@@ -59,19 +59,35 @@ impl IndexVolumeState {
     }
 
     pub fn write(&self, path: impl AsRef<Path>) -> Result<()> {
+        self.write_checked(path, || Ok(()))
+    }
+
+    pub fn write_checked(
+        &self,
+        path: impl AsRef<Path>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<()> {
         let path = path.as_ref();
-        gfm_store::atomic_write(path, |writer| {
+        gfm_store::atomic_write_checked(path, &mut check_control, |writer, check_control| {
             let mut writer = BufWriter::new(writer);
-            writeln!(writer, "{MAGIC}")?;
-            writeln!(writer, "schema_version\t{}", self.schema_version)?;
-            writeln!(writer, "root\t{}", escape_path(&self.root))?;
-            writeln!(writer, "records_path\t{}", escape_path(&self.records_path))?;
-            writeln!(writer, "volume_id\t{}", self.volume_id.0)?;
-            writeln!(writer, "mount_id\t{}", escape(&self.mount_id))?;
-            writeln!(writer, "scan_epoch\t{}", self.scan_epoch)?;
-            writeln!(writer, "record_count\t{}", self.record_count)?;
-            writeln!(writer, "inaccessible_count\t{}", self.inaccessible_count)?;
-            writer.flush()
+            macro_rules! line {
+                ($($arg:tt)*) => {
+                    writeln!($($arg)*).map_err(|err| GfmError::io(path, err))?
+                };
+            }
+            check_control()?;
+            line!(writer, "{MAGIC}");
+            check_control()?;
+            line!(writer, "schema_version\t{}", self.schema_version);
+            line!(writer, "root\t{}", escape_path(&self.root));
+            line!(writer, "records_path\t{}", escape_path(&self.records_path));
+            line!(writer, "volume_id\t{}", self.volume_id.0);
+            line!(writer, "mount_id\t{}", escape(&self.mount_id));
+            line!(writer, "scan_epoch\t{}", self.scan_epoch);
+            line!(writer, "record_count\t{}", self.record_count);
+            line!(writer, "inaccessible_count\t{}", self.inaccessible_count);
+            check_control()?;
+            writer.flush().map_err(|err| GfmError::io(path, err))
         })
         .map(|_| ())
     }

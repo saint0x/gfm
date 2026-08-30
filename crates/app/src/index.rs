@@ -63,7 +63,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
                     let record_count = snapshot.records.len();
                     let inaccessible_count = snapshot.inaccessible.len();
-                    snapshot.save(output)?;
+                    snapshot.save_checked(output, || cancellation.check())?;
                     Ok((record_count, inaccessible_count))
                 },
             )?;

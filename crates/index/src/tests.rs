@@ -4022,6 +4022,42 @@ fn index_volume_state_checked_read_honors_pre_cancelled_control_before_file_open
 }
 
 #[test]
+fn index_volume_state_checked_write_preserves_existing_state_when_cancelled_before_publish() {
+    let root = unique_temp_dir("gfm-index-state-write-cancel-root");
+    let records = unique_temp_path("gfm-index-state-write-cancel-records", "gfmidx");
+    let state_path = unique_temp_path("gfm-index-state-write-cancel", "gfmstate");
+    fs::write(root.join("Stable.md"), "state").unwrap();
+    let indexer = Indexer::default();
+    let original = indexer
+        .build_persistent(&root, &records, &state_path)
+        .unwrap();
+    let replacement = IndexVolumeState {
+        record_count: original.record_count + 10,
+        ..original.clone()
+    };
+    let before = fs::read_to_string(&state_path).unwrap();
+    let mut checks = 0usize;
+
+    let result = replacement.write_checked(&state_path, || {
+        checks += 1;
+        if checks >= 5 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert_eq!(result, Err(GfmError::Cancelled));
+    assert!(checks >= 5);
+    assert_eq!(fs::read_to_string(&state_path).unwrap(), before);
+    assert_eq!(IndexVolumeState::read(&state_path).unwrap(), original);
+    assert!(!has_store_atomic_temp_file(&state_path));
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(state_path).unwrap();
+}
+
+#[test]
 fn persistent_index_recovery_rebuilds_missing_or_stale_state() {
     let root = unique_temp_dir("gfm-index-recovery-state-root");
     let records = unique_temp_path("gfm-index-recovery-state-records", "gfmidx");
@@ -4229,6 +4265,38 @@ fn scan_progress_checked_read_honors_pre_cancelled_control_before_file_open() {
 }
 
 #[test]
+fn scan_progress_checked_write_preserves_existing_progress_when_cancelled_before_publish() {
+    let root = unique_temp_dir("gfm-scan-progress-write-cancel-root");
+    let records = unique_temp_path("gfm-scan-progress-write-cancel-records", "gfmidx");
+    let progress_path = unique_temp_path("gfm-scan-progress-write-cancel", "gfmprogress");
+    let original = ScanProgressCheckpoint::started(&root, &records);
+    original.write(&progress_path).unwrap();
+    let replacement = original.clone().completed();
+    let before = fs::read_to_string(&progress_path).unwrap();
+    let mut checks = 0usize;
+
+    let result = replacement.write_checked(&progress_path, || {
+        checks += 1;
+        if checks >= 5 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert_eq!(result, Err(GfmError::Cancelled));
+    assert!(checks >= 5);
+    assert_eq!(fs::read_to_string(&progress_path).unwrap(), before);
+    assert_eq!(
+        ScanProgressCheckpoint::read(&progress_path).unwrap(),
+        original
+    );
+    assert!(!has_store_atomic_temp_file(&progress_path));
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(progress_path).unwrap();
+}
+
+#[test]
 fn scan_progress_honors_pre_cancelled_token_without_publishing() {
     let root = unique_temp_dir("gfm-scan-progress-cancel-root");
     let records = unique_temp_path("gfm-scan-progress-cancel-records", "gfmidx");
@@ -4324,6 +4392,47 @@ fn fsevents_cursor_checked_read_honors_pre_cancelled_control_before_file_open() 
 
     assert!(matches!(result, Err(GfmError::Cancelled)));
     assert!(!cursor_path.exists());
+}
+
+#[test]
+fn fsevents_cursor_checked_write_preserves_existing_cursor_when_cancelled_before_publish() {
+    let root = unique_temp_dir("gfm-fsevents-cursor-write-cancel-root");
+    let records = unique_temp_path("gfm-fsevents-cursor-write-cancel-records", "gfmidx");
+    let state_path = unique_temp_path("gfm-fsevents-cursor-write-cancel-state", "gfmstate");
+    let cursor_path = unique_temp_path("gfm-fsevents-cursor-write-cancel", "gfmcursor");
+    fs::write(root.join("Evented.md"), "cursor").unwrap();
+    let indexer = Indexer::default();
+    indexer
+        .build_persistent(&root, &records, &state_path)
+        .unwrap();
+    let original = indexer
+        .checkpoint_fsevents_cursor(&state_path, &cursor_path, 42, FseventsCursorHealth::Clean)
+        .unwrap();
+    let replacement = FseventsCursor {
+        last_event_id: 99,
+        ..original.clone()
+    };
+    let before = fs::read_to_string(&cursor_path).unwrap();
+    let mut checks = 0usize;
+
+    let result = replacement.write_checked(&cursor_path, || {
+        checks += 1;
+        if checks >= 5 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert_eq!(result, Err(GfmError::Cancelled));
+    assert!(checks >= 5);
+    assert_eq!(fs::read_to_string(&cursor_path).unwrap(), before);
+    assert_eq!(FseventsCursor::read(&cursor_path).unwrap(), original);
+    assert!(!has_store_atomic_temp_file(&cursor_path));
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(state_path).unwrap();
+    fs::remove_file(cursor_path).unwrap();
 }
 
 #[test]
@@ -4571,6 +4680,25 @@ fn unique_temp_path(prefix: &str, extension: &str) -> PathBuf {
 
 fn unprobeable_child_path(root: &Path, prefix: &str, extension: &str) -> PathBuf {
     root.join(format!("{}.{}", prefix.repeat(64), extension))
+}
+
+fn has_store_atomic_temp_file(path: &Path) -> bool {
+    let Some(parent) = path.parent() else {
+        return false;
+    };
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let prefix = format!(".{file_name}.{}.", std::process::id());
+    fs::read_dir(parent)
+        .unwrap()
+        .filter_map(|entry| entry.ok())
+        .any(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with(&prefix) && name.ends_with(".tmp"))
+        })
 }
 
 fn volume_file_record(volume: u64, node: u64, path: &str, name: &str) -> FileRecord {

@@ -1117,6 +1117,47 @@ fn job_journal_append_checked_does_not_report_cancel_after_line_commit() {
 }
 
 #[test]
+fn job_journal_checked_read_honors_pre_cancelled_control_before_file_open() {
+    let path = temp_path("gfm-job-journal-read-pre-cancel", "journal");
+    let journal = JobJournal::new(&path);
+
+    let result = journal.read_checked(|| Err(GfmError::Cancelled));
+
+    assert_eq!(result, Err(GfmError::Cancelled));
+    assert!(!path.exists());
+}
+
+#[test]
+fn job_journal_recoverable_checked_honors_cancellation_during_scan() {
+    let path = temp_path("gfm-job-journal-recovery-cancel", "journal");
+    let journal = JobJournal::new(&path);
+    journal
+        .append(&sample_journal_entry(41, TaskStatus::Started))
+        .unwrap();
+    journal
+        .append(&sample_journal_entry(
+            42,
+            TaskStatus::Failed("temporary retry".to_string()),
+        ))
+        .unwrap();
+    let mut checks = 0usize;
+
+    let result = journal.recoverable_checked(RetryPolicy { max_attempts: 2 }, || {
+        checks += 1;
+        if checks >= 5 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert_eq!(result, Err(GfmError::Cancelled));
+    assert!(checks >= 5);
+    assert_eq!(journal.read().unwrap().len(), 2);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn job_journal_read_surfaces_path_probe_failures() {
     let root = temp_dir("gfm-job-journal-probe");
     let path = unprobeable_child_path(&root, "job-journal-unavailable", "journal");

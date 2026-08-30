@@ -11,7 +11,7 @@ pub use gfm_search::{
 use gfm_search::{SearchStreamBatch, ShardedSearchIndex};
 use gfm_store::{
     compact_content_segments, compact_content_segments_with_policy, read_records_checked,
-    write_records, MmapContentArchive, MmapContentSet, MmapRecordArchive,
+    write_records, write_records_checked, MmapContentArchive, MmapContentSet, MmapRecordArchive,
 };
 pub use gfm_store::{
     ContentArchiveCleanupAction, ContentArchiveCleanupPlan, ContentArchiveCleanupPolicy,
@@ -359,6 +359,14 @@ impl IndexSnapshot {
         write_records(path, &self.records)
     }
 
+    pub fn save_checked(
+        &self,
+        path: impl AsRef<Path>,
+        check_control: impl FnMut() -> Result<()>,
+    ) -> Result<()> {
+        write_records_checked(path, &self.records, check_control)
+    }
+
     pub fn volume_state(
         &self,
         records_path: impl Into<PathBuf>,
@@ -517,11 +525,11 @@ impl Indexer {
         };
         let snapshot = self.build_cancellable(root, cancellation)?;
         cancellation.check()?;
-        snapshot.save(records_path)?;
+        snapshot.save_checked(records_path, || cancellation.check())?;
         cancellation.check()?;
         let state = snapshot.volume_state(records_path.to_path_buf(), previous.as_ref())?;
         cancellation.check()?;
-        state.write(state_path)?;
+        state.write_checked(state_path, || cancellation.check())?;
         Ok(state)
     }
 
@@ -608,7 +616,7 @@ impl Indexer {
         let progress_path = progress_path.as_ref();
         cancellation.check()?;
         let started = ScanProgressCheckpoint::started(root, records_path);
-        started.write(progress_path)?;
+        started.write_checked(progress_path, || cancellation.check())?;
         let snapshot = self.build_cancellable(root, cancellation)?;
         cancellation.check()?;
         let last_path = snapshot.records.last().map(|record| record.path.clone());
@@ -618,10 +626,10 @@ impl Indexer {
             .with_progress(scanned, inaccessible, last_path)
             .with_publication(1, 0);
         cancellation.check()?;
-        snapshot.save(records_path)?;
+        snapshot.save_checked(records_path, || cancellation.check())?;
         let completed = progress.completed();
         cancellation.check()?;
-        completed.write(progress_path)?;
+        completed.write_checked(progress_path, || cancellation.check())?;
         Ok(completed)
     }
 
@@ -665,7 +673,7 @@ impl Indexer {
         let volume = IndexVolumeState::read_checked(state_path, || cancellation.check())?;
         cancellation.check()?;
         let cursor = FseventsCursor::checkpoint(&volume, last_event_id, health);
-        cursor.write(cursor_path)?;
+        cursor.write_checked(cursor_path, || cancellation.check())?;
         cancellation.check()?;
         Ok(cursor)
     }

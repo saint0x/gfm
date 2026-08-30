@@ -55,7 +55,7 @@ pub use dictionary::{
     dictionary_term_report_from_records, dictionary_terms_from_records, read_dictionary,
     write_dictionary, DictionaryTermReport, MmapDictionary,
 };
-pub use durable::{atomic_write, DurableCommit};
+pub use durable::{atomic_write, atomic_write_checked, DurableCommit};
 pub use fuzzy::{
     fuzzy_postings_from_records, read_fuzzy_postings, read_fuzzy_postings_checked,
     write_fuzzy_postings, FuzzyPosting, LimitedFuzzyPosting, MmapFuzzyArchive,
@@ -120,11 +120,20 @@ enum StoreVersion {
 }
 
 pub fn write_records(path: impl AsRef<Path>, records: &[FileRecord]) -> Result<()> {
+    write_records_checked(path, records, || Ok(()))
+}
+
+pub fn write_records_checked(
+    path: impl AsRef<Path>,
+    records: &[FileRecord],
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
     let path = path.as_ref();
-    durable::atomic_write(path, |writer| {
+    durable::atomic_write_checked(path, &mut check_control, |writer, check_control| {
         let mut bytes = Vec::new();
-        writeln!(&mut bytes, "{MAGIC_V3}")?;
+        writeln!(&mut bytes, "{MAGIC_V3}").map_err(|err| GfmError::io(path, err))?;
         for record in records {
+            check_control()?;
             writeln!(
                 &mut bytes,
                 "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
@@ -148,12 +157,17 @@ pub fn write_records(path: impl AsRef<Path>, records: &[FileRecord]) -> Result<(
                     .map(escape)
                     .unwrap_or_default(),
                 escape(&record.path.to_string_lossy()),
-            )?;
+            )
+            .map_err(|err| GfmError::io(path, err))?;
         }
         let mut footer = Vec::new();
-        integrity::write_checksum_footer(&mut footer, &bytes, RECORD_CHECKSUM_FOOTER)?;
+        integrity::write_checksum_footer(&mut footer, &bytes, RECORD_CHECKSUM_FOOTER)
+            .map_err(|err| GfmError::io(path, err))?;
         bytes.extend(footer);
-        writer.write_all(&bytes)?;
+        check_control()?;
+        writer
+            .write_all(&bytes)
+            .map_err(|err| GfmError::io(path, err))?;
         Ok(())
     })
     .map(|_| ())

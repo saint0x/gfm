@@ -59,6 +59,51 @@ pub fn atomic_write(
     })
 }
 
+pub fn atomic_write_checked(
+    path: impl AsRef<Path>,
+    mut check_control: impl FnMut() -> Result<()>,
+    write: impl FnOnce(&mut dyn Write, &mut dyn FnMut() -> Result<()>) -> Result<()>,
+) -> Result<DurableCommit> {
+    let path = path.as_ref();
+    check_control()?;
+    let temporary = temporary_path(path);
+    let result = (|| {
+        let file = File::create(&temporary).map_err(|err| GfmError::io(&temporary, err))?;
+        check_control()?;
+        let mut writer = BufWriter::new(file);
+        write(&mut writer, &mut check_control)?;
+        check_control()?;
+        writer
+            .flush()
+            .map_err(|err| GfmError::io(&temporary, err))?;
+        check_control()?;
+        writer
+            .get_ref()
+            .sync_all()
+            .map_err(|err| GfmError::io(&temporary, err))?;
+        check_control()?;
+        let bytes = writer
+            .get_ref()
+            .metadata()
+            .map_err(|err| GfmError::io(&temporary, err))?
+            .len();
+        drop(writer);
+        fs::rename(&temporary, path).map_err(|err| GfmError::io(path, err))?;
+        let synced_parent = sync_parent(path)?;
+        Ok(DurableCommit {
+            path: path.to_path_buf(),
+            temporary: temporary.clone(),
+            bytes,
+            synced_file: true,
+            synced_parent,
+        })
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
 pub(crate) fn sync_parent_for_path(path: &Path) -> Result<bool> {
     sync_parent(path)
 }
@@ -118,11 +163,63 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn atomic_write_checked_honors_pre_cancelled_control_before_file_create() {
+        let path = temp_path("durable-pre-cancel");
+
+        let result = atomic_write_checked(&path, || Err(GfmError::Cancelled), |_, _| Ok(()));
+
+        assert_eq!(result, Err(GfmError::Cancelled));
+        assert!(!path.exists());
+        assert!(!has_atomic_temp_file(&path));
+    }
+
+    #[test]
+    fn atomic_write_checked_removes_temporary_and_preserves_existing_on_cancelled_write() {
+        let path = temp_path("durable-cancelled-temp");
+        fs::write(&path, b"stable").unwrap();
+
+        let result = atomic_write_checked(
+            &path,
+            || Ok(()),
+            |writer, _| {
+                writer
+                    .write_all(b"partial")
+                    .map_err(|err| GfmError::io(&path, err))?;
+                Err(GfmError::Cancelled)
+            },
+        );
+
+        assert_eq!(result, Err(GfmError::Cancelled));
+        assert_eq!(fs::read(&path).unwrap(), b"stable");
+        assert!(!has_atomic_temp_file(&path));
+        fs::remove_file(path).unwrap();
+    }
+
     fn temp_path(label: &str) -> PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
         std::env::temp_dir().join(format!("gfm-store-{label}-{}-{nanos}", std::process::id()))
+    }
+
+    fn has_atomic_temp_file(path: &Path) -> bool {
+        let Some(parent) = path.parent() else {
+            return false;
+        };
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            return false;
+        };
+        let prefix = format!(".{file_name}.{}.", std::process::id());
+        fs::read_dir(parent)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .any(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.starts_with(&prefix) && name.ends_with(".tmp"))
+            })
     }
 }

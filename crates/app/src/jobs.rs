@@ -207,7 +207,7 @@ fn run_jobs_recover(journal: PathBuf) -> Result<Vec<String>> {
         let _access = preflight_access_scope(&journal, AccessIntent::Read, WORKER)?;
         cancellation.check()?;
         let lines = JobJournal::new(journal)
-            .recoverable(RetryPolicy { max_attempts: 2 })?
+            .recoverable_checked(RetryPolicy { max_attempts: 2 }, || cancellation.check())?
             .into_iter()
             .map(|job| {
                 format!(

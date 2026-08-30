@@ -68,33 +68,49 @@ impl ScanProgressCheckpoint {
     }
 
     pub fn write(&self, path: impl AsRef<Path>) -> Result<()> {
+        self.write_checked(path, || Ok(()))
+    }
+
+    pub fn write_checked(
+        &self,
+        path: impl AsRef<Path>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<()> {
         let path = path.as_ref();
-        gfm_store::atomic_write(path, |writer| {
+        gfm_store::atomic_write_checked(path, &mut check_control, |writer, check_control| {
             let mut writer = BufWriter::new(writer);
-            writeln!(writer, "{MAGIC}")?;
-            writeln!(writer, "schema_version\t{}", self.schema_version)?;
-            writeln!(writer, "root\t{}", escape_path(&self.root))?;
-            writeln!(writer, "records_path\t{}", escape_path(&self.records_path))?;
-            writeln!(writer, "started_at_nanos\t{}", self.started_at_nanos)?;
-            writeln!(writer, "updated_at_nanos\t{}", self.updated_at_nanos)?;
-            writeln!(writer, "scanned_records\t{}", self.scanned_records)?;
-            writeln!(
+            macro_rules! line {
+                ($($arg:tt)*) => {
+                    writeln!($($arg)*).map_err(|err| GfmError::io(path, err))?
+                };
+            }
+            check_control()?;
+            line!(writer, "{MAGIC}");
+            check_control()?;
+            line!(writer, "schema_version\t{}", self.schema_version);
+            line!(writer, "root\t{}", escape_path(&self.root));
+            line!(writer, "records_path\t{}", escape_path(&self.records_path));
+            line!(writer, "started_at_nanos\t{}", self.started_at_nanos);
+            line!(writer, "updated_at_nanos\t{}", self.updated_at_nanos);
+            line!(writer, "scanned_records\t{}", self.scanned_records);
+            line!(
                 writer,
                 "inaccessible_records\t{}",
                 self.inaccessible_records
-            )?;
-            writeln!(writer, "published_segments\t{}", self.published_segments)?;
-            writeln!(writer, "tombstones\t{}", self.tombstones)?;
-            writeln!(
+            );
+            line!(writer, "published_segments\t{}", self.published_segments);
+            line!(writer, "tombstones\t{}", self.tombstones);
+            line!(
                 writer,
                 "last_path\t{}",
                 self.last_path
                     .as_deref()
                     .map(escape_path)
                     .unwrap_or_default()
-            )?;
-            writeln!(writer, "completed\t{}", self.completed)?;
-            writer.flush()
+            );
+            line!(writer, "completed\t{}", self.completed);
+            check_control()?;
+            writer.flush().map_err(|err| GfmError::io(path, err))
         })
         .map(|_| ())
     }

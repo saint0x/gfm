@@ -834,14 +834,26 @@ impl JobJournal {
     }
 
     pub fn read(&self) -> Result<Vec<JournalEntry>> {
+        self.read_checked(|| Ok(()))
+    }
+
+    pub fn read_checked(
+        &self,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<JournalEntry>> {
+        check_control()?;
         if !path_exists(&self.path, "job journal")? {
             return Ok(Vec::new());
         }
+        check_control()?;
         let file = File::open(&self.path).map_err(|err| GfmError::io(&self.path, err))?;
+        check_control()?;
         let reader = BufReader::new(file);
         let mut entries = Vec::new();
         for (line_index, line) in reader.lines().enumerate() {
+            check_control()?;
             let line = line.map_err(|err| GfmError::io(&self.path, err))?;
+            check_control()?;
             entries.push(parse_journal_entry(&line).map_err(|err| {
                 GfmError::Format(format!(
                     "{} line {}: {}",
@@ -851,20 +863,37 @@ impl JobJournal {
                 ))
             })?);
         }
+        check_control()?;
         Ok(entries)
     }
 
     pub fn attempts_for(&self, id: JobId) -> Result<usize> {
+        self.attempts_for_checked(id, || Ok(()))
+    }
+
+    pub fn attempts_for_checked(
+        &self,
+        id: JobId,
+        check_control: impl FnMut() -> Result<()>,
+    ) -> Result<usize> {
         Ok(self
-            .read()?
+            .read_checked(check_control)?
             .into_iter()
             .filter(|entry| entry.id == id && entry.status == TaskStatus::Started)
             .count())
     }
 
     pub fn recoverable(&self, policy: RetryPolicy) -> Result<Vec<RecoveryJob>> {
+        self.recoverable_checked(policy, || Ok(()))
+    }
+
+    pub fn recoverable_checked(
+        &self,
+        policy: RetryPolicy,
+        check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<RecoveryJob>> {
         let mut states: Vec<JobRecoveryState> = Vec::new();
-        for entry in self.read()? {
+        for entry in self.read_checked(check_control)? {
             if let Some(state) = states.iter_mut().find(|state| state.id == entry.id) {
                 state.apply(entry);
             } else {
