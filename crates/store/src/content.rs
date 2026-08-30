@@ -25,6 +25,7 @@ pub(crate) const CONTENT_SEGMENT_MAGIC_V2: &[u8] = b"gfm-content-segment-v2\n";
 const CONTENT_INDEX_FOOTER: &[u8] = b"gfm-content-index-v1\n";
 const CONTENT_CHECKSUM_FOOTER: &[u8] = b"gfm-content-checksum-v1\n";
 const CONTENT_FOOTER_LEN: u64 = 8 + CONTENT_INDEX_FOOTER.len() as u64;
+const CONTENT_TERM_CHECK_STRIDE: usize = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ContentStoreVersion {
@@ -92,7 +93,7 @@ pub fn write_content_postings_checked(
                 .map_err(|err| GfmError::io(path, err))?;
                 let end = archive.position();
                 directory.push(ContentDirectoryEntry {
-                    term: posting.term.trim().to_lowercase(),
+                    term: canonical_term_checked(&posting.term, &mut *check_control)?,
                     offset,
                     len: end.saturating_sub(offset),
                 });
@@ -385,7 +386,7 @@ impl MmapContentArchive {
         mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<(Option<ContentPosting>, bool)> {
         check_control()?;
-        let term = term.trim().to_lowercase();
+        let term = canonical_term_checked(term, &mut check_control)?;
         if term.is_empty() {
             return Ok((None, false));
         }
@@ -404,7 +405,7 @@ impl MmapContentArchive {
         let (posting, truncated) =
             read_content_posting_limited_from_slice(bytes, &self.path, self.version, limit)?;
         check_control()?;
-        if posting.term.trim().to_lowercase() == term {
+        if canonical_term_checked(&posting.term, &mut check_control)? == term {
             Ok((Some(posting), truncated))
         } else {
             Err(content_format_error(
@@ -458,7 +459,7 @@ impl MmapContentArchive {
         let mut selected = BTreeSet::new();
         for term in terms {
             check_control()?;
-            let term = term.as_ref().trim().to_lowercase();
+            let term = canonical_term_checked(term.as_ref(), &mut check_control)?;
             if !term.is_empty() {
                 selected.insert(term);
             }
@@ -506,7 +507,7 @@ impl MmapContentArchive {
 
         for term in terms {
             check_control()?;
-            let term = term.as_ref().trim().to_lowercase();
+            let term = canonical_term_checked(term.as_ref(), &mut check_control)?;
             if term.is_empty() {
                 continue;
             }
@@ -540,7 +541,7 @@ impl MmapContentArchive {
                         self.version,
                         limit_per_term,
                     )?;
-                    if posting.term.trim().to_lowercase() == term {
+                    if canonical_term_checked(&posting.term, &mut check_control)? == term {
                         postings.push(LimitedContentPosting { posting, truncated });
                     } else {
                         return Err(content_format_error(
@@ -597,7 +598,7 @@ impl MmapContentArchive {
 
         for term in terms {
             check_control()?;
-            let term = term.as_ref().trim().to_lowercase();
+            let term = canonical_term_checked(term.as_ref(), &mut check_control)?;
             if term.is_empty() {
                 continue;
             }
@@ -632,7 +633,7 @@ impl MmapContentArchive {
                         volume,
                         limit_per_term,
                     )?;
-                    if posting.term.trim().to_lowercase() == term {
+                    if canonical_term_checked(&posting.term, &mut check_control)? == term {
                         if !posting.ids.is_empty() || !posting.positions.is_empty() {
                             postings.push(LimitedContentPosting { posting, truncated });
                         }
@@ -718,6 +719,22 @@ impl MmapContentArchive {
             .get(start..end)
             .ok_or_else(|| content_format_error(&self.path, "posting range out of bounds"))
     }
+}
+
+fn canonical_term_checked(
+    term: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<String> {
+    check_control()?;
+    let mut canonical = String::new();
+    for (index, ch) in term.trim().chars().enumerate() {
+        if index.is_multiple_of(CONTENT_TERM_CHECK_STRIDE) {
+            check_control()?;
+        }
+        canonical.extend(ch.to_lowercase());
+    }
+    check_control()?;
+    Ok(canonical)
 }
 
 fn read_content_magic(mut file: impl Read, path: &Path) -> Result<Vec<u8>> {

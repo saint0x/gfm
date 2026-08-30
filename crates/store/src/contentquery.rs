@@ -4,6 +4,8 @@ use gfm_types::{ContentPositions, ContentPosting, FileId, Result};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+const CONTENT_SET_TERM_CHECK_STRIDE: usize = 256;
+
 #[derive(Debug)]
 pub struct MmapContentSet {
     archives: Vec<MmapContentArchive>,
@@ -94,7 +96,7 @@ impl MmapContentSet {
         mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<(Option<ContentPosting>, bool)> {
         check_control()?;
-        let term = canonical_term(term);
+        let term = canonical_term_checked(term, &mut check_control)?;
         if term.is_empty() {
             return Ok((None, false));
         }
@@ -146,7 +148,7 @@ impl MmapContentSet {
         let mut selected = BTreeSet::new();
         for term in terms {
             check_control()?;
-            let term = canonical_term(term.as_ref());
+            let term = canonical_term_checked(term.as_ref(), &mut check_control)?;
             if !term.is_empty() {
                 selected.insert(term);
             }
@@ -187,7 +189,7 @@ impl MmapContentSet {
         let mut selected = BTreeSet::new();
         for term in terms {
             check_control()?;
-            let term = canonical_term(term.as_ref());
+            let term = canonical_term_checked(term.as_ref(), &mut check_control)?;
             if !term.is_empty() {
                 selected.insert(term);
             }
@@ -256,6 +258,22 @@ fn canonical_term(term: &str) -> String {
     term.trim().to_lowercase()
 }
 
+fn canonical_term_checked(
+    term: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<String> {
+    check_control()?;
+    let mut canonical = String::new();
+    for (index, ch) in term.trim().chars().enumerate() {
+        if index.is_multiple_of(CONTENT_SET_TERM_CHECK_STRIDE) {
+            check_control()?;
+        }
+        canonical.extend(ch.to_lowercase());
+    }
+    check_control()?;
+    Ok(canonical)
+}
+
 fn content_posting_from_positions(
     term: String,
     positions_by_id: BTreeMap<FileId, BTreeSet<u32>>,
@@ -306,6 +324,27 @@ mod tests {
         let result = set.posting_for_term_limit_checked("needle", 10, || Err(GfmError::Cancelled));
 
         assert!(matches!(result, Err(GfmError::Cancelled)));
+    }
+
+    #[test]
+    fn content_set_checked_limit_query_can_cancel_during_term_canonicalization() {
+        let set = MmapContentSet {
+            archives: Vec::new(),
+        };
+        let long_term = "Needle".repeat(256);
+        let mut checks = 0usize;
+
+        let result = set.posting_for_term_limit_checked(&long_term, 10, || {
+            checks += 1;
+            if checks >= 3 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(checks >= 3);
     }
 
     #[test]

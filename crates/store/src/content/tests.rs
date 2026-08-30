@@ -311,6 +311,36 @@ fn mmap_content_archive_checked_term_limit_honors_pre_cancelled_control() {
 }
 
 #[test]
+fn mmap_content_archive_checked_term_limit_can_cancel_during_term_canonicalization() {
+    let path = temp_path("gfm-content-term-canonical-cancel", "gfmcontent");
+    write_content_postings(
+        &path,
+        &[ContentPosting {
+            term: "alpha".to_string(),
+            ids: vec![FileId::new(VolumeId(8), 30_001)],
+            positions: Vec::new(),
+        }],
+    )
+    .unwrap();
+    let archive = MmapContentArchive::open(&path).unwrap();
+    let long_term = "A".repeat(1_024);
+    let mut checks = 0usize;
+
+    let result = archive.posting_for_term_limit_checked(&long_term, 1, || {
+        checks += 1;
+        if checks >= 3 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(checks >= 3);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn mmap_content_archive_reads_bounded_sorted_terms_for_one_volume() {
     let path = temp_path("gfm-content-volume-batch-postings", "gfmcontent");
     let volume_one_ids = (0..4)
