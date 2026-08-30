@@ -4619,6 +4619,25 @@ fn reports_cancelled_sidecar_candidate_expansion_from_binary() {
 }
 
 #[test]
+fn reports_cancelled_search_query_parse_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("search-query-cancel-parse")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(
+        stdout,
+        "search-query-parse\tstatus=cancelled\treason=cancelled-before-parse\n"
+    );
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn archive_sidecar_write_reports_output_probe_failure_before_indexing_from_binary() {
     let root = unique_temp_dir("gfm-cli-archive-sidecar-write-probe");
     let records = root.join("records.gfmidx");

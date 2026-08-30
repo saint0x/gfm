@@ -1810,6 +1810,17 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "search-query-cancel-parse"
+      ],
+      "exit_code": 0,
+      "stdout": "search-query-parse\tstatus=cancelled\treason=cancelled-before-parse\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "index-content-background",
         ".",
         "/tmp/gfm-fozzy-host-segments",
