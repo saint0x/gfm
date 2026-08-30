@@ -41,6 +41,7 @@ use gfm_preview::{
 };
 use gfm_types::{FileEvent, FileEventKind, FileId, FileRecord, GfmError, Result, VolumeId};
 use std::collections::BTreeSet;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -2085,8 +2086,8 @@ fn run_spotlight_reconcile(
                     || cancellation.check(),
                 )?;
                 cancellation.check()?;
-                let text = std::fs::read_to_string(&fixture_path)
-                    .map_err(|err| GfmError::io(&fixture_path, err))?;
+                let text =
+                    read_spotlight_fixture_text_checked(&fixture_path, || cancellation.check())?;
                 cancellation.check()?;
                 parse_spotlight_fixture(&path, &text)?
             }
@@ -2095,6 +2096,33 @@ fn run_spotlight_reconcile(
         cancellation.check()?;
         Ok(SpotlightReconciliationReport::reconcile(record, snapshot))
     })
+}
+
+fn read_spotlight_fixture_text_checked(
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<String> {
+    const CHUNK_BYTES: usize = 64 * 1024;
+
+    check_control()?;
+    let mut file = std::fs::File::open(path).map_err(|err| GfmError::io(path, err))?;
+    check_control()?;
+    let mut bytes = Vec::new();
+    let mut buffer = [0; CHUNK_BYTES];
+    loop {
+        check_control()?;
+        let len = file
+            .read(&mut buffer)
+            .map_err(|err| GfmError::io(path, err))?;
+        if len == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&buffer[..len]);
+        check_control()?;
+    }
+    check_control()?;
+    String::from_utf8(bytes)
+        .map_err(|err| GfmError::io(path, format!("spotlight fixture is not utf-8: {err}")))
 }
 
 fn run_preview_cache_fileprovider_invalidation(
@@ -2860,6 +2888,68 @@ mod tests {
             .expect_err("pre-cancelled preview materialization should not read FileProvider state");
 
         assert_eq!(err, GfmError::Cancelled);
+    }
+
+    #[test]
+    fn spotlight_fixture_reader_honors_pre_cancelled_token_before_open() {
+        let path = std::env::temp_dir().join(format!(
+            "gfm-platform-spotlight-fixture-pre-cancelled-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+
+        let err =
+            read_spotlight_fixture_text_checked(&path, || Err(GfmError::Cancelled)).unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn spotlight_fixture_reader_checks_control_between_chunks() {
+        let path = std::env::temp_dir().join(format!(
+            "gfm-platform-spotlight-fixture-chunked-{}",
+            std::process::id()
+        ));
+        let text = "kMDItemDisplayName\tPrimary.md\n".repeat(5000);
+        std::fs::write(&path, &text).unwrap();
+        let mut checks = 0usize;
+
+        let read = read_spotlight_fixture_text_checked(&path, || {
+            checks += 1;
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(read, text);
+        assert!(checks > 4, "expected repeated chunk checks, saw {checks}");
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn spotlight_fixture_reader_returns_cancelled_between_chunks() {
+        let path = std::env::temp_dir().join(format!(
+            "gfm-platform-spotlight-fixture-cancelled-{}",
+            std::process::id()
+        ));
+        let text = "kMDItemDisplayName\tPrimary.md\n".repeat(5000);
+        std::fs::write(&path, &text).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let mut checks = 0usize;
+
+        let err = read_spotlight_fixture_text_checked(&path, || {
+            checks += 1;
+            if checks >= 5 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

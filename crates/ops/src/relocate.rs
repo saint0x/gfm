@@ -6,7 +6,7 @@ use crate::target::{
     replacement_destination_is_directory, replacement_destination_is_non_directory,
     same_canonical_path, source_is_directory, source_is_regular_file, source_is_symlink,
 };
-use crate::trashmeta::remove_trash_metadata;
+use crate::trashmeta::remove_trash_metadata_checked;
 use crate::{
     ConflictPolicy, OperationProgressEvent, OperationVolumeCopyPolicy, VerificationPolicy,
 };
@@ -131,7 +131,7 @@ pub(crate) fn restore_path(
         progress,
     )?;
     if let Some(metadata_path) = metadata_path {
-        remove_trash_metadata(metadata_path, from)?;
+        remove_trash_metadata_checked(metadata_path, from, || progress.check_cancelled())?;
     }
     Ok(())
 }

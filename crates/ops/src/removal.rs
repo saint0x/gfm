@@ -1,7 +1,8 @@
 use crate::progress::ProgressTracker;
 use crate::target::ensure_source_exists;
 use crate::trashmeta::{
-    append_trash_metadata, reconcile_empty_trash_metadata, remove_trash_metadata,
+    append_trash_metadata_checked, reconcile_empty_trash_metadata_checked,
+    remove_trash_metadata_checked,
 };
 use crate::OperationProgressEvent;
 use gfm_types::{GfmError, Result};
@@ -18,11 +19,11 @@ pub(crate) fn delete_path(
     let metadata = fs::symlink_metadata(path).map_err(|err| GfmError::io(path, err))?;
     if metadata.is_dir() {
         fs::remove_dir_all(path).map_err(|err| GfmError::io(path, err))?;
-        remove_deleted_trash_metadata(metadata_path, path)?;
+        remove_deleted_trash_metadata(metadata_path, path, progress)?;
         progress.complete()
     } else {
         fs::remove_file(path).map_err(|err| GfmError::io(path, err))?;
-        remove_deleted_trash_metadata(metadata_path, path)?;
+        remove_deleted_trash_metadata(metadata_path, path, progress)?;
         progress.advance(&metadata)
     }
 }
@@ -45,7 +46,7 @@ pub(crate) fn trash_path(
     ensure_source_exists(path)?;
     crate::locked::ensure_unlocked_tree(path, "trash")?;
     if let Some(metadata_path) = metadata_path {
-        append_trash_metadata(metadata_path, path)?;
+        append_trash_metadata_checked(metadata_path, path, || progress.check_cancelled())?;
     }
     trash::delete(path).map_err(|err| GfmError::io(path, err))?;
     progress.complete()
@@ -77,7 +78,7 @@ pub(crate) fn empty_trash_path(
     for entry in entries {
         delete_trash_child(&entry, metadata_path, progress)?;
     }
-    reconcile_empty_trash_metadata(metadata_path, path)?;
+    reconcile_empty_trash_metadata_checked(metadata_path, path, || progress.check_cancelled())?;
     progress.complete()
 }
 
@@ -89,7 +90,7 @@ fn delete_trash_child(
     progress.check_cancelled()?;
     let metadata = fs::symlink_metadata(path).map_err(|err| GfmError::io(path, err))?;
     delete_path_untracked(path)?;
-    remove_deleted_trash_metadata(metadata_path, path)?;
+    remove_deleted_trash_metadata(metadata_path, path, progress)?;
     if metadata.is_dir() {
         progress.finish_current_item()
     } else {
@@ -100,9 +101,10 @@ fn delete_trash_child(
 pub(crate) fn remove_deleted_trash_metadata(
     metadata_path: Option<&Path>,
     deleted_path: &Path,
+    progress: &mut ProgressTracker<'_, impl FnMut(OperationProgressEvent)>,
 ) -> Result<()> {
     if let Some(metadata_path) = metadata_path {
-        remove_trash_metadata(metadata_path, deleted_path)?;
+        remove_trash_metadata_checked(metadata_path, deleted_path, || progress.check_cancelled())?;
     }
     Ok(())
 }
