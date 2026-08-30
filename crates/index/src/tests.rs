@@ -4128,6 +4128,35 @@ fn persistent_index_recovery_surfaces_state_path_probe_failures() {
 }
 
 #[test]
+fn persistent_index_recovery_plans_state_migration_for_unsupported_schema() {
+    let root = unique_temp_dir("gfm-index-recovery-state-migration-root");
+    let records = unique_temp_path("gfm-index-recovery-state-migration-records", "gfmidx");
+    let state_path = unique_temp_path("gfm-index-recovery-state-migration", "gfmstate");
+    fs::write(root.join("Probe.md"), "state").unwrap();
+    let indexer = Indexer::default();
+    indexer.build(&root).unwrap().save(&records).unwrap();
+    fs::write(
+        &state_path,
+        format!(
+            "gfm-index-state-v1\nschema_version\t999\nroot\t{}\nrecords_path\t{}\nvolume_id\t1\nmount_id\tdev:1:root:{}\nscan_epoch\t1\nrecord_count\t1\ninaccessible_count\t0\n",
+            root.display(),
+            records.display(),
+            root.display()
+        ),
+    )
+    .unwrap();
+
+    let plan = indexer.plan_persistent_recovery(&root, &records, &state_path);
+
+    assert_eq!(plan.action, PersistentIndexAction::MigrateState);
+    assert_eq!(plan.reason, PersistentIndexReason::UnsupportedStateSchema);
+    assert_eq!(plan.state_schema_version, Some(999));
+    fs::remove_file(state_path).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn scan_progress_checkpoint_tracks_completed_scan_publication() {
     let root = unique_temp_dir("gfm-scan-progress-root");
     let records = unique_temp_path("gfm-scan-progress-records", "gfmidx");

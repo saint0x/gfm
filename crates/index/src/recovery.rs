@@ -212,7 +212,8 @@ fn plan_persistent_index_recovery_checked(
         Err(err) => {
             let detail = err.to_string();
             let unsupported_schema = detail.contains("unsupported index state schema version");
-            let state_schema_version = read_state_schema_version(&state_path);
+            let state_schema_version =
+                read_state_schema_version_checked(&state_path, &mut check_control);
             return Ok(PersistentIndexPlan {
                 action: if unsupported_schema {
                     PersistentIndexAction::MigrateState
@@ -412,8 +413,13 @@ fn quarantine_records(records_path: &Path, quarantine_dir: &Path) -> Result<Path
     Ok(quarantine_path)
 }
 
-fn read_state_schema_version(path: &Path) -> Option<u32> {
+fn read_state_schema_version_checked(
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Option<u32> {
+    check_control().ok()?;
     let text = fs::read_to_string(path).ok()?;
+    check_control().ok()?;
     text.lines().find_map(|line| {
         let value = line.strip_prefix("schema_version\t")?;
         value.parse().ok()
