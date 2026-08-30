@@ -197,7 +197,9 @@ impl CachedExtractor {
             });
         }
         check_control()?;
-        let report = self.extractor.extract_path_report(&record.path)?;
+        let report = self
+            .extractor
+            .extract_path_report_checked(&record.path, &mut check_control)?;
         check_control()?;
         self.cache.insert(key.clone(), report.clone());
         Ok(CachedExtractionReport {

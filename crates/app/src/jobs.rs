@@ -238,8 +238,9 @@ fn run_jobs_payload_catalog(path: PathBuf) -> Result<Vec<String>> {
         let catalog = JobPayloadCatalog::new(&path);
         let records = sample_payload_catalog_records();
         catalog.write_all(&records)?;
+        cancellation.check()?;
         let lines = catalog
-            .read()?
+            .read_checked(|| cancellation.check())?
             .into_iter()
             .map(|record| record.as_tsv())
             .collect();
@@ -261,8 +262,9 @@ fn run_jobs_progress_snapshot(path: PathBuf) -> Result<Vec<String>> {
         for snapshot in sample_progress_snapshots() {
             store.upsert(snapshot)?;
         }
+        cancellation.check()?;
         let lines = store
-            .restorable()?
+            .restorable_checked(|| cancellation.check())?
             .into_iter()
             .map(|snapshot| snapshot.as_tsv())
             .collect();
@@ -281,7 +283,7 @@ fn run_jobs_progress_restore(path: PathBuf, updated_ms: u64) -> Result<Vec<Strin
             preflight_access_scope(write_probe_path(&path)?, AccessIntent::Write, WORKER)?;
         cancellation.check()?;
         let lines = JobProgressStore::new(&path)
-            .restore_interrupted(updated_ms)?
+            .restore_interrupted_checked(updated_ms, || cancellation.check())?
             .into_iter()
             .map(|snapshot| snapshot.as_tsv())
             .collect();
@@ -304,10 +306,11 @@ fn run_jobs_progress_control(
         let _access =
             preflight_access_scope(write_probe_path(&path)?, AccessIntent::Write, WORKER)?;
         cancellation.check()?;
-        let snapshot = JobProgressStore::new(&path).apply_command(
+        let snapshot = JobProgressStore::new(&path).apply_command_checked(
             gfm_jobs::JobId::from_raw(job_id),
             command,
             updated_ms,
+            || cancellation.check(),
         )?;
         Ok(vec![
             format!(
@@ -336,9 +339,12 @@ fn run_jobs_payload_restore_plan(
         let _access = retain_payload_restore_access(&catalog_path, &progress_path)?;
         cancellation.check()?;
         let store = JobProgressStore::new(&progress_path);
-        let restored = store.restore_interrupted(updated_ms)?;
+        let restored = store.restore_interrupted_checked(updated_ms, || cancellation.check())?;
+        cancellation.check()?;
         let payloads = JobPayloadCatalog::new(&catalog_path)
-            .read_for_ids(restored.iter().map(|snapshot| snapshot.id))?
+            .read_for_ids_checked(restored.iter().map(|snapshot| snapshot.id), || {
+                cancellation.check()
+            })?
             .into_iter()
             .map(|record| (record.id, record))
             .collect::<HashMap<_, _>>();

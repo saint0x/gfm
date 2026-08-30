@@ -789,7 +789,7 @@ fn run_extraction_report(
         cancellation.check()?;
         let _access = preflight_access_scope(&path, AccessIntent::Read, worker)?;
         cancellation.check()?;
-        let report = extractor.extract_path_report(&path)?;
+        let report = extractor.extract_path_report_checked(&path, || cancellation.check())?;
         let mut quarantine = ExtractionQuarantine::default();
         let decision = quarantine.record_report(&report);
         Ok(format!("{}\n{}\n", report.as_tsv(), decision.as_tsv()))

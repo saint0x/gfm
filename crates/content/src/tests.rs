@@ -87,6 +87,39 @@ fn text_output_budget_truncates_without_splitting_utf8() {
 }
 
 #[test]
+fn extraction_report_checked_honors_pre_cancelled_control_before_metadata_probe() {
+    let root = unique_temp_dir("gfm-content-extract-report-pre-cancel");
+    let path = root.join("missing.md");
+
+    let result =
+        Extractor::default().extract_path_report_checked(&path, || Err(GfmError::Cancelled));
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(!path.exists());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn extraction_report_checked_honors_cancellation_before_reading_content_bytes() {
+    let root = unique_temp_dir("gfm-content-extract-report-read-cancel");
+    let path = root.join("note.md");
+    fs::write(&path, "content that should not be indexed").unwrap();
+    let mut checks = 0usize;
+
+    let result = Extractor::default().extract_path_report_checked(&path, || {
+        checks += 1;
+        if checks == 6 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn pressure_budget_skips_large_text_before_reading_content() {
     let root = unique_temp_dir("gfm-content-pressure-budget");
     let path = root.join("large.txt");

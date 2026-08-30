@@ -576,11 +576,12 @@ impl LiveIndex {
         for hit in &mut hits {
             cancellation.check()?;
             if matches!(hit.reason, gfm_types::MatchReason::Content) {
-                hit.snippet = extractor.snippet_for_record(
+                hit.snippet = extractor.snippet_for_record_checked(
                     &hit.record,
                     &parsed.terms,
                     &parsed.phrases,
                     context_bytes,
+                    || cancellation.check(),
                 )?;
                 cancellation.check()?;
             }
@@ -601,7 +602,9 @@ impl LiveIndex {
         let mut indexed = 0;
         for record in records {
             cancellation.check()?;
-            if let Some(document) = extractor.extract_record(&record)? {
+            if let Some(document) =
+                extractor.extract_record_checked(&record, || cancellation.check())?
+            {
                 cancellation.check()?;
                 self.index.insert_content(record.id, &document.text);
                 indexed += 1;
@@ -648,7 +651,8 @@ impl LiveIndex {
                 continue;
             }
 
-            let extraction = extractor.extract_path_report(&record.path)?;
+            let extraction =
+                extractor.extract_path_report_checked(&record.path, || cancellation.check())?;
             cancellation.check()?;
             let status = extraction.status.clone();
             let decision = quarantine.record_report(&extraction);

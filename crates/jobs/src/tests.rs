@@ -501,6 +501,42 @@ fn progress_store_read_surfaces_path_probe_failures() {
 }
 
 #[test]
+fn progress_store_checked_read_honors_pre_cancelled_control_before_file_open() {
+    let path = temp_path("gfm-job-progress-read-cancel", "gfmprogress");
+    let store = JobProgressStore::new(&path);
+
+    let result = store.read_checked(|| Err(GfmError::Cancelled));
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(!path.exists());
+}
+
+#[test]
+fn progress_restore_checked_honors_pre_cancelled_control_before_file_open() {
+    let path = temp_path("gfm-job-progress-restore-cancel", "gfmprogress");
+    let store = JobProgressStore::new(&path);
+
+    let result = store.restore_interrupted_checked(99, || Err(GfmError::Cancelled));
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(!path.exists());
+}
+
+#[test]
+fn progress_command_checked_honors_pre_cancelled_control_before_file_open() {
+    let path = temp_path("gfm-job-progress-command-cancel", "gfmprogress");
+    let store = JobProgressStore::new(&path);
+
+    let result =
+        store.apply_command_checked(JobId::from_raw(1), JobProgressCommand::Pause, 99, || {
+            Err(GfmError::Cancelled)
+        });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(!path.exists());
+}
+
+#[test]
 fn progress_restore_interrupted_surfaces_path_probe_failures() {
     let root = temp_dir("gfm-job-progress-restore-probe");
     let path = unprobeable_child_path(&root, "job-progress-restore-unavailable", "gfmprogress");
@@ -1504,6 +1540,28 @@ fn payload_catalog_read_surfaces_path_probe_failures() {
         .to_string()
         .contains("job payload catalog existence unavailable"));
     std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn payload_catalog_checked_read_honors_pre_cancelled_control_before_file_open() {
+    let path = temp_path("gfm-job-payload-catalog-read-cancel", "gfmjobs");
+    let catalog = JobPayloadCatalog::new(&path);
+
+    let result = catalog.read_checked(|| Err(GfmError::Cancelled));
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(!path.exists());
+}
+
+#[test]
+fn payload_catalog_checked_filtered_read_honors_pre_cancelled_control_before_file_open() {
+    let path = temp_path("gfm-job-payload-catalog-filter-cancel", "gfmjobs");
+    let catalog = JobPayloadCatalog::new(&path);
+
+    let result = catalog.read_for_ids_checked([JobId::from_raw(1)], || Err(GfmError::Cancelled));
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(!path.exists());
 }
 
 #[test]

@@ -212,21 +212,39 @@ impl JobProgressStore {
     }
 
     pub fn read(&self) -> Result<Vec<JobProgressSnapshot>> {
-        self.read_filtered(|_| true)
+        self.read_filtered_checked(|_| true, || Ok(()))
+    }
+
+    pub fn read_checked(
+        &self,
+        check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<JobProgressSnapshot>> {
+        self.read_filtered_checked(|_| true, check_control)
     }
 
     pub fn restorable(&self) -> Result<Vec<JobProgressSnapshot>> {
-        self.read_filtered(|snapshot| snapshot.state.restorable())
+        self.read_filtered_checked(|snapshot| snapshot.state.restorable(), || Ok(()))
     }
 
-    fn read_filtered(
+    pub fn restorable_checked(
+        &self,
+        check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<JobProgressSnapshot>> {
+        self.read_filtered_checked(|snapshot| snapshot.state.restorable(), check_control)
+    }
+
+    fn read_filtered_checked(
         &self,
         mut keep: impl FnMut(&JobProgressSnapshot) -> bool,
+        mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<Vec<JobProgressSnapshot>> {
+        check_control()?;
         if !progress_path_exists(&self.path)? {
             return Ok(Vec::new());
         }
+        check_control()?;
         let file = File::open(&self.path).map_err(|err| GfmError::io(&self.path, err))?;
+        check_control()?;
         let mut lines = BufReader::new(file).lines();
         let header = lines
             .next()
@@ -235,6 +253,7 @@ impl JobProgressStore {
             .ok_or_else(|| {
                 GfmError::Format(format!("empty job progress store {}", self.path.display()))
             })?;
+        check_control()?;
         if header != MAGIC {
             return Err(GfmError::Format(format!(
                 "unsupported job progress header `{header}` in {}",
@@ -243,7 +262,9 @@ impl JobProgressStore {
         }
         let mut snapshots = Vec::new();
         for (line_index, line) in lines.enumerate() {
+            check_control()?;
             let line = line.map_err(|err| GfmError::io(&self.path, err))?;
+            check_control()?;
             let snapshot = parse_snapshot(&line).map_err(|err| {
                 GfmError::Format(format!(
                     "{} line {}: {}",
@@ -256,16 +277,24 @@ impl JobProgressStore {
                 snapshots.push(snapshot);
             }
         }
+        check_control()?;
         Ok(snapshots)
     }
 
     pub fn restore_interrupted(&self, updated_ms: u64) -> Result<Vec<JobProgressSnapshot>> {
-        if !progress_path_exists(&self.path)? {
-            return Ok(Vec::new());
-        }
-        let mut snapshots = self.read()?;
+        self.restore_interrupted_checked(updated_ms, || Ok(()))
+    }
+
+    pub fn restore_interrupted_checked(
+        &self,
+        updated_ms: u64,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<JobProgressSnapshot>> {
+        let mut snapshots = self.read_checked(&mut check_control)?;
+        check_control()?;
         let mut changed = false;
         for snapshot in &mut snapshots {
+            check_control()?;
             if matches!(
                 snapshot.state,
                 JobProgressState::Planned | JobProgressState::Running
@@ -282,7 +311,9 @@ impl JobProgressStore {
             }
         }
         if changed {
+            check_control()?;
             self.write_all(&snapshots)?;
+            check_control()?;
         }
         Ok(snapshots
             .into_iter()
@@ -296,7 +327,18 @@ impl JobProgressStore {
         command: JobProgressCommand,
         updated_ms: u64,
     ) -> Result<JobProgressSnapshot> {
-        let mut snapshots = self.read()?;
+        self.apply_command_checked(id, command, updated_ms, || Ok(()))
+    }
+
+    pub fn apply_command_checked(
+        &self,
+        id: JobId,
+        command: JobProgressCommand,
+        updated_ms: u64,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<JobProgressSnapshot> {
+        let mut snapshots = self.read_checked(&mut check_control)?;
+        check_control()?;
         let Some(snapshot) = snapshots.iter_mut().find(|snapshot| snapshot.id == id) else {
             return Err(GfmError::Format(format!(
                 "job progress store {} does not contain job {}",
@@ -308,7 +350,9 @@ impl JobProgressStore {
             return Ok(snapshot.clone());
         }
         let updated = snapshot.clone();
+        check_control()?;
         self.write_all(&snapshots)?;
+        check_control()?;
         Ok(updated)
     }
 

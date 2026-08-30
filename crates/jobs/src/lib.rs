@@ -654,51 +654,47 @@ impl JobPayloadCatalog {
     }
 
     pub fn read(&self) -> Result<Vec<JobPayloadRecord>> {
-        if !path_exists(&self.path, "job payload catalog")? {
-            return Ok(Vec::new());
-        }
-        let file = File::open(&self.path).map_err(|err| GfmError::io(&self.path, err))?;
-        let mut lines = BufReader::new(file).lines();
-        let header = lines
-            .next()
-            .transpose()
-            .map_err(|err| GfmError::io(&self.path, err))?
-            .ok_or_else(|| {
-                GfmError::Format(format!("empty payload catalog {}", self.path.display()))
-            })?;
-        if header != "gfm-job-payload-catalog-v1" {
-            return Err(GfmError::Format(format!(
-                "unsupported payload catalog header `{header}` in {}",
-                self.path.display()
-            )));
-        }
-        let mut records = Vec::new();
-        for (line_index, line) in lines.enumerate() {
-            let line = line.map_err(|err| GfmError::io(&self.path, err))?;
-            records.push(parse_payload_record(&line).map_err(|err| {
-                GfmError::Format(format!(
-                    "{} line {}: {}",
-                    self.path.display(),
-                    line_index + 2,
-                    err
-                ))
-            })?);
-        }
-        Ok(records)
+        self.read_filtered_checked(None, || Ok(()))
+    }
+
+    pub fn read_checked(
+        &self,
+        check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<JobPayloadRecord>> {
+        self.read_filtered_checked(None, check_control)
     }
 
     pub fn read_for_ids(
         &self,
         ids: impl IntoIterator<Item = JobId>,
     ) -> Result<Vec<JobPayloadRecord>> {
+        self.read_for_ids_checked(ids, || Ok(()))
+    }
+
+    pub fn read_for_ids_checked(
+        &self,
+        ids: impl IntoIterator<Item = JobId>,
+        check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<JobPayloadRecord>> {
         let wanted = ids.into_iter().collect::<HashSet<_>>();
         if wanted.is_empty() {
             return Ok(Vec::new());
         }
+        self.read_filtered_checked(Some(wanted), check_control)
+    }
+
+    fn read_filtered_checked(
+        &self,
+        wanted: Option<HashSet<JobId>>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<JobPayloadRecord>> {
+        check_control()?;
         if !path_exists(&self.path, "job payload catalog")? {
             return Ok(Vec::new());
         }
+        check_control()?;
         let file = File::open(&self.path).map_err(|err| GfmError::io(&self.path, err))?;
+        check_control()?;
         let mut lines = BufReader::new(file).lines();
         let header = lines
             .next()
@@ -707,6 +703,7 @@ impl JobPayloadCatalog {
             .ok_or_else(|| {
                 GfmError::Format(format!("empty payload catalog {}", self.path.display()))
             })?;
+        check_control()?;
         if header != "gfm-job-payload-catalog-v1" {
             return Err(GfmError::Format(format!(
                 "unsupported payload catalog header `{header}` in {}",
@@ -715,7 +712,9 @@ impl JobPayloadCatalog {
         }
         let mut records = Vec::new();
         for (line_index, line) in lines.enumerate() {
+            check_control()?;
             let line = line.map_err(|err| GfmError::io(&self.path, err))?;
+            check_control()?;
             let record = parse_payload_record(&line).map_err(|err| {
                 GfmError::Format(format!(
                     "{} line {}: {}",
@@ -724,7 +723,10 @@ impl JobPayloadCatalog {
                     err
                 ))
             })?;
-            if wanted.contains(&record.id) {
+            if wanted
+                .as_ref()
+                .is_none_or(|wanted| wanted.contains(&record.id))
+            {
                 if let Some(index) = records
                     .iter()
                     .position(|existing: &JobPayloadRecord| existing.id == record.id)
@@ -735,6 +737,7 @@ impl JobPayloadCatalog {
                 }
             }
         }
+        check_control()?;
         Ok(records)
     }
 

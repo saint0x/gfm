@@ -49,6 +49,7 @@ pub const ARCHIVE_EXTRACTOR_VERSION: u32 = 5;
 pub const STRUCTURED_EXTRACTOR_VERSION: u32 = 3;
 pub const UNSUPPORTED_EXTRACTOR_VERSION: u32 = 1;
 pub const EXTRACTOR_VERSION: u32 = ARCHIVE_EXTRACTOR_VERSION;
+const EXTRACTION_READ_CHUNK_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct Extractor {
@@ -65,6 +66,15 @@ impl Extractor {
     }
 
     pub fn extract_record(&self, record: &FileRecord) -> Result<Option<ContentDocument>> {
+        self.extract_record_checked(record, || Ok(()))
+    }
+
+    pub fn extract_record_checked(
+        &self,
+        record: &FileRecord,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Option<ContentDocument>> {
+        check_control()?;
         if record.kind != FileKind::File {
             return Ok(None);
         }
@@ -83,7 +93,7 @@ impl Extractor {
         if !self.accepts_path(&record.path) {
             return Ok(None);
         }
-        self.extract_path(&record.path)
+        self.extract_path_checked(&record.path, check_control)
     }
 
     pub fn snippet_for_record(
@@ -93,9 +103,21 @@ impl Extractor {
         phrases: &[String],
         context_bytes: usize,
     ) -> Result<Option<SearchSnippet>> {
-        let Some(document) = self.extract_record(record)? else {
+        self.snippet_for_record_checked(record, terms, phrases, context_bytes, || Ok(()))
+    }
+
+    pub fn snippet_for_record_checked(
+        &self,
+        record: &FileRecord,
+        terms: &[String],
+        phrases: &[String],
+        context_bytes: usize,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Option<SearchSnippet>> {
+        let Some(document) = self.extract_record_checked(record, &mut check_control)? else {
             return Ok(None);
         };
+        check_control()?;
         Ok(build_snippet(
             &document.text,
             terms,
@@ -105,11 +127,30 @@ impl Extractor {
     }
 
     pub fn extract_path(&self, path: impl AsRef<Path>) -> Result<Option<ContentDocument>> {
-        Ok(self.extract_path_report(path)?.document)
+        self.extract_path_checked(path, || Ok(()))
+    }
+
+    pub fn extract_path_checked(
+        &self,
+        path: impl AsRef<Path>,
+        check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Option<ContentDocument>> {
+        Ok(self
+            .extract_path_report_checked(path, check_control)?
+            .document)
     }
 
     pub fn extract_path_report(&self, path: impl AsRef<Path>) -> Result<ExtractionReport> {
+        self.extract_path_report_checked(path, || Ok(()))
+    }
+
+    pub fn extract_path_report_checked(
+        &self,
+        path: impl AsRef<Path>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<ExtractionReport> {
         let path = path.as_ref();
+        check_control()?;
         if !self.accepts_path(path) {
             return Ok(report_without_metadata(
                 path,
@@ -117,7 +158,9 @@ impl Extractor {
                 ExtractionStatus::Skipped("unsupported-extension"),
             ));
         }
+        check_control()?;
         let metadata = std::fs::metadata(path).map_err(|err| GfmError::io(path, err))?;
+        check_control()?;
         let extractor_version = extractor_version_for_path(path);
         let fingerprint = ExtractionFingerprint::from_metadata(&metadata, extractor_version);
         let office = office_kind(path);
@@ -145,11 +188,8 @@ impl Extractor {
             });
         }
 
-        let file = File::open(path).map_err(|err| GfmError::io(path, err))?;
-        let mut bytes = Vec::with_capacity(metadata.len().min(max_bytes) as usize);
-        file.take(max_bytes)
-            .read_to_end(&mut bytes)
-            .map_err(|err| GfmError::io(path, err))?;
+        let bytes = read_limited_file_checked(path, max_bytes, metadata.len(), &mut check_control)?;
+        check_control()?;
 
         if is_pdf {
             let (status, document) = extract_pdf(&bytes, &self.policy);
@@ -249,6 +289,31 @@ impl Extractor {
                 .and_then(|extension| extension.to_str())
                 .map(|extension| self.policy.extensions.contains(&extension.to_lowercase()))
                 .unwrap_or(false)
+    }
+}
+
+fn read_limited_file_checked(
+    path: &Path,
+    max_bytes: u64,
+    len: u64,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Vec<u8>> {
+    check_control()?;
+    let file = File::open(path).map_err(|err| GfmError::io(path, err))?;
+    check_control()?;
+    let mut reader = file.take(max_bytes);
+    let mut bytes = Vec::with_capacity(len.min(max_bytes) as usize);
+    let mut buffer = [0_u8; EXTRACTION_READ_CHUNK_BYTES];
+    loop {
+        check_control()?;
+        let read = reader
+            .read(&mut buffer)
+            .map_err(|err| GfmError::io(path, err))?;
+        check_control()?;
+        if read == 0 {
+            return Ok(bytes);
+        }
+        bytes.extend_from_slice(&buffer[..read]);
     }
 }
 
