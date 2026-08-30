@@ -24,10 +24,12 @@ pub enum ParityFixtureScenario {
     NetworkVolume,
     Trash,
     ConflictSheet,
+    Sheet,
+    Menu,
 }
 
 impl ParityFixtureScenario {
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 19] = [
         Self::Icon,
         Self::List,
         Self::Column,
@@ -45,6 +47,8 @@ impl ParityFixtureScenario {
         Self::NetworkVolume,
         Self::Trash,
         Self::ConflictSheet,
+        Self::Sheet,
+        Self::Menu,
     ];
 
     pub const fn directory(self) -> &'static str {
@@ -66,6 +70,8 @@ impl ParityFixtureScenario {
             Self::NetworkVolume => "network-volume",
             Self::Trash => "trash",
             Self::ConflictSheet => "conflict-sheet",
+            Self::Sheet => "sheet",
+            Self::Menu => "menu",
         }
     }
 
@@ -81,7 +87,9 @@ impl ParityFixtureScenario {
             | Self::ExternalVolume
             | Self::NetworkVolume
             | Self::Trash
-            | Self::ConflictSheet => "icon",
+            | Self::ConflictSheet
+            | Self::Sheet
+            | Self::Menu => "icon",
             Self::List | Self::Huge => "list",
             Self::Column | Self::Sidebar => "column",
             Self::Gallery | Self::Search => "gallery",
@@ -217,6 +225,8 @@ fn materialize_scenario(
         ParityFixtureScenario::NetworkVolume => network_volume_fixture(&mut writer)?,
         ParityFixtureScenario::Trash => trash_fixture(&mut writer)?,
         ParityFixtureScenario::ConflictSheet => conflict_sheet_fixture(&mut writer)?,
+        ParityFixtureScenario::Sheet => sheet_fixture(&mut writer)?,
+        ParityFixtureScenario::Menu => menu_fixture(&mut writer)?,
     }
 
     Ok(ParityFixtureScenarioReport {
@@ -389,6 +399,27 @@ fn conflict_sheet_fixture(writer: &mut ScenarioWriter) -> Result<()> {
     )
 }
 
+fn sheet_fixture(writer: &mut ScenarioWriter) -> Result<()> {
+    writer.file(
+        "Permission Target/Documents/Protected.md",
+        "protected document\n",
+    )?;
+    writer.file("Rename Target.txt", "rename sheet target\n")?;
+    writer.file(
+        ".gfm-sheet-states.tsv",
+        "surface\ttitle\tdefault-action\tcancel-action\tfocus\npermission\tGFM Needs Access\tcontinue\tcancel\tcontinue\nrename\tRename Finder Item\trename\tcancel\tfield\noperation-progress\tCopying Items\tstop\tclose\tstop\n",
+    )
+}
+
+fn menu_fixture(writer: &mut ScenarioWriter) -> Result<()> {
+    writer.file("Selected File.txt", "selected menu target\n")?;
+    writer.dir("Selected Folder")?;
+    writer.file(
+        ".gfm-menu-states.tsv",
+        "surface\tselection\titems\tdefault-item\tdestructive-item\nfile-context\tSelected File.txt\topen,open-with,rename,move-to-trash\topen\tmove-to-trash\nfolder-context\tSelected Folder\topen,new-folder,rename,move-to-trash\topen\tmove-to-trash\nempty-space\t-\tnew-folder,paste,view-options\tnew-folder\t-\n",
+    )
+}
+
 fn write_manifest(path: &Path, scenarios: &[ParityFixtureScenarioReport]) -> Result<()> {
     let mut file = fs::File::create(path).map_err(|err| GfmError::io(path, err))?;
     writeln!(file, "scenario\troot\tfinder-view\tfiles\tdirectories")
@@ -488,6 +519,16 @@ mod tests {
             .join("conflict-sheet")
             .join(".gfm-operation-conflicts.tsv")
             .exists());
+        assert!(report
+            .fixture_root
+            .join("sheet")
+            .join(".gfm-sheet-states.tsv")
+            .exists());
+        assert!(report
+            .fixture_root
+            .join("menu")
+            .join(".gfm-menu-states.tsv")
+            .exists());
         assert!(report.files_materialized() > ParityFixtureScenario::ALL.len());
 
         fs::remove_dir_all(root).unwrap();
@@ -506,6 +547,8 @@ mod tests {
         assert!(manifest.contains("network-volume\t"));
         assert!(manifest.contains("trash\t"));
         assert!(manifest.contains("conflict-sheet\t"));
+        assert!(manifest.contains("sheet\t"));
+        assert!(manifest.contains("menu\t"));
 
         fs::remove_dir_all(root).unwrap();
     }
