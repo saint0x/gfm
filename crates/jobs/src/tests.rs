@@ -1057,6 +1057,66 @@ fn job_journal_append_accepts_relative_leaf_path() {
 }
 
 #[test]
+fn job_journal_append_checked_honors_pre_cancelled_control_before_file_create() {
+    let path = temp_path("gfm-job-journal-append-pre-cancel", "journal");
+    let journal = JobJournal::new(&path);
+    let entry = sample_journal_entry(41, TaskStatus::Started);
+
+    let result = journal.append_checked(&entry, || Err(GfmError::Cancelled));
+
+    assert_eq!(result, Err(GfmError::Cancelled));
+    assert!(!path.exists());
+}
+
+#[test]
+fn job_journal_append_checked_preserves_existing_journal_when_cancelled_before_write() {
+    let path = temp_path("gfm-job-journal-append-preserve", "journal");
+    let journal = JobJournal::new(&path);
+    let existing = sample_journal_entry(41, TaskStatus::Started);
+    let next = sample_journal_entry(41, TaskStatus::Completed);
+    journal.append(&existing).unwrap();
+    let before = std::fs::read_to_string(&path).unwrap();
+    let mut checks = 0usize;
+
+    let result = journal.append_checked(&next, || {
+        checks += 1;
+        if checks >= 4 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert_eq!(result, Err(GfmError::Cancelled));
+    assert!(checks >= 4);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+    assert_eq!(journal.read().unwrap(), vec![existing]);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn job_journal_append_checked_does_not_report_cancel_after_line_commit() {
+    let path = temp_path("gfm-job-journal-append-after-commit", "journal");
+    let journal = JobJournal::new(&path);
+    let entry = sample_journal_entry(41, TaskStatus::Completed);
+    let mut checks = 0usize;
+
+    let result = journal.append_checked(&entry, || {
+        checks += 1;
+        if checks >= 5 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert_eq!(result, Ok(()));
+    assert_eq!(checks, 4);
+    assert_eq!(journal.read().unwrap(), vec![entry]);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn job_journal_read_surfaces_path_probe_failures() {
     let root = temp_dir("gfm-job-journal-probe");
     let path = unprobeable_child_path(&root, "job-journal-unavailable", "journal");
@@ -1494,7 +1554,7 @@ fn payload_catalog_write_all_checked_preserves_existing_catalog_when_cancelled_b
 
     let result = catalog.write_all_checked(std::slice::from_ref(&replacement), || {
         checks += 1;
-        if checks >= 9 {
+        if checks >= 4 {
             Err(GfmError::Cancelled)
         } else {
             Ok(())
@@ -1502,7 +1562,7 @@ fn payload_catalog_write_all_checked_preserves_existing_catalog_when_cancelled_b
     });
 
     assert_eq!(result, Err(GfmError::Cancelled));
-    assert!(checks >= 9);
+    assert!(checks >= 4);
     assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
     assert_eq!(catalog.read().unwrap(), vec![existing]);
     assert!(!has_payload_catalog_temp_file(&path));
@@ -1782,6 +1842,15 @@ fn sample_payload_record(id: u64) -> JobPayloadRecord {
         Some(VolumeId(7)),
         format!("preview item {id}"),
     )
+}
+
+fn sample_journal_entry(id: u64, status: TaskStatus) -> JournalEntry {
+    JournalEntry {
+        id: JobId::from_raw(id),
+        label: "journalled job".to_string(),
+        attempt: 1,
+        status,
+    }
 }
 
 fn has_payload_catalog_temp_file(path: &Path) -> bool {

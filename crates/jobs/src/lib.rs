@@ -796,24 +796,41 @@ impl JobJournal {
     }
 
     pub fn append(&self, entry: &JournalEntry) -> Result<()> {
+        self.append_checked(entry, || Ok(()))
+    }
+
+    pub fn append_checked(
+        &self,
+        entry: &JournalEntry,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<()> {
+        check_control()?;
         let parent = real_parent_or_cwd(&self.path);
         fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
+        check_control()?;
         let file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&self.path)
             .map_err(|err| GfmError::io(&self.path, err))?;
+        check_control()?;
         let mut writer = BufWriter::new(file);
-        writeln!(
-            writer,
-            "{}\t{}\t{}\t{}",
-            entry.id.value(),
-            entry.attempt,
-            encode_status(&entry.status),
-            escape(&entry.label),
-        )
-        .map_err(|err| GfmError::io(&self.path, err))?;
-        writer.flush().map_err(|err| GfmError::io(&self.path, err))
+        write_journal_line_checked(
+            &mut writer,
+            &self.path,
+            &format!(
+                "{}\t{}\t{}\t{}",
+                entry.id.value(),
+                entry.attempt,
+                encode_status(&entry.status),
+                escape(&entry.label),
+            ),
+            &mut check_control,
+        )?;
+        writer
+            .flush()
+            .map_err(|err| GfmError::io(&self.path, err))?;
+        Ok(())
     }
 
     pub fn read(&self) -> Result<Vec<JournalEntry>> {
@@ -1149,8 +1166,12 @@ fn execute_retriable_task(
             attempt,
             status: TaskStatus::Started,
         };
-        if let Err(err) = journal.append(&started) {
-            final_status = TaskStatus::Failed(err.to_string());
+        if let Err(err) = append_journal_entry_checked(journal, &started, &cancellation) {
+            final_status = if matches!(err, GfmError::Cancelled) {
+                TaskStatus::Cancelled
+            } else {
+                TaskStatus::Failed(err.to_string())
+            };
             break;
         }
 
@@ -1216,6 +1237,20 @@ fn execute_retriable_task(
         }
     }
     final_status
+}
+
+fn append_journal_entry_checked(
+    journal: &JobJournal,
+    entry: &JournalEntry,
+    cancellation: &Cancellation,
+) -> Result<()> {
+    journal.append_checked(entry, || {
+        if cancellation.is_cancelled() {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    })
 }
 
 fn sleep_retry_backoff_cancellable(delay_ms: u64, cancellation: &Cancellation) -> bool {
@@ -1348,6 +1383,22 @@ fn write_payload_catalog_line_checked(
         .write_all(b"\n")
         .map_err(|err| GfmError::io(path, err))?;
     check_control()?;
+    Ok(())
+}
+
+fn write_journal_line_checked(
+    writer: &mut impl Write,
+    path: &Path,
+    line: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    check_control()?;
+    writer
+        .write_all(line.as_bytes())
+        .map_err(|err| GfmError::io(path, err))?;
+    writer
+        .write_all(b"\n")
+        .map_err(|err| GfmError::io(path, err))?;
     Ok(())
 }
 

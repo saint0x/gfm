@@ -213,7 +213,6 @@ impl JobProgressStore {
                 .map_err(|err| GfmError::io(&tmp, err))?;
             check_control()?;
             fs::rename(&tmp, &self.path).map_err(|err| GfmError::io(&self.path, err))?;
-            check_control()?;
             Ok(())
         })();
         if result.is_err() {
@@ -684,6 +683,35 @@ mod tests {
         });
 
         assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert_eq!(store.read().unwrap(), vec![original]);
+        assert!(!has_progress_temp_file(&path));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn progress_store_checked_write_preserves_existing_store_when_cancelled_before_publish() {
+        let path = temp_path("write-preserve-before-publish");
+        let store = JobProgressStore::new(&path);
+        let original = sample_running_progress(1);
+        store.write_all(std::slice::from_ref(&original)).unwrap();
+        let before = fs::read_to_string(&path).unwrap();
+        let replacement = original
+            .clone()
+            .with_progress(JobProgressState::Completed, 1, "done", 2);
+        let mut checks = 0usize;
+
+        let result = store.write_all_checked(std::slice::from_ref(&replacement), || {
+            checks += 1;
+            if checks >= 10 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert_eq!(result, Err(GfmError::Cancelled));
+        assert!(checks >= 10);
+        assert_eq!(fs::read_to_string(&path).unwrap(), before);
         assert_eq!(store.read().unwrap(), vec![original]);
         assert!(!has_progress_temp_file(&path));
         let _ = fs::remove_file(path);
