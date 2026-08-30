@@ -60,10 +60,13 @@ fn extraction_volume_class_from_report(
     if let Some(volume) = report.volume_for_path(path) {
         return extraction_volume_class_for_descriptor(volume);
     }
-    fallback_extraction_volume_class_for_path(path)
+    conservative_unknown_extraction_volume_class()
 }
 
 fn extraction_volume_class_for_descriptor(volume: &VolumeDescriptor) -> ExtractionVolumeClass {
+    if volume.platform_state_unavailable() {
+        return conservative_unknown_extraction_volume_class();
+    }
     if volume.network || volume.local == Some(false) || volume.kind == VolumeKind::Network {
         return ExtractionVolumeClass::Network;
     }
@@ -74,9 +77,8 @@ fn extraction_volume_class_for_descriptor(volume: &VolumeDescriptor) -> Extracti
         VolumeKind::External | VolumeKind::Removable | VolumeKind::DiskImage => {
             ExtractionVolumeClass::External
         }
-        VolumeKind::System | VolumeKind::Internal | VolumeKind::Unknown => {
-            ExtractionVolumeClass::Local
-        }
+        VolumeKind::System | VolumeKind::Internal => ExtractionVolumeClass::Local,
+        VolumeKind::Unknown => conservative_unknown_extraction_volume_class(),
         VolumeKind::Network => ExtractionVolumeClass::Network,
     }
 }
@@ -95,27 +97,8 @@ fn descriptor_reports_cloud_storage(volume: &VolumeDescriptor) -> bool {
     .any(extraction_cloud_token)
 }
 
-fn fallback_extraction_volume_class_for_path(path: &Path) -> ExtractionVolumeClass {
-    let normalized = path
-        .to_string_lossy()
-        .to_ascii_lowercase()
-        .replace('\\', "/");
-    if normalized.contains("/network/")
-        || normalized.contains("/net/")
-        || normalized.contains("/smb/")
-        || normalized.contains("/nfs/")
-    {
-        ExtractionVolumeClass::Network
-    } else if normalized.contains("/mobile documents/")
-        || normalized.contains("cloud")
-        || normalized.contains("fileprovider")
-    {
-        ExtractionVolumeClass::Cloud
-    } else if normalized.starts_with("/volumes/") {
-        ExtractionVolumeClass::External
-    } else {
-        ExtractionVolumeClass::Local
-    }
+fn conservative_unknown_extraction_volume_class() -> ExtractionVolumeClass {
+    ExtractionVolumeClass::Network
 }
 
 fn extraction_cloud_token(value: &str) -> bool {
@@ -725,6 +708,60 @@ mod tests {
         assert_eq!(
             extraction_volume_class_from_report(&input, &report),
             ExtractionVolumeClass::Cloud
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn extraction_volume_class_constrains_unknown_descriptor() {
+        let root = unique_temp_dir("gfm-extract-volume-unknown-descriptor");
+        let input = root.join("Project.md");
+        fs::write(&input, "unknown").unwrap();
+        let mut report = VolumeDiscoveryReport::from_paths(vec![root.clone()]);
+        report.volumes[0].kind = VolumeKind::Unknown;
+        report.volumes[0].network = false;
+        report.volumes[0].local = None;
+
+        assert_eq!(
+            extraction_volume_class_from_report(&input, &report),
+            ExtractionVolumeClass::Network
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn extraction_volume_class_constrains_unavailable_volume_api_state() {
+        let root = unique_temp_dir("gfm-extract-volume-unavailable-api");
+        let input = root.join("Project.md");
+        fs::write(&input, "unavailable").unwrap();
+        let mut report = VolumeDiscoveryReport::from_paths(vec![root.clone()]);
+        report.volumes[0].kind = VolumeKind::Internal;
+        report.volumes[0].network = false;
+        report.volumes[0].local = Some(true);
+        report.volumes[0].native_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        report.volumes[0].resource_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        report.volumes[0].mount_table_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+
+        assert_eq!(
+            extraction_volume_class_from_report(&input, &report),
+            ExtractionVolumeClass::Network
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn extraction_volume_class_constrains_missing_descriptor_without_path_guessing() {
+        let root = unique_temp_dir("gfm-extract-volume-missing-descriptor");
+        let input = root.join("ordinary-local-name.md");
+        fs::write(&input, "missing descriptor").unwrap();
+        let report = VolumeDiscoveryReport { volumes: vec![] };
+
+        assert_eq!(
+            extraction_volume_class_from_report(&input, &report),
+            ExtractionVolumeClass::Network
         );
 
         fs::remove_dir_all(root).unwrap();
