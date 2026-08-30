@@ -149,21 +149,34 @@ fn index_comment(
 }
 
 pub fn write_metadata_postings(path: impl AsRef<Path>, postings: &[MetadataPosting]) -> Result<()> {
+    write_metadata_postings_checked(path, postings, || Ok(()))
+}
+
+pub fn write_metadata_postings_checked(
+    path: impl AsRef<Path>,
+    postings: &[MetadataPosting],
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
     let path = path.as_ref();
-    durable::atomic_write(path, |writer| {
+    durable::atomic_write_checked(path, &mut check_control, |writer, check_control| {
         let mut bytes = Vec::new();
         {
             let mut archive = CountingWriter::new(&mut bytes);
-            archive.write_all(METADATA_MAGIC_V3)?;
-            write_varint(&mut archive, postings.len() as u64)?;
+            archive
+                .write_all(METADATA_MAGIC_V3)
+                .map_err(|err| GfmError::io(path, err))?;
+            write_varint(&mut archive, postings.len() as u64)
+                .map_err(|err| GfmError::io(path, err))?;
             let mut directory = Vec::with_capacity(postings.len());
             let mut postings = postings.to_vec();
             postings.sort_by(|left, right| {
                 (left.field, left.term.as_str()).cmp(&(right.field, right.term.as_str()))
             });
             for posting in &postings {
+                check_control()?;
                 let offset = archive.position();
-                write_metadata_posting(&mut archive, posting, MetadataStoreVersion::V3)?;
+                write_metadata_posting(&mut archive, posting, MetadataStoreVersion::V3)
+                    .map_err(|err| GfmError::io(path, err))?;
                 let end = archive.position();
                 directory.push(MetadataDirectoryEntry {
                     field: posting.field,
@@ -173,17 +186,29 @@ pub fn write_metadata_postings(path: impl AsRef<Path>, postings: &[MetadataPosti
                 });
             }
             let directory_offset = archive.position();
-            write_varint(&mut archive, directory.len() as u64)?;
+            write_varint(&mut archive, directory.len() as u64)
+                .map_err(|err| GfmError::io(path, err))?;
             for entry in &directory {
-                write_directory_entry(&mut archive, entry)?;
+                check_control()?;
+                write_directory_entry(&mut archive, entry)
+                    .map_err(|err| GfmError::io(path, err))?;
             }
-            archive.write_all(&directory_offset.to_le_bytes())?;
-            archive.write_all(METADATA_INDEX_FOOTER)?;
+            check_control()?;
+            archive
+                .write_all(&directory_offset.to_le_bytes())
+                .map_err(|err| GfmError::io(path, err))?;
+            archive
+                .write_all(METADATA_INDEX_FOOTER)
+                .map_err(|err| GfmError::io(path, err))?;
         }
         let mut footer = Vec::new();
-        write_checksum_footer(&mut footer, &bytes, METADATA_CHECKSUM_FOOTER)?;
+        write_checksum_footer(&mut footer, &bytes, METADATA_CHECKSUM_FOOTER)
+            .map_err(|err| GfmError::io(path, err))?;
         bytes.extend(footer);
-        writer.write_all(&bytes)?;
+        check_control()?;
+        writer
+            .write_all(&bytes)
+            .map_err(|err| GfmError::io(path, err))?;
         Ok(())
     })
     .map(|_| ())

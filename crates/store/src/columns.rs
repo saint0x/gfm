@@ -52,29 +52,46 @@ pub struct MmapRecordColumns {
 }
 
 pub fn write_record_columns(path: impl AsRef<Path>, records: &[FileRecord]) -> Result<()> {
-    write_record_columns_v2(path, records)
+    write_record_columns_checked(path, records, || Ok(()))
 }
 
-fn write_record_columns_v2(path: impl AsRef<Path>, records: &[FileRecord]) -> Result<()> {
+pub fn write_record_columns_checked(
+    path: impl AsRef<Path>,
+    records: &[FileRecord],
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    write_record_columns_v2_checked(path, records, &mut check_control)
+}
+
+fn write_record_columns_v2_checked(
+    path: impl AsRef<Path>,
+    records: &[FileRecord],
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
     let path = path.as_ref();
     let columns = records
         .iter()
         .map(RecordColumn::from_record)
         .collect::<Vec<_>>();
     let string_ids = string_pool_for_columns(&columns);
-    durable::atomic_write(path, |writer| {
+    durable::atomic_write_checked(path, &mut check_control, |writer, check_control| {
         let mut bytes = Vec::new();
-        bytes.write_all(COLUMNS_MAGIC_V2)?;
-        write_varint(&mut bytes, records.len() as u64)?;
-        write_varint(&mut bytes, string_ids.len() as u64)?;
+        bytes
+            .write_all(COLUMNS_MAGIC_V2)
+            .map_err(|err| GfmError::io(path, err))?;
+        write_varint(&mut bytes, records.len() as u64).map_err(|err| GfmError::io(path, err))?;
+        write_varint(&mut bytes, string_ids.len() as u64).map_err(|err| GfmError::io(path, err))?;
         for value in string_ids.keys() {
-            write_string(&mut bytes, value)?;
+            check_control()?;
+            write_string(&mut bytes, value).map_err(|err| GfmError::io(path, err))?;
         }
 
         let mut directory = Vec::with_capacity(columns.len());
         for column in &columns {
+            check_control()?;
             let offset = bytes.len() as u64;
-            write_column_v2(&mut bytes, column, &string_ids)?;
+            write_column_v2(&mut bytes, column, &string_ids)
+                .map_err(|err| GfmError::io(path, err))?;
             directory.push(ColumnDirectoryEntry {
                 id: column.id,
                 offset,
@@ -82,19 +99,29 @@ fn write_record_columns_v2(path: impl AsRef<Path>, records: &[FileRecord]) -> Re
             });
         }
         let directory_offset = bytes.len() as u64;
-        write_varint(&mut bytes, directory.len() as u64)?;
+        write_varint(&mut bytes, directory.len() as u64).map_err(|err| GfmError::io(path, err))?;
         for entry in &directory {
-            write_varint(&mut bytes, entry.id.volume.0)?;
-            write_varint(&mut bytes, entry.id.node)?;
-            write_varint(&mut bytes, entry.offset)?;
-            write_varint(&mut bytes, entry.len)?;
+            check_control()?;
+            write_varint(&mut bytes, entry.id.volume.0).map_err(|err| GfmError::io(path, err))?;
+            write_varint(&mut bytes, entry.id.node).map_err(|err| GfmError::io(path, err))?;
+            write_varint(&mut bytes, entry.offset).map_err(|err| GfmError::io(path, err))?;
+            write_varint(&mut bytes, entry.len).map_err(|err| GfmError::io(path, err))?;
         }
-        bytes.write_all(&directory_offset.to_le_bytes())?;
-        bytes.write_all(COLUMNS_INDEX_FOOTER)?;
+        check_control()?;
+        bytes
+            .write_all(&directory_offset.to_le_bytes())
+            .map_err(|err| GfmError::io(path, err))?;
+        bytes
+            .write_all(COLUMNS_INDEX_FOOTER)
+            .map_err(|err| GfmError::io(path, err))?;
         let mut footer = Vec::new();
-        write_checksum_footer(&mut footer, &bytes, COLUMNS_CHECKSUM_FOOTER)?;
+        write_checksum_footer(&mut footer, &bytes, COLUMNS_CHECKSUM_FOOTER)
+            .map_err(|err| GfmError::io(path, err))?;
         bytes.extend(footer);
-        writer.write_all(&bytes)?;
+        check_control()?;
+        writer
+            .write_all(&bytes)
+            .map_err(|err| GfmError::io(path, err))?;
         Ok(())
     })
     .map(|_| ())

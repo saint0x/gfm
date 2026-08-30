@@ -1,9 +1,9 @@
 use crate::{
     dictionary_terms_from_records, fuzzy_postings_from_records, metadata_postings_from_records,
-    prefix_postings_from_records, substring_postings_from_records, write_dictionary,
-    write_fuzzy_postings_checked, write_metadata_postings, write_prefix_postings_checked,
-    write_record_columns, write_substring_postings_checked, MmapDictionary, MmapFuzzyArchive,
-    MmapMetadataArchive, MmapPrefixArchive, MmapRecordArchive, MmapRecordColumns,
+    prefix_postings_from_records, substring_postings_from_records, write_dictionary_checked,
+    write_fuzzy_postings_checked, write_metadata_postings_checked, write_prefix_postings_checked,
+    write_record_columns_checked, write_substring_postings_checked, MmapDictionary,
+    MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive, MmapRecordArchive, MmapRecordColumns,
     MmapSubstringArchive,
 };
 use gfm_types::{FileRecord, GfmError, Result};
@@ -321,9 +321,10 @@ fn rebuild_sidecar_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<()> {
     match kind {
-        SidecarKind::Columns => write_record_columns(path, records),
+        SidecarKind::Columns => write_record_columns_checked(path, records, &mut check_control),
         SidecarKind::Metadata => {
-            write_metadata_postings(path, &metadata_postings_from_records(records))
+            let postings = metadata_postings_from_records(records);
+            write_metadata_postings_checked(path, &postings, &mut check_control)
         }
         SidecarKind::Prefixes => {
             let postings = prefix_postings_from_records(records);
@@ -337,7 +338,10 @@ fn rebuild_sidecar_checked(
             let postings = fuzzy_postings_from_records(records);
             write_fuzzy_postings_checked(path, &postings, &mut check_control)
         }
-        SidecarKind::Dictionary => write_dictionary(path, &dictionary_terms_from_records(records)),
+        SidecarKind::Dictionary => {
+            let terms = dictionary_terms_from_records(records);
+            write_dictionary_checked(path, &terms, &mut check_control)
+        }
     }
 }
 

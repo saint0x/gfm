@@ -123,7 +123,15 @@ pub fn dictionary_term_report_from_records(records: &[FileRecord]) -> Dictionary
 }
 
 pub fn write_dictionary(path: impl AsRef<Path>, terms: &[String]) -> Result<()> {
-    write_dictionary_with_block_size(path, terms, DEFAULT_BLOCK_SIZE)
+    write_dictionary_checked(path, terms, || Ok(()))
+}
+
+pub fn write_dictionary_checked(
+    path: impl AsRef<Path>,
+    terms: &[String],
+    check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    write_dictionary_with_block_size_checked(path, terms, DEFAULT_BLOCK_SIZE, check_control)
 }
 
 pub fn read_dictionary(path: impl AsRef<Path>) -> Result<Vec<String>> {
@@ -133,10 +141,20 @@ pub fn read_dictionary(path: impl AsRef<Path>) -> Result<Vec<String>> {
         .collect::<Result<Vec<_>>>()
 }
 
+#[cfg(test)]
 fn write_dictionary_with_block_size(
     path: impl AsRef<Path>,
     terms: &[String],
     block_size: usize,
+) -> Result<()> {
+    write_dictionary_with_block_size_checked(path, terms, block_size, || Ok(()))
+}
+
+fn write_dictionary_with_block_size_checked(
+    path: impl AsRef<Path>,
+    terms: &[String],
+    block_size: usize,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<()> {
     let path = path.as_ref();
     let block_size = block_size.max(1);
@@ -147,16 +165,20 @@ fn write_dictionary_with_block_size(
         .collect();
     terms.sort();
     terms.dedup();
-    durable::atomic_write(path, |writer| {
+    durable::atomic_write_checked(path, &mut check_control, |writer, check_control| {
         let mut bytes = Vec::new();
         {
             let mut archive = CountingWriter::new(&mut bytes);
-            archive.write_all(DICTIONARY_MAGIC_V1)?;
-            write_varint(&mut archive, terms.len() as u64)?;
-            write_varint(&mut archive, block_size as u64)?;
+            archive
+                .write_all(DICTIONARY_MAGIC_V1)
+                .map_err(|err| GfmError::io(path, err))?;
+            write_varint(&mut archive, terms.len() as u64)
+                .map_err(|err| GfmError::io(path, err))?;
+            write_varint(&mut archive, block_size as u64).map_err(|err| GfmError::io(path, err))?;
             let mut blocks = Vec::new();
             let mut previous = String::new();
             for (index, term) in terms.iter().enumerate() {
+                check_control()?;
                 if index % block_size == 0 {
                     let offset = archive.position();
                     blocks.push(DictionaryBlock {
@@ -166,27 +188,42 @@ fn write_dictionary_with_block_size(
                     });
                     previous.clear();
                 }
-                write_front_coded(&mut archive, &previous, term)?;
+                write_front_coded(&mut archive, &previous, term)
+                    .map_err(|err| GfmError::io(path, err))?;
                 previous = term.clone();
                 if let Some(block) = blocks.last_mut() {
                     block.entries += 1;
                 }
             }
             let directory_offset = archive.position();
-            write_varint(&mut archive, blocks.len() as u64)?;
+            write_varint(&mut archive, blocks.len() as u64)
+                .map_err(|err| GfmError::io(path, err))?;
             for block in &blocks {
-                write_varint(&mut archive, block.first.len() as u64)?;
-                archive.write_all(block.first.as_bytes())?;
-                write_varint(&mut archive, block.offset)?;
-                write_varint(&mut archive, block.entries)?;
+                check_control()?;
+                write_varint(&mut archive, block.first.len() as u64)
+                    .map_err(|err| GfmError::io(path, err))?;
+                archive
+                    .write_all(block.first.as_bytes())
+                    .map_err(|err| GfmError::io(path, err))?;
+                write_varint(&mut archive, block.offset).map_err(|err| GfmError::io(path, err))?;
+                write_varint(&mut archive, block.entries).map_err(|err| GfmError::io(path, err))?;
             }
-            archive.write_all(&directory_offset.to_le_bytes())?;
-            archive.write_all(DICTIONARY_INDEX_FOOTER)?;
+            check_control()?;
+            archive
+                .write_all(&directory_offset.to_le_bytes())
+                .map_err(|err| GfmError::io(path, err))?;
+            archive
+                .write_all(DICTIONARY_INDEX_FOOTER)
+                .map_err(|err| GfmError::io(path, err))?;
         }
         let mut footer = Vec::new();
-        write_checksum_footer(&mut footer, &bytes, DICTIONARY_CHECKSUM_FOOTER)?;
+        write_checksum_footer(&mut footer, &bytes, DICTIONARY_CHECKSUM_FOOTER)
+            .map_err(|err| GfmError::io(path, err))?;
         bytes.extend(footer);
-        writer.write_all(&bytes)?;
+        check_control()?;
+        writer
+            .write_all(&bytes)
+            .map_err(|err| GfmError::io(path, err))?;
         Ok(())
     })
     .map(|_| ())

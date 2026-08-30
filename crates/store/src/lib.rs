@@ -16,7 +16,9 @@ mod schema;
 mod sidecar;
 mod substring;
 
-pub use columns::{write_record_columns, MmapRecordColumns, RecordColumn};
+pub use columns::{
+    write_record_columns, write_record_columns_checked, MmapRecordColumns, RecordColumn,
+};
 pub use content::{
     read_content_postings, read_content_postings_checked, read_content_segment,
     read_content_segment_checked, write_content_postings, write_content_postings_checked,
@@ -54,7 +56,7 @@ pub use contentset::{
 };
 pub use dictionary::{
     dictionary_term_report_from_records, dictionary_terms_from_records, read_dictionary,
-    write_dictionary, DictionaryTermReport, MmapDictionary,
+    write_dictionary, write_dictionary_checked, DictionaryTermReport, MmapDictionary,
 };
 pub use durable::{atomic_write, atomic_write_checked, DurableCommit};
 pub use fuzzy::{
@@ -65,7 +67,8 @@ pub use fuzzy::{
 pub use metadata::{
     metadata_postings_from_records, metadata_postings_from_records_and_secondary,
     read_metadata_postings, read_metadata_postings_checked, write_metadata_postings,
-    LimitedMetadataPosting, MetadataField, MetadataPosting, MmapMetadataArchive,
+    write_metadata_postings_checked, LimitedMetadataPosting, MetadataField, MetadataPosting,
+    MmapMetadataArchive,
 };
 pub use prefix::{
     prefix_postings_from_records, read_prefix_postings, read_prefix_postings_checked,

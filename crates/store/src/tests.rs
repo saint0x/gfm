@@ -162,6 +162,97 @@ fn checked_fuzzy_write_preserves_existing_file_when_cancelled_before_publish() {
 }
 
 #[test]
+fn checked_metadata_write_preserves_existing_file_when_cancelled_before_publish() {
+    let path = temp_path("gfm-store-metadata-write-cancel", "gfmmeta");
+    let original = vec![MetadataPosting {
+        field: MetadataField::Tag,
+        term: "stable".to_string(),
+        ids: vec![FileId::new(VolumeId(4), 12)],
+    }];
+    let replacement = vec![MetadataPosting {
+        field: MetadataField::Tag,
+        term: "replacement".to_string(),
+        ids: vec![FileId::new(VolumeId(4), 13)],
+    }];
+    write_metadata_postings(&path, &original).unwrap();
+    let before = std::fs::read(&path).unwrap();
+    let mut checks = 0usize;
+
+    let result = write_metadata_postings_checked(&path, &replacement, || {
+        checks += 1;
+        if checks >= 5 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert_eq!(result, Err(GfmError::Cancelled));
+    assert!(checks >= 5);
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    assert_eq!(read_metadata_postings(&path).unwrap(), original);
+    assert!(!has_store_atomic_temp_file(&path));
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn checked_record_columns_write_preserves_existing_file_when_cancelled_before_publish() {
+    let path = temp_path("gfm-store-columns-write-cancel", "gfmcols");
+    let original = vec![sample_file_record(12, "stable.txt")];
+    let replacement = vec![sample_file_record(13, "replacement.txt")];
+    write_record_columns(&path, &original).unwrap();
+    let before = std::fs::read(&path).unwrap();
+    let mut checks = 0usize;
+
+    let result = write_record_columns_checked(&path, &replacement, || {
+        checks += 1;
+        if checks >= 5 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert_eq!(result, Err(GfmError::Cancelled));
+    assert!(checks >= 5);
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    let archive = MmapRecordColumns::open(&path).unwrap();
+    assert_eq!(archive.len(), 1);
+    assert_eq!(archive.column(0).unwrap().id, original[0].id);
+    assert!(!has_store_atomic_temp_file(&path));
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn checked_dictionary_write_preserves_existing_file_when_cancelled_before_publish() {
+    let path = temp_path("gfm-store-dictionary-write-cancel", "gfmdict");
+    let original = vec!["stable".to_string(), "alpha".to_string()];
+    let replacement = vec!["replacement".to_string(), "beta".to_string()];
+    write_dictionary(&path, &original).unwrap();
+    let before = std::fs::read(&path).unwrap();
+    let mut checks = 0usize;
+
+    let result = write_dictionary_checked(&path, &replacement, || {
+        checks += 1;
+        if checks >= 5 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert_eq!(result, Err(GfmError::Cancelled));
+    assert!(checks >= 5);
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+    assert_eq!(
+        read_dictionary(&path).unwrap(),
+        vec!["alpha".to_string(), "stable".to_string()]
+    );
+    assert!(!has_store_atomic_temp_file(&path));
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn mmap_record_archive_hydrates_records_from_immutable_map() {
     let path = temp_path("gfm-store-mmap", "idx");
     let records = vec![

@@ -18,11 +18,11 @@ use gfm_store::{
     plan_metadata_archive_migration_checked, plan_record_archive_migration_checked,
     plan_sidecar_recovery_checked, prefix_postings_from_records, rebuild_columns_archive,
     rebuild_derived_sidecar_checked, recover_sidecars_checked, sidecar_kind_name,
-    substring_postings_from_records, write_dictionary, write_fuzzy_postings,
-    write_metadata_postings, write_prefix_postings, write_record_columns, write_substring_postings,
-    ArchiveRebuildInputs, ArchiveSchemaKind, ColumnsArchiveRebuild, MmapRecordArchive,
-    MmapRecordColumns, SidecarHealth, SidecarKind, SidecarPaths, SidecarRecovery,
-    SidecarRecoveryPlan,
+    substring_postings_from_records, write_dictionary_checked, write_fuzzy_postings_checked,
+    write_metadata_postings_checked, write_prefix_postings_checked, write_record_columns_checked,
+    write_substring_postings_checked, ArchiveRebuildInputs, ArchiveSchemaKind,
+    ColumnsArchiveRebuild, MmapRecordArchive, MmapRecordColumns, SidecarHealth, SidecarKind,
+    SidecarPaths, SidecarRecovery, SidecarRecoveryPlan,
 };
 use gfm_types::{FileId, FileRecord, GfmError, Result, VolumeId};
 use std::fs;
@@ -285,12 +285,16 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let records = required_path(args.next(), "index-columns requires a records path")?;
             let output =
                 required_path(args.next(), "index-columns requires an output columns path")?;
-            let records =
-                build_record_sidecar(records, output, "index columns", |output, records| {
+            let records = build_record_sidecar(
+                records,
+                output,
+                "index columns",
+                |output, records, cancellation| {
                     let count = records.len();
-                    write_record_columns(output, &records)?;
+                    write_record_columns_checked(output, &records, || cancellation.check())?;
                     Ok(count)
-                })?;
+                },
+            )?;
             eprintln!("columns-indexed {} records", records);
         }
         "columns-verify" => {
@@ -354,13 +358,17 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "index-metadata requires an output metadata path",
             )?;
-            let terms =
-                build_record_sidecar(records, output, "index metadata", |output, records| {
+            let terms = build_record_sidecar(
+                records,
+                output,
+                "index metadata",
+                |output, records, cancellation| {
                     let postings = metadata_postings_from_records(&records);
                     let terms = postings.len();
-                    write_metadata_postings(output, &postings)?;
+                    write_metadata_postings_checked(output, &postings, || cancellation.check())?;
                     Ok(terms)
-                })?;
+                },
+            )?;
             eprintln!("metadata-indexed {} terms", terms);
         }
         "index-dictionary" => {
@@ -369,12 +377,16 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "index-dictionary requires an output dictionary path",
             )?;
-            let report =
-                build_record_sidecar(records, output, "index dictionary", |output, records| {
+            let report = build_record_sidecar(
+                records,
+                output,
+                "index dictionary",
+                |output, records, cancellation| {
                     let report = dictionary_term_report_from_records(&records);
-                    write_dictionary(output, &report.terms)?;
+                    write_dictionary_checked(output, &report.terms, || cancellation.check())?;
                     Ok(report)
-                })?;
+                },
+            )?;
             eprintln!(
                 "dictionary-indexed\tterms={}\tpaths={}\tpath-prefixes={}\textensions={}\ttags={}\tkinds={}\tmetadata-keys={}\tcomment-tokens={}",
                 report.terms.len(),
@@ -391,13 +403,17 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let records = required_path(args.next(), "index-prefixes requires a records path")?;
             let output =
                 required_path(args.next(), "index-prefixes requires an output prefix path")?;
-            let prefixes =
-                build_record_sidecar(records, output, "index prefixes", |output, records| {
+            let prefixes = build_record_sidecar(
+                records,
+                output,
+                "index prefixes",
+                |output, records, cancellation| {
                     let postings = prefix_postings_from_records(&records);
                     let prefixes = postings.len();
-                    write_prefix_postings(output, &postings)?;
+                    write_prefix_postings_checked(output, &postings, || cancellation.check())?;
                     Ok(prefixes)
-                })?;
+                },
+            )?;
             eprintln!("prefixes-indexed {} prefixes", prefixes);
         }
         "index-substrings" => {
@@ -406,24 +422,33 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "index-substrings requires an output substring path",
             )?;
-            let grams =
-                build_record_sidecar(records, output, "index substrings", |output, records| {
+            let grams = build_record_sidecar(
+                records,
+                output,
+                "index substrings",
+                |output, records, cancellation| {
                     let postings = substring_postings_from_records(&records);
                     let grams = postings.len();
-                    write_substring_postings(output, &postings)?;
+                    write_substring_postings_checked(output, &postings, || cancellation.check())?;
                     Ok(grams)
-                })?;
+                },
+            )?;
             eprintln!("substrings-indexed {} grams", grams);
         }
         "index-fuzzy" => {
             let records = required_path(args.next(), "index-fuzzy requires a records path")?;
             let output = required_path(args.next(), "index-fuzzy requires an output fuzzy path")?;
-            let keys = build_record_sidecar(records, output, "index fuzzy", |output, records| {
-                let postings = fuzzy_postings_from_records(&records);
-                let keys = postings.len();
-                write_fuzzy_postings(output, &postings)?;
-                Ok(keys)
-            })?;
+            let keys = build_record_sidecar(
+                records,
+                output,
+                "index fuzzy",
+                |output, records, cancellation| {
+                    let postings = fuzzy_postings_from_records(&records);
+                    let keys = postings.len();
+                    write_fuzzy_postings_checked(output, &postings, || cancellation.check())?;
+                    Ok(keys)
+                },
+            )?;
             eprintln!("fuzzy-indexed {} keys", keys);
         }
         "sidecar-recovery-plan" => {
@@ -670,7 +695,7 @@ fn build_record_sidecar<T>(
     records: PathBuf,
     output: PathBuf,
     worker: &'static str,
-    build: impl FnOnce(PathBuf, Vec<FileRecord>) -> Result<T> + Send + 'static,
+    build: impl FnOnce(PathBuf, Vec<FileRecord>, &Cancellation) -> Result<T> + Send + 'static,
 ) -> Result<T>
 where
     T: Send + 'static,
@@ -686,7 +711,7 @@ where
         cancellation.check()?;
         let records = archive.records_checked(|| cancellation.check())?;
         cancellation.check()?;
-        build(output, records)
+        build(output, records, &cancellation)
     })
 }
 
@@ -1223,5 +1248,57 @@ mod tests {
 
         assert_eq!(result, Err(GfmError::Cancelled));
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn record_sidecar_build_cancellable_passes_runtime_token_to_writer() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-record-sidecar-cancellation-token-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let records = root.join("records.gfmidx");
+        let output = root.join("records.gfmprefix");
+        gfm_store::write_records(
+            &records,
+            &[FileRecord {
+                id: FileId::new(VolumeId(1), 1),
+                parent: None,
+                path: PathBuf::from("/tmp/project.md"),
+                name: "project.md".to_string(),
+                kind: gfm_types::FileKind::File,
+                len: 7,
+                mode: 0o100644,
+                owner: 501,
+                group: 20,
+                xattrs_digest: 0,
+                created: None,
+                modified: None,
+                changed: None,
+                hidden: false,
+                tags: Vec::new(),
+                finder_comment: None,
+            }],
+        )
+        .unwrap();
+
+        let result = build_record_sidecar(
+            records,
+            output.clone(),
+            "archive cancellation token",
+            |output, records, cancellation| {
+                let postings = prefix_postings_from_records(&records);
+                cancellation.cancel();
+                write_prefix_postings_checked(output, &postings, || cancellation.check())
+            },
+        );
+
+        assert_eq!(result, Err(GfmError::Cancelled));
+        assert!(!output.exists());
+        fs::remove_dir_all(root).unwrap();
     }
 }
