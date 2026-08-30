@@ -844,6 +844,7 @@ fn print_usage() {
   gfm volume-index-policy <external:disabled|opt-in|enabled> <network:disabled|opt-in|enabled> [opt-in:path...] [paths...]
   gfm volume-invalidation <previous-class> <previous-mount> <path>
   gfm volume-event-index-invalidation <appeared|description-changed|disappeared|unavailable> [path]
+  gfm volume-event-state-index-invalidation <previous-paths...> -- <appeared|description-changed|disappeared|unavailable> [path]
   gfm volume-case-sensitivity-invalidation <previous:true|false> <current:true|false>
   gfm volume-event-runtime-invalidation <appeared|description-changed|disappeared|unavailable> [path]
   gfm volume-topology-diff <previous-paths...> -- <current-paths...>

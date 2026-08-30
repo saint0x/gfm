@@ -29,8 +29,8 @@ use gfm_mac::{
     NativeIconInvalidationReport, SecurityScopedAccessReport, SecurityScopedBookmarkStatus,
     SecurityScopedBookmarkStore, SpotlightMetadataReader, SpotlightReconciliationReport,
     VolumeDescriptor, VolumeDiscoveryReport, VolumeEventInvalidationReport, VolumeEventKind,
-    VolumeEventStream, VolumeMountIdentityReport, VolumeOperation, VolumeOperationReport,
-    VolumeTopologyChangeKind, VolumeTopologyDiff, WatchRoot,
+    VolumeEventState, VolumeEventStream, VolumeMountIdentityReport, VolumeOperation,
+    VolumeOperationReport, VolumeTopologyChangeKind, VolumeTopologyDiff, WatchRoot,
 };
 use gfm_preview::{
     decide_invalidation, decide_preview_security, preview_invalidation_for_fileprovider,
@@ -503,6 +503,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             println!(
                 "{}",
                 volume_event_index_invalidation_from_args(args)?.as_tsv()
+            );
+        }
+        "volume-event-state-index-invalidation" => {
+            println!(
+                "{}",
+                volume_event_state_index_invalidation_from_args(args)?.as_tsv()
             );
         }
         "volume-case-sensitivity-invalidation" => {
@@ -1076,6 +1082,49 @@ fn volume_event_index_invalidation_from_args(
         current.as_ref(),
         event_report.invalidate_index_admission,
         event_report.rescan_index,
+    ))
+}
+
+fn volume_event_state_index_invalidation_from_args(
+    args: &mut impl Iterator<Item = String>,
+) -> Result<VolumeEventIndexInvalidationReport> {
+    let mut previous_paths = Vec::new();
+    loop {
+        let arg = required_string(
+            args.next(),
+            "volume event state index invalidation requires previous paths, `--`, event kind, and optional event path",
+        )?;
+        if arg == "--" {
+            break;
+        }
+        previous_paths.push(PathBuf::from(arg));
+    }
+
+    let kind = parse_volume_event_kind(&required_string(
+        args.next(),
+        "volume event state index invalidation requires an event kind after `--`",
+    )?)?;
+    let resolution = resolve_volume_event_path(kind, args.next().map(PathBuf::from))?;
+    let mut state = VolumeEventState::new(volume_discovery_report(previous_paths)?);
+    let current = (kind != VolumeEventKind::Disappeared)
+        .then_some(resolution.descriptor)
+        .flatten();
+    let transition = state.apply_parts_transition(
+        kind,
+        resolution.native_status,
+        resolution.path.clone(),
+        current,
+        resolution.native_reason,
+    );
+    let previous = transition.previous.as_ref().map(index_volume_descriptor);
+    let current = transition.current.as_ref().map(index_volume_descriptor);
+    Ok(VolumeEventIndexInvalidationReport::from_event(
+        index_volume_event_kind(kind),
+        transition.invalidation.path,
+        previous.as_ref(),
+        current.as_ref(),
+        transition.invalidation.invalidate_index_admission,
+        transition.invalidation.rescan_index,
     ))
 }
 
