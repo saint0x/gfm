@@ -1,4 +1,5 @@
 use crate::{JournalEntry, Operation, OperationStatus};
+use gfm_jobs::RetryPolicy;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OperationRecoveryReport {
@@ -78,7 +79,11 @@ pub(crate) fn recoverable_operations(
             let failed_retryable = policy.retry_failed
                 && state.last_status == OperationStatus::Failed
                 && state.started_count < policy.max_attempts.max(1)
-                && retryable_failure_message(state.message.as_deref());
+                && retryable_failure_message(
+                    state.message.as_deref(),
+                    policy.max_attempts,
+                    state.started_count,
+                );
             let append_started = if state.last_status == OperationStatus::Started {
                 false
             } else if state.last_status == OperationStatus::Paused || failed_retryable {
@@ -100,24 +105,13 @@ pub(crate) fn recoverable_operations(
         .collect()
 }
 
-fn retryable_failure_message(message: Option<&str>) -> bool {
+fn retryable_failure_message(message: Option<&str>, max_attempts: usize, attempts: usize) -> bool {
     let Some(message) = message else {
         return false;
     };
-    let message = message.to_ascii_lowercase();
-    [
-        "source does not exist",
-        "no such file",
-        "resource temporarily unavailable",
-        "operation timed out",
-        "network is down",
-        "network is unreachable",
-        "device not configured",
-        "stale file handle",
-        "interrupted system call",
-    ]
-    .iter()
-    .any(|needle| message.contains(needle))
+    RetryPolicy { max_attempts }
+        .retry_decision(attempts, message)
+        .retryable
 }
 
 #[cfg(test)]

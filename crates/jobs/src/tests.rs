@@ -1126,6 +1126,28 @@ fn retry_policy_classifies_failures_and_backoff() {
     assert!(offline.retryable);
     assert_eq!(offline.next_delay_ms, 500);
 
+    for message in [
+        "network is unreachable",
+        "device not configured",
+        "stale file handle",
+    ] {
+        let decision = policy.retry_decision(1, message);
+        assert_eq!(decision.class, FailureClass::OfflineVolume);
+        assert!(decision.retryable);
+        assert_eq!(decision.next_delay_ms, 250);
+    }
+
+    for message in [
+        "resource temporarily unavailable",
+        "interrupted system call",
+        "source does not exist",
+    ] {
+        let decision = policy.retry_decision(1, message);
+        assert_eq!(decision.class, FailureClass::Transient);
+        assert!(decision.retryable);
+        assert_eq!(decision.next_delay_ms, 25);
+    }
+
     for (message, class) in [
         ("permission denied by tcc", FailureClass::Permission),
         ("missing source: no such file", FailureClass::MissingFile),

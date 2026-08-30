@@ -61,7 +61,16 @@ impl FailureClass {
         let message = message.to_ascii_lowercase();
         if contains_any(
             &message,
-            &["offline", "not mounted", "unmounted", "ejected"],
+            &[
+                "offline",
+                "not mounted",
+                "unmounted",
+                "ejected",
+                "network is down",
+                "network is unreachable",
+                "device not configured",
+                "stale file handle",
+            ],
         ) {
             Self::OfflineVolume
         } else if contains_any(&message, &["permission", "denied", "not permitted", "tcc"]) {
@@ -79,6 +88,9 @@ impl FailureClass {
                 "timeout",
                 "busy",
                 "again",
+                "resource temporarily unavailable",
+                "interrupted system call",
+                "source does not exist",
             ],
         ) {
             Self::Transient

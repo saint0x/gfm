@@ -8,6 +8,7 @@ license.workspace = true
 exacl = "0.13.0"
 filetime = "0.2.29"
 gfm-fs = { path = "../fs" }
+gfm-jobs = { path = "../jobs" }
 gfm-types = { path = "../types" }
 libc = "0.2.177"
 nix = { version = "0.31.3", features = ["fs"] }
