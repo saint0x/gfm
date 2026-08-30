@@ -607,6 +607,33 @@ fn extracts_json_structure() {
 }
 
 #[test]
+fn extraction_report_checked_can_cancel_while_parsing_json_structure() {
+    let root = unique_temp_dir("gfm-content-json-cancel");
+    let path = root.join("large.json");
+    let json = format!(
+        "{{\"items\":[{}]}}",
+        (0..4096)
+            .map(|index| format!("\"jsonneedle-{index}\""))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    fs::write(&path, json).unwrap();
+    let mut checks = 0usize;
+
+    let result = Extractor::default().extract_path_report_checked(&path, || {
+        checks += 1;
+        if checks >= 512 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn extracts_csv_cells() {
     let root = unique_temp_dir("gfm-content-csv");
     let path = root.join("rows.csv");
@@ -615,6 +642,29 @@ fn extracts_csv_cells() {
     let doc = Extractor::default().extract_path(&path).unwrap().unwrap();
 
     assert_eq!(doc.text, "name notes Ada csvneedle, quoted");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn extraction_report_checked_can_cancel_while_parsing_csv_structure() {
+    let root = unique_temp_dir("gfm-content-csv-cancel");
+    let path = root.join("large.csv");
+    let csv = (0..4096)
+        .map(|index| format!("row-{index},csvneedle-{index}\n"))
+        .collect::<String>();
+    fs::write(&path, csv).unwrap();
+    let mut checks = 0usize;
+
+    let result = Extractor::default().extract_path_report_checked(&path, || {
+        checks += 1;
+        if checks >= 512 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -633,6 +683,37 @@ fn extracts_binary_plist_values() {
     let doc = Extractor::default().extract_path(&path).unwrap().unwrap();
 
     assert_eq!(doc.text, "Owner plistneedle");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn extraction_report_checked_can_cancel_while_walking_plist_structure() {
+    let root = unique_temp_dir("gfm-content-plist-cancel");
+    let path = root.join("large.plist");
+    let mut dictionary = plist::Dictionary::new();
+    for index in 0..4096 {
+        dictionary.insert(
+            format!("Key{index}"),
+            plist::Value::String(format!("plist-{index}")),
+        );
+    }
+    let mut bytes = Vec::new();
+    plist::Value::Dictionary(dictionary)
+        .to_writer_binary(&mut bytes)
+        .unwrap();
+    fs::write(&path, bytes).unwrap();
+    let mut checks = 0usize;
+
+    let result = Extractor::default().extract_path_report_checked(&path, || {
+        checks += 1;
+        if checks >= 512 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
     fs::remove_dir_all(root).unwrap();
 }
 

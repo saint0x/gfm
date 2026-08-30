@@ -1,4 +1,5 @@
 use crate::{normalize_text, ContentDocument, ExtractionPolicy};
+use gfm_types::Result;
 use plist::Value;
 use std::io::Cursor;
 
@@ -17,45 +18,60 @@ pub(crate) enum StructuredExtractStatus {
     Corrupt,
 }
 
-pub(crate) fn extract_structured(
+pub(crate) fn extract_structured_checked(
     bytes: &[u8],
     kind: StructuredKind,
     policy: &ExtractionPolicy,
-) -> (StructuredExtractStatus, Option<ContentDocument>) {
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<(StructuredExtractStatus, Option<ContentDocument>)> {
+    check_control()?;
     if bytes.len() as u64 > policy.max_bytes {
-        return (StructuredExtractStatus::TooLarge, None);
+        return Ok((StructuredExtractStatus::TooLarge, None));
     }
     let text = match kind {
-        StructuredKind::Json => String::from_utf8_lossy(bytes)
-            .pipe(|input| extract_json_text(&input, policy.max_structured_text_bytes)),
-        StructuredKind::Csv => String::from_utf8_lossy(bytes)
-            .pipe(|input| extract_csv_text(&input, policy.max_structured_text_bytes)),
+        StructuredKind::Json => String::from_utf8_lossy(bytes).pipe(|input| {
+            extract_json_text_checked(&input, policy.max_structured_text_bytes, &mut check_control)
+        })?,
+        StructuredKind::Csv => String::from_utf8_lossy(bytes).pipe(|input| {
+            extract_csv_text_checked(&input, policy.max_structured_text_bytes, &mut check_control)
+        })?,
         StructuredKind::Plist => {
             let Ok(value) = Value::from_reader(Cursor::new(bytes)) else {
-                return (StructuredExtractStatus::Corrupt, None);
+                return Ok((StructuredExtractStatus::Corrupt, None));
             };
             let mut output = String::new();
-            append_plist_value(&value, &mut output, policy.max_structured_text_bytes);
+            append_plist_value_checked(
+                &value,
+                &mut output,
+                policy.max_structured_text_bytes,
+                &mut check_control,
+            )?;
             output
         }
     };
+    check_control()?;
     let text = normalize_text(text.trim());
     if text.is_empty() {
-        return (StructuredExtractStatus::Unsupported, None);
+        return Ok((StructuredExtractStatus::Unsupported, None));
     }
-    (
+    Ok((
         StructuredExtractStatus::Extracted,
         Some(ContentDocument {
             bytes_read: bytes.len(),
             text,
         }),
-    )
+    ))
 }
 
-fn extract_json_text(input: &str, max_bytes: usize) -> String {
+fn extract_json_text_checked(
+    input: &str,
+    max_bytes: usize,
+    check_control: &mut dyn FnMut() -> Result<()>,
+) -> Result<String> {
     let mut output = String::new();
     let mut chars = input.chars().peekable();
     while let Some(ch) = chars.next() {
+        check_control()?;
         match ch {
             '"' => {
                 let value = parse_json_string(&mut chars);
@@ -93,7 +109,7 @@ fn extract_json_text(input: &str, max_bytes: usize) -> String {
             break;
         }
     }
-    output
+    Ok(output)
 }
 
 fn parse_json_string(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> String {
@@ -132,12 +148,17 @@ fn parse_json_string(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> St
     value
 }
 
-fn extract_csv_text(input: &str, max_bytes: usize) -> String {
+fn extract_csv_text_checked(
+    input: &str,
+    max_bytes: usize,
+    check_control: &mut dyn FnMut() -> Result<()>,
+) -> Result<String> {
     let mut output = String::new();
     let mut field = String::new();
     let mut chars = input.chars().peekable();
     let mut in_quotes = false;
     while let Some(ch) = chars.next() {
+        check_control()?;
         match ch {
             '"' if in_quotes && chars.peek() == Some(&'"') => {
                 chars.next();
@@ -155,20 +176,27 @@ fn extract_csv_text(input: &str, max_bytes: usize) -> String {
         }
     }
     push_token(&mut output, field.trim(), max_bytes);
-    output
+    Ok(output)
 }
 
-fn append_plist_value(value: &Value, output: &mut String, max_bytes: usize) {
+fn append_plist_value_checked(
+    value: &Value,
+    output: &mut String,
+    max_bytes: usize,
+    check_control: &mut dyn FnMut() -> Result<()>,
+) -> Result<()> {
+    check_control()?;
     match value {
         Value::Array(values) => {
             for value in values {
-                append_plist_value(value, output, max_bytes);
+                append_plist_value_checked(value, output, max_bytes, check_control)?;
             }
         }
         Value::Dictionary(values) => {
             for (key, value) in values {
+                check_control()?;
                 push_token(output, key, max_bytes);
-                append_plist_value(value, output, max_bytes);
+                append_plist_value_checked(value, output, max_bytes, check_control)?;
             }
         }
         Value::String(value) => push_token(output, value, max_bytes),
@@ -179,6 +207,7 @@ fn append_plist_value(value: &Value, output: &mut String, max_bytes: usize) {
         Value::Data(_) | Value::Uid(_) => {}
         _ => {}
     }
+    Ok(())
 }
 
 fn push_token(output: &mut String, value: &str, max_bytes: usize) {
@@ -217,15 +246,19 @@ impl<T> Pipe for T {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gfm_types::GfmError;
     use plist::Dictionary;
+    use std::cell::Cell;
 
     #[test]
     fn extracts_json_keys_and_values() {
-        let (_, doc) = extract_structured(
+        let (_, doc) = extract_structured_checked(
             br#"{"client":"Aperture","items":[{"name":"jsonneedle","enabled":true}],"count":7}"#,
             StructuredKind::Json,
             &ExtractionPolicy::default(),
-        );
+            || Ok(()),
+        )
+        .unwrap();
 
         let text = doc.unwrap().text;
         assert!(text.contains("client"));
@@ -236,11 +269,13 @@ mod tests {
 
     #[test]
     fn extracts_csv_cells() {
-        let (_, doc) = extract_structured(
+        let (_, doc) = extract_structured_checked(
             b"name,notes\nAda,\"csvneedle, quoted\"\n",
             StructuredKind::Csv,
             &ExtractionPolicy::default(),
-        );
+            || Ok(()),
+        )
+        .unwrap();
 
         assert_eq!(doc.unwrap().text, "name notes Ada csvneedle, quoted");
     }
@@ -254,9 +289,101 @@ mod tests {
             .to_writer_binary(&mut bytes)
             .unwrap();
 
-        let (_, doc) =
-            extract_structured(&bytes, StructuredKind::Plist, &ExtractionPolicy::default());
+        let (_, doc) = extract_structured_checked(
+            &bytes,
+            StructuredKind::Plist,
+            &ExtractionPolicy::default(),
+            || Ok(()),
+        )
+        .unwrap();
 
         assert_eq!(doc.unwrap().text, "Owner plistneedle");
+    }
+
+    #[test]
+    fn checked_json_extraction_can_cancel_during_parse() {
+        let input = format!(
+            "{{\"items\":[{}]}}",
+            (0..4096)
+                .map(|index| format!("\"jsonneedle-{index}\""))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        let checks = Cell::new(0);
+
+        let result = extract_structured_checked(
+            input.as_bytes(),
+            StructuredKind::Json,
+            &ExtractionPolicy::default(),
+            || {
+                let next = checks.get() + 1;
+                checks.set(next);
+                if next >= 512 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        );
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+    }
+
+    #[test]
+    fn checked_csv_extraction_can_cancel_during_parse() {
+        let input = (0..4096)
+            .map(|index| format!("row-{index},csvneedle-{index}\n"))
+            .collect::<String>();
+        let checks = Cell::new(0);
+
+        let result = extract_structured_checked(
+            input.as_bytes(),
+            StructuredKind::Csv,
+            &ExtractionPolicy::default(),
+            || {
+                let next = checks.get() + 1;
+                checks.set(next);
+                if next >= 512 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        );
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+    }
+
+    #[test]
+    fn checked_plist_extraction_can_cancel_during_tree_walk() {
+        let mut dictionary = Dictionary::new();
+        for index in 0..4096 {
+            dictionary.insert(
+                format!("Key{index}"),
+                Value::String(format!("plist-{index}")),
+            );
+        }
+        let mut bytes = Vec::new();
+        Value::Dictionary(dictionary)
+            .to_writer_binary(&mut bytes)
+            .unwrap();
+        let checks = Cell::new(0);
+
+        let result = extract_structured_checked(
+            &bytes,
+            StructuredKind::Plist,
+            &ExtractionPolicy::default(),
+            || {
+                let next = checks.get() + 1;
+                checks.set(next);
+                if next >= 512 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        );
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
     }
 }

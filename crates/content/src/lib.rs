@@ -39,7 +39,7 @@ use status::{
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
-use structured::extract_structured;
+use structured::extract_structured_checked;
 
 pub const TEXT_EXTRACTOR_VERSION: u32 = 4;
 pub const PDF_EXTRACTOR_VERSION: u32 = 3;
@@ -238,7 +238,8 @@ impl Extractor {
         }
 
         if let Some(kind) = structured {
-            let (status, document) = extract_structured(&bytes, kind, &self.policy);
+            let (status, document) =
+                extract_structured_checked(&bytes, kind, &self.policy, &mut check_control)?;
             return Ok(ExtractionReport {
                 path: path.to_path_buf(),
                 format,
