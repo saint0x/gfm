@@ -110,6 +110,7 @@ impl CloudMaterialization {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CloudMaterializationSource {
     NativeUrlResource,
+    NativeUrlResourceMissing,
     NativeUrlResourceUnavailable,
     NativeUrlResourceUnsupported,
     NativeFileProviderIdentityUnknown,
@@ -125,6 +126,7 @@ impl CloudMaterializationSource {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::NativeUrlResource => "native-url-resource",
+            Self::NativeUrlResourceMissing => "native-url-resource:missing",
             Self::NativeUrlResourceUnavailable => "native-url-resource:unavailable",
             Self::NativeUrlResourceUnsupported => "native-url-resource:unsupported",
             Self::NativeFileProviderIdentityUnknown => "nsfileprovidermanager:unknown",
@@ -2122,11 +2124,11 @@ fn materialization_source_for_state(
     {
         CloudMaterializationSource::NativeUrlResourceUnsupported
     } else if state == CloudStorageState::Unknown
-        && matches!(
-            hints.native.status,
-            gfm_mac_sys::NativeFileProviderStatus::Missing
-                | gfm_mac_sys::NativeFileProviderStatus::Unavailable
-        )
+        && hints.native.status == gfm_mac_sys::NativeFileProviderStatus::Missing
+    {
+        CloudMaterializationSource::NativeUrlResourceMissing
+    } else if state == CloudStorageState::Unknown
+        && hints.native.status == gfm_mac_sys::NativeFileProviderStatus::Unavailable
     {
         CloudMaterializationSource::NativeUrlResourceUnavailable
     } else if hints.native_identity.status == NativeFileProviderIdentityStatus::Available
@@ -2163,6 +2165,7 @@ fn materialization_confidence_for_source(
 ) -> CloudMaterializationConfidence {
     match source {
         CloudMaterializationSource::NativeUrlResource
+        | CloudMaterializationSource::NativeUrlResourceMissing
         | CloudMaterializationSource::NativeUrlResourceUnavailable
         | CloudMaterializationSource::NativeUrlResourceUnsupported => {
             CloudMaterializationConfidence::Native
@@ -5200,6 +5203,46 @@ mod tests {
         let report = FileProviderStateReport::from_hints(path, hints);
         assert!(report.as_tsv().contains(
             "\tmaterialization-source=native-url-resource:unavailable\tmaterialization-confidence=native\tmaterialization-reason=native FileProvider URL resource values unavailable\t"
+        ));
+    }
+
+    #[test]
+    fn native_url_missing_unknown_state_reports_typed_source() {
+        let path = PathBuf::from("/tmp/Remote.fileprovider");
+        let mut native = native_values();
+        native.status = gfm_mac_sys::NativeFileProviderStatus::Missing;
+        native.reason = Some("native FileProvider URL resource path missing".to_string());
+        let hints = CloudHints {
+            native,
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::NotQueried,
+                item_identifier: None,
+                domain_identifier: None,
+                reason: Some("hot path skipped native manager identity".to_string()),
+            },
+            xattrs: Vec::new(),
+            xattr_values: Vec::new(),
+            provider_identifier: None,
+            source: "fixture-name".to_string(),
+        };
+
+        let domain = domain_for_path(&path, &hints);
+        let state = storage_state_for_path(&path, domain, &hints);
+
+        assert_eq!(domain, FileProviderDomain::FileProvider);
+        assert_eq!(state, CloudStorageState::Unknown);
+        assert_eq!(
+            materialization_source_for_state(state, &hints),
+            CloudMaterializationSource::NativeUrlResourceMissing
+        );
+        assert_eq!(
+            materialization_reason_for_state(state, &hints).as_deref(),
+            Some("native FileProvider URL resource path missing")
+        );
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+        assert!(report.as_tsv().contains(
+            "\tmaterialization-source=native-url-resource:missing\tmaterialization-confidence=native\tmaterialization-reason=native FileProvider URL resource path missing\t"
         ));
     }
 
