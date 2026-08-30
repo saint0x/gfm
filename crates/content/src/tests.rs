@@ -124,6 +124,26 @@ fn extraction_report_checked_honors_cancellation_before_reading_content_bytes() 
 }
 
 #[test]
+fn extraction_report_checked_can_cancel_while_normalizing_plain_text() {
+    let root = unique_temp_dir("gfm-content-text-normalize-cancel");
+    let path = root.join("large.md");
+    fs::write(&path, "plain text needle ".repeat(64 * 1024)).unwrap();
+    let mut checks = 0usize;
+
+    let result = Extractor::default().extract_path_report_checked(&path, || {
+        checks += 1;
+        if checks >= 512 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn extraction_report_checked_can_cancel_while_reading_ooxml_entry() {
     let root = unique_temp_dir("gfm-content-ooxml-entry-cancel");
     let path = root.join("large.docx");

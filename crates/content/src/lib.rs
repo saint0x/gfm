@@ -274,7 +274,9 @@ impl Extractor {
                 document: None,
             });
         };
-        let text = truncate_text(&normalize_text(&text), self.policy.max_text_bytes);
+        let normalized = normalize_text_checked(&text, &mut check_control)?;
+        let text =
+            truncate_text_checked(&normalized, self.policy.max_text_bytes, &mut check_control)?;
 
         let document = ContentDocument { bytes_read, text };
         Ok(ExtractionReport {
@@ -415,9 +417,34 @@ fn normalize_text(input: &str) -> String {
         .collect()
 }
 
+fn normalize_text_checked(
+    input: &str,
+    check_control: &mut dyn FnMut() -> Result<()>,
+) -> Result<String> {
+    let mut output = String::with_capacity(input.len());
+    for ch in input.chars() {
+        check_control()?;
+        if ch.is_control() && ch != '\n' && ch != '\t' {
+            output.push(' ');
+        } else {
+            output.push(ch);
+        }
+    }
+    Ok(output)
+}
+
 fn truncate_text(text: &str, max_bytes: usize) -> String {
     let end = floor_char_boundary(text, max_bytes);
     text[..end].to_string()
+}
+
+fn truncate_text_checked(
+    text: &str,
+    max_bytes: usize,
+    check_control: &mut dyn FnMut() -> Result<()>,
+) -> Result<String> {
+    check_control()?;
+    Ok(truncate_text(text, max_bytes))
 }
 
 fn is_binary(bytes: &[u8]) -> bool {
