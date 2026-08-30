@@ -829,6 +829,56 @@ fn query_sidecar_loader_hydrates_only_candidate_records() {
 }
 
 #[test]
+fn sidecar_mmap_hydration_honors_pre_cancelled_tokens() {
+    let records_path = unique_temp_path("gfm-index-sidecar-hydration-cancel", "gfmidx");
+    let columns_path = unique_temp_path("gfm-index-sidecar-hydration-cancel", "gfmcols");
+    let record = FileRecord {
+        id: FileId::new(VolumeId(1), 1),
+        parent: None,
+        path: PathBuf::from("/tmp/cancelled/tagged.md"),
+        name: "tagged.md".to_string(),
+        kind: FileKind::File,
+        len: 11,
+        created: Some(UNIX_EPOCH),
+        modified: Some(UNIX_EPOCH),
+        changed: Some(UNIX_EPOCH),
+        mode: 0o644,
+        owner: 501,
+        group: 20,
+        hidden: false,
+        tags: vec!["Important".to_string()],
+        finder_comment: Some("bodymarker".to_string()),
+        xattrs_digest: 0,
+    };
+    write_records(&records_path, std::slice::from_ref(&record)).unwrap();
+    write_record_columns(&columns_path, std::slice::from_ref(&record)).unwrap();
+    let records = MmapRecordArchive::open(&records_path).unwrap();
+    let columns = MmapRecordColumns::open(&columns_path).unwrap();
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+    let import = SidecarQueryImport {
+        metadata: vec![SearchMetadataPosting {
+            field: SearchMetadataField::Tag,
+            term: "important".to_string(),
+            ids: vec![record.id],
+        }],
+        ..Default::default()
+    };
+
+    let result = LiveIndex::from_mmap_records_with_sidecar_import_cancellable(
+        &records,
+        &columns,
+        import,
+        &cancellation,
+    );
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+
+    fs::remove_file(records_path).unwrap();
+    fs::remove_file(columns_path).unwrap();
+}
+
+#[test]
 fn sidecar_query_session_reuses_mmap_archives_and_lookup_cache() {
     let records_path = unique_temp_path("gfm-index-sidecar-session", "gfmidx");
     let columns_path = unique_temp_path("gfm-index-sidecar-session", "gfmcols");

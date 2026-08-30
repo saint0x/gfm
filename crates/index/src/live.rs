@@ -159,6 +159,21 @@ impl LiveIndex {
         columns: &MmapRecordColumns,
         import: SidecarQueryImport,
     ) -> Result<(Self, SidecarRecordHydrationReport)> {
+        Self::from_mmap_records_with_sidecar_import_cancellable(
+            records,
+            columns,
+            import,
+            &Cancellation::default(),
+        )
+    }
+
+    pub fn from_mmap_records_with_sidecar_import_cancellable(
+        records: &MmapRecordArchive,
+        columns: &MmapRecordColumns,
+        import: SidecarQueryImport,
+        cancellation: &Cancellation,
+    ) -> Result<(Self, SidecarRecordHydrationReport)> {
+        cancellation.check()?;
         let mut live = Self::new();
         let mut loaded = 0usize;
         let mut missing = 0usize;
@@ -166,6 +181,7 @@ impl LiveIndex {
 
         if import.report.requires_full_record_hydration {
             for index in 0..records.len() {
+                cancellation.check()?;
                 let record = records.record(index)?;
                 if insert_mmap_record_with_columns(&mut live, columns, record)? {
                     applied += 1;
@@ -173,18 +189,19 @@ impl LiveIndex {
                 loaded += 1;
             }
         } else {
-            let cancellation = Cancellation::default();
-            let candidate_ids = sidecar_candidate_ids_cancellable(&import, &cancellation)?;
+            let candidate_ids = sidecar_candidate_ids_cancellable(&import, cancellation)?;
             let batch = records.records_for_sorted_ids(candidate_ids)?;
             missing = batch.missing;
             loaded = batch.records.len();
             for record in batch.records {
+                cancellation.check()?;
                 if insert_mmap_record_with_columns(&mut live, columns, record)? {
                     applied += 1;
                 }
             }
         }
 
+        cancellation.check()?;
         let metadata_keys = live.index.import_metadata_postings(&import.metadata);
         let prefix_keys = live.index.import_prefix_postings(&import.prefixes);
         let substring_keys = live.index.import_substring_postings(&import.substrings);
