@@ -15,7 +15,7 @@ use gfm_mac::{AccessIntent, VolumeDescriptor, VolumeDiscoveryReport, VolumeKind}
 use gfm_types::{GfmError, Result};
 use std::env;
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -397,18 +397,12 @@ fn run_supervised_worker(
         }
         match child.try_wait() {
             Ok(Some(status)) => {
-                let stdout =
-                    std::fs::read(stdout_path).map_err(|err| GfmError::io(stdout_path, err))?;
-                let stderr =
-                    std::fs::read(stderr_path).map_err(|err| GfmError::io(stderr_path, err))?;
+                let output =
+                    read_supervised_worker_output(status, stdout_path, stderr_path, cancellation);
                 let _ = std::fs::remove_file(stdout_path);
                 let _ = std::fs::remove_file(stderr_path);
                 let _ = std::fs::remove_dir_all(permission_state_dir);
-                return Ok(std::process::Output {
-                    status,
-                    stdout,
-                    stderr,
-                });
+                return output;
             }
             Ok(None) if start.elapsed() >= timeout => {
                 kill_process_group(child.id());
@@ -436,6 +430,50 @@ fn run_supervised_worker(
             }
         }
     }
+}
+
+fn read_supervised_worker_output(
+    status: std::process::ExitStatus,
+    stdout_path: &Path,
+    stderr_path: &Path,
+    cancellation: &Cancellation,
+) -> Result<std::process::Output> {
+    cancellation.check()?;
+    let stdout = read_worker_output_file_checked(stdout_path, || cancellation.check())?;
+    cancellation.check()?;
+    let stderr = read_worker_output_file_checked(stderr_path, || cancellation.check())?;
+    cancellation.check()?;
+    Ok(std::process::Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+fn read_worker_output_file_checked(
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Vec<u8>> {
+    const CHUNK_BYTES: usize = 256 * 1024;
+
+    check_control()?;
+    let mut file = std::fs::File::open(path).map_err(|err| GfmError::io(path, err))?;
+    check_control()?;
+    let mut bytes = Vec::new();
+    let mut buffer = [0; CHUNK_BYTES];
+    loop {
+        check_control()?;
+        let len = file
+            .read(&mut buffer)
+            .map_err(|err| GfmError::io(path, err))?;
+        if len == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&buffer[..len]);
+        check_control()?;
+    }
+    check_control()?;
+    Ok(bytes)
 }
 
 fn kill_process_group(pid: u32) {
@@ -787,6 +825,42 @@ mod tests {
             "(allow file-write* (subpath \"{}\"))",
             sandbox_escape(&fixture.permission_dir.canonicalize().unwrap())
         )));
+    }
+
+    #[test]
+    fn worker_output_reader_round_trips_large_output() {
+        let root = unique_temp_dir("gfm-extract-output-read");
+        let path = root.join("stdout.bin");
+        let bytes = vec![17; 300 * 1024];
+        fs::write(&path, &bytes).unwrap();
+
+        let read = read_worker_output_file_checked(&path, || Ok(())).unwrap();
+
+        assert_eq!(read, bytes);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn worker_output_reader_honors_cancellation_during_chunked_load() {
+        let root = unique_temp_dir("gfm-extract-output-cancel");
+        let path = root.join("stdout.bin");
+        let bytes = vec![23; 300 * 1024];
+        fs::write(&path, &bytes).unwrap();
+        let mut checks = 0usize;
+
+        let result = read_worker_output_file_checked(&path, || {
+            checks += 1;
+            if checks >= 4 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(checks >= 4);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
