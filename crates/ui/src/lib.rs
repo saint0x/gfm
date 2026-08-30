@@ -394,8 +394,8 @@ impl AppLaunchSpec {
 }
 
 fn validate_permission_prompt_orchestration(access: &PermissionAccessContract) -> Result<()> {
-    let has_prompt_action = access.prompt_action != "none";
-    let has_prompt_source = access.prompt_source != "none";
+    let has_prompt_action = concrete_permission_value(&access.prompt_action);
+    let has_prompt_source = concrete_permission_value(&access.prompt_source);
     let is_blocked_prompt = access.prompt_kind == PermissionPromptKind::Blocked;
 
     if access.promptable && (!has_prompt_action || !has_prompt_source || is_blocked_prompt) {
@@ -423,6 +423,11 @@ fn validate_permission_prompt_orchestration(access: &PermissionAccessContract) -
         )));
     }
     Ok(())
+}
+
+fn concrete_permission_value(value: &str) -> bool {
+    let trimmed = value.trim();
+    !trimmed.is_empty() && trimmed != "none"
 }
 
 impl Default for AppLaunchSpec {
@@ -938,6 +943,34 @@ mod tests {
             prompt_action: "blocked-missing-path".to_string(),
             promptable: false,
             prompt_source: "none".to_string(),
+            reason: "path is not present on this host".to_string(),
+        };
+        let spec = AppLaunchSpec::new("/tmp/gfm").with_permission_access(access);
+
+        let err = WindowLifecycleContract::from_spec(&spec).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("blocks access without a concrete failure source"));
+    }
+
+    #[test]
+    fn rejects_blocked_permission_access_with_blank_failure_source() {
+        let access = PermissionAccessContract {
+            path: "/tmp/gfm".to_string(),
+            intent: "read".to_string(),
+            scope: "none".to_string(),
+            probe: "missing".to_string(),
+            mode: "denied".to_string(),
+            access_action: "deny".to_string(),
+            worker_action: "deny".to_string(),
+            can_touch_filesystem: false,
+            bookmark_required: false,
+            bookmark_access: false,
+            refresh_on_permission_change: false,
+            prompt_kind: PermissionPromptKind::Blocked,
+            prompt_action: "blocked-missing-path".to_string(),
+            promptable: false,
+            prompt_source: "   ".to_string(),
             reason: "path is not present on this host".to_string(),
         };
         let spec = AppLaunchSpec::new("/tmp/gfm").with_permission_access(access);
