@@ -1,6 +1,6 @@
 use crate::access::{preflight_access_scope, preflight_volume_access_scope, ScopedAccessGuard};
 use crate::runtime::{
-    default_job_journal_path, run_scheduled_volume_task, run_volume_task_cancellable,
+    default_job_journal_path, run_scheduled_volume_task_cancellable, run_volume_task_cancellable,
 };
 use crate::{
     parent_volume, parse_optional_scheduling_pressure, parse_u64_arg, parse_usize_arg, path_volume,
@@ -162,18 +162,20 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 AccessIntent::Write,
                 "runtime retry probe",
             )?;
-            let outcome = run_scheduled_volume_task(
+            let outcome = run_scheduled_volume_task_cancellable(
                 path_volume(write_probe_path(&state)?),
                 Priority::Background,
                 "runtime retry probe",
                 pressure,
-                move || {
+                move |cancellation| {
+                    cancellation.check()?;
                     let _access = preflight_access_scope(
                         write_probe_path(&state)?,
                         AccessIntent::Write,
                         "runtime retry probe",
                     )?;
-                    runtime_retry_probe(&state)
+                    cancellation.check()?;
+                    runtime_retry_probe_cancellable(&state, &cancellation)
                 },
             )?;
             if outcome.deferred {
@@ -633,13 +635,16 @@ fn parse_optional_timestamp_ms(command: &str, value: Option<String>) -> Result<u
     }
 }
 
-fn runtime_retry_probe(state: &Path) -> Result<usize> {
+fn runtime_retry_probe_cancellable(state: &Path, cancellation: &Cancellation) -> Result<usize> {
+    cancellation.check()?;
     let attempt = std::fs::read_to_string(state)
         .ok()
         .and_then(|value| value.trim().parse::<usize>().ok())
         .unwrap_or(0)
         + 1;
+    cancellation.check()?;
     std::fs::write(state, attempt.to_string()).map_err(|err| GfmError::io(state, err))?;
+    cancellation.check()?;
     if attempt == 1 {
         Err(GfmError::Format("temporary runtime probe busy".to_string()))
     } else {

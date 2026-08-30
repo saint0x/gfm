@@ -180,19 +180,6 @@ pub(crate) struct ScheduledTaskOutcome<T> {
     pub(crate) deferred: bool,
 }
 
-pub(crate) fn run_scheduled_volume_task<T>(
-    volume: Option<VolumeId>,
-    priority: Priority,
-    label: &'static str,
-    pressure: SchedulingPressure,
-    work: impl Fn() -> Result<T> + Send + Sync + 'static,
-) -> Result<ScheduledTaskOutcome<T>>
-where
-    T: Send + 'static,
-{
-    run_scheduled_volume_task_cancellable(volume, priority, label, pressure, move |_| work())
-}
-
 pub(crate) fn run_scheduled_volume_task_cancellable<T>(
     volume: Option<VolumeId>,
     priority: Priority,
