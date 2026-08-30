@@ -2,7 +2,7 @@ use super::fuzzy::{bounded_levenshtein, deletion_keys};
 use super::query::normalize;
 use super::terms::{is_fuzzy_term, is_prefix_term, substring_grams, SUBSTRING_GRAM_CHARS};
 use super::SearchIndex;
-use gfm_types::{FileId, VolumeId};
+use gfm_types::{FileId, GfmError, VolumeId};
 use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,10 +166,10 @@ pub trait SearchLookup: Sync {
         volume: VolumeId,
         limit: usize,
     ) -> gfm_types::Result<SearchLookupIds> {
-        let mut ids = self.prefix_ids_for_volume(prefix, volume)?;
-        let truncated = ids.len() > limit;
-        ids.truncate(limit);
-        Ok(SearchLookupIds::new(ids, truncated))
+        let _ = (prefix, volume, limit);
+        Err(unbounded_lookup_not_allowed(
+            "prefix_ids_for_volume_bounded",
+        ))
     }
 
     fn substring_ids_for_volume_bounded(
@@ -178,17 +178,15 @@ pub trait SearchLookup: Sync {
         volume: VolumeId,
         limit: usize,
     ) -> gfm_types::Result<SearchLookupIds> {
-        let mut ids = self.substring_ids_for_volume(gram, volume)?;
-        let truncated = ids.len() > limit;
-        ids.truncate(limit);
-        Ok(SearchLookupIds::new(ids, truncated))
+        let _ = (gram, volume, limit);
+        Err(unbounded_lookup_not_allowed(
+            "substring_ids_for_volume_bounded",
+        ))
     }
 
     fn prefix_ids_bounded(&self, prefix: &str, limit: usize) -> gfm_types::Result<SearchLookupIds> {
-        let mut ids = self.prefix_ids(prefix)?;
-        let truncated = ids.len() > limit;
-        ids.truncate(limit);
-        Ok(SearchLookupIds::new(ids, truncated))
+        let _ = (prefix, limit);
+        Err(unbounded_lookup_not_allowed("prefix_ids_bounded"))
     }
 
     fn substring_ids_bounded(
@@ -196,22 +194,24 @@ pub trait SearchLookup: Sync {
         gram: &str,
         limit: usize,
     ) -> gfm_types::Result<SearchLookupIds> {
-        let mut ids = self.substring_ids(gram)?;
-        let truncated = ids.len() > limit;
-        ids.truncate(limit);
-        Ok(SearchLookupIds::new(ids, truncated))
+        let _ = (gram, limit);
+        Err(unbounded_lookup_not_allowed("substring_ids_bounded"))
     }
 
     fn fuzzy_terms_bounded(&self, key: &str, limit: usize) -> gfm_types::Result<SearchLookupTerms> {
-        let mut terms = self.fuzzy_terms(key)?;
-        let truncated = terms.len() > limit;
-        terms.truncate(limit);
-        Ok(SearchLookupTerms::new(terms, truncated))
+        let _ = (key, limit);
+        Err(unbounded_lookup_not_allowed("fuzzy_terms_bounded"))
     }
 
     fn cache_telemetry(&self) -> SearchLookupTelemetry {
         SearchLookupTelemetry::default()
     }
+}
+
+fn unbounded_lookup_not_allowed(method: &str) -> GfmError {
+    GfmError::Format(format!(
+        "{method} must be implemented by the search lookup; bounded search may not materialize unbounded sidecar postings"
+    ))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -252,6 +252,48 @@ impl SearchLookup for EmptySearchLookup {
 
     fn fuzzy_terms(&self, _key: &str) -> gfm_types::Result<Vec<String>> {
         Ok(Vec::new())
+    }
+
+    fn prefix_ids_bounded(
+        &self,
+        _prefix: &str,
+        _limit: usize,
+    ) -> gfm_types::Result<SearchLookupIds> {
+        Ok(SearchLookupIds::new(Vec::new(), false))
+    }
+
+    fn prefix_ids_for_volume_bounded(
+        &self,
+        _prefix: &str,
+        _volume: VolumeId,
+        _limit: usize,
+    ) -> gfm_types::Result<SearchLookupIds> {
+        Ok(SearchLookupIds::new(Vec::new(), false))
+    }
+
+    fn substring_ids_bounded(
+        &self,
+        _gram: &str,
+        _limit: usize,
+    ) -> gfm_types::Result<SearchLookupIds> {
+        Ok(SearchLookupIds::new(Vec::new(), false))
+    }
+
+    fn substring_ids_for_volume_bounded(
+        &self,
+        _gram: &str,
+        _volume: VolumeId,
+        _limit: usize,
+    ) -> gfm_types::Result<SearchLookupIds> {
+        Ok(SearchLookupIds::new(Vec::new(), false))
+    }
+
+    fn fuzzy_terms_bounded(
+        &self,
+        _key: &str,
+        _limit: usize,
+    ) -> gfm_types::Result<SearchLookupTerms> {
+        Ok(SearchLookupTerms::new(Vec::new(), false))
     }
 }
 

@@ -182,6 +182,53 @@ fn hot_substring_lookup_budget_caps_local_candidates_before_archive_lookup() {
 }
 
 #[test]
+fn bounded_lookup_defaults_fail_closed_without_unbounded_materialization() {
+    struct UnboundedOnlyLookup;
+
+    impl SearchLookup for UnboundedOnlyLookup {
+        fn prefix_ids(&self, _prefix: &str) -> gfm_types::Result<Vec<FileId>> {
+            panic!("bounded prefix lookup must not materialize unbounded prefix ids");
+        }
+
+        fn substring_ids(&self, _gram: &str) -> gfm_types::Result<Vec<FileId>> {
+            panic!("bounded substring lookup must not materialize unbounded substring ids");
+        }
+
+        fn fuzzy_terms(&self, _key: &str) -> gfm_types::Result<Vec<String>> {
+            panic!("bounded fuzzy lookup must not materialize unbounded fuzzy terms");
+        }
+    }
+
+    let lookup = UnboundedOnlyLookup;
+
+    for result in [
+        lookup
+            .prefix_ids_bounded("needle", 1)
+            .map(|_| "prefix_ids_bounded"),
+        lookup
+            .substring_ids_bounded("nee", 1)
+            .map(|_| "substring_ids_bounded"),
+        lookup
+            .fuzzy_terms_bounded("needle", 1)
+            .map(|_| "fuzzy_terms_bounded"),
+        lookup
+            .prefix_ids_for_volume_bounded("needle", VolumeId(1), 1)
+            .map(|_| "prefix_ids_for_volume_bounded"),
+        lookup
+            .substring_ids_for_volume_bounded("nee", VolumeId(1), 1)
+            .map(|_| "substring_ids_for_volume_bounded"),
+    ] {
+        let Err(GfmError::Format(message)) = result else {
+            panic!("bounded lookup without an implementation should fail closed");
+        };
+        assert!(
+            message.contains("bounded search may not materialize unbounded sidecar postings"),
+            "{message}"
+        );
+    }
+}
+
+#[test]
 fn search_query_canonical_cache_key_normalizes_without_collapsing_filters() {
     let first = SearchQuery::parse("  FinderLatency  ext:MD");
     let second = SearchQuery::parse("finderlatency extension:md");
@@ -2554,12 +2601,83 @@ impl SearchLookup for StaticLookup {
         Ok(self.prefix_ids.clone())
     }
 
+    fn prefix_ids_bounded(
+        &self,
+        _prefix: &str,
+        limit: usize,
+    ) -> gfm_types::Result<SearchLookupIds> {
+        Ok(SearchLookupIds::new(
+            self.prefix_ids.iter().copied().take(limit).collect(),
+            self.prefix_ids.len() > limit,
+        ))
+    }
+
+    fn prefix_ids_for_volume_bounded(
+        &self,
+        _prefix: &str,
+        volume: VolumeId,
+        limit: usize,
+    ) -> gfm_types::Result<SearchLookupIds> {
+        let ids: Vec<_> = self
+            .prefix_ids
+            .iter()
+            .copied()
+            .filter(|id| id.volume == volume)
+            .take(limit.saturating_add(1))
+            .collect();
+        Ok(SearchLookupIds::new(
+            ids.iter().copied().take(limit).collect(),
+            ids.len() > limit,
+        ))
+    }
+
     fn substring_ids(&self, _gram: &str) -> gfm_types::Result<Vec<FileId>> {
         Ok(self.substring_ids.clone())
     }
 
+    fn substring_ids_bounded(
+        &self,
+        _gram: &str,
+        limit: usize,
+    ) -> gfm_types::Result<SearchLookupIds> {
+        Ok(SearchLookupIds::new(
+            self.substring_ids.iter().copied().take(limit).collect(),
+            self.substring_ids.len() > limit,
+        ))
+    }
+
+    fn substring_ids_for_volume_bounded(
+        &self,
+        _gram: &str,
+        volume: VolumeId,
+        limit: usize,
+    ) -> gfm_types::Result<SearchLookupIds> {
+        let ids: Vec<_> = self
+            .substring_ids
+            .iter()
+            .copied()
+            .filter(|id| id.volume == volume)
+            .take(limit.saturating_add(1))
+            .collect();
+        Ok(SearchLookupIds::new(
+            ids.iter().copied().take(limit).collect(),
+            ids.len() > limit,
+        ))
+    }
+
     fn fuzzy_terms(&self, _key: &str) -> gfm_types::Result<Vec<String>> {
         Ok(self.fuzzy_terms.clone())
+    }
+
+    fn fuzzy_terms_bounded(
+        &self,
+        _key: &str,
+        limit: usize,
+    ) -> gfm_types::Result<SearchLookupTerms> {
+        Ok(SearchLookupTerms::new(
+            self.fuzzy_terms.iter().take(limit).cloned().collect(),
+            self.fuzzy_terms.len() > limit,
+        ))
     }
 }
 
@@ -2591,8 +2709,37 @@ impl SearchLookup for TrackingVolumeLookup {
             .collect())
     }
 
+    fn prefix_ids_for_volume_bounded(
+        &self,
+        _prefix: &str,
+        volume: VolumeId,
+        limit: usize,
+    ) -> gfm_types::Result<SearchLookupIds> {
+        self.volume_prefix_calls.fetch_add(1, Ordering::SeqCst);
+        let ids: Vec<_> = self
+            .prefix_ids
+            .iter()
+            .copied()
+            .filter(|id| id.volume == volume)
+            .take(limit.saturating_add(1))
+            .collect();
+        Ok(SearchLookupIds::new(
+            ids.iter().copied().take(limit).collect(),
+            ids.len() > limit,
+        ))
+    }
+
     fn substring_ids(&self, _gram: &str) -> gfm_types::Result<Vec<FileId>> {
         Ok(Vec::new())
+    }
+
+    fn substring_ids_for_volume_bounded(
+        &self,
+        _gram: &str,
+        _volume: VolumeId,
+        _limit: usize,
+    ) -> gfm_types::Result<SearchLookupIds> {
+        Ok(SearchLookupIds::new(Vec::new(), false))
     }
 
     fn fuzzy_terms(&self, _key: &str) -> gfm_types::Result<Vec<String>> {
