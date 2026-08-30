@@ -10,8 +10,8 @@ use gfm_ops::OperationConflictReport;
 use gfm_types::{GfmError, Result, VolumeId};
 use std::collections::BTreeSet;
 use std::env;
-use std::fs::{self, OpenOptions};
-use std::io::{self, Write};
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -708,6 +708,62 @@ mod tests {
     }
 
     #[test]
+    fn operation_conflict_store_checked_append_preserves_existing_state_on_cancel() {
+        let path = temp_path("gfm-operation-conflict-append-publish-cancel", "tsv");
+        let store = OperationConflictStore::new(&path);
+        let conflict = RuntimeOperationConflict {
+            operation: "copy".to_string(),
+            source: "/tmp/source-existing.md".to_string(),
+            target: "/tmp/target-existing.md".to_string(),
+            target_kind: "file".to_string(),
+            selected_policy: "fail".to_string(),
+            available_policies: vec!["replace".to_string(), "keep-both".to_string()],
+            blocks_operation: true,
+            reason: "destination-conflict".to_string(),
+        };
+        let report = OperationConflictReport {
+            operation: "copy",
+            source: Some(PathBuf::from("/tmp/source-new.md")),
+            target: Some(PathBuf::from("/tmp/target-new.md")),
+            target_exists: true,
+            target_kind: gfm_ops::OperationConflictKind::File,
+            selected_policy: gfm_ops::ConflictPolicy::Fail,
+            available_policies: vec![
+                gfm_ops::ConflictPolicy::Replace,
+                gfm_ops::ConflictPolicy::KeepBoth,
+            ],
+            blocks_operation: true,
+            reason: "destination-conflict-requires-user-resolution".to_string(),
+        };
+        store
+            .write_all_checked(std::slice::from_ref(&conflict), || Ok(()))
+            .unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let mut checks = 0usize;
+
+        let err = store
+            .append_checked(&report, || {
+                checks += 1;
+                if checks >= 15 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert!(checks >= 15);
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert_eq!(
+            store.read_checked(|| Ok(())).unwrap(),
+            std::slice::from_ref(&conflict)
+        );
+        assert_eq!(operation_conflict_temp_count(&path), 0);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn operation_conflict_store_checked_resolve_preserves_state_on_cancel() {
         let path = temp_path("gfm-operation-conflict-resolve-cancel", "tsv");
         let store = OperationConflictStore::new(&path);
@@ -741,17 +797,7 @@ mod tests {
         assert_eq!(err, GfmError::Cancelled);
         assert!(checks >= 14);
         assert_eq!(std::fs::read(&path).unwrap(), before);
-        let leftovers = std::fs::read_dir(path.parent().unwrap())
-            .unwrap()
-            .filter_map(|entry| entry.ok())
-            .filter(|entry| {
-                entry
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with(".gfm-operation-conflict-resolve-cancel")
-            })
-            .count();
-        assert_eq!(leftovers, 0);
+        assert_eq!(operation_conflict_temp_count(&path), 0);
         std::fs::remove_file(path).unwrap();
     }
 
@@ -774,6 +820,21 @@ mod tests {
             TEMP_COUNTER.fetch_add(1, Ordering::SeqCst),
             extension
         ))
+    }
+
+    fn operation_conflict_temp_count(path: &Path) -> usize {
+        let Some(parent) = path.parent() else {
+            return 0;
+        };
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            return 0;
+        };
+        let prefix = format!(".{file_name}.{}", std::process::id());
+        std::fs::read_dir(parent)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
+            .count()
     }
 }
 
@@ -860,18 +921,29 @@ impl OperationConflictStore {
         let parent = crate::parent_or_cwd(&self.path);
         fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
         check_control()?;
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)
-            .map_err(|err| GfmError::io(&self.path, err))?;
+        let mut conflicts = self.read_existing_for_append_checked(&mut check_control)?;
+        conflicts.push(RuntimeOperationConflict::from(report));
         check_control()?;
-        writeln!(file, "{}", RuntimeOperationConflict::from(report).as_tsv())
-            .map_err(|err| GfmError::io(&self.path, err))?;
+        self.write_all_checked(&conflicts, &mut check_control)
+    }
+
+    fn read_existing_for_append_checked(
+        &self,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<RuntimeOperationConflict>> {
         check_control()?;
-        file.flush().map_err(|err| GfmError::io(&self.path, err))?;
-        check_control()?;
-        Ok(())
+        match fs::metadata(&self.path) {
+            Ok(metadata) if metadata.is_file() => self.read_checked(check_control),
+            Ok(_) => Err(GfmError::io(
+                &self.path,
+                "operation conflict store is not a regular file",
+            )),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+            Err(err) => Err(GfmError::io(
+                &self.path,
+                format!("operation conflict store metadata unavailable: {err}"),
+            )),
+        }
     }
 
     pub(crate) fn read_checked(
