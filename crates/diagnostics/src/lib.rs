@@ -3,9 +3,13 @@ use gfm_content::Extractor;
 use gfm_index::{Indexer, PersistentIndexPlan, PersistentIndexRecovery};
 use gfm_jobs::Cancellation;
 use gfm_store::{read_records, ContentArchive};
-use gfm_telemetry::{export_diagnostics, DiagnosticPrivacy, IoSample, LatencyMetric, Telemetry};
+use gfm_telemetry::{
+    export_diagnostics_checked, DiagnosticExportError, DiagnosticPrivacy, IoSample, LatencyMetric,
+    Telemetry,
+};
 use gfm_types::{FileKind, GfmError, Result};
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -149,7 +153,15 @@ pub struct TraceExportReport {
 }
 
 pub fn export_operator_trace(path: impl AsRef<Path>) -> Result<TraceExportReport> {
+    export_operator_trace_checked(path, || Ok(()))
+}
+
+pub fn export_operator_trace_checked(
+    path: impl AsRef<Path>,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<TraceExportReport> {
     let path = path.as_ref();
+    check_control()?;
     let mut telemetry = Telemetry::default();
     telemetry.increment("operator_trace_export");
     telemetry.observe_latency(LatencyMetric::WindowRender, Duration::from_millis(1));
@@ -159,8 +171,21 @@ pub fn export_operator_trace(path: impl AsRef<Path>) -> Result<TraceExportReport
         read_ops: 0,
         write_ops: 1,
     });
-    let receipt = export_diagnostics(path, &telemetry, DiagnosticPrivacy::default())
-        .map_err(|err| GfmError::Format(err.to_string()))?;
+    check_control()?;
+    let receipt =
+        export_diagnostics_checked(path, &telemetry, DiagnosticPrivacy::default(), || {
+            check_control().map_err(|err| match err {
+                GfmError::Cancelled => DiagnosticExportError::Cancelled,
+                other => DiagnosticExportError::Io {
+                    path: path.to_path_buf(),
+                    error: io::Error::other(other.to_string()),
+                },
+            })
+        })
+        .map_err(|err| match err {
+            DiagnosticExportError::Cancelled => GfmError::Cancelled,
+            other => GfmError::Format(other.to_string()),
+        })?;
     Ok(TraceExportReport {
         path: receipt.path,
         bytes_written: receipt.bytes_written,
@@ -402,6 +427,41 @@ mod tests {
         let encoded = fs::read_to_string(&report.path).unwrap();
         assert!(encoded.contains("\"schema_version\""));
         assert!(!encoded.contains("query_text"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cancellable_trace_export_stops_before_writing() {
+        let root = unique_temp_dir("gfm-diagnostics-trace-cancel");
+        let trace = root.join("trace.json");
+
+        let result = export_operator_trace_checked(&trace, || Err(GfmError::Cancelled));
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(!trace.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cancellable_trace_export_preserves_existing_trace() {
+        let root = unique_temp_dir("gfm-diagnostics-trace-preserve");
+        let trace = root.join("trace.json");
+        export_operator_trace(&trace).unwrap();
+        let before = fs::read(&trace).unwrap();
+        let mut checks = 0usize;
+
+        let result = export_operator_trace_checked(&trace, || {
+            checks += 1;
+            if checks >= 4 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(checks >= 4);
+        assert_eq!(fs::read(&trace).unwrap(), before);
         fs::remove_dir_all(root).unwrap();
     }
 

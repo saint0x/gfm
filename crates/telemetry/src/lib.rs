@@ -6,8 +6,8 @@ pub use budgets::{
     ScenarioBudget, ScenarioMetric,
 };
 pub use diagnostics::{
-    export_diagnostics, DiagnosticExportError, DiagnosticExportReceipt, DiagnosticPrivacy,
-    PrivacyReview,
+    export_diagnostics, export_diagnostics_checked, DiagnosticExportError, DiagnosticExportReceipt,
+    DiagnosticPrivacy, PrivacyReview,
 };
 
 use std::collections::BTreeMap;

@@ -1,4 +1,7 @@
-use crate::access::{preflight_access_scope, preflight_volume_access_scope, ScopedAccessGuard};
+use crate::access::{
+    preflight_access_scope, preflight_access_scope_checked, preflight_volume_access_scope,
+    ScopedAccessGuard,
+};
 use crate::runtime::{
     run_scheduled_volume_task_cancellable_with_volume_and_payload_path,
     run_volume_task_cancellable, run_volume_task_cancellable_with_payload_path,
@@ -9,7 +12,7 @@ use crate::{
 };
 use gfm_config::ConfigStore;
 use gfm_diagnostics::{
-    export_operator_trace, inspect_storage, plan_index_recovery_cancellable,
+    export_operator_trace_checked, inspect_storage, plan_index_recovery_cancellable,
     rebuild_index_cancellable, recover_index_cancellable, select_parity_baseline,
     PersistentIndexRecoverySpec, RebuildSpec, StorageInspection,
 };
@@ -380,10 +383,13 @@ fn run_trace_export(output: PathBuf) -> Result<String> {
     let volume = parent_volume(&output_probe);
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
+        let output_probe = write_probe_path(&output)?.to_path_buf();
         let _access =
-            preflight_access_scope(write_probe_path(&output)?, AccessIntent::Write, WORKER)?;
+            preflight_access_scope_checked(&output_probe, AccessIntent::Write, WORKER, || {
+                cancellation.check()
+            })?;
         cancellation.check()?;
-        let report = export_operator_trace(output)?;
+        let report = export_operator_trace_checked(output, || cancellation.check())?;
         Ok(format!(
             "{}\t{}",
             report.path.display(),
