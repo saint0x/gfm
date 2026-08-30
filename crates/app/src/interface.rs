@@ -142,6 +142,21 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 refresh.as_ref().map(permission_refresh_contract),
             );
         }
+        "ui-permission-refresh-compare-contract" => {
+            let previous_path = required_path(
+                args.next(),
+                "ui-permission-refresh-compare-contract requires a previous state path",
+            )?;
+            let current_path = required_path(
+                args.next(),
+                "ui-permission-refresh-compare-contract requires a current state path",
+            )?;
+            let previous = gfm_mac::PermissionStateSnapshot::read(&previous_path)?;
+            let current = gfm_mac::PermissionStateSnapshot::read(&current_path)?;
+            let refresh =
+                gfm_mac::PermissionStateInvalidationReport::evaluate(Some(&previous), &current);
+            println!("{}", permission_refresh_contract(&refresh).as_tsv());
+        }
         "ui-progress-job-contract" => {
             let path = required_path(
                 args.next(),

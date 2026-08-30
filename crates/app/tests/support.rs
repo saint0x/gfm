@@ -596,6 +596,51 @@ fn reports_permission_ui_refresh_in_access_contract_from_binary() {
 }
 
 #[test]
+fn reports_removed_permission_scope_in_ui_refresh_compare_contract_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-ui-permission-refresh-removed-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let previous = root.join("previous-permission-state.tsv");
+    let current = root.join("current-permission-state.tsv");
+    let documents = root.join("Documents");
+    std::fs::write(
+        &previous,
+        format!(
+            "gfm-permission-state-v1\ndocuments\tgranted\t{}\treadable\n",
+            documents.display()
+        ),
+    )
+    .unwrap();
+    std::fs::write(&current, "gfm-permission-state-v1\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("ui-permission-refresh-compare-contract")
+        .arg(&previous)
+        .arg(&current)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert_eq!(
+        stdout,
+        format!(
+            "permission-refresh\taudience=ui\tinitialized=false\tchanged=1\trefresh-ui=true\trefresh-workers=true\trefresh-operations=true\npermission-refresh-change\tscope=documents\tkind=removed\tprevious=granted\tcurrent=unavailable\tpath={}\treason=permission scope no longer reported by permission onboarding\n",
+            documents.display()
+        )
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn permission_access_contract_uses_bookmark_prompt_for_protected_locations_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-ui-permission-access-bookmark-{}",

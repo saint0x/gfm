@@ -672,6 +672,7 @@ fn print_usage() {
   gfm ui-dialog-contract [alert|rename|popover|disclosure|progress|conflict|permission] [running|paused] [true|false]
   gfm ui-permission-onboarding-contract
   gfm ui-permission-access-contract <path> <read|write|index|preview|operate> [worker]
+  gfm ui-permission-refresh-compare-contract <previous-state.tsv> <current-state.tsv>
   gfm ui-progress-job-contract <progress.gfmprogress> <job-id>
   gfm ui-fileprovider-conflict-contract <fileprovider-path>
   gfm ui-operation-conflict-contract <copy|move|rename|restore> <source> <target> [fail|replace|keep-both|merge|skip]
