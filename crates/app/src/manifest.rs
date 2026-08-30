@@ -9,9 +9,9 @@ use gfm_jobs::Priority;
 use gfm_mac::AccessIntent;
 use gfm_store::{
     cleanup_inactive_content_archives_checked, content_manifest_promotion_journal_path,
-    plan_content_manifest_promotion_recovery, plan_content_manifest_recovery,
+    plan_content_manifest_promotion_recovery_checked, plan_content_manifest_recovery,
     plan_inactive_content_archive_cleanup_checked, promote_content_archive_manifest_checked,
-    recover_content_manifest, recover_content_manifest_promotion, ContentArchiveHealth,
+    recover_content_manifest, recover_content_manifest_promotion_checked, ContentArchiveHealth,
     ContentManifestPromotionJournal, MmapContentSet,
 };
 use gfm_types::{GfmError, Result};
@@ -739,7 +739,9 @@ fn run_manifest_promotion_recovery_plan(manifest_path: PathBuf) -> Result<String
         let _access = retain_manifest_promotion_recovery_plan_access(&manifest_path)?;
         let journal_path = content_manifest_promotion_journal_path(&manifest_path);
         let archive_paths = if manifest_path_exists(&journal_path, "promotion journal")? {
-            let journal = ContentManifestPromotionJournal::read(&journal_path)?;
+            let journal = ContentManifestPromotionJournal::read_checked(&journal_path, || {
+                cancellation.check()
+            })?;
             promotion_recovery_archive_paths(&manifest_path, &journal)?
         } else {
             Vec::new()
@@ -749,7 +751,12 @@ fn run_manifest_promotion_recovery_plan(manifest_path: PathBuf) -> Result<String
         let _archive_access =
             retain_manifest_promotion_recovery_archive_access(&archive_paths, ARCHIVE_WORKER)?;
         cancellation.check()?;
-        Ok(plan_content_manifest_promotion_recovery(manifest_path).as_tsv())
+        Ok(
+            plan_content_manifest_promotion_recovery_checked(manifest_path, || {
+                cancellation.check()
+            })?
+            .as_tsv(),
+        )
     })
 }
 
@@ -764,7 +771,9 @@ fn run_manifest_promotion_recover(manifest_path: PathBuf) -> Result<Vec<String>>
         let _access = retain_manifest_promotion_recovery_access(&manifest_path)?;
         let journal_path = content_manifest_promotion_journal_path(&manifest_path);
         let archive_paths = if manifest_path_exists(&journal_path, "promotion journal")? {
-            let journal = ContentManifestPromotionJournal::read(&journal_path)?;
+            let journal = ContentManifestPromotionJournal::read_checked(&journal_path, || {
+                cancellation.check()
+            })?;
             promotion_recovery_archive_paths(&manifest_path, &journal)?
         } else {
             Vec::new()
@@ -774,7 +783,8 @@ fn run_manifest_promotion_recover(manifest_path: PathBuf) -> Result<Vec<String>>
         let _archive_access =
             retain_manifest_promotion_recovery_archive_access(&archive_paths, ARCHIVE_WORKER)?;
         cancellation.check()?;
-        let recovery = recover_content_manifest_promotion(manifest_path)?;
+        let recovery =
+            recover_content_manifest_promotion_checked(manifest_path, || cancellation.check())?;
         Ok(vec![
             recovery.before.as_tsv(),
             format!(

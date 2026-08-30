@@ -1,9 +1,9 @@
 use super::*;
 use crate::{
-    metadata_postings_from_records, prefix_postings_from_records, write_content_postings,
-    write_dictionary, write_fuzzy_postings, write_metadata_postings, write_prefix_postings,
-    write_record_columns, write_records, write_substring_postings, ContentArchiveManifestEntry,
-    ContentMergeTier, MetadataField, MetadataPosting,
+    metadata_postings_from_records, prefix_postings_from_records, read_content_postings,
+    write_content_postings, write_dictionary, write_fuzzy_postings, write_metadata_postings,
+    write_prefix_postings, write_record_columns, write_records, write_substring_postings,
+    ContentArchiveManifestEntry, ContentMergeTier, MetadataField, MetadataPosting,
 };
 use gfm_types::{ContentPosting, FileId, FileKind, FileRecord, GfmError, VolumeId};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -196,6 +196,35 @@ fn migrates_legacy_content_archive_to_current_schema_with_backup() {
         ArchiveSchemaStatus::Legacy
     );
 
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn checked_content_archive_migration_cancels_before_legacy_posting_read() {
+    let dir = temp_dir("gfm-schema-content-migration-cancel");
+    let content = dir.join("legacy.gfmcontent");
+    let backup = dir.join("backup");
+    let postings = vec![ContentPosting {
+        term: "alpha".to_string(),
+        ids: vec![FileId::new(VolumeId(1), 2)],
+        positions: Vec::new(),
+    }];
+    write_legacy_content_archive(&content, &postings);
+    let original = std::fs::read(&content).unwrap();
+    let mut checks = 0;
+
+    let result = migrate_content_archive_checked(&content, &backup, || {
+        checks += 1;
+        if checks >= 8 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert_eq!(std::fs::read(&content).unwrap(), original);
+    assert!(!backup.exists());
     std::fs::remove_dir_all(dir).unwrap();
 }
 

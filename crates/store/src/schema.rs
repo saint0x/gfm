@@ -1,5 +1,5 @@
 use crate::{
-    read_content_postings, read_metadata_postings, read_records, write_content_postings,
+    read_content_postings_checked, read_metadata_postings, read_records, write_content_postings,
     write_metadata_postings, write_records, ContentArchive, ContentArchiveManifest,
     MmapContentArchive, MmapDictionary, MmapFuzzyArchive, MmapMetadataArchive, MmapPrefixArchive,
     MmapRecordArchive, MmapRecordColumns, MmapSubstringArchive,
@@ -555,9 +555,19 @@ pub fn migrate_content_archive(
     path: impl AsRef<Path>,
     backup_dir: impl AsRef<Path>,
 ) -> Result<ContentArchiveMigration> {
+    migrate_content_archive_checked(path, backup_dir, || Ok(()))
+}
+
+pub fn migrate_content_archive_checked(
+    path: impl AsRef<Path>,
+    backup_dir: impl AsRef<Path>,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<ContentArchiveMigration> {
     let path = path.as_ref();
     let backup_dir = backup_dir.as_ref();
+    check_control()?;
     let before = plan_content_archive_migration(path);
+    check_control()?;
     match before.action {
         ContentArchiveMigrationAction::Ready => {
             return Ok(ContentArchiveMigration {
@@ -580,9 +590,12 @@ pub fn migrate_content_archive(
         ContentArchiveMigrationAction::Migrate => {}
     }
 
-    let postings = read_content_postings(path)?;
+    let postings = read_content_postings_checked(path, &mut check_control)?;
+    check_control()?;
     let backup_path = backup_archive(path, backup_dir, "legacy")?;
+    check_control()?;
     write_content_postings(path, &postings)?;
+    check_control()?;
     let after = inspect_archive_schema(ArchiveSchemaKind::Content, path);
     if after.status != ArchiveSchemaStatus::Current {
         return Err(GfmError::Format(format!(

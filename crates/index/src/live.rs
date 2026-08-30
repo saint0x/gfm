@@ -13,7 +13,7 @@ use gfm_search::{
     SearchSubstringPosting, SearchVolumeScope, ShardedSearchIndex,
 };
 use gfm_store::{
-    read_content_postings, write_content_postings, MmapContentArchive, MmapContentSet,
+    read_content_postings_checked, write_content_postings, MmapContentArchive, MmapContentSet,
     MmapRecordArchive, MmapRecordColumns,
 };
 use gfm_types::{
@@ -685,7 +685,7 @@ impl LiveIndex {
         cancellation: &Cancellation,
     ) -> Result<usize> {
         cancellation.check()?;
-        let postings = read_content_postings(path)?;
+        let postings = read_content_postings_checked(path, || cancellation.check())?;
         cancellation.check()?;
         let terms = postings.len();
         self.index.import_content_postings(&postings);

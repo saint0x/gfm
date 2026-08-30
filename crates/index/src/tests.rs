@@ -2857,6 +2857,20 @@ fn content_posting_load_honors_pre_cancelled_token_before_content_open() {
 }
 
 #[test]
+fn unbudgeted_content_posting_load_honors_pre_cancelled_token_before_content_open() {
+    let root = unique_temp_dir("gfm-content-posting-load-full-cancel-root");
+    let unavailable = unprobeable_child_path(&root, "content-postings-unavailable", "gfmcontent");
+    let mut live = LiveIndex::new();
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+
+    let result = live.load_content_postings_cancellable(&unavailable, &cancellation);
+
+    assert_eq!(result, Err(GfmError::Cancelled));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn content_query_loader_honors_pre_cancelled_token_before_records_open() {
     let root = unique_temp_dir("gfm-content-query-loader-cancel-root");
     let records = unprobeable_child_path(&root, "records-unavailable", "gfmidx");

@@ -551,6 +551,21 @@ fn content_promotion_journal_read_rejects_duplicate_previous_paths_with_line_num
 }
 
 #[test]
+fn content_promotion_journal_checked_read_honors_pre_cancelled_control_before_file_open() {
+    let dir = temp_dir("gfm-content-manifest-promotion-journal-read-cancel");
+    let manifest_path = dir.join("content.gfmmanifest");
+    let journal_path = content_manifest_promotion_journal_path(&manifest_path);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let result =
+        ContentManifestPromotionJournal::read_checked(&journal_path, || Err(GfmError::Cancelled));
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(!journal_path.exists());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn content_promotion_journal_read_rejects_duplicate_retired_paths_with_line_number() {
     let dir = temp_dir("gfm-content-manifest-promotion-duplicate-retired");
     let manifest_path = dir.join("content.gfmmanifest");
@@ -570,6 +585,91 @@ fn content_promotion_journal_read_rejects_duplicate_retired_paths_with_line_numb
     assert!(err
         .to_string()
         .contains("duplicate retired archive path `hot-a.gfmcontent`"));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn checked_content_promotion_journal_read_honors_pre_cancelled_control_before_file_open() {
+    let dir = temp_dir("gfm-content-promotion-journal-read-cancel");
+    let manifest_path = dir.join("content.gfmmanifest");
+    let journal_path = content_manifest_promotion_journal_path(&manifest_path);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let result =
+        ContentManifestPromotionJournal::read_checked(&journal_path, || Err(GfmError::Cancelled));
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(!journal_path.exists());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn checked_content_manifest_promotion_recovery_plan_honors_pre_cancelled_control_before_journal_probe(
+) {
+    let dir = temp_dir("gfm-content-promotion-recovery-plan-cancel");
+    let manifest_path = dir.join("content.gfmmanifest");
+    let journal_path = content_manifest_promotion_journal_path(&manifest_path);
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let result = plan_content_manifest_promotion_recovery_checked(&manifest_path, || {
+        Err(GfmError::Cancelled)
+    });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert!(!journal_path.exists());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn checked_content_manifest_promotion_recovery_plan_cancels_before_journal_probe() {
+    let dir = temp_dir("gfm-content-manifest-promotion-plan-cancel");
+    let manifest_path = dir.join("content.gfmmanifest");
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let result = plan_content_manifest_promotion_recovery_checked(&manifest_path, || {
+        Err(GfmError::Cancelled)
+    });
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn checked_content_manifest_promotion_recovery_cancels_before_mutation() {
+    let dir = temp_dir("gfm-content-manifest-promotion-recover-cancel");
+    let manifest_path = dir.join("content.gfmmanifest");
+    let old_archive = dir.join("hot-a.gfmcontent");
+    let new_archive = dir.join("warm-b.gfmcontent");
+    std::fs::create_dir_all(&dir).unwrap();
+    write_content_postings(&old_archive, &[]).unwrap();
+    write_content_postings(&new_archive, &[]).unwrap();
+    let previous = ContentArchiveManifest::new(vec![ContentArchiveManifestEntry {
+        tier: ContentMergeTier::Hot,
+        path: PathBuf::from("hot-a.gfmcontent"),
+    }])
+    .unwrap();
+    previous.write(&manifest_path).unwrap();
+    let journal = ContentManifestPromotionJournal::new(
+        previous.clone(),
+        ContentArchiveManifestEntry {
+            tier: ContentMergeTier::Warm,
+            path: PathBuf::from("warm-b.gfmcontent"),
+        },
+        vec![PathBuf::from("hot-a.gfmcontent")],
+    )
+    .unwrap();
+    let journal_path = content_manifest_promotion_journal_path(&manifest_path);
+    journal.write(&journal_path).unwrap();
+
+    let result =
+        recover_content_manifest_promotion_checked(&manifest_path, || Err(GfmError::Cancelled));
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert_eq!(
+        ContentArchiveManifest::read(&manifest_path).unwrap(),
+        previous
+    );
+    assert!(journal_path.exists());
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -630,6 +730,45 @@ fn content_manifest_promotion_recovery_surfaces_journal_probe_failures() {
         .detail
         .as_deref()
         .is_some_and(|detail| detail.contains("content promotion journal existence unavailable")));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn checked_content_manifest_promotion_recovery_honors_pre_cancelled_control_before_mutation() {
+    let dir = temp_dir("gfm-content-promotion-recovery-cancel");
+    let manifest_path = dir.join("content.gfmmanifest");
+    let old_archive = dir.join("hot-a.gfmcontent");
+    let new_archive = dir.join("warm-b.gfmcontent");
+    std::fs::create_dir_all(&dir).unwrap();
+    write_content_postings(&old_archive, &[]).unwrap();
+    write_content_postings(&new_archive, &[]).unwrap();
+    let previous = ContentArchiveManifest::new(vec![ContentArchiveManifestEntry {
+        tier: ContentMergeTier::Hot,
+        path: PathBuf::from("hot-a.gfmcontent"),
+    }])
+    .unwrap();
+    previous.write(&manifest_path).unwrap();
+    let journal = ContentManifestPromotionJournal::new(
+        previous.clone(),
+        ContentArchiveManifestEntry {
+            tier: ContentMergeTier::Warm,
+            path: PathBuf::from("warm-b.gfmcontent"),
+        },
+        vec![PathBuf::from("hot-a.gfmcontent")],
+    )
+    .unwrap();
+    let journal_path = content_manifest_promotion_journal_path(&manifest_path);
+    journal.write(&journal_path).unwrap();
+
+    let result =
+        recover_content_manifest_promotion_checked(&manifest_path, || Err(GfmError::Cancelled));
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    assert_eq!(
+        ContentArchiveManifest::read(&manifest_path).unwrap(),
+        previous
+    );
+    assert!(journal_path.exists());
     std::fs::remove_dir_all(dir).unwrap();
 }
 

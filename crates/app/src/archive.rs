@@ -11,16 +11,17 @@ use gfm_jobs::{Cancellation, Priority};
 use gfm_mac::AccessIntent;
 use gfm_store::{
     dictionary_term_report_from_records, fuzzy_postings_from_records,
-    inspect_archive_schema_checked, metadata_postings_from_records, migrate_content_archive,
-    migrate_metadata_archive, migrate_record_archive, plan_archive_rebuilds,
-    plan_columns_archive_rebuild, plan_content_archive_migration, plan_derived_sidecar_rebuild,
-    plan_metadata_archive_migration, plan_record_archive_migration, plan_sidecar_recovery,
-    prefix_postings_from_records, rebuild_columns_archive, rebuild_derived_sidecar_checked,
-    recover_sidecars_checked, sidecar_kind_name, substring_postings_from_records, write_dictionary,
-    write_fuzzy_postings, write_metadata_postings, write_prefix_postings, write_record_columns,
-    write_substring_postings, ArchiveRebuildInputs, ArchiveSchemaKind, ColumnsArchiveRebuild,
-    MmapRecordArchive, MmapRecordColumns, SidecarHealth, SidecarKind, SidecarPaths,
-    SidecarRecovery, SidecarRecoveryPlan,
+    inspect_archive_schema_checked, metadata_postings_from_records,
+    migrate_content_archive_checked, migrate_metadata_archive, migrate_record_archive,
+    plan_archive_rebuilds, plan_columns_archive_rebuild, plan_content_archive_migration,
+    plan_derived_sidecar_rebuild, plan_metadata_archive_migration, plan_record_archive_migration,
+    plan_sidecar_recovery, prefix_postings_from_records, rebuild_columns_archive,
+    rebuild_derived_sidecar_checked, recover_sidecars_checked, sidecar_kind_name,
+    substring_postings_from_records, write_dictionary, write_fuzzy_postings,
+    write_metadata_postings, write_prefix_postings, write_record_columns, write_substring_postings,
+    ArchiveRebuildInputs, ArchiveSchemaKind, ColumnsArchiveRebuild, MmapRecordArchive,
+    MmapRecordColumns, SidecarHealth, SidecarKind, SidecarPaths, SidecarRecovery,
+    SidecarRecoveryPlan,
 };
 use gfm_types::{FileId, FileRecord, GfmError, Result, VolumeId};
 use std::fs;
@@ -144,7 +145,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 records,
                 backup_dir,
                 "records migrate",
-                migrate_record_archive,
+                |archive, backup_dir, _cancellation| migrate_record_archive(archive, backup_dir),
             )?;
             println!("{}", migration.as_tsv());
         }
@@ -173,7 +174,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 content,
                 backup_dir,
                 "content migrate",
-                migrate_content_archive,
+                |archive, backup_dir, cancellation| {
+                    migrate_content_archive_checked(archive, backup_dir, || cancellation.check())
+                },
             )?;
             println!("{}", migration.as_tsv());
         }
@@ -202,7 +205,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 metadata,
                 backup_dir,
                 "metadata migrate",
-                migrate_metadata_archive,
+                |archive, backup_dir, _cancellation| migrate_metadata_archive(archive, backup_dir),
             )?;
             println!("{}", migration.as_tsv());
         }
@@ -540,7 +543,7 @@ fn run_archive_migration<T>(
     archive: PathBuf,
     backup_dir: PathBuf,
     worker: &'static str,
-    migrate: impl FnOnce(PathBuf, PathBuf) -> Result<T> + Send + 'static,
+    migrate: impl FnOnce(PathBuf, PathBuf, &Cancellation) -> Result<T> + Send + 'static,
 ) -> Result<T>
 where
     T: Send + 'static,
@@ -553,7 +556,7 @@ where
         cancellation.check()?;
         let _access = retain_archive_migration_access(&archive, &backup_dir, worker)?;
         cancellation.check()?;
-        migrate(archive, backup_dir)
+        migrate(archive, backup_dir, &cancellation)
     })
 }
 

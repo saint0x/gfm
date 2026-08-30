@@ -40,9 +40,10 @@ pub use contentrecover::{
 pub use contentset::{
     cleanup_inactive_content_archives, cleanup_inactive_content_archives_checked,
     content_manifest_promotion_journal_path, plan_content_manifest_promotion_recovery,
-    plan_inactive_content_archive_cleanup, plan_inactive_content_archive_cleanup_checked,
-    promote_content_archive_manifest, promote_content_archive_manifest_checked,
-    read_content_archive_manifest, recover_content_manifest_promotion,
+    plan_content_manifest_promotion_recovery_checked, plan_inactive_content_archive_cleanup,
+    plan_inactive_content_archive_cleanup_checked, promote_content_archive_manifest,
+    promote_content_archive_manifest_checked, read_content_archive_manifest,
+    recover_content_manifest_promotion, recover_content_manifest_promotion_checked,
     write_content_archive_manifest, ContentArchiveCleanupAction, ContentArchiveCleanupPlan,
     ContentArchiveCleanupPolicy, ContentArchiveCleanupReport, ContentArchiveManifest,
     ContentArchiveManifestEntry, ContentManifestPromotion, ContentManifestPromotionJournal,
@@ -76,9 +77,9 @@ pub use rebuild::{
 };
 pub use schema::{
     inspect_archive_schema, inspect_archive_schema_checked, migrate_content_archive,
-    migrate_metadata_archive, migrate_record_archive, plan_content_archive_migration,
-    plan_metadata_archive_migration, plan_record_archive_migration, ArchiveSchemaKind,
-    ArchiveSchemaReport, ArchiveSchemaStatus, ContentArchiveMigration,
+    migrate_content_archive_checked, migrate_metadata_archive, migrate_record_archive,
+    plan_content_archive_migration, plan_metadata_archive_migration, plan_record_archive_migration,
+    ArchiveSchemaKind, ArchiveSchemaReport, ArchiveSchemaStatus, ContentArchiveMigration,
     ContentArchiveMigrationAction, ContentArchiveMigrationPlan, MetadataArchiveMigration,
     MetadataArchiveMigrationAction, MetadataArchiveMigrationPlan, RecordArchiveMigration,
     RecordArchiveMigrationAction, RecordArchiveMigrationPlan,

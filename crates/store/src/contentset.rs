@@ -445,8 +445,17 @@ impl ContentManifestPromotionJournal {
     }
 
     pub fn read(path: impl AsRef<Path>) -> Result<Self> {
+        Self::read_checked(path, || Ok(()))
+    }
+
+    pub fn read_checked(
+        path: impl AsRef<Path>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
         let path = path.as_ref();
+        check_control()?;
         let file = std::fs::File::open(path).map_err(|err| GfmError::io(path, err))?;
+        check_control()?;
         let mut lines = BufReader::new(file).lines();
         match lines.next() {
             Some(Ok(header)) if header == CONTENT_PROMOTION_JOURNAL_HEADER => {}
@@ -464,6 +473,7 @@ impl ContentManifestPromotionJournal {
                 )))
             }
         }
+        check_control()?;
 
         let mut previous = Vec::new();
         let mut new_archive = None;
@@ -471,7 +481,9 @@ impl ContentManifestPromotionJournal {
         let mut seen_previous = BTreeSet::new();
         let mut seen_retired = BTreeSet::new();
         for (line_index, line) in lines.enumerate() {
+            check_control()?;
             let line = line.map_err(|err| GfmError::io(path, err))?;
+            check_control()?;
             if line.trim().is_empty() {
                 continue;
             }
@@ -526,6 +538,7 @@ impl ContentManifestPromotionJournal {
                 }
             }
         }
+        check_control()?;
         Self::new(
             ContentArchiveManifest::new(previous)?,
             new_archive.ok_or_else(|| {
@@ -633,67 +646,82 @@ pub fn content_manifest_promotion_journal_path(manifest_path: impl AsRef<Path>) 
 pub fn plan_content_manifest_promotion_recovery(
     manifest_path: impl AsRef<Path>,
 ) -> ContentManifestPromotionRecoveryPlan {
+    plan_content_manifest_promotion_recovery_checked(manifest_path, || Ok(()))
+        .expect("infallible content promotion recovery planning cancellation")
+}
+
+pub fn plan_content_manifest_promotion_recovery_checked(
+    manifest_path: impl AsRef<Path>,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<ContentManifestPromotionRecoveryPlan> {
     let manifest_path = manifest_path.as_ref().to_path_buf();
     let journal_path = content_manifest_promotion_journal_path(&manifest_path);
+    check_control()?;
     let journal_exists = match journal_path.try_exists() {
         Ok(exists) => exists,
         Err(err) => {
-            return ContentManifestPromotionRecoveryPlan {
+            return Ok(ContentManifestPromotionRecoveryPlan {
                 action: ContentManifestPromotionRecoveryAction::CannotRecover,
                 manifest_path,
                 journal_path,
                 detail: Some(format!(
                     "content promotion journal existence unavailable: {err}"
                 )),
-            }
+            })
         }
     };
+    check_control()?;
     if !journal_exists {
-        return ContentManifestPromotionRecoveryPlan {
+        return Ok(ContentManifestPromotionRecoveryPlan {
             action: ContentManifestPromotionRecoveryAction::Ready,
             manifest_path,
             journal_path,
             detail: Some("no pending promotion journal".to_string()),
-        };
+        });
     }
-    let journal = match ContentManifestPromotionJournal::read(&journal_path) {
-        Ok(journal) => journal,
-        Err(err) => {
-            return ContentManifestPromotionRecoveryPlan {
-                action: ContentManifestPromotionRecoveryAction::CannotRecover,
-                manifest_path,
-                journal_path,
-                detail: Some(err.to_string()),
+    let journal =
+        match ContentManifestPromotionJournal::read_checked(&journal_path, &mut check_control) {
+            Ok(journal) => journal,
+            Err(err) => {
+                return Ok(ContentManifestPromotionRecoveryPlan {
+                    action: ContentManifestPromotionRecoveryAction::CannotRecover,
+                    manifest_path,
+                    journal_path,
+                    detail: Some(err.to_string()),
+                })
             }
-        }
-    };
+        };
+    check_control()?;
     let promotion = match journal.promotion(&manifest_path) {
         Ok(promotion) => promotion,
         Err(err) => {
-            return ContentManifestPromotionRecoveryPlan {
+            return Ok(ContentManifestPromotionRecoveryPlan {
                 action: ContentManifestPromotionRecoveryAction::CannotRecover,
                 manifest_path,
                 journal_path,
                 detail: Some(err.to_string()),
-            }
+            })
         }
     };
-    let current = ContentArchiveManifest::read(&manifest_path);
+    check_control()?;
+    let current = ContentArchiveManifest::read_checked(&manifest_path, &mut check_control);
+    check_control()?;
     if current
         .as_ref()
         .is_ok_and(|manifest| *manifest == promotion.manifest)
     {
-        return ContentManifestPromotionRecoveryPlan {
+        return Ok(ContentManifestPromotionRecoveryPlan {
             action: ContentManifestPromotionRecoveryAction::RemoveStaleJournal,
             manifest_path,
             journal_path,
             detail: Some("manifest already contains promoted archive".to_string()),
-        };
+        });
     }
     for entry in &promotion.manifest.archives {
+        check_control()?;
         let path = resolve_manifest_path(&manifest_path, &entry.path);
-        if let Err(err) = MmapContentArchive::open(&path) {
-            return ContentManifestPromotionRecoveryPlan {
+        if let Err(err) = MmapContentArchive::open_checked(&path, &mut check_control) {
+            return Ok(ContentManifestPromotionRecoveryPlan {
                 action: ContentManifestPromotionRecoveryAction::CannotRecover,
                 manifest_path,
                 journal_path,
@@ -701,35 +729,56 @@ pub fn plan_content_manifest_promotion_recovery(
                     "promoted archive {} is not readable: {err}",
                     path.display()
                 )),
-            };
+            });
         }
+        check_control()?;
     }
-    ContentManifestPromotionRecoveryPlan {
+    Ok(ContentManifestPromotionRecoveryPlan {
         action: ContentManifestPromotionRecoveryAction::CompletePromotion,
         manifest_path,
         journal_path,
         detail: current.err().map(|err| err.to_string()),
-    }
+    })
 }
 
 pub fn recover_content_manifest_promotion(
     manifest_path: impl AsRef<Path>,
 ) -> Result<ContentManifestPromotionRecovery> {
+    recover_content_manifest_promotion_checked(manifest_path, || Ok(()))
+}
+
+pub fn recover_content_manifest_promotion_checked(
+    manifest_path: impl AsRef<Path>,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<ContentManifestPromotionRecovery> {
     let manifest_path = manifest_path.as_ref();
-    let before = plan_content_manifest_promotion_recovery(manifest_path);
+    check_control()?;
+    let before =
+        plan_content_manifest_promotion_recovery_checked(manifest_path, &mut check_control)?;
+    check_control()?;
     let mut completed_promotion = false;
     let mut removed_journal = false;
     match before.action {
         ContentManifestPromotionRecoveryAction::Ready => {}
         ContentManifestPromotionRecoveryAction::RemoveStaleJournal => {
+            check_control()?;
             remove_journal_if_exists(&before.journal_path)?;
+            check_control()?;
             removed_journal = true;
         }
         ContentManifestPromotionRecoveryAction::CompletePromotion => {
-            let journal = ContentManifestPromotionJournal::read(&before.journal_path)?;
+            check_control()?;
+            let journal = ContentManifestPromotionJournal::read_checked(
+                &before.journal_path,
+                &mut check_control,
+            )?;
+            check_control()?;
             let promotion = journal.promotion(manifest_path)?;
+            check_control()?;
             promotion.manifest.write(manifest_path)?;
+            check_control()?;
             remove_journal_if_exists(&before.journal_path)?;
+            check_control()?;
             completed_promotion = true;
             removed_journal = true;
         }
@@ -744,7 +793,8 @@ pub fn recover_content_manifest_promotion(
             )))
         }
     }
-    let after = plan_content_manifest_promotion_recovery(manifest_path);
+    check_control()?;
+    let after = plan_content_manifest_promotion_recovery_checked(manifest_path, check_control)?;
     Ok(ContentManifestPromotionRecovery {
         before,
         after,
