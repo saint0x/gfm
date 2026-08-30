@@ -234,10 +234,13 @@ impl VolumeDescriptor {
             .as_ref()
             .and_then(|mount_table| mount_table.is_local)
             .or_else(|| resource.as_ref().and_then(|resource| resource.is_local));
-        let network = marker_network(marker_value)
-            .or_else(|| local.map(|local| !local))
-            .or_else(|| native.as_ref().and_then(|native| native.volume_network))
-            .unwrap_or(kind == VolumeKind::Network);
+        let network = volume_network_state(
+            marker_value,
+            native.as_ref(),
+            resource.as_ref(),
+            mount_table.as_ref(),
+            kind,
+        );
         let reachable = marker_reachability(
             marker.as_deref(),
             network,
@@ -2086,6 +2089,40 @@ fn volume_reachability(
         .or_else(|| path.try_exists().ok())
 }
 
+fn volume_network_state(
+    marker: Option<&str>,
+    native: Option<&NativeVolumeDescription>,
+    resource: Option<&NativeVolumeResourceValues>,
+    mount_table: Option<&NativeVolumeMountTableEntry>,
+    kind: VolumeKind,
+) -> bool {
+    if let Some(network) = marker_network(marker) {
+        return network;
+    }
+    if native
+        .filter(|native| native.status == NativeVolumeStatus::Available)
+        .and_then(|native| native.volume_network)
+        == Some(true)
+    {
+        return true;
+    }
+    mount_table
+        .filter(|mount_table| mount_table.status == NativeVolumeStatus::Available)
+        .and_then(|mount_table| mount_table.is_local)
+        .or_else(|| {
+            resource
+                .filter(|resource| resource.status == NativeVolumeStatus::Available)
+                .and_then(|resource| resource.is_local)
+        })
+        .map(|local| !local)
+        .or_else(|| {
+            native
+                .filter(|native| native.status == NativeVolumeStatus::Available)
+                .and_then(|native| native.volume_network)
+        })
+        .unwrap_or(kind == VolumeKind::Network)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct VolumeAccessState {
     writable: bool,
@@ -2920,6 +2957,45 @@ mod tests {
         let kind = classify_volume(Path::new("/Volumes/Team SMB"), None, None, None, None);
 
         assert_eq!(kind, VolumeKind::Network);
+    }
+
+    #[test]
+    fn volume_network_state_prefers_positive_diskarbitration_network_truth() {
+        let native = native_description(|description| {
+            description.volume_network = Some(true);
+        });
+        let resource = resource_values(|values| {
+            values.is_local = Some(true);
+        });
+        let mount_table = mount_table_entry(|entry| {
+            entry.is_local = Some(true);
+        });
+
+        assert!(volume_network_state(
+            None,
+            Some(&native),
+            Some(&resource),
+            Some(&mount_table),
+            VolumeKind::Network,
+        ));
+    }
+
+    #[test]
+    fn volume_network_state_uses_mount_table_network_when_diskarbitration_is_local() {
+        let native = native_description(|description| {
+            description.volume_network = Some(false);
+        });
+        let mount_table = mount_table_entry(|entry| {
+            entry.is_local = Some(false);
+        });
+
+        assert!(volume_network_state(
+            None,
+            Some(&native),
+            None,
+            Some(&mount_table),
+            VolumeKind::Internal,
+        ));
     }
 
     #[test]
