@@ -923,6 +923,42 @@ fn quicklook_refuses_missing_path_before_preview_from_binary() {
 }
 
 #[test]
+fn thumbnail_generation_refuses_missing_path_before_generation_from_binary() {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "gfm-thumbnail-missing-{}-{}.png",
+        std::process::id(),
+        nanos
+    ));
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("thumbnail-generation")
+        .arg(&path)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("security-scope\t"), "{stderr}");
+    assert!(stderr.contains("security-worker-admission\tworker=thumbnail generation\t"));
+    assert!(stderr.contains("\tintent=preview\t"), "{stderr}");
+    assert!(stderr.contains("\tprobe=missing\t"), "{stderr}");
+    assert!(stderr.contains("\taction=deny\t"), "{stderr}");
+    assert!(stderr.contains("\tworker-action=deny\t"), "{stderr}");
+    assert!(
+        stderr.contains("\tcan-touch-filesystem=false\t"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("thumbnail generation access blocked: path is not present on this host"),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn reports_mac_bridge_contract_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("mac-bridges")

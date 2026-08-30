@@ -6294,6 +6294,16 @@
       "times": 1
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "thumbnail-generation",
+        "tmp/gfm-fozzy-thumbnail-missing.png"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
       "type": "fs_write",
       "path": "tmp/gfm-fozzy-thumbnail-permission-state.tsv",
       "data": "gfm-permission-state-v1\ndocuments\tgranted\ttmp/gfm-fozzy-home/Documents\treadable\n"
