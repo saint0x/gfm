@@ -2199,32 +2199,44 @@ fn evaluate_fileprovider_observed_invalidation(
     worker: &str,
     cancellation: &Cancellation,
 ) -> Result<FileProviderObservedInvalidation> {
-    cancellation.check()?;
+    evaluate_fileprovider_observed_invalidation_checked(state_path, event, worker, || {
+        cancellation.check()
+    })
+}
+
+fn evaluate_fileprovider_observed_invalidation_checked(
+    state_path: &Path,
+    event: FileEvent,
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<FileProviderObservedInvalidation> {
+    check_control()?;
     let state_probe = write_probe_existing_ancestor(state_path, worker)?;
     let mut access = vec![preflight_access_scope(
         &state_probe,
         AccessIntent::Write,
         worker,
     )?];
-    cancellation.check()?;
+    check_control()?;
     let previous = if fileprovider_state_file_exists(state_path, worker)? {
-        Some(FileProviderStateSnapshot::read_checked(state_path, || {
-            cancellation.check()
-        })?)
+        Some(FileProviderStateSnapshot::read_checked(
+            state_path,
+            &mut check_control,
+        )?)
     } else {
         None
     };
-    cancellation.check()?;
+    check_control()?;
     access.extend(retain_fileprovider_event_access(
         &event,
         previous.as_ref(),
         worker,
     )?);
-    cancellation.check()?;
+    check_control()?;
     let (observed, snapshot) =
         FileProviderObservedInvalidation::evaluate(previous.as_ref(), [event])?;
-    cancellation.check()?;
-    snapshot.write_checked(state_path, || cancellation.check())?;
+    check_control()?;
+    snapshot.write_checked(state_path, &mut check_control)?;
     Ok(observed)
 }
 
@@ -2820,6 +2832,58 @@ mod tests {
             .expect_err("pre-cancelled preview materialization should not read FileProvider state");
 
         assert_eq!(err, GfmError::Cancelled);
+    }
+
+    #[test]
+    fn fileprovider_observed_invalidation_preserves_state_when_cancelled_during_publish() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-platform-fileprovider-publish-cancel-{}",
+            std::process::id()
+        ));
+        let state_path = root.join("state.tsv");
+        let tracked = root.join("Remote.icloud-placeholder").join("Gone.md");
+        std::fs::create_dir_all(tracked.parent().unwrap()).unwrap();
+        let previous = FileProviderStateSnapshot {
+            entries: vec![FileProviderStateSnapshotEntry {
+                path: tracked.clone(),
+                state: CloudStorageState::Evicted,
+            }],
+        };
+        previous.write(&state_path).unwrap();
+        let before = std::fs::read(&state_path).unwrap();
+        std::fs::remove_dir_all(tracked.parent().unwrap()).unwrap();
+        let event = FileEvent::new(tracked, FileEventKind::Remove);
+        let mut checks = 0usize;
+
+        let err = evaluate_fileprovider_observed_invalidation_checked(
+            &state_path,
+            event,
+            "fileprovider observed invalidation",
+            || {
+                checks += 1;
+                if checks >= 10 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert_eq!(std::fs::read(&state_path).unwrap(), before);
+        let leftovers = std::fs::read_dir(&root)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".state.tsv")
+            })
+            .count();
+        assert_eq!(leftovers, 0);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
