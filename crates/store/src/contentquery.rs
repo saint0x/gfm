@@ -84,6 +84,16 @@ impl MmapContentSet {
         term: &str,
         limit: usize,
     ) -> Result<(Option<ContentPosting>, bool)> {
+        self.posting_for_term_limit_checked(term, limit, || Ok(()))
+    }
+
+    pub fn posting_for_term_limit_checked(
+        &self,
+        term: &str,
+        limit: usize,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<(Option<ContentPosting>, bool)> {
+        check_control()?;
         let term = canonical_term(term);
         if term.is_empty() {
             return Ok((None, false));
@@ -91,8 +101,9 @@ impl MmapContentSet {
         let mut positions_by_id: BTreeMap<FileId, BTreeSet<u32>> = BTreeMap::new();
         let mut truncated = false;
         for archive in &self.archives {
+            check_control()?;
             let (Some(posting), archive_truncated) =
-                archive.posting_for_term_limit(&term, limit)?
+                archive.posting_for_term_limit_checked(&term, limit, &mut check_control)?
             else {
                 continue;
             };
@@ -108,6 +119,7 @@ impl MmapContentSet {
                 positions_by_id.pop_last();
             }
         }
+        check_control()?;
         Ok((
             Some(content_posting_from_positions(term, positions_by_id)),
             truncated,
@@ -119,8 +131,21 @@ impl MmapContentSet {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
+        self.postings_for_terms_checked(terms, || Ok(()))
+    }
+
+    pub fn postings_for_terms_checked<I, S>(
+        &self,
+        terms: I,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<ContentPosting>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
         let mut selected = BTreeSet::new();
         for term in terms {
+            check_control()?;
             let term = canonical_term(term.as_ref());
             if !term.is_empty() {
                 selected.insert(term);
@@ -129,7 +154,11 @@ impl MmapContentSet {
 
         selected
             .into_iter()
-            .filter_map(|term| self.posting_for_term(&term).transpose())
+            .filter_map(|term| {
+                check_control()
+                    .and_then(|_| self.posting_for_term(&term))
+                    .transpose()
+            })
             .collect()
     }
 
@@ -142,8 +171,22 @@ impl MmapContentSet {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
+        self.postings_for_terms_limit_checked(terms, limit_per_term, || Ok(()))
+    }
+
+    pub fn postings_for_terms_limit_checked<I, S>(
+        &self,
+        terms: I,
+        limit_per_term: usize,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<ContentPosting>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
         let mut selected = BTreeSet::new();
         for term in terms {
+            check_control()?;
             let term = canonical_term(term.as_ref());
             if !term.is_empty() {
                 selected.insert(term);
@@ -157,7 +200,13 @@ impl MmapContentSet {
             .collect();
 
         for archive in &self.archives {
-            for limited in archive.postings_for_sorted_terms_limit(&selected, limit_per_term)? {
+            check_control()?;
+            for limited in archive.postings_for_sorted_terms_limit_checked(
+                &selected,
+                limit_per_term,
+                &mut check_control,
+            )? {
+                check_control()?;
                 let Some(positions_by_id) = by_term.get_mut(&limited.posting.term) else {
                     continue;
                 };
@@ -165,9 +214,12 @@ impl MmapContentSet {
             }
         }
 
-        Ok(by_term
+        by_term
             .into_iter()
             .filter_map(|(term, mut positions_by_id)| {
+                if let Err(err) = check_control() {
+                    return Some(Err(err));
+                }
                 if positions_by_id.is_empty() {
                     return None;
                 }
@@ -176,9 +228,9 @@ impl MmapContentSet {
                         positions_by_id.pop_last();
                     }
                 }
-                Some(content_posting_from_positions(term, positions_by_id))
+                Some(Ok(content_posting_from_positions(term, positions_by_id)))
             })
-            .collect())
+            .collect::<Result<Vec<_>>>()
     }
 
     pub fn archive_count(&self) -> usize {
@@ -234,5 +286,66 @@ fn merge_content_posting_positions(
             .entry(positions.id)
             .or_default()
             .extend(positions.positions);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::content::write_content_postings;
+    use gfm_types::{GfmError, VolumeId};
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn content_set_checked_limit_query_honors_pre_cancelled_control() {
+        let set = MmapContentSet {
+            archives: Vec::new(),
+        };
+
+        let result = set.posting_for_term_limit_checked("needle", 10, || Err(GfmError::Cancelled));
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+    }
+
+    #[test]
+    fn content_set_checked_terms_query_cancels_before_archive_traversal() {
+        let path = temp_path("gfm-content-set-query-cancel", "gfmcontent");
+        write_content_postings(
+            &path,
+            &[ContentPosting {
+                term: "needle".to_string(),
+                ids: vec![FileId::new(VolumeId(1), 7)],
+                positions: Vec::new(),
+            }],
+        )
+        .unwrap();
+        let set = MmapContentSet::open([&path]).unwrap();
+        let mut checks = 0usize;
+
+        let result = set.postings_for_terms_limit_checked(["needle"], 10, || {
+            checks += 1;
+            if checks >= 2 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(checks >= 2);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    fn temp_path(prefix: &str, extension: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "{}-{}.{}",
+            prefix,
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+            extension
+        ))
     }
 }

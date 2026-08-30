@@ -849,9 +849,10 @@ impl Indexer {
         cancellation.check()?;
         let content = MmapContentArchive::open_checked(content_path, || cancellation.check())?;
         cancellation.check()?;
-        let postings = content.postings_for_terms_limit(
+        let postings = content.postings_for_terms_limit_checked(
             content_query_terms(query),
             budget.max_content_ids_per_term,
+            || cancellation.check(),
         )?;
         cancellation.check()?;
         LiveIndex::from_mmap_records_with_content_postings_cancellable(
@@ -962,9 +963,10 @@ impl Indexer {
         cancellation.check()?;
         let content = MmapContentSet::open_checked(content_paths, || cancellation.check())?;
         cancellation.check()?;
-        let postings = content.postings_for_terms_limit(
+        let postings = content.postings_for_terms_limit_checked(
             content_query_terms(query),
             SearchLookupBudget::default().max_content_ids_per_term,
+            || cancellation.check(),
         )?;
         cancellation.check()?;
         LiveIndex::from_mmap_records_with_content_postings_cancellable(
@@ -1001,9 +1003,10 @@ impl Indexer {
         let content =
             MmapContentSet::open_manifest_checked(manifest_path, || cancellation.check())?;
         cancellation.check()?;
-        let postings = content.postings_for_terms_limit(
+        let postings = content.postings_for_terms_limit_checked(
             content_query_terms(query),
             SearchLookupBudget::default().max_content_ids_per_term,
+            || cancellation.check(),
         )?;
         cancellation.check()?;
         LiveIndex::from_mmap_records_with_content_postings_cancellable(

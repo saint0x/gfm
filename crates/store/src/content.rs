@@ -351,10 +351,21 @@ impl MmapContentArchive {
         term: &str,
         limit: usize,
     ) -> Result<(Option<ContentPosting>, bool)> {
+        self.posting_for_term_limit_checked(term, limit, || Ok(()))
+    }
+
+    pub fn posting_for_term_limit_checked(
+        &self,
+        term: &str,
+        limit: usize,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<(Option<ContentPosting>, bool)> {
+        check_control()?;
         let term = term.trim().to_lowercase();
         if term.is_empty() {
             return Ok((None, false));
         }
+        check_control()?;
         let Some(entry) = self
             .directory
             .binary_search_by(|entry| entry.term.as_str().cmp(term.as_str()))
@@ -363,9 +374,12 @@ impl MmapContentArchive {
         else {
             return Ok((None, false));
         };
+        check_control()?;
         let bytes = self.posting_bytes(entry)?;
+        check_control()?;
         let (posting, truncated) =
             read_content_posting_limited_from_slice(bytes, &self.path, self.version, limit)?;
+        check_control()?;
         if posting.term.trim().to_lowercase() == term {
             Ok((Some(posting), truncated))
         } else {
@@ -404,15 +418,29 @@ impl MmapContentArchive {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
+        self.postings_for_terms_limit_checked(terms, limit_per_term, || Ok(()))
+    }
+
+    pub fn postings_for_terms_limit_checked<I, S>(
+        &self,
+        terms: I,
+        limit_per_term: usize,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<ContentPosting>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
         let mut selected = BTreeSet::new();
         for term in terms {
+            check_control()?;
             let term = term.as_ref().trim().to_lowercase();
             if !term.is_empty() {
                 selected.insert(term);
             }
         }
 
-        self.postings_for_sorted_terms_limit(selected, limit_per_term)
+        self.postings_for_sorted_terms_limit_checked(selected, limit_per_term, check_control)
             .map(|postings| {
                 postings
                     .into_iter()
@@ -430,6 +458,20 @@ impl MmapContentArchive {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
+        self.postings_for_sorted_terms_limit_checked(terms, limit_per_term, || Ok(()))
+    }
+
+    pub fn postings_for_sorted_terms_limit_checked<I, S>(
+        &self,
+        terms: I,
+        limit_per_term: usize,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<LimitedContentPosting>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        check_control()?;
         if limit_per_term == 0 {
             return Ok(Vec::new());
         }
@@ -439,6 +481,7 @@ impl MmapContentArchive {
         let mut previous: Option<String> = None;
 
         for term in terms {
+            check_control()?;
             let term = term.as_ref().trim().to_lowercase();
             if term.is_empty() {
                 continue;
@@ -456,6 +499,7 @@ impl MmapContentArchive {
             }
 
             while let Some(entry) = self.directory.get(directory_index) {
+                check_control()?;
                 if entry.term.as_str() >= term.as_str() {
                     break;
                 }
@@ -464,6 +508,7 @@ impl MmapContentArchive {
 
             if let Some(entry) = self.directory.get(directory_index) {
                 if entry.term.as_str() == term.as_str() {
+                    check_control()?;
                     let bytes = self.posting_bytes(entry)?;
                     let (posting, truncated) = read_content_posting_limited_from_slice(
                         bytes,
@@ -484,6 +529,7 @@ impl MmapContentArchive {
             previous = Some(term);
         }
 
+        check_control()?;
         Ok(postings)
     }
 
@@ -497,6 +543,26 @@ impl MmapContentArchive {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
+        self.postings_for_sorted_terms_volume_limit_checked(
+            terms,
+            volume,
+            limit_per_term,
+            || Ok(()),
+        )
+    }
+
+    pub fn postings_for_sorted_terms_volume_limit_checked<I, S>(
+        &self,
+        terms: I,
+        volume: VolumeId,
+        limit_per_term: usize,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<LimitedContentPosting>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        check_control()?;
         if limit_per_term == 0 {
             return Ok(Vec::new());
         }
@@ -506,6 +572,7 @@ impl MmapContentArchive {
         let mut previous: Option<String> = None;
 
         for term in terms {
+            check_control()?;
             let term = term.as_ref().trim().to_lowercase();
             if term.is_empty() {
                 continue;
@@ -523,6 +590,7 @@ impl MmapContentArchive {
             }
 
             while let Some(entry) = self.directory.get(directory_index) {
+                check_control()?;
                 if entry.term.as_str() >= term.as_str() {
                     break;
                 }
@@ -531,6 +599,7 @@ impl MmapContentArchive {
 
             if let Some(entry) = self.directory.get(directory_index) {
                 if entry.term.as_str() == term.as_str() {
+                    check_control()?;
                     let bytes = self.posting_bytes(entry)?;
                     let (posting, truncated) = read_content_posting_for_volume_limited_from_slice(
                         bytes,
@@ -554,6 +623,7 @@ impl MmapContentArchive {
             previous = Some(term);
         }
 
+        check_control()?;
         Ok(postings)
     }
 

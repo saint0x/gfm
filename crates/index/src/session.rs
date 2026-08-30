@@ -309,9 +309,11 @@ impl ContentIndexQuerySession {
 
         for term in misses {
             cancellation.check()?;
-            let (posting, truncated) = self
-                .content
-                .posting_for_term_limit(&term, budget.max_content_ids_per_term)?;
+            let (posting, truncated) = self.content.posting_for_term_limit_checked(
+                &term,
+                budget.max_content_ids_per_term,
+                || cancellation.check(),
+            )?;
             if !truncated {
                 self.posting_cache_lock().insert(
                     posting_cache_key(&term, budget.max_content_ids_per_term),

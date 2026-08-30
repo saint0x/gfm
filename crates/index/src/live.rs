@@ -722,9 +722,10 @@ impl LiveIndex {
         cancellation.check()?;
         let content = MmapContentArchive::open_checked(path, || cancellation.check())?;
         cancellation.check()?;
-        let postings = content.postings_for_terms_limit(
+        let postings = content.postings_for_terms_limit_checked(
             content_query_terms(query),
             budget.max_content_ids_per_term,
+            || cancellation.check(),
         )?;
         cancellation.check()?;
         let terms = postings.len();
@@ -750,7 +751,8 @@ impl LiveIndex {
         cancellation.check()?;
         let content = MmapContentSet::open_checked(paths, || cancellation.check())?;
         cancellation.check()?;
-        let postings = content.postings_for_terms(content_query_terms(query))?;
+        let postings = content
+            .postings_for_terms_checked(content_query_terms(query), || cancellation.check())?;
         cancellation.check()?;
         let terms = postings.len();
         self.index.import_content_postings(&postings);
@@ -782,9 +784,10 @@ impl LiveIndex {
         cancellation.check()?;
         let content = MmapContentSet::open_checked(paths, || cancellation.check())?;
         cancellation.check()?;
-        let postings = content.postings_for_terms_limit(
+        let postings = content.postings_for_terms_limit_checked(
             content_query_terms(query),
             budget.max_content_ids_per_term,
+            || cancellation.check(),
         )?;
         cancellation.check()?;
         let terms = postings.len();
@@ -815,7 +818,8 @@ impl LiveIndex {
         let content =
             MmapContentSet::open_manifest_checked(manifest_path, || cancellation.check())?;
         cancellation.check()?;
-        let postings = content.postings_for_terms(content_query_terms(query))?;
+        let postings = content
+            .postings_for_terms_checked(content_query_terms(query), || cancellation.check())?;
         cancellation.check()?;
         let terms = postings.len();
         self.index.import_content_postings(&postings);
@@ -848,9 +852,10 @@ impl LiveIndex {
         let content =
             MmapContentSet::open_manifest_checked(manifest_path, || cancellation.check())?;
         cancellation.check()?;
-        let postings = content.postings_for_terms_limit(
+        let postings = content.postings_for_terms_limit_checked(
             content_query_terms(query),
             budget.max_content_ids_per_term,
+            || cancellation.check(),
         )?;
         cancellation.check()?;
         let terms = postings.len();

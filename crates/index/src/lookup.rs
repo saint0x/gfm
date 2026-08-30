@@ -466,7 +466,9 @@ impl SidecarIndexQuerySession {
         cancellation.check()?;
         let loaded = self
             .content
-            .postings_for_sorted_terms_limit(&misses, limit_per_term)?
+            .postings_for_sorted_terms_limit_checked(&misses, limit_per_term, || {
+                cancellation.check()
+            })?
             .into_iter()
             .map(|limited| {
                 (
@@ -581,7 +583,12 @@ impl SidecarIndexQuerySession {
         cancellation.check()?;
         let loaded = self
             .content
-            .postings_for_sorted_terms_volume_limit(&misses, volume, limit_per_term)?
+            .postings_for_sorted_terms_volume_limit_checked(
+                &misses,
+                volume,
+                limit_per_term,
+                || cancellation.check(),
+            )?
             .into_iter()
             .map(|limited| {
                 (
@@ -1298,8 +1305,11 @@ pub fn query_sidecar_imports_cancellable(
     let parsed = gfm_search::SearchQuery::parse(query);
     cancellation.check()?;
     let content_terms = parsed.content_candidate_terms();
-    let content =
-        content.postings_for_terms_limit(content_terms.clone(), budget.max_content_ids_per_term)?;
+    let content = content.postings_for_terms_limit_checked(
+        content_terms.clone(),
+        budget.max_content_ids_per_term,
+        || cancellation.check(),
+    )?;
     cancellation.check()?;
     query_sidecar_imports_with_content_postings(
         metadata,
