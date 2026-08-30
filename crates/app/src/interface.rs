@@ -562,11 +562,14 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 Priority::Visible,
                 "ui search",
                 move |cancellation| {
-                    let _access = crate::access::preflight_access_scope(
+                    cancellation.check()?;
+                    let _access = crate::access::preflight_access_scope_checked(
                         &root,
                         AccessIntent::Index,
                         "ui search",
+                        || cancellation.check(),
                     )?;
+                    cancellation.check()?;
                     let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
                     let session = snapshot.query_session();
                     let batches = session
@@ -631,10 +634,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "package traversal",
                 move |cancellation| {
                     cancellation.check()?;
-                    let _access = crate::access::preflight_access_scope(
+                    let _access = crate::access::preflight_access_scope_checked(
                         &root,
                         AccessIntent::Read,
                         "package traversal",
+                        || cancellation.check(),
                     )?;
                     cancellation.check()?;
                     scan_tree_checked(&root, options_for_worker, || cancellation.check())
@@ -972,20 +976,25 @@ fn observed_sidebar_invalidation_tsv(observed: &FileProviderObservedInvalidation
     lines.join("\n")
 }
 
-fn retain_fileprovider_event_access(
+fn retain_fileprovider_event_access_checked(
     event: &FileEvent,
     previous: Option<&FileProviderStateSnapshot>,
     worker: &'static str,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<crate::access::ScopedAccessGuard>> {
+    check_control()?;
     let mut guards = Vec::new();
     let paths = fileprovider_event_access_paths(event, previous)?;
     for path in unique_fileprovider_paths(paths.iter().map(PathBuf::as_path)) {
-        guards.push(crate::access::preflight_access_scope(
+        check_control()?;
+        guards.push(crate::access::preflight_access_scope_checked(
             path,
             AccessIntent::Read,
             worker,
+            &mut check_control,
         )?);
     }
+    check_control()?;
     Ok(guards)
 }
 
@@ -1108,7 +1117,12 @@ fn read_directory_with_access(path: &Path, worker: &'static str) -> Result<Direc
         worker,
         move |cancellation| {
             cancellation.check()?;
-            let _access = crate::access::preflight_access_scope(&path, AccessIntent::Read, worker)?;
+            let _access = crate::access::preflight_access_scope_checked(
+                &path,
+                AccessIntent::Read,
+                worker,
+                || cancellation.check(),
+            )?;
             cancellation.check()?;
             read_directory_checked(&path, || cancellation.check())
         },
@@ -1139,7 +1153,12 @@ fn read_ui_progress_snapshots_with(
         WORKER,
         move |cancellation| {
             cancellation.check()?;
-            let _access = crate::access::preflight_access_scope(&path, AccessIntent::Read, WORKER)?;
+            let _access = crate::access::preflight_access_scope_checked(
+                &path,
+                AccessIntent::Read,
+                WORKER,
+                || cancellation.check(),
+            )?;
             cancellation.check()?;
             let store = JobProgressStore::new(&path);
             read(&store)
@@ -1163,7 +1182,12 @@ fn read_ui_operation_conflicts(
         WORKER,
         move |cancellation| {
             cancellation.check()?;
-            let _access = crate::access::preflight_access_scope(&path, AccessIntent::Read, WORKER)?;
+            let _access = crate::access::preflight_access_scope_checked(
+                &path,
+                AccessIntent::Read,
+                WORKER,
+                || cancellation.check(),
+            )?;
             cancellation.check()?;
             store.read_checked(|| cancellation.check())
         },
@@ -1191,10 +1215,13 @@ fn resolve_ui_operation_conflict(
         WORKER,
         move |cancellation| {
             cancellation.check()?;
-            let _access = crate::access::preflight_access_scope(
-                write_probe_path(&store_path)?,
+            let store_probe = write_probe_path(&store_path)?.to_path_buf();
+            cancellation.check()?;
+            let _access = crate::access::preflight_access_scope_checked(
+                &store_probe,
                 AccessIntent::Write,
                 WORKER,
+                || cancellation.check(),
             )?;
             cancellation.check()?;
             let store = crate::runtime::OperationConflictStore::new(store_path.clone());
@@ -1227,10 +1254,12 @@ fn run_ui_fileprovider_observed_invalidation(
         move |cancellation| {
             cancellation.check()?;
             let state_probe = write_probe_existing_ancestor(&state_path)?;
-            let mut access = vec![crate::access::preflight_access_scope(
+            cancellation.check()?;
+            let mut access = vec![crate::access::preflight_access_scope_checked(
                 &state_probe,
                 AccessIntent::Write,
                 WORKER,
+                || cancellation.check(),
             )?];
             cancellation.check()?;
             let previous = if ui_fileprovider_state_file_exists(&state_path, WORKER)? {
@@ -1241,10 +1270,11 @@ fn run_ui_fileprovider_observed_invalidation(
             } else {
                 None
             };
-            access.extend(retain_fileprovider_event_access(
+            access.extend(retain_fileprovider_event_access_checked(
                 &event,
                 previous.as_ref(),
                 WORKER,
+                || cancellation.check(),
             )?);
             cancellation.check()?;
             let (observed, snapshot) =
@@ -1267,7 +1297,8 @@ fn read_ui_fileprovider_sidebar_state(path: PathBuf) -> Result<FileProviderState
         WORKER,
         move |cancellation| {
             cancellation.check()?;
-            let _access = preflight_ui_fileprovider_read(&path, WORKER)?;
+            let _access =
+                preflight_ui_fileprovider_read_checked(&path, WORKER, || cancellation.check())?;
             cancellation.check()?;
             FileProviderStateReport::read_path(&path)
         },
@@ -1289,7 +1320,8 @@ fn read_ui_fileprovider_sidebar_invalidation(
         WORKER,
         move |cancellation| {
             cancellation.check()?;
-            let _access = preflight_ui_fileprovider_read(&path, WORKER)?;
+            let _access =
+                preflight_ui_fileprovider_read_checked(&path, WORKER, || cancellation.check())?;
             cancellation.check()?;
             FileProviderInvalidationReport::evaluate(&path, previous)
         },
@@ -1308,18 +1340,20 @@ fn read_ui_fileprovider_conflict(path: PathBuf) -> Result<FileProviderConflictRe
         WORKER,
         move |cancellation| {
             cancellation.check()?;
-            let _access = preflight_ui_fileprovider_read(&path, WORKER)?;
+            let _access =
+                preflight_ui_fileprovider_read_checked(&path, WORKER, || cancellation.check())?;
             cancellation.check()?;
             FileProviderConflictReport::read_path(&path)
         },
     )
 }
 
-fn preflight_ui_fileprovider_read(
+fn preflight_ui_fileprovider_read_checked(
     path: &Path,
     worker: &'static str,
+    check_control: impl FnMut() -> Result<()>,
 ) -> Result<crate::access::ScopedAccessGuard> {
-    crate::access::preflight_access_scope(path, AccessIntent::Read, worker)
+    crate::access::preflight_access_scope_checked(path, AccessIntent::Read, worker, check_control)
 }
 
 fn app_launch_spec(path: Option<String>) -> Result<AppLaunchSpec> {
@@ -1692,7 +1726,12 @@ fn read_finder_metadata(path: PathBuf) -> Result<FinderMetadataReport> {
         WORKER,
         move |cancellation| {
             cancellation.check()?;
-            let _access = crate::access::preflight_access_scope(&path, AccessIntent::Read, WORKER)?;
+            let _access = crate::access::preflight_access_scope_checked(
+                &path,
+                AccessIntent::Read,
+                WORKER,
+                || cancellation.check(),
+            )?;
             cancellation.check()?;
             FinderMetadataReport::read_path(path)
         },
@@ -1954,6 +1993,40 @@ mod tests {
         assert_eq!(access_path, root);
         assert!(!tracked.exists());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fileprovider_event_access_checked_honors_pre_cancelled_control() {
+        let event = FileEvent::new(
+            env::temp_dir().join("gfm-interface-fileprovider-pre-cancelled"),
+            FileEventKind::Modify,
+        );
+
+        let result = retain_fileprovider_event_access_checked(
+            &event,
+            None,
+            "ui fileprovider sidebar observed invalidation",
+            || Err(GfmError::Cancelled),
+        );
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+    }
+
+    #[test]
+    fn ui_fileprovider_read_checked_honors_pre_cancelled_control() {
+        let path = env::temp_dir().join(format!(
+            "gfm-interface-fileprovider-read-pre-cancelled-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&path);
+
+        let result =
+            preflight_ui_fileprovider_read_checked(&path, "ui fileprovider sidebar state", || {
+                Err(GfmError::Cancelled)
+            });
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!path.exists());
     }
 
     #[test]

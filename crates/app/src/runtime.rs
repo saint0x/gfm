@@ -1,4 +1,4 @@
-use crate::access::{preflight_access_scope, ScopedAccessGuard};
+use crate::access::{preflight_access_scope_checked, ScopedAccessGuard};
 use gfm_jobs::{
     Cancellation, Job, JobFairnessPolicy, JobJournal, JobPayloadCatalog, JobPayloadKind,
     JobPayloadRecord, JobProgressSnapshot, JobProgressState, JobProgressStore, Priority,
@@ -887,7 +887,8 @@ mod tests {
 }
 
 fn preflight_runtime_write(path: &Path, worker: &str) -> Result<ScopedAccessGuard> {
-    preflight_access_scope(write_probe_path(path)?, AccessIntent::Write, worker)
+    let probe = write_probe_path(path)?.to_path_buf();
+    preflight_access_scope_checked(&probe, AccessIntent::Write, worker, || Ok(()))
 }
 
 pub(crate) fn default_journal_path() -> PathBuf {
@@ -964,7 +965,7 @@ impl OperationConflictStore {
         mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<()> {
         check_control()?;
-        let _access = preflight_operation_conflict_write(&self.path)?;
+        let _access = preflight_operation_conflict_write_checked(&self.path, &mut check_control)?;
         check_control()?;
         let parent = crate::parent_or_cwd(&self.path);
         fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
@@ -999,7 +1000,7 @@ impl OperationConflictStore {
         mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<Vec<RuntimeOperationConflict>> {
         check_control()?;
-        let _access = preflight_operation_conflict_read(&self.path)?;
+        let _access = preflight_operation_conflict_read_checked(&self.path, &mut check_control)?;
         check_control()?;
         let file = match fs::File::open(&self.path) {
             Ok(file) => file,
@@ -1106,7 +1107,7 @@ impl OperationConflictStore {
         mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<()> {
         check_control()?;
-        let _access = preflight_operation_conflict_write(&self.path)?;
+        let _access = preflight_operation_conflict_write_checked(&self.path, &mut check_control)?;
         check_control()?;
         let parent = crate::parent_or_cwd(&self.path);
         fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
@@ -1129,15 +1130,30 @@ impl OperationConflictStore {
     }
 }
 
-fn preflight_operation_conflict_read(path: &Path) -> Result<ScopedAccessGuard> {
-    preflight_access_scope(path, AccessIntent::Read, "operation conflict store")
+fn preflight_operation_conflict_read_checked(
+    path: &Path,
+    check_control: impl FnMut() -> Result<()>,
+) -> Result<ScopedAccessGuard> {
+    preflight_access_scope_checked(
+        path,
+        AccessIntent::Read,
+        "operation conflict store",
+        check_control,
+    )
 }
 
-fn preflight_operation_conflict_write(path: &Path) -> Result<ScopedAccessGuard> {
-    preflight_access_scope(
-        write_probe_path(path)?,
+fn preflight_operation_conflict_write_checked(
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<ScopedAccessGuard> {
+    check_control()?;
+    let probe = write_probe_path(path)?.to_path_buf();
+    check_control()?;
+    preflight_access_scope_checked(
+        &probe,
         AccessIntent::Write,
         "operation conflict store",
+        check_control,
     )
 }
 
