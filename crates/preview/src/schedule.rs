@@ -215,6 +215,7 @@ impl PreviewScheduler {
         viewport: Viewport,
         tasks: impl IntoIterator<Item = PreviewTask>,
     ) -> Vec<PreviewTaskDecision> {
+        let mut decisions = self.prune_cancelled_inflight("cancelled-token");
         let mut desired = coalesce_desired_tasks(
             tasks
                 .into_iter()
@@ -238,7 +239,6 @@ impl PreviewScheduler {
             .iter()
             .map(|item| item.task.key.clone())
             .collect::<HashSet<_>>();
-        let mut decisions = Vec::new();
         if self.policy.cancel_offscreen {
             let stale = self
                 .inflight
@@ -318,7 +318,9 @@ impl PreviewScheduler {
 
     pub fn adapt_to_pressure(&mut self, pressure: SchedulingPressure) -> Vec<PreviewTaskDecision> {
         self.policy = self.base_policy.adapted_for_pressure(pressure);
-        self.reconcile_inflight_limits("pressure-admission")
+        let mut decisions = self.prune_cancelled_inflight("cancelled-token");
+        decisions.extend(self.reconcile_inflight_limits("pressure-admission"));
+        decisions
     }
 
     pub fn cancellation_for(&self, key: &PreviewRequestKey) -> Option<Cancellation> {
@@ -360,6 +362,24 @@ impl PreviewScheduler {
 
     fn reconcile_inflight_limits(&mut self, reason: &'static str) -> Vec<PreviewTaskDecision> {
         self.reconcile_inflight_limits_preserving(reason, &HashSet::new())
+    }
+
+    fn prune_cancelled_inflight(&mut self, reason: &'static str) -> Vec<PreviewTaskDecision> {
+        let cancelled = self
+            .inflight
+            .iter()
+            .filter(|(_, task)| task.cancellation.is_cancelled())
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
+
+        cancelled
+            .into_iter()
+            .filter_map(|key| {
+                self.inflight
+                    .remove(&key)
+                    .map(|_| PreviewTaskDecision::Cancelled { key, reason })
+            })
+            .collect()
     }
 
     fn reconcile_inflight_limits_preserving(
@@ -551,6 +571,40 @@ mod tests {
 
         second.cancel();
         assert!(first.is_cancelled());
+    }
+
+    #[test]
+    fn externally_cancelled_work_is_pruned_before_rescheduling() {
+        let viewport = Viewport::new(Rect::new(0, 0, 100, 100), 0);
+        let mut scheduler = PreviewScheduler::new(PreviewSchedulingPolicy::default()).unwrap();
+        let task = task(1, Rect::new(0, 0, 20, 20));
+
+        scheduler.schedule(viewport, vec![task.clone()]);
+        let cancelled = scheduler
+            .cancellation_for(&task.key)
+            .expect("scheduled task has a cancellation token");
+        cancelled.cancel();
+
+        let decisions = scheduler.schedule(viewport, vec![task.clone()]);
+        let replacement = scheduler
+            .cancellation_for(&task.key)
+            .expect("rescheduled task has a fresh cancellation token");
+
+        assert_eq!(
+            decisions,
+            vec![
+                PreviewTaskDecision::Cancelled {
+                    key: task.key.clone(),
+                    reason: "cancelled-token",
+                },
+                PreviewTaskDecision::Scheduled {
+                    key: task.key.clone(),
+                    priority: PreviewPriority::Visible,
+                },
+            ]
+        );
+        assert_eq!(scheduler.inflight_len(), 1);
+        assert!(!replacement.is_cancelled());
     }
 
     #[test]
