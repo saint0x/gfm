@@ -102,6 +102,31 @@ fn preflight_permission_state_volume_with_report(
             ),
         });
     }
+    if volume_platform_state_unavailable(volume) {
+        return Err(GfmError::Permission {
+            path: path.to_path_buf(),
+            message: format!(
+                "permission state volume access blocked: unavailable volume {}; label={}; root={}; stable-id={}; mount={}; native-status={}; resource-status={}; mount-status={}",
+                volume.kind.as_str(),
+                volume.label,
+                volume.path.display(),
+                volume.stable_identity,
+                volume.mount_state.as_str(),
+                volume
+                    .native_status
+                    .map(gfm_mac::NativeVolumeStatus::as_str)
+                    .unwrap_or("-"),
+                volume
+                    .resource_status
+                    .map(gfm_mac::NativeVolumeStatus::as_str)
+                    .unwrap_or("-"),
+                volume
+                    .mount_table_status
+                    .map(gfm_mac::NativeVolumeStatus::as_str)
+                    .unwrap_or("-")
+            ),
+        });
+    }
     if volume.reachable != Some(false) {
         if !volume.read_only || read_only_root_allows_permission_state_write(volume, probe_path) {
             return Ok(());
@@ -129,6 +154,12 @@ fn preflight_permission_state_volume_with_report(
             volume.mount_state.as_str()
         ),
     })
+}
+
+fn volume_platform_state_unavailable(volume: &gfm_mac::VolumeDescriptor) -> bool {
+    volume.native_status == Some(gfm_mac::NativeVolumeStatus::Unavailable)
+        && volume.resource_status == Some(gfm_mac::NativeVolumeStatus::Unavailable)
+        && volume.mount_table_status == Some(gfm_mac::NativeVolumeStatus::Unavailable)
 }
 
 fn read_only_root_allows_permission_state_write(
@@ -279,6 +310,37 @@ mod tests {
             .to_string()
             .contains("permission state volume access blocked: unmounted volume network"));
         assert!(err.to_string().contains("mount=stale"));
+        assert!(!state.exists());
+        assert!(!state.parent().unwrap().exists());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn refresh_state_refuses_unavailable_volume_api_state_before_write() {
+        let root = unique_temp_dir("gfm-permission-refresh-unavailable-api");
+        let state = root.join("runtime").join("permission-state.tsv");
+        let mut volume = VolumeDescriptor::for_path(&root).unwrap();
+        volume.kind = VolumeKind::Network;
+        volume.mount_state = MountState::Mounted;
+        volume.reachable = Some(true);
+        volume.native_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        volume.resource_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        volume.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        let report = VolumeDiscoveryReport {
+            volumes: vec![volume],
+        };
+
+        let err =
+            preflight_permission_state_volume_with_report(&state, &root, &report).unwrap_err();
+
+        assert!(matches!(err, GfmError::Permission { .. }));
+        assert!(err
+            .to_string()
+            .contains("permission state volume access blocked: unavailable volume network"));
+        assert!(err.to_string().contains("native-status=unavailable"));
+        assert!(err.to_string().contains("resource-status=unavailable"));
+        assert!(err.to_string().contains("mount-status=unavailable"));
         assert!(!state.exists());
         assert!(!state.parent().unwrap().exists());
 
