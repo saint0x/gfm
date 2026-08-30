@@ -1,4 +1,7 @@
-use crate::access::{preflight_access_scope, preflight_volume_access_scope, ScopedAccessGuard};
+use crate::access::{
+    preflight_access_scope, preflight_access_scope_checked, preflight_volume_access_scope,
+    ScopedAccessGuard,
+};
 use crate::extract::{
     extraction_budget_profile, preflight_adaptive_extraction_worker_scratch,
     read_extraction_quarantine_cancellable, run_adaptive_extraction_worker_cancellable,
@@ -121,10 +124,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 },
                 path.clone(),
                 move |cancellation| {
-                    let _access = preflight_access_scope(
+                    let _access = preflight_access_scope_checked(
                         &path,
                         AccessIntent::Read,
                         "adaptive extraction worker",
+                        || cancellation.check(),
                     )?;
                     run_adaptive_extraction_worker_cancellable(
                         &path,
@@ -216,10 +220,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 },
                 path.clone(),
                 move |cancellation| {
-                    let _access = retain_extraction_quarantine_access(
+                    let _access = retain_extraction_quarantine_access_checked(
                         &path,
                         &store,
                         "quarantined adaptive extraction",
+                        || cancellation.check(),
                     )?;
                     run_quarantined_adaptive_extraction_worker_cancellable(
                         &path,
@@ -1270,17 +1275,22 @@ fn optional_recovery_store_exists(path: &Path, worker: &str) -> Result<bool> {
         .map_err(|err| GfmError::io(path, format!("{worker} existence unavailable: {err}")))
 }
 
-fn retain_extraction_quarantine_access(
+fn retain_extraction_quarantine_access_checked(
     path: &Path,
     store: &Path,
     worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
+    check_control()?;
+    let store_probe = checked_write_probe_path(store)?.to_path_buf();
+    check_control()?;
     Ok(vec![
-        preflight_access_scope(path, AccessIntent::Read, worker)?,
-        preflight_access_scope(
-            checked_write_probe_path(store)?,
+        preflight_access_scope_checked(path, AccessIntent::Read, worker, &mut check_control)?,
+        preflight_access_scope_checked(
+            &store_probe,
             AccessIntent::Write,
             worker,
+            &mut check_control,
         )?,
     ])
 }
@@ -1309,7 +1319,9 @@ fn run_extraction_quarantine(
         .or_else(|| parent_volume(&store_probe));
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = retain_extraction_quarantine_access(&path, &store, WORKER)?;
+        let _access = retain_extraction_quarantine_access_checked(&path, &store, WORKER, || {
+            cancellation.check()
+        })?;
         cancellation.check()?;
         let fingerprint = ExtractionFingerprint::for_path_checked(&path, || cancellation.check())?;
         let mut quarantine = ExtractionQuarantine::new(2);

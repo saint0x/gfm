@@ -1,5 +1,5 @@
 use crate::{
-    access::{preflight_access_scope, preflight_volume_access_scope, ScopedAccessGuard},
+    access::{preflight_access_scope_checked, preflight_volume_access_scope, ScopedAccessGuard},
     permission_refresh::refresh_permission_state_at_path_checked,
 };
 use gfm_content::{
@@ -116,8 +116,12 @@ pub(crate) fn run_adaptive_extraction_worker_cancellable(
     cancellation: &Cancellation,
 ) -> Result<String> {
     cancellation.check()?;
-    let _input_access =
-        preflight_access_scope(path, AccessIntent::Read, "adaptive extraction worker")?;
+    let _input_access = preflight_access_scope_checked(
+        path,
+        AccessIntent::Read,
+        "adaptive extraction worker",
+        || cancellation.check(),
+    )?;
     cancellation.check()?;
     let exe = env::current_exe().map_err(|err| {
         GfmError::Format(format!(
@@ -168,6 +172,23 @@ pub(crate) fn preflight_adaptive_extraction_worker_scratch() -> Result<Vec<Scope
     retain_worker_scratch_access(&stdout_path, &stderr_path, &permission_state_dir)
 }
 
+pub(crate) fn preflight_adaptive_extraction_worker_scratch_checked(
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Vec<ScopedAccessGuard>> {
+    check_control()?;
+    preflight_volume_access_scope(&env::temp_dir(), AccessIntent::Write, "adaptive extraction")?;
+    check_control()?;
+    let stdout_path = worker_temp_path("stdout-probe");
+    let stderr_path = worker_temp_path("stderr-probe");
+    let permission_state_dir = worker_temp_dir("permission-state-probe");
+    retain_worker_scratch_access_checked(
+        &stdout_path,
+        &stderr_path,
+        &permission_state_dir,
+        check_control,
+    )
+}
+
 struct WorkerScratch {
     stdout_path: PathBuf,
     stderr_path: PathBuf,
@@ -182,8 +203,12 @@ impl WorkerScratch {
         let stderr_path = worker_temp_path("stderr");
         let permission_state_dir = worker_temp_dir("permission-state");
         let permission_state_path = permission_state_dir.join("state.tsv");
-        let access_guards =
-            retain_worker_scratch_access(&stdout_path, &stderr_path, &permission_state_dir)?;
+        let access_guards = retain_worker_scratch_access_checked(
+            &stdout_path,
+            &stderr_path,
+            &permission_state_dir,
+            &mut check_control,
+        )?;
         check_control()?;
         let scratch = Self {
             stdout_path,
@@ -254,10 +279,15 @@ pub(crate) fn run_quarantined_adaptive_extraction_worker_cancellable(
     cancellation: &Cancellation,
 ) -> Result<String> {
     cancellation.check()?;
-    let _access =
-        retain_extraction_quarantine_worker_access(path, store, "quarantined extraction worker")?;
+    let _access = retain_extraction_quarantine_worker_access_checked(
+        path,
+        store,
+        "quarantined extraction worker",
+        || cancellation.check(),
+    )?;
     cancellation.check()?;
-    let _scratch_access = preflight_adaptive_extraction_worker_scratch()?;
+    let _scratch_access =
+        preflight_adaptive_extraction_worker_scratch_checked(|| cancellation.check())?;
     cancellation.check()?;
     let fingerprint = ExtractionFingerprint::for_path_checked(path, || cancellation.check())?;
     cancellation.check()?;
@@ -327,14 +357,23 @@ fn worker_failure_reason(kind: QuarantineFailureKind) -> &'static str {
     }
 }
 
-fn retain_extraction_quarantine_worker_access(
+fn retain_extraction_quarantine_worker_access_checked(
     path: &Path,
     store: &Path,
     worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
+    check_control()?;
+    let store_probe = write_probe_path(store)?.to_path_buf();
+    check_control()?;
     Ok(vec![
-        preflight_access_scope(path, AccessIntent::Read, worker)?,
-        preflight_access_scope(write_probe_path(store)?, AccessIntent::Write, worker)?,
+        preflight_access_scope_checked(path, AccessIntent::Read, worker, &mut check_control)?,
+        preflight_access_scope_checked(
+            &store_probe,
+            AccessIntent::Write,
+            worker,
+            &mut check_control,
+        )?,
     ])
 }
 
@@ -375,10 +414,14 @@ impl WorkerSandbox {
             monotonic_nanos()
         ));
         check_control()?;
-        let _profile_access = preflight_access_scope(
-            write_probe_path(&profile_path)?,
+        check_control()?;
+        let profile_probe = write_probe_path(&profile_path)?.to_path_buf();
+        check_control()?;
+        let _profile_access = preflight_access_scope_checked(
+            &profile_probe,
             AccessIntent::Write,
             "adaptive extraction sandbox profile",
+            &mut check_control,
         )?;
         if let Err(err) = write_worker_sandbox_profile_checked(
             &profile_path,
@@ -617,21 +660,40 @@ fn retain_worker_scratch_access(
     stderr_path: &Path,
     permission_state_dir: &Path,
 ) -> Result<Vec<ScopedAccessGuard>> {
+    retain_worker_scratch_access_checked(stdout_path, stderr_path, permission_state_dir, || Ok(()))
+}
+
+fn retain_worker_scratch_access_checked(
+    stdout_path: &Path,
+    stderr_path: &Path,
+    permission_state_dir: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Vec<ScopedAccessGuard>> {
+    check_control()?;
+    let stdout_probe = write_probe_path(stdout_path)?.to_path_buf();
+    check_control()?;
+    let stderr_probe = write_probe_path(stderr_path)?.to_path_buf();
+    check_control()?;
+    let permission_state_probe = write_probe_path(permission_state_dir)?.to_path_buf();
+    check_control()?;
     Ok(vec![
-        preflight_access_scope(
-            write_probe_path(stdout_path)?,
+        preflight_access_scope_checked(
+            &stdout_probe,
             AccessIntent::Write,
             "adaptive extraction stdout",
+            &mut check_control,
         )?,
-        preflight_access_scope(
-            write_probe_path(stderr_path)?,
+        preflight_access_scope_checked(
+            &stderr_probe,
             AccessIntent::Write,
             "adaptive extraction stderr",
+            &mut check_control,
         )?,
-        preflight_access_scope(
-            write_probe_path(permission_state_dir)?,
+        preflight_access_scope_checked(
+            &permission_state_probe,
             AccessIntent::Write,
             "adaptive extraction permission state",
+            &mut check_control,
         )?,
     ])
 }
@@ -1035,6 +1097,17 @@ mod tests {
     }
 
     #[test]
+    fn worker_scratch_preflight_checked_honors_pre_cancelled_control() {
+        let scratch_before = worker_scratch_entries();
+
+        let result =
+            preflight_adaptive_extraction_worker_scratch_checked(|| Err(GfmError::Cancelled));
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert_eq!(scratch_before, worker_scratch_entries());
+    }
+
+    #[test]
     fn extraction_sandbox_profile_strict_mode_denies_ambient_reads_and_writes() {
         let fixture = SandboxProfileFixture::new("strict");
 
@@ -1095,6 +1168,34 @@ mod tests {
     }
 
     #[test]
+    fn quarantine_worker_access_checked_can_cancel_before_store_preflight() {
+        let root = unique_temp_dir("gfm-extract-quarantine-access-cancel");
+        let input = root.join("document.txt");
+        let store = root.join("quarantine.gfmquarantine");
+        fs::write(&input, "worker should not launch").unwrap();
+        let mut checks = 0usize;
+
+        let result = retain_extraction_quarantine_worker_access_checked(
+            &input,
+            &store,
+            "quarantined extraction worker",
+            || {
+                checks += 1;
+                if checks >= 4 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        );
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(checks >= 4);
+        assert!(!store.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn quarantine_reader_surfaces_store_probe_failure() {
         let root = unique_temp_dir("gfm-extract-quarantine-store-probe");
         let store = root.join("quarantine-store-unavailable".repeat(16));
@@ -1121,6 +1222,63 @@ mod tests {
 
         assert_eq!(result, Err(GfmError::Cancelled));
         assert!(!store.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn quarantine_worker_access_honors_cancelled_control_before_store_probe() {
+        let root = unique_temp_dir("gfm-extract-quarantine-access-cancel");
+        let input = root.join("document.txt");
+        let store = root.join("missing").join("quarantine.gfmquarantine");
+        fs::write(&input, "cancel before store probe").unwrap();
+
+        let result = retain_extraction_quarantine_worker_access_checked(
+            &input,
+            &store,
+            "quarantined extraction worker",
+            || Err(GfmError::Cancelled),
+        );
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!store.exists());
+        assert!(!store.parent().unwrap().exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn adaptive_worker_scratch_preflight_honors_cancelled_control_before_probe() {
+        let before = worker_scratch_entries();
+
+        let result =
+            preflight_adaptive_extraction_worker_scratch_checked(|| Err(GfmError::Cancelled));
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert_eq!(worker_scratch_entries(), before);
+    }
+
+    #[test]
+    fn worker_scratch_access_honors_cancellation_while_resolving_probes() {
+        let root = unique_temp_dir("gfm-extract-scratch-access-cancel");
+        let stdout = root.join("stdout");
+        let stderr = root.join("stderr");
+        let permission_state = root.join("permission-state");
+        let mut checks = 0usize;
+
+        let result =
+            retain_worker_scratch_access_checked(&stdout, &stderr, &permission_state, || {
+                checks += 1;
+                if checks >= 3 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            });
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(checks >= 3);
+        assert!(!stdout.exists());
+        assert!(!stderr.exists());
+        assert!(!permission_state.exists());
         fs::remove_dir_all(root).unwrap();
     }
 
