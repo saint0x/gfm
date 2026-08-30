@@ -30,8 +30,17 @@ impl SearchSupersession {
     }
 
     pub fn query(&self, index: &SearchIndex, query: &str, limit: usize) -> Result<Vec<SearchHit>> {
+        self.query_structured(index, &crate::SearchQuery::parse(query), limit)
+    }
+
+    pub fn query_structured(
+        &self,
+        index: &SearchIndex,
+        query: &crate::SearchQuery,
+        limit: usize,
+    ) -> Result<Vec<SearchHit>> {
         let cancellation = self.begin();
-        index.query_cancellable(query, limit, &cancellation)
+        index.query_structured_cancellable(query, limit, &cancellation)
     }
 
     pub fn query_sharded(
@@ -40,8 +49,17 @@ impl SearchSupersession {
         query: &str,
         limit: usize,
     ) -> Result<Vec<SearchHit>> {
+        self.query_sharded_structured(index, &crate::SearchQuery::parse(query), limit)
+    }
+
+    pub fn query_sharded_structured(
+        &self,
+        index: &ShardedSearchIndex,
+        query: &crate::SearchQuery,
+        limit: usize,
+    ) -> Result<Vec<SearchHit>> {
         let cancellation = self.begin();
-        index.query_cancellable(query, limit, &cancellation)
+        index.query_structured_cancellable(query, limit, &cancellation)
     }
 
     pub fn query_sharded_with_volume_scope(
@@ -51,13 +69,23 @@ impl SearchSupersession {
         limit: usize,
         scope: &SearchVolumeScope,
     ) -> Result<Vec<SearchHit>> {
-        let cancellation = self.begin();
-        index.query_structured_with_volume_scope_cancellable(
+        self.query_sharded_structured_with_volume_scope(
+            index,
             &crate::SearchQuery::parse(query),
             limit,
             scope,
-            &cancellation,
         )
+    }
+
+    pub fn query_sharded_structured_with_volume_scope(
+        &self,
+        index: &ShardedSearchIndex,
+        query: &crate::SearchQuery,
+        limit: usize,
+        scope: &SearchVolumeScope,
+    ) -> Result<Vec<SearchHit>> {
+        let cancellation = self.begin();
+        index.query_structured_with_volume_scope_cancellable(query, limit, scope, &cancellation)
     }
 
     pub fn stream(
@@ -66,8 +94,17 @@ impl SearchSupersession {
         query: &str,
         limit: usize,
     ) -> Result<Vec<SearchStreamBatch>> {
+        self.stream_structured(index, &crate::SearchQuery::parse(query), limit)
+    }
+
+    pub fn stream_structured(
+        &self,
+        index: &SearchIndex,
+        query: &crate::SearchQuery,
+        limit: usize,
+    ) -> Result<Vec<SearchStreamBatch>> {
         let cancellation = self.begin();
-        index.stream_cancellable(query, limit, &cancellation)
+        index.stream_structured_cancellable(query, limit, &cancellation)
     }
 
     pub fn stream_sharded(
@@ -76,8 +113,17 @@ impl SearchSupersession {
         query: &str,
         limit: usize,
     ) -> Result<Vec<SearchStreamBatch>> {
+        self.stream_sharded_structured(index, &crate::SearchQuery::parse(query), limit)
+    }
+
+    pub fn stream_sharded_structured(
+        &self,
+        index: &ShardedSearchIndex,
+        query: &crate::SearchQuery,
+        limit: usize,
+    ) -> Result<Vec<SearchStreamBatch>> {
         let cancellation = self.begin();
-        index.stream_cancellable(query, limit, &cancellation)
+        index.stream_structured_cancellable(query, limit, &cancellation)
     }
 
     pub fn stream_sharded_with_volume_scope(
@@ -87,13 +133,23 @@ impl SearchSupersession {
         limit: usize,
         scope: &SearchVolumeScope,
     ) -> Result<Vec<SearchStreamBatch>> {
-        let cancellation = self.begin();
-        index.stream_structured_with_volume_scope_cancellable(
+        self.stream_sharded_structured_with_volume_scope(
+            index,
             &crate::SearchQuery::parse(query),
             limit,
             scope,
-            &cancellation,
         )
+    }
+
+    pub fn stream_sharded_structured_with_volume_scope(
+        &self,
+        index: &ShardedSearchIndex,
+        query: &crate::SearchQuery,
+        limit: usize,
+        scope: &SearchVolumeScope,
+    ) -> Result<Vec<SearchStreamBatch>> {
+        let cancellation = self.begin();
+        index.stream_structured_with_volume_scope_cancellable(query, limit, scope, &cancellation)
     }
 
     fn active_lock(&self) -> MutexGuard<'_, Option<Cancellation>> {
@@ -106,8 +162,59 @@ impl SearchSupersession {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gfm_types::GfmError;
+    use gfm_types::{FileId, FileKind, GfmError, VolumeId};
     use std::panic::{self, AssertUnwindSafe};
+    use std::path::PathBuf;
+
+    #[test]
+    fn query_sharded_structured_with_volume_scope_preserves_filters() {
+        let mut index = ShardedSearchIndex::new();
+        let mut directory = record(FileId::new(VolumeId(1), 1), "/Volumes/A/report", "report");
+        directory.kind = FileKind::Directory;
+        index.insert(directory);
+        index.insert(record(
+            FileId::new(VolumeId(2), 2),
+            "/Volumes/B/report.md",
+            "report.md",
+        ));
+        let supersession = SearchSupersession::new();
+        let query = crate::SearchQuery::parse("report kind:file");
+
+        let hits = supersession
+            .query_sharded_structured_with_volume_scope(
+                &index,
+                &query,
+                10,
+                &SearchVolumeScope::only([VolumeId(2)]),
+            )
+            .unwrap();
+
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].record.kind, FileKind::File);
+        assert_eq!(hits[0].record.path, PathBuf::from("/Volumes/B/report.md"));
+    }
+
+    #[test]
+    fn stream_sharded_structured_cancels_previous_query() {
+        let mut index = ShardedSearchIndex::new();
+        index.insert(record(
+            FileId::new(VolumeId(1), 1),
+            "/Volumes/A/needle.md",
+            "needle.md",
+        ));
+        let supersession = SearchSupersession::new();
+        let previous = supersession.begin();
+        let query = crate::SearchQuery::parse("needle kind:file");
+
+        let batches = supersession
+            .stream_sharded_structured(&index, &query, 10)
+            .unwrap();
+
+        assert!(matches!(previous.check(), Err(GfmError::Cancelled)));
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].stage, crate::SearchStreamStage::Hot);
+        assert_eq!(batches[0].hits[0].record.name, "needle.md");
+    }
 
     #[test]
     fn begin_recovers_poisoned_active_lock() {
@@ -140,5 +247,26 @@ mod tests {
                 .expect("initial supersession lock");
             panic!("poison search supersession lock");
         }));
+    }
+
+    fn record(id: FileId, path: &str, name: &str) -> gfm_types::FileRecord {
+        gfm_types::FileRecord {
+            id,
+            parent: None,
+            path: PathBuf::from(path),
+            name: name.to_string(),
+            kind: FileKind::File,
+            len: 0,
+            mode: 0,
+            owner: 0,
+            group: 0,
+            xattrs_digest: 0,
+            created: None,
+            modified: None,
+            changed: None,
+            hidden: false,
+            tags: Vec::new(),
+            finder_comment: None,
+        }
     }
 }
