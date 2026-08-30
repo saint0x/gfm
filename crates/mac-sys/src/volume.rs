@@ -874,11 +874,11 @@ unsafe extern "C" fn volume_operation_callback(
         )
     } else {
         let code = DADissenterGetStatus(dissenter) as u32;
-        (
-            native_operation_status_for_dissenter(code),
-            Some(code),
-            Some(dissenter_reason(dissenter, code)),
-        )
+        let native_status = dissenter_status_string(dissenter);
+        let operation_status =
+            native_operation_status_for_dissenter_with_status(code, native_status.as_deref());
+        let reason = dissenter_reason_for_status(operation_status, code, native_status.as_deref());
+        (operation_status, Some(code), Some(reason))
     };
     let _ = context.sender.send(NativeVolumeOperationResult {
         operation: context.operation,
@@ -890,7 +890,18 @@ unsafe extern "C" fn volume_operation_callback(
     CFRunLoopWakeUp(context.run_loop);
 }
 
+#[cfg(test)]
 fn native_operation_status_for_dissenter(code: u32) -> NativeVolumeOperationStatus {
+    native_operation_status_for_dissenter_with_status(code, None)
+}
+
+fn native_operation_status_for_dissenter_with_status(
+    code: u32,
+    native_status: Option<&str>,
+) -> NativeVolumeOperationStatus {
+    if native_status.is_some_and(dissenter_status_mentions_cancellation) {
+        return NativeVolumeOperationStatus::Cancelled;
+    }
     match code {
         DA_RETURN_ERROR => NativeVolumeOperationStatus::Error,
         DA_RETURN_BUSY => NativeVolumeOperationStatus::Busy,
@@ -907,6 +918,11 @@ fn native_operation_status_for_dissenter(code: u32) -> NativeVolumeOperationStat
         _ => native_operation_status_for_unix_dissenter(code)
             .unwrap_or(NativeVolumeOperationStatus::Failed),
     }
+}
+
+fn dissenter_status_mentions_cancellation(status: &str) -> bool {
+    let status = status.to_ascii_lowercase();
+    status.contains("cancelled") || status.contains("canceled")
 }
 
 fn native_operation_status_for_unix_dissenter(code: u32) -> Option<NativeVolumeOperationStatus> {
@@ -942,18 +958,13 @@ fn volume_operation_submitted_reason() -> String {
     format!("submitted-to-diskarbitration-timeout-{VOLUME_OPERATION_CALLBACK_TIMEOUT_MILLIS}ms")
 }
 
-fn dissenter_reason(dissenter: DADissenterRef, code: u32) -> String {
-    let operation_status = native_operation_status_for_dissenter(code);
+fn dissenter_status_string(dissenter: DADissenterRef) -> Option<String> {
     let status = unsafe { DADissenterGetStatusString(dissenter) };
     if status.is_null() {
-        return dissenter_reason_for_status(operation_status, code, None);
+        return None;
     }
     let status = unsafe { CFString::wrap_under_get_rule(status) }.to_string();
-    dissenter_reason_for_status(
-        operation_status,
-        code,
-        (!status.is_empty()).then_some(&status),
-    )
+    (!status.is_empty()).then_some(status)
 }
 
 fn dissenter_reason_for_status(
@@ -1771,6 +1782,27 @@ mod tests {
             ),
             "diskarbitration-busy:0xf8da0002:Resource busy"
         );
+    }
+
+    #[test]
+    fn volume_operation_dissenter_text_preserves_user_cancellation() {
+        for native_status in ["Operation canceled by user", "Operation cancelled by user"] {
+            assert_eq!(
+                native_operation_status_for_dissenter_with_status(
+                    DA_RETURN_ERROR,
+                    Some(native_status)
+                ),
+                NativeVolumeOperationStatus::Cancelled
+            );
+            assert_eq!(
+                dissenter_reason_for_status(
+                    NativeVolumeOperationStatus::Cancelled,
+                    DA_RETURN_ERROR,
+                    Some(native_status)
+                ),
+                format!("diskarbitration-cancelled:0xf8da0001:{native_status}")
+            );
+        }
     }
 
     #[test]
