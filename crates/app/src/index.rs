@@ -3,7 +3,7 @@ use crate::{
     parse_u64_arg, parse_usize_arg, path_volume, required_path,
     runtime::run_volume_task_cancellable,
 };
-use gfm_fs::read_directory;
+use gfm_fs::read_directory_checked;
 use gfm_index::{
     EventBackpressureQueue, EventPriority, FseventsCursor, FseventsCursorHealth, IndexVolumeState,
     Indexer, LiveIndex,
@@ -32,7 +32,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     cancellation.check()?;
                     let _access = preflight_index_read(&path, "directory listing")?;
                     cancellation.check()?;
-                    read_directory(path)
+                    read_directory_checked(path, || cancellation.check())
                 },
             )?;
             for record in page.entries {

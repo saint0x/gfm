@@ -25,9 +25,16 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "macrobench" => {
             let options = macrobench_options(args.next(), args.next(), "macrobench")?;
             let workspace = options.workspace.clone();
-            let report = run_workspace_write_task(&workspace, "macrobench workspace", move |_| {
-                run_macrobench(&options)
-            })?;
+            let report = run_workspace_write_task(
+                &workspace,
+                "macrobench workspace",
+                move |cancellation| {
+                    cancellation.check()?;
+                    let report = run_macrobench(&options)?;
+                    cancellation.check()?;
+                    Ok(report)
+                },
+            )?;
             println!(
                 "fixture\t{}\tfiles\t{}\tpassed\t{}",
                 report.fixture_root.display(),
@@ -52,10 +59,16 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let (root, scale) =
                 macrobench_fixture_options(args.next(), args.next(), "macrobench-fixture")?;
             let workspace = root.clone();
-            let report =
-                run_workspace_write_task(&workspace, "macrobench fixture workspace", move |_| {
-                    materialize_macrobench_fixture_report(root, scale)
-                })?;
+            let report = run_workspace_write_task(
+                &workspace,
+                "macrobench fixture workspace",
+                move |cancellation| {
+                    cancellation.check()?;
+                    let report = materialize_macrobench_fixture_report(root, scale)?;
+                    cancellation.check()?;
+                    Ok(report)
+                },
+            )?;
             println!(
                 "fixture\t{}\tmanifest\t{}\tfiles\t{}\tdirectories\t{}\tscenarios\t{}",
                 report.fixture_root.display(),
@@ -77,10 +90,16 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "parity-fixture" => {
             let options = parity_fixture_options(args.next(), args.next(), "parity-fixture")?;
             let workspace = options.workspace.clone();
-            let report =
-                run_workspace_write_task(&workspace, "parity fixture workspace", move |_| {
-                    materialize_parity_fixture(&options)
-                })?;
+            let report = run_workspace_write_task(
+                &workspace,
+                "parity fixture workspace",
+                move |cancellation| {
+                    cancellation.check()?;
+                    let report = materialize_parity_fixture(&options)?;
+                    cancellation.check()?;
+                    Ok(report)
+                },
+            )?;
             println!(
                 "fixture\t{}\tmanifest\t{}\tfiles\t{}\tscenarios\t{}",
                 report.fixture_root.display(),
@@ -345,10 +364,16 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "regression-gate" => {
             let options = macrobench_options(args.next(), args.next(), "regression-gate")?;
             let workspace = options.workspace.clone();
-            let run =
-                run_workspace_write_task(&workspace, "regression gate workspace", move |_| {
-                    run_regression_gate(&options, RegressionGateOptions::default())
-                })?;
+            let run = run_workspace_write_task(
+                &workspace,
+                "regression gate workspace",
+                move |cancellation| {
+                    cancellation.check()?;
+                    let run = run_regression_gate(&options, RegressionGateOptions::default())?;
+                    cancellation.check()?;
+                    Ok(run)
+                },
+            )?;
             println!(
                 "fixture\t{}\tfiles\t{}\tindex-bytes\t{}\tsidecar-prefix-candidates\t{}\tsidecar-substring-candidates\t{}\tsidecar-fuzzy-verified\t{}\tsidecar-prefix-cache-hits\t{}\tsidecar-substring-cache-hits\t{}\tsidecar-fuzzy-cache-hits\t{}\tsidecar-prefix-cutoffs\t{}\tsidecar-prefix-truncated\t{}\tsidecar-substring-cutoffs\t{}\tsidecar-substring-truncated\t{}\tsidecar-fuzzy-truncated\t{}\tpassed\t{}",
                 run.macrobench.fixture_root.display(),
@@ -388,10 +413,19 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "large-sidecar-gate requires a synthetic record count",
             )?;
             let worker_workspace = workspace.clone();
-            let report =
-                run_workspace_write_task(&workspace, "large sidecar gate workspace", move |_| {
-                    run_large_sidecar_gate(&LargeSidecarGateOptions::new(worker_workspace, records))
-                })?;
+            let report = run_workspace_write_task(
+                &workspace,
+                "large sidecar gate workspace",
+                move |cancellation| {
+                    cancellation.check()?;
+                    let report = run_large_sidecar_gate(&LargeSidecarGateOptions::new(
+                        worker_workspace,
+                        records,
+                    ))?;
+                    cancellation.check()?;
+                    Ok(report)
+                },
+            )?;
             println!(
                 "large-sidecar-gate\tfixture={}\tthresholds={}\thistory={}\tprofile={}\tmin-ci-records={}\trecords={}\tprobe-records={}\tprefix-keys={}\tsubstring-keys={}\tfuzzy-keys={}\tprefix-bytes={}\tsubstring-bytes={}\tfuzzy-bytes={}\tprefix-candidates={}\tsubstring-candidates={}\tfuzzy-verified={}\tprefix-cache-hits={}\tsubstring-cache-hits={}\tfuzzy-cache-hits={}\tprefix-cutoffs={}\tprefix-truncated={}\tsubstring-cutoffs={}\tsubstring-truncated={}\tfuzzy-truncated={}\tviolations={}\tpassed={}",
                 report.fixture_root.display(),
@@ -456,7 +490,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let report = run_workspace_write_task(
                 &workspace,
                 "search typing benchmark workspace",
-                move |_| run_search_typing_benchmark(&options),
+                move |cancellation| {
+                    cancellation.check()?;
+                    let report = run_search_typing_benchmark(&options)?;
+                    cancellation.check()?;
+                    Ok(report)
+                },
             )?;
             println!(
                 "search-typing-benchmark\tfixture={}\thistory={}\trecords={}\tprobe-records={}\trepetitions={}\tqueries={}\tsamples={}\thits={}\tp50-ns={}\tp95-ns={}\tp99-ns={}\tmax-ns={}\tprefix-candidates={}\tsubstring-candidates={}\tfuzzy-verified={}\tprefix-cache-hits={}\tsubstring-cache-hits={}\tfuzzy-cache-hits={}\tviolations={}\tpassed={}",
@@ -514,7 +553,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let report = run_workspace_write_task(
                 &workspace,
                 "search typing session benchmark workspace",
-                move |_| run_search_typing_session_benchmark(&options),
+                move |cancellation| {
+                    cancellation.check()?;
+                    let report = run_search_typing_session_benchmark(&options)?;
+                    cancellation.check()?;
+                    Ok(report)
+                },
             )?;
             println!(
                 "search-typing-session-benchmark\tfixture={}\thistory={}\trecords={}\tindexed-records={}\tindexed-prefixes={}\tindexed-substring-grams={}\tindexed-fuzzy-keys={}\trepetitions={}\tqueries={}\tsamples={}\thits={}\tp50-ns={}\tp95-ns={}\tp99-ns={}\tmax-ns={}\tprefix-candidates={}\tsubstring-candidates={}\tfuzzy-verified={}\tprefix-cache-hits={}\tsubstring-cache-hits={}\tfuzzy-cache-hits={}\tcontent-cache-hits={}\tcontent-cache-misses={}\trecord-cache-hits={}\trecord-cache-misses={}\tresult-cache-hits={}\tresult-cache-misses={}\tviolations={}\tpassed={}",

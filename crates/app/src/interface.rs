@@ -1,7 +1,7 @@
 use crate::volume::{resolve_volume_event_path, volume_event_invalidation_for_descriptor};
 use gfm_fs::{
-    read_directory, scan_tree, FinderMetadataReport, PackageTraversalMode, PackageTraversalReport,
-    ScanOptions,
+    read_directory_checked, scan_tree_checked, FinderMetadataReport, PackageTraversalMode,
+    PackageTraversalReport, ScanOptions,
 };
 use gfm_index::Indexer;
 use gfm_jobs::{JobId, JobProgressSnapshot, JobProgressState, JobProgressStore, Priority};
@@ -637,7 +637,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         "package traversal",
                     )?;
                     cancellation.check()?;
-                    scan_tree(&root, options_for_worker)
+                    scan_tree_checked(&root, options_for_worker, || cancellation.check())
                 },
             )?;
             let report = PackageTraversalReport::from_page(&page, &options.package_policy);
@@ -1110,7 +1110,7 @@ fn read_directory_with_access(path: &Path, worker: &'static str) -> Result<Direc
             cancellation.check()?;
             let _access = crate::access::preflight_access_scope(&path, AccessIntent::Read, worker)?;
             cancellation.check()?;
-            read_directory(&path)
+            read_directory_checked(&path, || cancellation.check())
         },
     )
 }

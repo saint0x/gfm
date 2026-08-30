@@ -212,12 +212,22 @@ pub struct PackageEntrySpec {
 }
 
 pub fn read_directory(path: impl AsRef<Path>) -> Result<DirectoryPage> {
+    read_directory_checked(path, || Ok(()))
+}
+
+pub fn read_directory_checked(
+    path: impl AsRef<Path>,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<DirectoryPage> {
     let root = path.as_ref().to_path_buf();
     let mut entries = Vec::new();
     let mut inaccessible = Vec::new();
 
+    check_control()?;
     let dir = fs::read_dir(&root).map_err(|err| GfmError::io(&root, err))?;
+    check_control()?;
     for entry in dir {
+        check_control()?;
         match entry {
             Ok(entry) => match record_for_path(entry.path(), None, false) {
                 Ok(record) => entries.push(record),
@@ -234,7 +244,9 @@ pub fn read_directory(path: impl AsRef<Path>) -> Result<DirectoryPage> {
         }
     }
 
+    check_control()?;
     entries.sort_by_key(finder_order);
+    check_control()?;
     Ok(DirectoryPage {
         root,
         entries,
@@ -547,6 +559,27 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn checked_directory_read_stops_mid_directory_when_control_fails() {
+        let root = unique_temp_dir();
+        for index in 0..32 {
+            fs::write(root.join(format!("entry-{index:02}.txt")), "visible").unwrap();
+        }
+        let mut checks = 0_u32;
+
+        let result = read_directory_checked(&root, || {
+            checks += 1;
+            if checks > 8 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn checked_scan_stops_mid_walk_when_control_fails() {
