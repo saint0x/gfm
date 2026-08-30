@@ -4978,7 +4978,7 @@ fn volume_operation_reports_missing_path_from_binary() {
     let stdout = String::from_utf8(output.stdout).unwrap();
 
     assert!(stdout.starts_with("volume-operation\teject\t"));
-    assert!(stdout.contains("\tdisposition=refused\tnative-status=-\t"));
+    assert!(stdout.contains("\tdisposition=missing\tnative-status=-\t"));
     assert!(stdout.contains("\tvolume-kind=-\tmount=-\t"));
     assert!(stdout.contains("\treason=volume-path-missing\n"));
 }

@@ -1577,7 +1577,7 @@ impl VolumeOperationReport {
                 return Ok(Self::without_volume(
                     path,
                     operation,
-                    VolumeOperationDisposition::Refused,
+                    VolumeOperationDisposition::Missing,
                     "volume-path-missing",
                 ));
             }
@@ -4263,17 +4263,17 @@ mod tests {
     }
 
     #[test]
-    fn volume_operation_refuses_missing_path_without_native_submission() {
+    fn volume_operation_reports_missing_path_without_native_submission() {
         let report = VolumeOperationReport::execute(
             "/tmp/gfm-volume-operation-missing",
             VolumeOperation::Eject,
         )
         .unwrap();
 
-        assert_eq!(report.disposition, VolumeOperationDisposition::Refused);
+        assert_eq!(report.disposition, VolumeOperationDisposition::Missing);
         assert_eq!(report.native_status, None);
         assert_eq!(report.reason, "volume-path-missing");
-        assert!(report.as_tsv().contains("\tdisposition=refused\t"));
+        assert!(report.as_tsv().contains("\tdisposition=missing\t"));
     }
 
     #[cfg(unix)]
