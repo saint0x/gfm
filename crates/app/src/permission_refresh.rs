@@ -63,9 +63,19 @@ pub(crate) fn refresh_permission_state(
 pub(crate) fn refresh_permission_state_at_path(
     path: &Path,
 ) -> Result<PermissionStateInvalidationReport> {
+    refresh_permission_state_at_path_checked(path, || Ok(()))
+}
+
+pub(crate) fn refresh_permission_state_at_path_checked(
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<PermissionStateInvalidationReport> {
+    check_control()?;
     let probe_path = write_probe_existing_ancestor(path)?;
+    check_control()?;
     let report = VolumeDiscoveryReport::for_containing_path(&probe_path);
-    refresh_permission_state_at_path_with_report(path, &probe_path, &report)
+    check_control()?;
+    refresh_permission_state_at_path_with_report_checked(path, &probe_path, &report, check_control)
 }
 
 pub(crate) fn refresh_permission_state_at_path_with_report(
@@ -73,15 +83,31 @@ pub(crate) fn refresh_permission_state_at_path_with_report(
     probe_path: &Path,
     report: &VolumeDiscoveryReport,
 ) -> Result<PermissionStateInvalidationReport> {
+    refresh_permission_state_at_path_with_report_checked(path, probe_path, report, || Ok(()))
+}
+
+pub(crate) fn refresh_permission_state_at_path_with_report_checked(
+    path: &Path,
+    probe_path: &Path,
+    report: &VolumeDiscoveryReport,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<PermissionStateInvalidationReport> {
+    check_control()?;
     preflight_permission_state_volume_with_report(path, probe_path, report)?;
+    check_control()?;
     let previous = if permission_state_is_file(path)? {
-        Some(PermissionStateSnapshot::read(path)?)
+        Some(PermissionStateSnapshot::read_checked(
+            path,
+            &mut check_control,
+        )?)
     } else {
         None
     };
+    check_control()?;
     let current = PermissionStateSnapshot::from_plan(&current_permission_onboarding()?);
     let report = PermissionStateInvalidationReport::evaluate(previous.as_ref(), &current);
-    current.write(path)?;
+    check_control()?;
+    current.write_checked(path, &mut check_control)?;
     Ok(report)
 }
 
@@ -342,6 +368,59 @@ mod tests {
         assert!(!state.exists());
         assert!(!state.parent().unwrap().exists());
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn refresh_state_preserves_existing_state_when_cancelled_before_publish() {
+        let root = unique_temp_dir("gfm-permission-refresh-publish-cancel");
+        let state = root.join("permission-state.tsv");
+        let previous = PermissionStateSnapshot {
+            readiness: vec![PermissionReadiness {
+                scope: PermissionScope::Documents,
+                path: root.join("Documents"),
+                state: PermissionState::Denied,
+                reason: "old denial".to_string(),
+            }],
+        };
+        previous.write(&state).unwrap();
+        let before = fs::read(&state).unwrap();
+        let mut volume = VolumeDescriptor::for_path(&root).unwrap();
+        volume.label = "Local".to_string();
+        volume.kind = VolumeKind::Internal;
+        volume.mount_state = MountState::Mounted;
+        volume.reachable = Some(true);
+        volume.read_only = false;
+        let report = VolumeDiscoveryReport {
+            volumes: vec![volume],
+        };
+        let mut checks = 0usize;
+
+        let err =
+            refresh_permission_state_at_path_with_report_checked(&state, &root, &report, || {
+                checks += 1;
+                if checks >= 9 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert!(checks >= 9);
+        assert_eq!(fs::read(&state).unwrap(), before);
+        let leftovers = fs::read_dir(&root)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".permission-state.tsv")
+            })
+            .count();
+        assert_eq!(leftovers, 0);
         fs::remove_dir_all(root).unwrap();
     }
 

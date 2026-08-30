@@ -223,8 +223,17 @@ impl PermissionStateSnapshot {
     }
 
     pub fn read(path: impl AsRef<Path>) -> Result<Self> {
+        Self::read_checked(path, || Ok(()))
+    }
+
+    pub fn read_checked(
+        path: impl AsRef<Path>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
         let path = path.as_ref();
+        check_control()?;
         let text = fs::read_to_string(path).map_err(|err| GfmError::io(path, err))?;
+        check_control()?;
         let mut lines = text.lines();
         match lines.next() {
             Some("gfm-permission-state-v1") => {}
@@ -244,6 +253,7 @@ impl PermissionStateSnapshot {
         let mut readiness = Vec::new();
         let mut seen_scopes = BTreeSet::new();
         for (line_index, line) in lines.enumerate() {
+            check_control()?;
             if line.trim().is_empty() {
                 continue;
             }
@@ -289,6 +299,14 @@ impl PermissionStateSnapshot {
     }
 
     pub fn write(&self, path: impl AsRef<Path>) -> Result<()> {
+        self.write_checked(path, || Ok(()))
+    }
+
+    pub fn write_checked(
+        &self,
+        path: impl AsRef<Path>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<()> {
         let path = path.as_ref();
         validate_unique_permission_scopes(path, &self.readiness)?;
         let mut output = String::from("gfm-permission-state-v1\n");
@@ -301,7 +319,7 @@ impl PermissionStateSnapshot {
                 escape_field(&item.reason)
             ));
         }
-        atomic_write_text(path, &output)
+        atomic_write_text_checked(path, &output, &mut check_control)
     }
 }
 
@@ -562,22 +580,35 @@ fn unescape_field(value: &str) -> String {
     output
 }
 
-fn atomic_write_text(path: &Path, text: &str) -> Result<()> {
+fn atomic_write_text_checked(
+    path: &Path,
+    text: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
     if let Some(parent) = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
     {
         fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
     }
+    check_control()?;
     let temporary = temporary_path(path);
     let mut file = File::create(&temporary).map_err(|err| GfmError::io(&temporary, err))?;
     if let Err(err) = file.write_all(text.as_bytes()) {
         let _ = fs::remove_file(&temporary);
         return Err(GfmError::io(&temporary, err));
     }
+    if let Err(err) = check_control() {
+        let _ = fs::remove_file(&temporary);
+        return Err(err);
+    }
     if let Err(err) = file.sync_all() {
         let _ = fs::remove_file(&temporary);
         return Err(GfmError::io(&temporary, err));
+    }
+    if let Err(err) = check_control() {
+        let _ = fs::remove_file(&temporary);
+        return Err(err);
     }
     drop(file);
     if let Err(err) = fs::rename(&temporary, path) {
@@ -745,6 +776,52 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn checked_permission_snapshot_read_honors_pre_cancelled_control_before_file_open() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+
+        let path = PathBuf::from(OsString::from_vec(
+            b"/tmp/gfm-permission-snapshot-cancelled\0path".to_vec(),
+        ));
+
+        let err =
+            PermissionStateSnapshot::read_checked(&path, || Err(GfmError::Cancelled)).unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+    }
+
+    #[test]
+    fn checked_permission_snapshot_read_can_cancel_during_parse() {
+        let root = temp_root("permissions-snapshot-read-cancel");
+        let path = root.join("permission-state.tsv");
+        fs::write(
+            &path,
+            format!(
+                "gfm-permission-state-v1\ndocuments\tgranted\t{}\treadable\ndesktop\tdenied\t{}\tmacOS denied read access\n",
+                escape_field(&root.join("Documents").to_string_lossy()),
+                escape_field(&root.join("Desktop").to_string_lossy())
+            ),
+        )
+        .unwrap();
+        let mut checks = 0usize;
+
+        let err = PermissionStateSnapshot::read_checked(&path, || {
+            checks += 1;
+            if checks >= 4 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert!(checks >= 4);
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn permission_state_snapshot_write_rejects_duplicate_scopes_before_persisting() {
         let root = temp_root("permissions-snapshot-write-duplicate-scope");
@@ -772,6 +849,57 @@ mod tests {
             .to_string()
             .contains("duplicate permission state scope `documents` before writing"));
         assert!(!path.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn checked_permission_snapshot_write_preserves_existing_state_on_cancel() {
+        let root = temp_root("permissions-snapshot-write-cancel");
+        let path = root.join("permission-state.tsv");
+        let previous = PermissionStateSnapshot {
+            readiness: vec![PermissionReadiness {
+                scope: PermissionScope::Documents,
+                path: root.join("Documents"),
+                state: PermissionState::Granted,
+                reason: "readable".to_string(),
+            }],
+        };
+        let current = PermissionStateSnapshot {
+            readiness: vec![PermissionReadiness {
+                scope: PermissionScope::Documents,
+                path: root.join("Documents"),
+                state: PermissionState::Denied,
+                reason: "macOS denied read access".to_string(),
+            }],
+        };
+        previous.write(&path).unwrap();
+        let before = fs::read(&path).unwrap();
+        let mut checks = 0usize;
+
+        let err = current
+            .write_checked(&path, || {
+                checks += 1;
+                if checks >= 3 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert_eq!(fs::read(&path).unwrap(), before);
+        let leftovers = fs::read_dir(&root)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".permission-state.tsv")
+            })
+            .count();
+        assert_eq!(leftovers, 0);
         fs::remove_dir_all(root).unwrap();
     }
 

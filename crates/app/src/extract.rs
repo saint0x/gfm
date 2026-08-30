@@ -1,6 +1,6 @@
 use crate::{
     access::{preflight_access_scope, preflight_volume_access_scope, ScopedAccessGuard},
-    permission_refresh::refresh_permission_state_at_path,
+    permission_refresh::refresh_permission_state_at_path_checked,
 };
 use gfm_content::{
     ExtractionBatteryState, ExtractionBudgetProfile, ExtractionFingerprint, ExtractionQuarantine,
@@ -137,7 +137,9 @@ pub(crate) fn run_adaptive_extraction_worker_cancellable(
         let _ = std::fs::remove_file(&stderr_path);
         return Err(GfmError::io(&permission_state_dir, err));
     }
-    if let Err(err) = refresh_permission_state_at_path(&permission_state_path) {
+    if let Err(err) =
+        refresh_permission_state_at_path_checked(&permission_state_path, || cancellation.check())
+    {
         let _ = std::fs::remove_file(&stdout_path);
         let _ = std::fs::remove_file(&stderr_path);
         let _ = std::fs::remove_dir_all(&permission_state_dir);
