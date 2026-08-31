@@ -1,6 +1,6 @@
 use crate::access::{
-    preflight_access_scope_checked, preflight_access_scope_checked_with_volume_report,
-    preflight_volume_access_scope, preflight_volume_access_scope_with_report, ScopedAccessGuard,
+    preflight_access_scope_checked_with_volume_report, preflight_volume_access_scope_with_report,
+    ScopedAccessGuard,
 };
 use crate::content::run_content_search;
 use crate::extract::extraction_budget_profile;
@@ -42,15 +42,16 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 None
             };
             let root_access = SearchRootAccessReport::new(root.clone());
+            let retry_access = search_retry_probe_access_report(retry_probe.as_deref())?;
             root_access.preflight_volume("search")?;
-            if let Some(retry_probe) = retry_probe.as_ref() {
-                preflight_volume_access_scope(
-                    write_probe_path(retry_probe)?,
-                    AccessIntent::Write,
-                    "search",
-                )?;
+            if let Some(retry_access) = retry_access.as_ref() {
+                retry_access.preflight_volume("search")?;
             }
-            let volume = root_access.volume();
+            let volume = root_access.volume().or_else(|| {
+                retry_access
+                    .as_ref()
+                    .and_then(SearchWriteAccessReport::volume)
+            });
             let hits = run_retriable_volume_task_cancellable_with_payload_path(
                 volume,
                 Priority::Visible,
@@ -60,11 +61,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     let root = root.clone();
                     let query = query.clone();
                     let retry_probe = retry_probe.clone();
+                    let retry_access = retry_access.clone();
                     let root_access = root_access.clone();
                     cancellation.check()?;
-                    if let Some(retry_probe) = retry_probe.as_ref() {
+                    if let (Some(retry_probe), Some(retry_access)) =
+                        (retry_probe.as_ref(), retry_access.as_ref())
+                    {
                         fail_first_search_retry_probe_attempt(
                             retry_probe,
+                            retry_access,
                             "search",
                             &cancellation,
                         )?;
@@ -97,15 +102,16 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 None
             };
             let root_access = SearchRootAccessReport::new(root.clone());
+            let retry_access = search_retry_probe_access_report(retry_probe.as_deref())?;
             root_access.preflight_volume("search stream")?;
-            if let Some(retry_probe) = retry_probe.as_ref() {
-                preflight_volume_access_scope(
-                    write_probe_path(retry_probe)?,
-                    AccessIntent::Write,
-                    "search stream",
-                )?;
+            if let Some(retry_access) = retry_access.as_ref() {
+                retry_access.preflight_volume("search stream")?;
             }
-            let volume = root_access.volume();
+            let volume = root_access.volume().or_else(|| {
+                retry_access
+                    .as_ref()
+                    .and_then(SearchWriteAccessReport::volume)
+            });
             let batches = run_retriable_volume_task_cancellable_with_payload_path(
                 volume,
                 Priority::Visible,
@@ -115,11 +121,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     let root = root.clone();
                     let query = query.clone();
                     let retry_probe = retry_probe.clone();
+                    let retry_access = retry_access.clone();
                     let root_access = root_access.clone();
                     cancellation.check()?;
-                    if let Some(retry_probe) = retry_probe.as_ref() {
+                    if let (Some(retry_probe), Some(retry_access)) =
+                        (retry_probe.as_ref(), retry_access.as_ref())
+                    {
                         fail_first_search_retry_probe_attempt(
                             retry_probe,
+                            retry_access,
                             "search stream",
                             &cancellation,
                         )?;
@@ -1404,6 +1414,60 @@ impl SearchRootAccessReport {
     }
 }
 
+#[derive(Clone)]
+struct SearchWriteAccessReport {
+    path: PathBuf,
+    volume_report: VolumeDiscoveryReport,
+}
+
+impl SearchWriteAccessReport {
+    fn for_probe(path: &Path) -> Result<Self> {
+        let path = write_probe_path(path)?.to_path_buf();
+        let volume_report = VolumeDiscoveryReport::for_containing_path(&path);
+        Ok(Self {
+            path,
+            volume_report,
+        })
+    }
+
+    fn preflight_volume(&self, worker: &str) -> Result<()> {
+        preflight_volume_access_scope_with_report(
+            &self.path,
+            AccessIntent::Write,
+            worker,
+            &self.volume_report,
+        )
+    }
+
+    fn access_checked(
+        &self,
+        worker: &str,
+        check_control: impl FnMut() -> Result<()>,
+    ) -> Result<ScopedAccessGuard> {
+        preflight_access_scope_checked_with_volume_report(
+            &self.path,
+            AccessIntent::Write,
+            worker,
+            &self.volume_report,
+            check_control,
+        )
+    }
+
+    fn volume(&self) -> Option<VolumeId> {
+        self.volume_report
+            .volume_for_path(&self.path)
+            .map(|volume| volume.id)
+    }
+}
+
+fn search_retry_probe_access_report(
+    retry_probe: Option<&Path>,
+) -> Result<Option<SearchWriteAccessReport>> {
+    retry_probe
+        .map(SearchWriteAccessReport::for_probe)
+        .transpose()
+}
+
 fn run_content_archive_read_cancellable<T>(
     path: PathBuf,
     worker: &'static str,
@@ -1425,11 +1489,16 @@ where
     T: Send + 'static,
 {
     let volume_reports = ArchiveVolumeAccessReports::for_paths([path.as_path()]);
+    let retry_access = search_retry_probe_access_report(retry_probe.as_deref())?;
     volume_reports.preflight_volumes(worker)?;
-    if let Some(retry_probe) = retry_probe.as_ref() {
-        preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, worker)?;
+    if let Some(retry_access) = retry_access.as_ref() {
+        retry_access.preflight_volume(worker)?;
     }
-    let volume = volume_reports.first_volume();
+    let volume = volume_reports.first_volume().or_else(|| {
+        retry_access
+            .as_ref()
+            .and_then(SearchWriteAccessReport::volume)
+    });
     run_retriable_volume_task_cancellable_with_payload_path(
         volume,
         Priority::Visible,
@@ -1438,10 +1507,18 @@ where
         move |cancellation| {
             let path = path.clone();
             let retry_probe = retry_probe.clone();
+            let retry_access = retry_access.clone();
             let read = read.clone();
             cancellation.check()?;
-            if let Some(retry_probe) = retry_probe.as_ref() {
-                fail_first_search_retry_probe_attempt(retry_probe, worker, &cancellation)?;
+            if let (Some(retry_probe), Some(retry_access)) =
+                (retry_probe.as_ref(), retry_access.as_ref())
+            {
+                fail_first_search_retry_probe_attempt(
+                    retry_probe,
+                    retry_access,
+                    worker,
+                    &cancellation,
+                )?;
             }
             let _access =
                 volume_reports.preflight_access_checked(worker, || cancellation.check())?;
@@ -1461,11 +1538,16 @@ where
     T: Send + 'static,
 {
     let volume_reports = ArchiveVolumeAccessReports::for_paths(paths.iter().map(PathBuf::as_path));
+    let retry_access = search_retry_probe_access_report(retry_probe.as_deref())?;
     volume_reports.preflight_volumes(worker)?;
-    if let Some(retry_probe) = retry_probe.as_ref() {
-        preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, worker)?;
+    if let Some(retry_access) = retry_access.as_ref() {
+        retry_access.preflight_volume(worker)?;
     }
-    let volume = volume_reports.first_volume();
+    let volume = volume_reports.first_volume().or_else(|| {
+        retry_access
+            .as_ref()
+            .and_then(SearchWriteAccessReport::volume)
+    });
     let payload_path = paths.first().cloned().unwrap_or_else(|| PathBuf::from("."));
     run_retriable_volume_task_cancellable_with_payload_path(
         volume,
@@ -1475,10 +1557,18 @@ where
         move |cancellation| {
             let paths = paths.clone();
             let retry_probe = retry_probe.clone();
+            let retry_access = retry_access.clone();
             let read = read.clone();
             cancellation.check()?;
-            if let Some(retry_probe) = retry_probe.as_ref() {
-                fail_first_search_retry_probe_attempt(retry_probe, worker, &cancellation)?;
+            if let (Some(retry_probe), Some(retry_access)) =
+                (retry_probe.as_ref(), retry_access.as_ref())
+            {
+                fail_first_search_retry_probe_attempt(
+                    retry_probe,
+                    retry_access,
+                    worker,
+                    &cancellation,
+                )?;
             }
             let _access =
                 volume_reports.preflight_access_checked(worker, || cancellation.check())?;
@@ -1498,11 +1588,16 @@ where
     T: Send + 'static,
 {
     let volume_reports = ArchiveVolumeAccessReports::for_paths([manifest.as_path()]);
+    let retry_access = search_retry_probe_access_report(retry_probe.as_deref())?;
     volume_reports.preflight_volumes(worker)?;
-    if let Some(retry_probe) = retry_probe.as_ref() {
-        preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, worker)?;
+    if let Some(retry_access) = retry_access.as_ref() {
+        retry_access.preflight_volume(worker)?;
     }
-    let volume = volume_reports.first_volume();
+    let volume = volume_reports.first_volume().or_else(|| {
+        retry_access
+            .as_ref()
+            .and_then(SearchWriteAccessReport::volume)
+    });
     run_retriable_volume_task_cancellable_with_payload_path(
         volume,
         Priority::Visible,
@@ -1511,10 +1606,18 @@ where
         move |cancellation| {
             let manifest = manifest.clone();
             let retry_probe = retry_probe.clone();
+            let retry_access = retry_access.clone();
             let read = read.clone();
             cancellation.check()?;
-            if let Some(retry_probe) = retry_probe.as_ref() {
-                fail_first_search_retry_probe_attempt(retry_probe, worker, &cancellation)?;
+            if let (Some(retry_probe), Some(retry_access)) =
+                (retry_probe.as_ref(), retry_access.as_ref())
+            {
+                fail_first_search_retry_probe_attempt(
+                    retry_probe,
+                    retry_access,
+                    worker,
+                    &cancellation,
+                )?;
             }
             let _access = preflight_content_manifest_access_checked_with_volume_report(
                 &manifest,
@@ -1549,11 +1652,16 @@ where
     T: Send + 'static,
 {
     let volume_reports = ArchiveVolumeAccessReports::for_paths([path.as_path()]);
+    let retry_access = search_retry_probe_access_report(retry_probe.as_deref())?;
     volume_reports.preflight_volumes(worker)?;
-    if let Some(retry_probe) = retry_probe.as_ref() {
-        preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, worker)?;
+    if let Some(retry_access) = retry_access.as_ref() {
+        retry_access.preflight_volume(worker)?;
     }
-    let volume = volume_reports.first_volume();
+    let volume = volume_reports.first_volume().or_else(|| {
+        retry_access
+            .as_ref()
+            .and_then(SearchWriteAccessReport::volume)
+    });
     run_retriable_volume_task_cancellable_with_payload_path(
         volume,
         Priority::Visible,
@@ -1562,9 +1670,17 @@ where
         move |cancellation| {
             let path = path.clone();
             let retry_probe = retry_probe.clone();
+            let retry_access = retry_access.clone();
             cancellation.check()?;
-            if let Some(retry_probe) = retry_probe.as_ref() {
-                fail_first_search_retry_probe_attempt(retry_probe, worker, &cancellation)?;
+            if let (Some(retry_probe), Some(retry_access)) =
+                (retry_probe.as_ref(), retry_access.as_ref())
+            {
+                fail_first_search_retry_probe_attempt(
+                    retry_probe,
+                    retry_access,
+                    worker,
+                    &cancellation,
+                )?;
             }
             let _access =
                 volume_reports.preflight_access_checked(worker, || cancellation.check())?;
@@ -1588,14 +1704,12 @@ fn write_probe_path(path: &Path) -> Result<&Path> {
 
 fn fail_first_search_retry_probe_attempt(
     attempt_state: &Path,
+    access_report: &SearchWriteAccessReport,
     worker: &str,
     cancellation: &Cancellation,
 ) -> Result<()> {
     cancellation.check()?;
-    let probe = write_probe_path(attempt_state)?.to_path_buf();
-    let _access = preflight_access_scope_checked(&probe, AccessIntent::Write, worker, || {
-        cancellation.check()
-    })?;
+    let _access = access_report.access_checked(worker, || cancellation.check())?;
     cancellation.check()?;
     let attempts = read_search_retry_probe_attempt_checked(attempt_state, || cancellation.check())?;
     cancellation.check()?;
@@ -1694,11 +1808,16 @@ fn run_search_index_columns(
 ) -> Result<SearchIndexColumnsOutput> {
     const WORKER: &str = "search index columns";
     let volume_reports = SearchIndexColumnsVolumeAccessReports::for_paths(&records, &columns);
+    let retry_access = search_retry_probe_access_report(retry_probe.as_deref())?;
     volume_reports.preflight_volumes()?;
-    if let Some(retry_probe) = retry_probe.as_ref() {
-        preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, WORKER)?;
+    if let Some(retry_access) = retry_access.as_ref() {
+        retry_access.preflight_volume(WORKER)?;
     }
-    let volume = volume_reports.first_volume();
+    let volume = volume_reports.first_volume().or_else(|| {
+        retry_access
+            .as_ref()
+            .and_then(SearchWriteAccessReport::volume)
+    });
     run_retriable_volume_task_cancellable_with_payload_path(
         volume,
         Priority::Visible,
@@ -1709,9 +1828,17 @@ fn run_search_index_columns(
             let columns = columns.clone();
             let query = query.clone();
             let retry_probe = retry_probe.clone();
+            let retry_access = retry_access.clone();
             cancellation.check()?;
-            if let Some(retry_probe) = retry_probe.as_ref() {
-                fail_first_search_retry_probe_attempt(retry_probe, WORKER, &cancellation)?;
+            if let (Some(retry_probe), Some(retry_access)) =
+                (retry_probe.as_ref(), retry_access.as_ref())
+            {
+                fail_first_search_retry_probe_attempt(
+                    retry_probe,
+                    retry_access,
+                    WORKER,
+                    &cancellation,
+                )?;
             }
             let _access = preflight_search_index_columns_access_checked(&volume_reports, || {
                 cancellation.check()
@@ -1818,10 +1945,15 @@ fn run_content_index_search(
         std::slice::from_ref(&content),
         worker,
     )?;
-    if let Some(retry_probe) = retry_probe.as_ref() {
-        preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, worker)?;
+    let retry_access = search_retry_probe_access_report(retry_probe.as_deref())?;
+    if let Some(retry_access) = retry_access.as_ref() {
+        retry_access.preflight_volume(worker)?;
     }
-    let volume = volume_reports.first_volume();
+    let volume = volume_reports.first_volume().or_else(|| {
+        retry_access
+            .as_ref()
+            .and_then(SearchWriteAccessReport::volume)
+    });
     run_retriable_volume_task_cancellable_with_payload_path(
         volume,
         Priority::Visible,
@@ -1833,9 +1965,17 @@ fn run_content_index_search(
             let query = query.clone();
             let extractor = extractor.clone();
             let retry_probe = retry_probe.clone();
+            let retry_access = retry_access.clone();
             cancellation.check()?;
-            if let Some(retry_probe) = retry_probe.as_ref() {
-                fail_first_search_retry_probe_attempt(retry_probe, worker, &cancellation)?;
+            if let (Some(retry_probe), Some(retry_access)) =
+                (retry_probe.as_ref(), retry_access.as_ref())
+            {
+                fail_first_search_retry_probe_attempt(
+                    retry_probe,
+                    retry_access,
+                    worker,
+                    &cancellation,
+                )?;
             }
             let _access =
                 preflight_content_index_search_access_checked(&volume_reports, worker, || {
@@ -1873,10 +2013,15 @@ fn run_content_index_set_search(
     const WORKER: &str = "content index set search";
     let volume_reports =
         preflight_content_index_set_volume_access(&records, &content_paths, WORKER)?;
-    if let Some(retry_probe) = retry_probe.as_ref() {
-        preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, WORKER)?;
+    let retry_access = search_retry_probe_access_report(retry_probe.as_deref())?;
+    if let Some(retry_access) = retry_access.as_ref() {
+        retry_access.preflight_volume(WORKER)?;
     }
-    let volume = volume_reports.first_volume();
+    let volume = volume_reports.first_volume().or_else(|| {
+        retry_access
+            .as_ref()
+            .and_then(SearchWriteAccessReport::volume)
+    });
     run_retriable_volume_task_cancellable_with_payload_path(
         volume,
         Priority::Visible,
@@ -1887,9 +2032,17 @@ fn run_content_index_set_search(
             let content_paths = content_paths.clone();
             let query = query.clone();
             let retry_probe = retry_probe.clone();
+            let retry_access = retry_access.clone();
             cancellation.check()?;
-            if let Some(retry_probe) = retry_probe.as_ref() {
-                fail_first_search_retry_probe_attempt(retry_probe, WORKER, &cancellation)?;
+            if let (Some(retry_probe), Some(retry_access)) =
+                (retry_probe.as_ref(), retry_access.as_ref())
+            {
+                fail_first_search_retry_probe_attempt(
+                    retry_probe,
+                    retry_access,
+                    WORKER,
+                    &cancellation,
+                )?;
             }
             let _access =
                 preflight_content_index_set_search_access_checked(&volume_reports, WORKER, || {
@@ -1936,10 +2089,15 @@ fn run_content_index_set_session(
     const WORKER: &str = "content index set session";
     let volume_reports =
         preflight_content_index_set_volume_access(&records, &content_paths, WORKER)?;
-    if let Some(retry_probe) = retry_probe.as_ref() {
-        preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, WORKER)?;
+    let retry_access = search_retry_probe_access_report(retry_probe.as_deref())?;
+    if let Some(retry_access) = retry_access.as_ref() {
+        retry_access.preflight_volume(WORKER)?;
     }
-    let volume = volume_reports.first_volume();
+    let volume = volume_reports.first_volume().or_else(|| {
+        retry_access
+            .as_ref()
+            .and_then(SearchWriteAccessReport::volume)
+    });
     run_retriable_volume_task_cancellable_with_payload_path(
         volume,
         Priority::Visible,
@@ -1950,9 +2108,17 @@ fn run_content_index_set_session(
             let content_paths = content_paths.clone();
             let query = query.clone();
             let retry_probe = retry_probe.clone();
+            let retry_access = retry_access.clone();
             cancellation.check()?;
-            if let Some(retry_probe) = retry_probe.as_ref() {
-                fail_first_search_retry_probe_attempt(retry_probe, WORKER, &cancellation)?;
+            if let (Some(retry_probe), Some(retry_access)) =
+                (retry_probe.as_ref(), retry_access.as_ref())
+            {
+                fail_first_search_retry_probe_attempt(
+                    retry_probe,
+                    retry_access,
+                    WORKER,
+                    &cancellation,
+                )?;
             }
             let _access =
                 preflight_content_index_set_search_access_checked(&volume_reports, WORKER, || {
@@ -2004,11 +2170,16 @@ fn run_content_index_manifest_search(
     const WORKER: &str = "content index manifest search";
     let volume_reports =
         ContentIndexManifestVolumeAccessReports::for_records_and_manifest(&records, &manifest);
+    let retry_access = search_retry_probe_access_report(retry_probe.as_deref())?;
     volume_reports.preflight_volumes(WORKER)?;
-    if let Some(retry_probe) = retry_probe.as_ref() {
-        preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, WORKER)?;
+    if let Some(retry_access) = retry_access.as_ref() {
+        retry_access.preflight_volume(WORKER)?;
     }
-    let volume = volume_reports.first_volume();
+    let volume = volume_reports.first_volume().or_else(|| {
+        retry_access
+            .as_ref()
+            .and_then(SearchWriteAccessReport::volume)
+    });
     run_retriable_volume_task_cancellable_with_payload_path(
         volume,
         Priority::Visible,
@@ -2019,9 +2190,17 @@ fn run_content_index_manifest_search(
             let manifest = manifest.clone();
             let query = query.clone();
             let retry_probe = retry_probe.clone();
+            let retry_access = retry_access.clone();
             cancellation.check()?;
-            if let Some(retry_probe) = retry_probe.as_ref() {
-                fail_first_search_retry_probe_attempt(retry_probe, WORKER, &cancellation)?;
+            if let (Some(retry_probe), Some(retry_access)) =
+                (retry_probe.as_ref(), retry_access.as_ref())
+            {
+                fail_first_search_retry_probe_attempt(
+                    retry_probe,
+                    retry_access,
+                    WORKER,
+                    &cancellation,
+                )?;
             }
             let _access = preflight_content_index_manifest_search_access_checked(
                 &manifest,
@@ -2068,11 +2247,16 @@ fn run_content_index_manifest_session(
     const WORKER: &str = "content index manifest session";
     let volume_reports =
         ContentIndexManifestVolumeAccessReports::for_records_and_manifest(&records, &manifest);
+    let retry_access = search_retry_probe_access_report(retry_probe.as_deref())?;
     volume_reports.preflight_volumes(WORKER)?;
-    if let Some(retry_probe) = retry_probe.as_ref() {
-        preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, WORKER)?;
+    if let Some(retry_access) = retry_access.as_ref() {
+        retry_access.preflight_volume(WORKER)?;
     }
-    let volume = volume_reports.first_volume();
+    let volume = volume_reports.first_volume().or_else(|| {
+        retry_access
+            .as_ref()
+            .and_then(SearchWriteAccessReport::volume)
+    });
     run_retriable_volume_task_cancellable_with_payload_path(
         volume,
         Priority::Visible,
@@ -2083,9 +2267,17 @@ fn run_content_index_manifest_session(
             let manifest = manifest.clone();
             let query = query.clone();
             let retry_probe = retry_probe.clone();
+            let retry_access = retry_access.clone();
             cancellation.check()?;
-            if let Some(retry_probe) = retry_probe.as_ref() {
-                fail_first_search_retry_probe_attempt(retry_probe, WORKER, &cancellation)?;
+            if let (Some(retry_probe), Some(retry_access)) =
+                (retry_probe.as_ref(), retry_access.as_ref())
+            {
+                fail_first_search_retry_probe_attempt(
+                    retry_probe,
+                    retry_access,
+                    WORKER,
+                    &cancellation,
+                )?;
             }
             let _access = preflight_content_index_manifest_search_access_checked(
                 &manifest,
@@ -2465,10 +2657,15 @@ fn run_sidecar_index_search(
 ) -> Result<SidecarSearchOutput> {
     const WORKER: &str = "sidecar search";
     let volume_reports = preflight_sidecar_index_volume_access(&paths, WORKER)?;
-    if let Some(retry_probe) = retry_probe.as_ref() {
-        preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, WORKER)?;
+    let retry_access = search_retry_probe_access_report(retry_probe.as_deref())?;
+    if let Some(retry_access) = retry_access.as_ref() {
+        retry_access.preflight_volume(WORKER)?;
     }
-    let volume = volume_reports.first_volume();
+    let volume = volume_reports.first_volume().or_else(|| {
+        retry_access
+            .as_ref()
+            .and_then(SearchWriteAccessReport::volume)
+    });
     run_retriable_volume_task_cancellable_with_payload_path(
         volume,
         Priority::Visible,
@@ -2478,9 +2675,17 @@ fn run_sidecar_index_search(
             let paths = paths.clone();
             let query = query.clone();
             let retry_probe = retry_probe.clone();
+            let retry_access = retry_access.clone();
             cancellation.check()?;
-            if let Some(retry_probe) = retry_probe.as_ref() {
-                fail_first_search_retry_probe_attempt(retry_probe, WORKER, &cancellation)?;
+            if let (Some(retry_probe), Some(retry_access)) =
+                (retry_probe.as_ref(), retry_access.as_ref())
+            {
+                fail_first_search_retry_probe_attempt(
+                    retry_probe,
+                    retry_access,
+                    WORKER,
+                    &cancellation,
+                )?;
             }
             let _access =
                 preflight_sidecar_index_search_access_checked(&volume_reports, WORKER, || {
@@ -2553,10 +2758,15 @@ fn run_sidecar_index_session(
 ) -> Result<SidecarSessionOutput> {
     const WORKER: &str = "sidecar session";
     let volume_reports = preflight_sidecar_index_volume_access(&paths, WORKER)?;
-    if let Some(retry_probe) = retry_probe.as_ref() {
-        preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, WORKER)?;
+    let retry_access = search_retry_probe_access_report(retry_probe.as_deref())?;
+    if let Some(retry_access) = retry_access.as_ref() {
+        retry_access.preflight_volume(WORKER)?;
     }
-    let volume = volume_reports.first_volume();
+    let volume = volume_reports.first_volume().or_else(|| {
+        retry_access
+            .as_ref()
+            .and_then(SearchWriteAccessReport::volume)
+    });
     run_retriable_volume_task_cancellable_with_payload_path(
         volume,
         Priority::Visible,
@@ -2566,9 +2776,17 @@ fn run_sidecar_index_session(
             let paths = paths.clone();
             let query = query.clone();
             let retry_probe = retry_probe.clone();
+            let retry_access = retry_access.clone();
             cancellation.check()?;
-            if let Some(retry_probe) = retry_probe.as_ref() {
-                fail_first_search_retry_probe_attempt(retry_probe, WORKER, &cancellation)?;
+            if let (Some(retry_probe), Some(retry_access)) =
+                (retry_probe.as_ref(), retry_access.as_ref())
+            {
+                fail_first_search_retry_probe_attempt(
+                    retry_probe,
+                    retry_access,
+                    WORKER,
+                    &cancellation,
+                )?;
             }
             let _access =
                 preflight_sidecar_index_search_access_checked(&volume_reports, WORKER, || {
@@ -2623,10 +2841,15 @@ fn run_sidecar_index_budget(
 ) -> Result<SidecarSearchOutput> {
     const WORKER: &str = "sidecar budget";
     let volume_reports = preflight_sidecar_index_volume_access(&paths, WORKER)?;
-    if let Some(retry_probe) = retry_probe.as_ref() {
-        preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, WORKER)?;
+    let retry_access = search_retry_probe_access_report(retry_probe.as_deref())?;
+    if let Some(retry_access) = retry_access.as_ref() {
+        retry_access.preflight_volume(WORKER)?;
     }
-    let volume = volume_reports.first_volume();
+    let volume = volume_reports.first_volume().or_else(|| {
+        retry_access
+            .as_ref()
+            .and_then(SearchWriteAccessReport::volume)
+    });
     run_retriable_volume_task_cancellable_with_payload_path(
         volume,
         Priority::Visible,
@@ -2636,9 +2859,17 @@ fn run_sidecar_index_budget(
             let paths = paths.clone();
             let query = query.clone();
             let retry_probe = retry_probe.clone();
+            let retry_access = retry_access.clone();
             cancellation.check()?;
-            if let Some(retry_probe) = retry_probe.as_ref() {
-                fail_first_search_retry_probe_attempt(retry_probe, WORKER, &cancellation)?;
+            if let (Some(retry_probe), Some(retry_access)) =
+                (retry_probe.as_ref(), retry_access.as_ref())
+            {
+                fail_first_search_retry_probe_attempt(
+                    retry_probe,
+                    retry_access,
+                    WORKER,
+                    &cancellation,
+                )?;
             }
             let _access =
                 preflight_sidecar_index_search_access_checked(&volume_reports, WORKER, || {
@@ -2672,10 +2903,15 @@ fn run_sidecar_index_volume_scope(
 ) -> Result<SidecarSearchOutput> {
     const WORKER: &str = "sidecar volume scope";
     let volume_reports = preflight_sidecar_index_volume_access(&paths, WORKER)?;
-    if let Some(retry_probe) = retry_probe.as_ref() {
-        preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, WORKER)?;
+    let retry_access = search_retry_probe_access_report(retry_probe.as_deref())?;
+    if let Some(retry_access) = retry_access.as_ref() {
+        retry_access.preflight_volume(WORKER)?;
     }
-    let volume = volume_reports.first_volume();
+    let volume = volume_reports.first_volume().or_else(|| {
+        retry_access
+            .as_ref()
+            .and_then(SearchWriteAccessReport::volume)
+    });
     run_retriable_volume_task_cancellable_with_payload_path(
         volume,
         Priority::Visible,
@@ -2686,9 +2922,17 @@ fn run_sidecar_index_volume_scope(
             let query = query.clone();
             let scope = scope.clone();
             let retry_probe = retry_probe.clone();
+            let retry_access = retry_access.clone();
             cancellation.check()?;
-            if let Some(retry_probe) = retry_probe.as_ref() {
-                fail_first_search_retry_probe_attempt(retry_probe, WORKER, &cancellation)?;
+            if let (Some(retry_probe), Some(retry_access)) =
+                (retry_probe.as_ref(), retry_access.as_ref())
+            {
+                fail_first_search_retry_probe_attempt(
+                    retry_probe,
+                    retry_access,
+                    WORKER,
+                    &cancellation,
+                )?;
             }
             let _access =
                 preflight_sidecar_index_search_access_checked(&volume_reports, WORKER, || {

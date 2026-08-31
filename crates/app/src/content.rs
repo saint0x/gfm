@@ -1,6 +1,8 @@
+#[cfg(test)]
+use crate::access::preflight_access_scope_checked;
 use crate::access::{
-    preflight_access_scope_checked, preflight_access_scope_checked_with_volume_report,
-    preflight_volume_access_scope, preflight_volume_access_scope_with_report, ScopedAccessGuard,
+    preflight_access_scope_checked_with_volume_report, preflight_volume_access_scope_with_report,
+    ScopedAccessGuard,
 };
 use crate::extract::{
     extraction_budget_profile, preflight_adaptive_extraction_worker_scratch,
@@ -61,15 +63,16 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 records.clone(),
                 content.clone(),
             )?;
+            let retry_probe_access_report = retry_probe_access_report(retry_probe.as_deref())?;
             access_reports.preflight_volumes("content index")?;
-            if let Some(retry_probe) = retry_probe.as_ref() {
-                preflight_volume_access_scope(
-                    write_probe_path(retry_probe)?,
-                    AccessIntent::Write,
-                    "content index",
-                )?;
+            if let Some(report) = retry_probe_access_report.as_ref() {
+                report.preflight_volume("content index")?;
             }
-            let volume = access_reports.first_volume();
+            let volume = access_reports.first_volume().or_else(|| {
+                retry_probe_access_report
+                    .as_ref()
+                    .and_then(ForegroundContentIndexAccessReport::volume)
+            });
             let (records_len, inaccessible_len, indexed) =
                 run_retriable_volume_task_cancellable_with_payload_path(
                     volume,
@@ -81,9 +84,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         let records = records.clone();
                         let content = content.clone();
                         let retry_probe = retry_probe.clone();
+                        let retry_probe_access_report = retry_probe_access_report.clone();
                         cancellation.check()?;
-                        if let Some(retry_probe) = retry_probe.as_ref() {
+                        if let (Some(retry_probe), Some(retry_probe_access_report)) =
+                            (retry_probe.as_ref(), retry_probe_access_report.as_ref())
+                        {
                             fail_first_content_retry_probe_attempt(
+                                retry_probe_access_report,
                                 retry_probe,
                                 "content index",
                                 &cancellation,
@@ -322,15 +329,16 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 None
             };
             let access_reports = ContentSegmentIndexAccessReports::for_paths(&root, &output)?;
+            let retry_probe_access_report = retry_probe_access_report(retry_probe.as_deref())?;
             access_reports.preflight_volumes("content segment index")?;
-            if let Some(retry_probe) = retry_probe.as_ref() {
-                preflight_volume_access_scope(
-                    write_probe_path(retry_probe)?,
-                    AccessIntent::Write,
-                    "content segment index",
-                )?;
+            if let Some(report) = retry_probe_access_report.as_ref() {
+                report.preflight_volume("content segment index")?;
             }
-            let volume = access_reports.first_volume();
+            let volume = access_reports.first_volume().or_else(|| {
+                retry_probe_access_report
+                    .as_ref()
+                    .and_then(ForegroundContentIndexAccessReport::volume)
+            });
             let (inaccessible_len, indexed) =
                 run_retriable_volume_task_cancellable_with_payload_path(
                     volume,
@@ -341,9 +349,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         let root = root.clone();
                         let output = output.clone();
                         let retry_probe = retry_probe.clone();
+                        let retry_probe_access_report = retry_probe_access_report.clone();
                         cancellation.check()?;
-                        if let Some(retry_probe) = retry_probe.as_ref() {
+                        if let (Some(retry_probe), Some(retry_probe_access_report)) =
+                            (retry_probe.as_ref(), retry_probe_access_report.as_ref())
+                        {
                             fail_first_content_retry_probe_attempt(
+                                retry_probe_access_report,
                                 retry_probe,
                                 "content segment index",
                                 &cancellation,
@@ -860,14 +872,19 @@ fn run_extraction_report(
 ) -> Result<String> {
     let access_report =
         ForegroundContentIndexAccessReports::entry(path.clone(), AccessIntent::Read);
+    let retry_probe_access_report = retry_probe_access_report(retry_probe.as_deref())?;
     access_report.preflight_volume(worker)?;
     if matches!(fs::metadata(&path), Err(err) if err.kind() == io::ErrorKind::NotFound) {
         let _access = access_report.access_checked(worker, || Ok(()))?;
     }
-    if let Some(retry_probe) = retry_probe.as_ref() {
-        preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, worker)?;
+    if let Some(report) = retry_probe_access_report.as_ref() {
+        report.preflight_volume(worker)?;
     }
-    let volume = access_report.volume();
+    let volume = access_report.volume().or_else(|| {
+        retry_probe_access_report
+            .as_ref()
+            .and_then(ForegroundContentIndexAccessReport::volume)
+    });
     run_retriable_volume_task_cancellable_with_payload_path(
         volume,
         Priority::Visible,
@@ -877,9 +894,17 @@ fn run_extraction_report(
             let path = path.clone();
             let extractor = extractor.clone();
             let retry_probe = retry_probe.clone();
+            let retry_probe_access_report = retry_probe_access_report.clone();
             cancellation.check()?;
-            if let Some(retry_probe) = retry_probe.as_ref() {
-                fail_first_content_retry_probe_attempt(retry_probe, worker, &cancellation)?;
+            if let (Some(retry_probe), Some(retry_probe_access_report)) =
+                (retry_probe.as_ref(), retry_probe_access_report.as_ref())
+            {
+                fail_first_content_retry_probe_attempt(
+                    retry_probe_access_report,
+                    retry_probe,
+                    worker,
+                    &cancellation,
+                )?;
             }
             let _access = access_report.access_checked(worker, || cancellation.check())?;
             cancellation.check()?;
@@ -1207,18 +1232,10 @@ fn retain_index_footprint_archive_access_checked(
 fn preflight_index_footprint_archive_volumes_checked(
     paths: &[PathBuf],
     worker: &str,
-    mut check_control: impl FnMut() -> Result<()>,
+    check_control: impl FnMut() -> Result<()>,
 ) -> Result<()> {
-    for path in unique_path_refs(paths.iter().map(PathBuf::as_path)) {
-        check_control()?;
-        preflight_volume_access_scope(
-            path,
-            AccessIntent::Read,
-            &format!("{worker} content archive"),
-        )?;
-    }
-    check_control()?;
-    Ok(())
+    IndexFootprintAccessReports::for_archive_paths(paths, worker)
+        .preflight_volumes_checked(check_control)
 }
 
 fn index_footprint_paths_with_roles(spec: &IndexFootprintSpec) -> Vec<(&Path, &'static str)> {
@@ -1919,6 +1936,19 @@ impl ForegroundContentIndexAccessReports {
     }
 }
 
+fn retry_probe_access_report(
+    retry_probe: Option<&Path>,
+) -> Result<Option<ForegroundContentIndexAccessReport>> {
+    retry_probe
+        .map(|retry_probe| {
+            Ok(ForegroundContentIndexAccessReports::entry(
+                write_probe_path(retry_probe)?.to_path_buf(),
+                AccessIntent::Write,
+            ))
+        })
+        .transpose()
+}
+
 #[derive(Clone)]
 struct ContentSegmentsAccessReports {
     entries: Vec<ForegroundContentIndexAccessReport>,
@@ -2186,15 +2216,13 @@ fn content_input_file_exists_checked(
 }
 
 fn fail_first_content_retry_probe_attempt(
+    access_report: &ForegroundContentIndexAccessReport,
     attempt_state: &Path,
     worker: &str,
     cancellation: &Cancellation,
 ) -> Result<()> {
     cancellation.check()?;
-    let probe = write_probe_path(attempt_state)?.to_path_buf();
-    let _access = preflight_access_scope_checked(&probe, AccessIntent::Write, worker, || {
-        cancellation.check()
-    })?;
+    let _access = access_report.access_checked(worker, || cancellation.check())?;
     cancellation.check()?;
     let attempts =
         read_content_retry_probe_attempt_checked(attempt_state, || cancellation.check())?;
