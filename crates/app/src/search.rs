@@ -5,10 +5,7 @@ use crate::access::{
 use crate::content::run_content_search;
 use crate::extract::extraction_budget_profile;
 use crate::runtime::run_retriable_volume_task_cancellable_with_payload_path;
-use crate::{
-    parse_required_scheduling_pressure, parse_usize_arg, path_volume, required_path,
-    required_string,
-};
+use crate::{parse_required_scheduling_pressure, parse_usize_arg, required_path, required_string};
 use gfm_content::Extractor;
 use gfm_index::{
     Indexer, LiveIndex, SearchLookupBudget, SearchMetadataPosting, SearchPrefixPosting,
@@ -44,7 +41,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             } else {
                 None
             };
-            preflight_volume_access_scope(&root, AccessIntent::Index, "search")?;
+            let root_access = SearchRootAccessReport::new(root.clone());
+            root_access.preflight_volume("search")?;
             if let Some(retry_probe) = retry_probe.as_ref() {
                 preflight_volume_access_scope(
                     write_probe_path(retry_probe)?,
@@ -52,7 +50,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     "search",
                 )?;
             }
-            let volume = path_volume(&root);
+            let volume = root_access.volume();
             let hits = run_retriable_volume_task_cancellable_with_payload_path(
                 volume,
                 Priority::Visible,
@@ -62,6 +60,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     let root = root.clone();
                     let query = query.clone();
                     let retry_probe = retry_probe.clone();
+                    let root_access = root_access.clone();
                     cancellation.check()?;
                     if let Some(retry_probe) = retry_probe.as_ref() {
                         fail_first_search_retry_probe_attempt(
@@ -70,12 +69,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                             &cancellation,
                         )?;
                     }
-                    let _access = preflight_access_scope_checked(
-                        &root,
-                        AccessIntent::Index,
-                        "search",
-                        || cancellation.check(),
-                    )?;
+                    let _access = root_access.access_checked("search", || cancellation.check())?;
                     let parsed = SearchQuery::parse_cancellable(&query, &cancellation)?;
                     let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
                     let session = snapshot.query_session();
@@ -102,7 +96,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             } else {
                 None
             };
-            preflight_volume_access_scope(&root, AccessIntent::Index, "search stream")?;
+            let root_access = SearchRootAccessReport::new(root.clone());
+            root_access.preflight_volume("search stream")?;
             if let Some(retry_probe) = retry_probe.as_ref() {
                 preflight_volume_access_scope(
                     write_probe_path(retry_probe)?,
@@ -110,7 +105,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     "search stream",
                 )?;
             }
-            let volume = path_volume(&root);
+            let volume = root_access.volume();
             let batches = run_retriable_volume_task_cancellable_with_payload_path(
                 volume,
                 Priority::Visible,
@@ -120,6 +115,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     let root = root.clone();
                     let query = query.clone();
                     let retry_probe = retry_probe.clone();
+                    let root_access = root_access.clone();
                     cancellation.check()?;
                     if let Some(retry_probe) = retry_probe.as_ref() {
                         fail_first_search_retry_probe_attempt(
@@ -128,12 +124,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                             &cancellation,
                         )?;
                     }
-                    let _access = preflight_access_scope_checked(
-                        &root,
-                        AccessIntent::Index,
-                        "search stream",
-                        || cancellation.check(),
-                    )?;
+                    let _access =
+                        root_access.access_checked("search stream", || cancellation.check())?;
                     let parsed = SearchQuery::parse_cancellable(&query, &cancellation)?;
                     let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
                     let session = snapshot.query_session();
@@ -1365,6 +1357,51 @@ fn single_archive_access_guard(mut guards: Vec<ScopedAccessGuard>) -> Result<Sco
     guards.pop().ok_or_else(|| {
         GfmError::Format("archive access preflight did not produce a guard".to_string())
     })
+}
+
+#[derive(Clone)]
+struct SearchRootAccessReport {
+    path: PathBuf,
+    volume_report: VolumeDiscoveryReport,
+}
+
+impl SearchRootAccessReport {
+    fn new(path: PathBuf) -> Self {
+        let volume_report = VolumeDiscoveryReport::for_containing_path(&path);
+        Self {
+            path,
+            volume_report,
+        }
+    }
+
+    fn preflight_volume(&self, worker: &str) -> Result<()> {
+        preflight_volume_access_scope_with_report(
+            &self.path,
+            AccessIntent::Index,
+            worker,
+            &self.volume_report,
+        )
+    }
+
+    fn access_checked(
+        &self,
+        worker: &str,
+        check_control: impl FnMut() -> Result<()>,
+    ) -> Result<ScopedAccessGuard> {
+        preflight_access_scope_checked_with_volume_report(
+            &self.path,
+            AccessIntent::Index,
+            worker,
+            &self.volume_report,
+            check_control,
+        )
+    }
+
+    fn volume(&self) -> Option<VolumeId> {
+        self.volume_report
+            .volume_for_path(&self.path)
+            .map(|volume| volume.id)
+    }
 }
 
 fn run_content_archive_read_cancellable<T>(

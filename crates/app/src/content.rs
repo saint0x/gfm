@@ -155,29 +155,21 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let path = required_path(args.next(), "extract-worker-adaptive requires a path")?;
             let pressure = parse_required_scheduling_pressure(args, "extract worker")?;
             let _scratch_access = preflight_adaptive_extraction_worker_scratch()?;
-            let volume_path = path.clone();
+            let access_report =
+                ForegroundContentIndexAccessReports::entry(path.clone(), AccessIntent::Read);
+            let volume_report = access_report.clone();
             let outcome = run_scheduled_volume_task_cancellable_with_volume_and_payload_path(
                 Priority::Background,
                 "adaptive extraction",
                 pressure,
                 move || {
-                    preflight_volume_access_scope(
-                        &volume_path,
-                        AccessIntent::Read,
-                        "adaptive extraction",
-                    )?;
-                    Ok(detect_volume_id(&volume_path)
-                        .ok()
-                        .or_else(|| parent_volume(&volume_path)))
+                    volume_report.preflight_volume("adaptive extraction")?;
+                    Ok(volume_report.volume())
                 },
                 path.clone(),
                 move |cancellation| {
-                    let _access = preflight_access_scope_checked(
-                        &path,
-                        AccessIntent::Read,
-                        "adaptive extraction worker",
-                        || cancellation.check(),
-                    )?;
+                    let _access = access_report
+                        .access_checked("adaptive extraction worker", || cancellation.check())?;
                     run_adaptive_extraction_worker_cancellable(
                         &path,
                         pressure,
@@ -252,28 +244,19 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "quarantined adaptive extraction",
                 pressure,
                 move || {
-                    preflight_volume_access_scope(
-                        &volume_path,
-                        AccessIntent::Read,
-                        "quarantined adaptive extraction",
-                    )?;
-                    preflight_volume_access_scope(
-                        write_probe_path(&volume_store)?,
-                        AccessIntent::Write,
-                        "quarantined adaptive extraction",
-                    )?;
-                    Ok(detect_volume_id(&volume_path)
-                        .ok()
-                        .or_else(|| parent_volume(&volume_path)))
+                    let access_reports =
+                        ExtractionQuarantineAccessReports::for_paths(&volume_path, &volume_store)?;
+                    access_reports.preflight_volumes("quarantined adaptive extraction")?;
+                    Ok(access_reports.first_volume())
                 },
                 path.clone(),
                 move |cancellation| {
-                    let _access = retain_extraction_quarantine_access_checked(
-                        &path,
-                        &store,
-                        "quarantined adaptive extraction",
-                        || cancellation.check(),
-                    )?;
+                    let access_reports =
+                        ExtractionQuarantineAccessReports::for_paths(&path, &store)?;
+                    let _access = access_reports
+                        .access_checked("quarantined adaptive extraction", || {
+                            cancellation.check()
+                        })?;
                     run_quarantined_adaptive_extraction_worker_cancellable(
                         &path,
                         &store,
@@ -1600,33 +1583,50 @@ fn optional_recovery_store_exists_checked(
     Ok(exists)
 }
 
-fn retain_extraction_quarantine_access_checked(
-    path: &Path,
-    store: &Path,
-    worker: &str,
-    mut check_control: impl FnMut() -> Result<()>,
-) -> Result<Vec<ScopedAccessGuard>> {
-    check_control()?;
-    let store_probe = checked_write_probe_path(store)?.to_path_buf();
-    check_control()?;
-    Ok(vec![
-        preflight_access_scope_checked(path, AccessIntent::Read, worker, &mut check_control)?,
-        preflight_access_scope_checked(
-            &store_probe,
-            AccessIntent::Write,
-            worker,
-            &mut check_control,
-        )?,
-    ])
+#[derive(Clone)]
+struct ExtractionQuarantineAccessReports {
+    entries: [ForegroundContentIndexAccessReport; 2],
 }
 
-fn preflight_extraction_quarantine_volumes(path: &Path, store: &Path, worker: &str) -> Result<()> {
-    preflight_volume_access_scope(path, AccessIntent::Read, worker)?;
-    preflight_volume_access_scope(
-        checked_write_probe_path(store)?,
-        AccessIntent::Write,
-        worker,
-    )
+impl ExtractionQuarantineAccessReports {
+    fn for_paths(path: &Path, store: &Path) -> Result<Self> {
+        Ok(Self {
+            entries: [
+                ForegroundContentIndexAccessReports::entry(path.to_path_buf(), AccessIntent::Read),
+                ForegroundContentIndexAccessReports::entry(
+                    checked_write_probe_path(store)?.to_path_buf(),
+                    AccessIntent::Write,
+                ),
+            ],
+        })
+    }
+
+    fn preflight_volumes(&self, worker: &str) -> Result<()> {
+        for report in &self.entries {
+            report.preflight_volume(worker)?;
+        }
+        Ok(())
+    }
+
+    fn access_checked(
+        &self,
+        worker: &str,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<ScopedAccessGuard>> {
+        let mut guards = Vec::with_capacity(self.entries.len());
+        for report in &self.entries {
+            check_control()?;
+            guards.push(report.access_checked(worker, &mut check_control)?);
+        }
+        check_control()?;
+        Ok(guards)
+    }
+
+    fn first_volume(&self) -> Option<gfm_types::VolumeId> {
+        self.entries
+            .iter()
+            .find_map(ForegroundContentIndexAccessReport::volume)
+    }
 }
 
 fn run_extraction_quarantine(
@@ -1636,17 +1636,12 @@ fn run_extraction_quarantine(
     attempts: u32,
 ) -> Result<Vec<String>> {
     const WORKER: &str = "extraction quarantine";
-    preflight_extraction_quarantine_volumes(&path, &store, WORKER)?;
-    let store_probe = checked_write_probe_path(&store)?.to_path_buf();
-    let volume = detect_volume_id(&path)
-        .ok()
-        .or_else(|| parent_volume(&path))
-        .or_else(|| parent_volume(&store_probe));
+    let access_reports = ExtractionQuarantineAccessReports::for_paths(&path, &store)?;
+    access_reports.preflight_volumes(WORKER)?;
+    let volume = access_reports.first_volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = retain_extraction_quarantine_access_checked(&path, &store, WORKER, || {
-            cancellation.check()
-        })?;
+        let _access = access_reports.access_checked(WORKER, || cancellation.check())?;
         cancellation.check()?;
         let fingerprint = ExtractionFingerprint::for_path_checked(&path, || cancellation.check())?;
         let mut quarantine = ExtractionQuarantine::new(2);
