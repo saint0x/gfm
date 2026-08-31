@@ -1,16 +1,19 @@
+#[cfg(test)]
+use crate::access::preflight_access_scope_checked;
 use crate::access::{
-    preflight_access_scope_checked, preflight_volume_access_scope, ScopedAccessGuard,
+    preflight_access_scope_checked_with_volume_report, preflight_volume_access_scope_with_report,
+    ScopedAccessGuard,
 };
-use crate::{parent_volume, runtime::run_volume_task_cancellable};
+use crate::runtime::run_volume_task_cancellable;
 use gfm_jobs::Priority;
-use gfm_mac::AccessIntent;
+use gfm_mac::{AccessIntent, VolumeDiscoveryReport};
 use gfm_packaging::{
     build_app_bundle, notarize_app_bundle, register_launch_services, require_codesign_toolchain,
     require_release_xcode_toolchain, validate_release_artifact, AppBundle, AppBundleSpec,
     AppleToolchainReport, NotarizationCredentials, NotarizationSpec, NotarizationTicket,
     ReleaseArtifactReport, ReleaseArtifactSpec, ReleasePolicy, SigningIdentity,
 };
-use gfm_types::{GfmError, Result};
+use gfm_types::{GfmError, Result, VolumeId};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -140,12 +143,13 @@ fn print_toolchain_report(report: &AppleToolchainReport) {
 
 fn run_release_validate(spec: ReleaseArtifactSpec) -> Result<ReleaseArtifactReport> {
     const WORKER: &str = "release validate app";
-    preflight_volume_access_scope(&spec.app_path, AccessIntent::Read, WORKER)?;
-    let volume = parent_volume(&spec.app_path);
+    let access_report =
+        PackagingAccessReport::new(spec.app_path.clone(), AccessIntent::Read, WORKER);
+    access_report.preflight_volume()?;
+    let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access =
-            retain_packaging_read_access_checked(&spec.app_path, WORKER, || cancellation.check())?;
+        let _access = access_report.access_checked(|| cancellation.check())?;
         cancellation.check()?;
         if spec.require_signed || spec.require_notarized || spec.assess_gatekeeper {
             require_release_xcode_toolchain()?;
@@ -156,17 +160,12 @@ fn run_release_validate(spec: ReleaseArtifactSpec) -> Result<ReleaseArtifactRepo
 
 fn run_bundle_app(spec: AppBundleSpec) -> Result<AppBundle> {
     const WORKER: &str = "bundle app";
-    preflight_bundle_volumes(&spec)?;
-    let output_probe = write_probe_path(&spec.output_dir)?.to_path_buf();
-    let volume = parent_volume(&output_probe)
-        .or_else(|| parent_volume(&spec.executable))
-        .or_else(|| parent_volume(&spec.icon));
+    let access_reports = PackagingAccessReports::bundle(&spec)?;
+    access_reports.preflight_volumes()?;
+    let volume = access_reports.first_volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access =
-            retain_bundle_access_checked(&spec.executable, &spec.icon, &spec.output_dir, || {
-                cancellation.check()
-            })?;
+        let _access = access_reports.access_checked(|| cancellation.check())?;
         cancellation.check()?;
         if spec.signing_identity != SigningIdentity::Unsigned {
             require_codesign_toolchain()?;
@@ -177,14 +176,12 @@ fn run_bundle_app(spec: AppBundleSpec) -> Result<AppBundle> {
 
 fn run_register_app(app_path: PathBuf) -> Result<()> {
     const WORKER: &str = "register app";
-    preflight_volume_access_scope(&app_path, AccessIntent::Operate, WORKER)?;
-    let volume = parent_volume(&app_path);
+    let access_report = PackagingAccessReport::new(app_path.clone(), AccessIntent::Operate, WORKER);
+    access_report.preflight_volume()?;
+    let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access =
-            preflight_access_scope_checked(&app_path, AccessIntent::Operate, WORKER, || {
-                cancellation.check()
-            })?;
+        let _access = access_report.access_checked(|| cancellation.check())?;
         cancellation.check()?;
         register_launch_services(&app_path)
     })
@@ -192,23 +189,139 @@ fn run_register_app(app_path: PathBuf) -> Result<()> {
 
 fn run_notarize_app(spec: NotarizationSpec) -> Result<NotarizationTicket> {
     const WORKER: &str = "notarize app";
-    preflight_notarize_volumes(&spec)?;
-    let output_probe = write_probe_path(&spec.output_dir)?.to_path_buf();
-    let volume = parent_volume(&output_probe).or_else(|| parent_volume(&spec.app_path));
+    let access_reports = PackagingAccessReports::notarize(&spec)?;
+    access_reports.preflight_volumes()?;
+    let volume = access_reports.first_volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = retain_notarize_access_checked(
-            &spec.app_path,
-            &spec.output_dir,
-            &spec.credentials,
-            || cancellation.check(),
-        )?;
+        let _access = access_reports.access_checked(|| cancellation.check())?;
         cancellation.check()?;
         require_release_xcode_toolchain()?;
         notarize_app_bundle(&spec)
     })
 }
 
+#[derive(Clone)]
+struct PackagingAccessReport {
+    path: PathBuf,
+    intent: AccessIntent,
+    worker: &'static str,
+    volume_report: VolumeDiscoveryReport,
+}
+
+impl PackagingAccessReport {
+    fn new(path: PathBuf, intent: AccessIntent, worker: &'static str) -> Self {
+        let volume_report = VolumeDiscoveryReport::for_containing_path(&path);
+        Self {
+            path,
+            intent,
+            worker,
+            volume_report,
+        }
+    }
+
+    fn preflight_volume(&self) -> Result<()> {
+        preflight_volume_access_scope_with_report(
+            &self.path,
+            self.intent,
+            self.worker,
+            &self.volume_report,
+        )
+    }
+
+    fn access_checked(
+        &self,
+        check_control: impl FnMut() -> Result<()>,
+    ) -> Result<ScopedAccessGuard> {
+        preflight_access_scope_checked_with_volume_report(
+            &self.path,
+            self.intent,
+            self.worker,
+            &self.volume_report,
+            check_control,
+        )
+    }
+
+    fn volume(&self) -> Option<VolumeId> {
+        self.volume_report
+            .volume_for_path(&self.path)
+            .map(|volume| volume.id)
+    }
+}
+
+#[derive(Clone)]
+struct PackagingAccessReports {
+    entries: Vec<PackagingAccessReport>,
+}
+
+impl PackagingAccessReports {
+    fn bundle(spec: &AppBundleSpec) -> Result<Self> {
+        Ok(Self {
+            entries: vec![
+                PackagingAccessReport::new(
+                    spec.executable.clone(),
+                    AccessIntent::Read,
+                    "bundle app executable",
+                ),
+                PackagingAccessReport::new(
+                    spec.icon.clone(),
+                    AccessIntent::Read,
+                    "bundle app icon",
+                ),
+                PackagingAccessReport::new(
+                    write_probe_path(&spec.output_dir)?.to_path_buf(),
+                    AccessIntent::Write,
+                    "bundle app output",
+                ),
+            ],
+        })
+    }
+
+    fn notarize(spec: &NotarizationSpec) -> Result<Self> {
+        let mut entries = vec![
+            PackagingAccessReport::new(spec.app_path.clone(), AccessIntent::Read, "notarize app"),
+            PackagingAccessReport::new(
+                write_probe_path(&spec.output_dir)?.to_path_buf(),
+                AccessIntent::Write,
+                "notarize output",
+            ),
+        ];
+        if let NotarizationCredentials::ApiKey { key_path, .. } = &spec.credentials {
+            entries.push(PackagingAccessReport::new(
+                key_path.clone(),
+                AccessIntent::Read,
+                "notarize api key",
+            ));
+        }
+        Ok(Self { entries })
+    }
+
+    fn preflight_volumes(&self) -> Result<()> {
+        for entry in &self.entries {
+            entry.preflight_volume()?;
+        }
+        Ok(())
+    }
+
+    fn access_checked(
+        &self,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<ScopedAccessGuard>> {
+        let mut guards = Vec::with_capacity(self.entries.len());
+        for entry in &self.entries {
+            check_control()?;
+            guards.push(entry.access_checked(&mut check_control)?);
+        }
+        check_control()?;
+        Ok(guards)
+    }
+
+    fn first_volume(&self) -> Option<VolumeId> {
+        self.entries.iter().find_map(PackagingAccessReport::volume)
+    }
+}
+
+#[cfg(test)]
 fn retain_packaging_read_access_checked(
     path: &Path,
     worker: &str,
@@ -217,20 +330,7 @@ fn retain_packaging_read_access_checked(
     preflight_access_scope_checked(path, AccessIntent::Read, worker, check_control)
 }
 
-fn preflight_bundle_volumes(spec: &AppBundleSpec) -> Result<()> {
-    preflight_volume_access_scope(
-        &spec.executable,
-        AccessIntent::Read,
-        "bundle app executable",
-    )?;
-    preflight_volume_access_scope(&spec.icon, AccessIntent::Read, "bundle app icon")?;
-    preflight_volume_access_scope(
-        write_probe_path(&spec.output_dir)?,
-        AccessIntent::Write,
-        "bundle app output",
-    )
-}
-
+#[cfg(test)]
 fn retain_bundle_access_checked(
     executable: &Path,
     icon: &Path,
@@ -256,19 +356,7 @@ fn retain_bundle_access_checked(
     ])
 }
 
-fn preflight_notarize_volumes(spec: &NotarizationSpec) -> Result<()> {
-    preflight_volume_access_scope(&spec.app_path, AccessIntent::Read, "notarize app")?;
-    preflight_volume_access_scope(
-        write_probe_path(&spec.output_dir)?,
-        AccessIntent::Write,
-        "notarize output",
-    )?;
-    if let NotarizationCredentials::ApiKey { key_path, .. } = &spec.credentials {
-        preflight_volume_access_scope(key_path, AccessIntent::Read, "notarize api key")?;
-    }
-    Ok(())
-}
-
+#[cfg(test)]
 fn retain_notarize_access_checked(
     app_path: &Path,
     output_dir: &Path,
