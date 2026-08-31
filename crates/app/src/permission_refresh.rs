@@ -1,8 +1,8 @@
 use crate::runtime::default_permission_state_path;
 use gfm_mac::{
-    current_permission_onboarding, AccessIntent, MountState, PermissionStateInvalidationReport,
-    PermissionStateSnapshot, SecurityDecisionAction, SecurityScopedAccessReport,
-    VolumeDiscoveryReport,
+    current_permission_onboarding_checked, AccessIntent, MountState,
+    PermissionStateInvalidationReport, PermissionStateSnapshot, SecurityDecisionAction,
+    SecurityScopedAccessReport, VolumeDiscoveryReport,
 };
 use gfm_types::{GfmError, Result};
 use std::fs;
@@ -105,7 +105,9 @@ pub(crate) fn refresh_permission_state_at_path_with_report_checked(
         None
     };
     check_control()?;
-    let current = PermissionStateSnapshot::from_plan(&current_permission_onboarding()?);
+    let current = PermissionStateSnapshot::from_plan(&current_permission_onboarding_checked(
+        &mut check_control,
+    )?);
     let report = PermissionStateInvalidationReport::evaluate(previous.as_ref(), &current);
     check_control()?;
     current.write_checked(path, &mut check_control)?;
@@ -469,6 +471,41 @@ mod tests {
         assert_eq!(err, GfmError::Cancelled);
         assert!(checks >= 5);
         assert!(!state.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn refresh_state_preserves_snapshot_when_cancelled_during_current_onboarding() {
+        let root = unique_temp_dir("gfm-permission-refresh-onboarding-cancel");
+        let state = root.join("permission-state.tsv");
+        let snapshot = PermissionStateSnapshot {
+            readiness: vec![PermissionReadiness {
+                scope: PermissionScope::Documents,
+                path: root.join("Documents"),
+                state: PermissionState::Granted,
+                reason: "previous readable snapshot".to_string(),
+            }],
+        };
+        snapshot.write(&state).unwrap();
+        let before = fs::read(&state).unwrap();
+        let report = VolumeDiscoveryReport {
+            volumes: Vec::new(),
+        };
+        let mut checks = 0usize;
+
+        let err =
+            refresh_permission_state_at_path_with_report_checked(&state, &root, &report, || {
+                checks += 1;
+                if checks >= 5 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert_eq!(fs::read(&state).unwrap(), before);
         fs::remove_dir_all(root).unwrap();
     }
 

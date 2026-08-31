@@ -33,7 +33,8 @@ pub use icon::{
     NativeIconInvalidationReport, NativeIconProvider, NativeIconRole,
 };
 pub use permissions::{
-    current_permission_onboarding, PermissionAction, PermissionOnboardingPlan, PermissionPolicy,
+    current_permission_onboarding, current_permission_onboarding_checked, permission_onboarding,
+    permission_onboarding_checked, PermissionAction, PermissionOnboardingPlan, PermissionPolicy,
     PermissionPromptMode, PermissionReadiness, PermissionScope, PermissionScopeChange,
     PermissionScopeChangeKind, PermissionState, PermissionStateInvalidationReport,
     PermissionStateSnapshot,

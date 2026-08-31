@@ -451,17 +451,41 @@ fn permission_change_kind(
 }
 
 pub fn current_permission_onboarding() -> Result<PermissionOnboardingPlan> {
-    permission_onboarding(PermissionPolicy::default(), default_permission_roots()?)
+    current_permission_onboarding_checked(|| Ok(()))
+}
+
+pub fn current_permission_onboarding_checked(
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<PermissionOnboardingPlan> {
+    check_control()?;
+    let roots = default_permission_roots_checked(&mut check_control)?;
+    check_control()?;
+    permission_onboarding_checked(PermissionPolicy::default(), roots, check_control)
 }
 
 pub fn permission_onboarding(
     policy: PermissionPolicy,
     roots: Vec<(PermissionScope, PathBuf)>,
 ) -> Result<PermissionOnboardingPlan> {
+    permission_onboarding_checked(policy, roots, || Ok(()))
+}
+
+pub fn permission_onboarding_checked(
+    policy: PermissionPolicy,
+    roots: Vec<(PermissionScope, PathBuf)>,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<PermissionOnboardingPlan> {
+    check_control()?;
     let readiness = roots
         .into_iter()
-        .map(|(scope, path)| probe_scope(scope, path))
-        .collect::<Vec<_>>();
+        .map(|(scope, path)| {
+            check_control()?;
+            let readiness = probe_scope_checked(scope, path, &mut check_control)?;
+            check_control()?;
+            Ok(readiness)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    check_control()?;
     let denied = readiness
         .iter()
         .any(|item| item.state == PermissionState::Denied);
@@ -490,10 +514,14 @@ pub fn permission_onboarding(
     })
 }
 
-fn default_permission_roots() -> Result<Vec<(PermissionScope, PathBuf)>> {
+fn default_permission_roots_checked(
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Vec<(PermissionScope, PathBuf)>> {
+    check_control()?;
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or_else(|| GfmError::Format("HOME is not set".to_string()))?;
+    check_control()?;
     Ok(vec![
         (PermissionScope::Desktop, home.join("Desktop")),
         (PermissionScope::Documents, home.join("Documents")),
@@ -510,32 +538,37 @@ fn default_permission_roots() -> Result<Vec<(PermissionScope, PathBuf)>> {
     ])
 }
 
-fn probe_scope(scope: PermissionScope, path: PathBuf) -> PermissionReadiness {
+fn probe_scope_checked(
+    scope: PermissionScope,
+    path: PathBuf,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<PermissionReadiness> {
+    check_control()?;
     match fs::read_dir(&path) {
-        Ok(_) => PermissionReadiness {
+        Ok(_) => Ok(PermissionReadiness {
             scope,
             path,
             state: PermissionState::Granted,
             reason: "readable".to_string(),
-        },
-        Err(err) if err.kind() == ErrorKind::NotFound => PermissionReadiness {
+        }),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(PermissionReadiness {
             scope,
             path,
             state: PermissionState::Missing,
             reason: "path is not present on this host".to_string(),
-        },
-        Err(err) if err.kind() == ErrorKind::PermissionDenied => PermissionReadiness {
+        }),
+        Err(err) if err.kind() == ErrorKind::PermissionDenied => Ok(PermissionReadiness {
             scope,
             path,
             state: PermissionState::Denied,
             reason: "macOS denied read access".to_string(),
-        },
-        Err(err) => PermissionReadiness {
+        }),
+        Err(err) => Ok(PermissionReadiness {
             scope,
             path,
             state: PermissionState::Unavailable,
             reason: format!("permission probe unavailable: {err}"),
-        },
+        }),
     }
 }
 
@@ -683,6 +716,44 @@ mod tests {
         assert_eq!(plan.action, PermissionAction::ContinueNormally);
         assert!(plan.granted_for_machine_search());
         assert_eq!(plan.readiness[0].state, PermissionState::Missing);
+    }
+
+    #[test]
+    fn checked_current_permission_onboarding_honors_pre_cancelled_control() {
+        let err = current_permission_onboarding_checked(|| Err(GfmError::Cancelled)).unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+    }
+
+    #[test]
+    fn checked_permission_onboarding_can_cancel_between_scope_probes() {
+        let root = temp_root("permissions-checked-cancel");
+        let desktop = root.join("Desktop");
+        let documents = root.join("Documents");
+        fs::create_dir_all(&desktop).unwrap();
+        fs::create_dir_all(&documents).unwrap();
+        let mut checks = 0usize;
+
+        let err = permission_onboarding_checked(
+            PermissionPolicy::default(),
+            vec![
+                (PermissionScope::Desktop, desktop),
+                (PermissionScope::Documents, documents),
+            ],
+            || {
+                checks += 1;
+                if checks >= 4 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert!(checks >= 4);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1199,7 +1270,8 @@ mod tests {
         let root = temp_root("permissions-probe-unavailable");
         let path = root.join("permission-probe-unavailable".repeat(64));
 
-        let readiness = probe_scope(PermissionScope::Documents, path.clone());
+        let readiness =
+            probe_scope_checked(PermissionScope::Documents, path.clone(), || Ok(())).unwrap();
 
         assert_eq!(readiness.scope, PermissionScope::Documents);
         assert_eq!(readiness.path, path);
