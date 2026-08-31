@@ -156,10 +156,16 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "ui-permission-refresh-compare-contract requires a current state path",
             )?;
-            let previous_access_report =
-                InterfaceAccessReport::new(previous_path.clone(), AccessIntent::Read);
-            let current_access_report =
-                InterfaceAccessReport::new(current_path.clone(), AccessIntent::Read);
+            let previous_access_report = InterfaceAccessReport::new_checked(
+                previous_path.clone(),
+                AccessIntent::Read,
+                || Ok(()),
+            )?;
+            let current_access_report = InterfaceAccessReport::new_checked(
+                current_path.clone(),
+                AccessIntent::Read,
+                || Ok(()),
+            )?;
             previous_access_report.preflight_volume("ui permission refresh previous state")?;
             current_access_report.preflight_volume("ui permission refresh current state")?;
             let _previous_access = previous_access_report
@@ -569,7 +575,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             let viewport_rows = optional_u16(args.next(), "viewport-rows", 24)?;
             let scroll_row = optional_u32(args.next(), "scroll-row", 0)?;
-            let access_report = InterfaceAccessReport::new(root.clone(), AccessIntent::Index);
+            let access_report =
+                InterfaceAccessReport::new_checked(root.clone(), AccessIntent::Index, || Ok(()))?;
             access_report.preflight_volume("ui search")?;
             let volume = access_report.volume();
             let query_for_worker = query.clone();
@@ -631,7 +638,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let root = required_path(args.next(), "package-traversal requires a root path")?;
             let mode = parse_package_traversal_mode(args.next().as_deref())?;
             let options = ScanOptions::default().with_package_traversal(mode);
-            let access_report = InterfaceAccessReport::new(root.clone(), AccessIntent::Read);
+            let access_report =
+                InterfaceAccessReport::new_checked(root.clone(), AccessIntent::Read, || Ok(()))?;
             access_report.preflight_volume("package traversal")?;
             let volume = access_report.volume();
             let options_for_worker = options.clone();
@@ -994,8 +1002,12 @@ fn retain_fileprovider_event_access_checked(
     for path in unique_fileprovider_paths(paths.iter().map(PathBuf::as_path)) {
         check_control()?;
         guards.push(
-            InterfaceAccessReport::new(path.to_path_buf(), AccessIntent::Read)
-                .access_checked(worker, &mut check_control)?,
+            InterfaceAccessReport::new_checked(
+                path.to_path_buf(),
+                AccessIntent::Read,
+                &mut check_control,
+            )?
+            .access_checked(worker, &mut check_control)?,
         );
     }
     check_control()?;
@@ -1106,11 +1118,6 @@ struct InterfaceAccessReport {
 }
 
 impl InterfaceAccessReport {
-    fn new(path: PathBuf, intent: AccessIntent) -> Self {
-        Self::new_checked(path, intent, || Ok(()))
-            .expect("uncancellable interface access report cannot cancel")
-    }
-
     fn new_checked(
         path: PathBuf,
         intent: AccessIntent,
@@ -1163,13 +1170,18 @@ struct InterfaceAccessReports {
 }
 
 impl InterfaceAccessReports {
-    fn read_paths<'a>(paths: impl IntoIterator<Item = &'a Path>) -> Self {
-        Self {
-            entries: paths
-                .into_iter()
-                .map(|path| InterfaceAccessReport::new(path.to_path_buf(), AccessIntent::Read))
-                .collect(),
-        }
+    fn read_paths<'a>(paths: impl IntoIterator<Item = &'a Path>) -> Result<Self> {
+        let entries = paths
+            .into_iter()
+            .map(|path| {
+                InterfaceAccessReport::new_checked(
+                    path.to_path_buf(),
+                    AccessIntent::Read,
+                    || Ok(()),
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self { entries })
     }
 
     fn preflight_volumes(&self, worker: &str) -> Result<()> {
@@ -1210,7 +1222,8 @@ fn ui_fileprovider_state_file_exists(path: &Path, worker: &str) -> Result<bool> 
 }
 
 fn read_directory_with_access(path: &Path, worker: &'static str) -> Result<DirectoryPage> {
-    let access_report = InterfaceAccessReport::new(path.to_path_buf(), AccessIntent::Read);
+    let access_report =
+        InterfaceAccessReport::new_checked(path.to_path_buf(), AccessIntent::Read, || Ok(()))?;
     access_report.preflight_volume(worker)?;
     let volume = access_report.volume();
     let path = access_report.path.clone();
@@ -1237,7 +1250,8 @@ fn read_ui_restorable_progress_snapshots(path: &Path) -> Result<Vec<JobProgressS
 
 fn read_ui_payload_records(path: &Path) -> Result<HashMap<JobId, JobPayloadRecord>> {
     const WORKER: &str = "ui payload catalog";
-    let access_report = InterfaceAccessReport::new(path.to_path_buf(), AccessIntent::Read);
+    let access_report =
+        InterfaceAccessReport::new_checked(path.to_path_buf(), AccessIntent::Read, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
     let path = access_report.path.clone();
@@ -1279,7 +1293,8 @@ fn read_ui_progress_snapshots_with(
     read: fn(&JobProgressStore) -> Result<Vec<JobProgressSnapshot>>,
 ) -> Result<Vec<JobProgressSnapshot>> {
     const WORKER: &str = "ui progress store";
-    let access_report = InterfaceAccessReport::new(path.to_path_buf(), AccessIntent::Read);
+    let access_report =
+        InterfaceAccessReport::new_checked(path.to_path_buf(), AccessIntent::Read, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
     let path = access_report.path.clone();
@@ -1301,7 +1316,10 @@ fn read_ui_operation_conflicts(
     store: &crate::runtime::OperationConflictStore,
 ) -> Result<Vec<crate::runtime::RuntimeOperationConflict>> {
     const WORKER: &str = "ui operation conflict store";
-    let access_report = InterfaceAccessReport::new(store.path().to_path_buf(), AccessIntent::Read);
+    let access_report =
+        InterfaceAccessReport::new_checked(store.path().to_path_buf(), AccessIntent::Read, || {
+            Ok(())
+        })?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
     let path = access_report.path.clone();
@@ -1325,10 +1343,11 @@ fn resolve_ui_operation_conflict(
     policy: ConflictPolicy,
 ) -> Result<(crate::runtime::RuntimeOperationConflict, PathBuf)> {
     const WORKER: &str = "ui operation conflict resolve";
-    let access_report = InterfaceAccessReport::new(
+    let access_report = InterfaceAccessReport::new_checked(
         write_probe_path(&store_path)?.to_path_buf(),
         AccessIntent::Write,
-    );
+        || Ok(()),
+    )?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
     crate::runtime::run_volume_task_cancellable(
@@ -1354,12 +1373,13 @@ fn run_ui_fileprovider_observed_invalidation(
 ) -> Result<FileProviderObservedInvalidation> {
     const WORKER: &str = "ui fileprovider sidebar observed invalidation";
     let state_probe = write_probe_existing_ancestor(&state_path)?;
-    let state_access_report = InterfaceAccessReport::new(state_probe, AccessIntent::Write);
+    let state_access_report =
+        InterfaceAccessReport::new_checked(state_probe, AccessIntent::Write, || Ok(()))?;
     state_access_report.preflight_volume(WORKER)?;
     let raw_paths = fileprovider_raw_event_paths(&event);
     let raw_event_access_reports = InterfaceAccessReports::read_paths(unique_fileprovider_paths(
         raw_paths.iter().map(PathBuf::as_path),
-    ));
+    ))?;
     raw_event_access_reports.preflight_volumes(WORKER)?;
     let volume = state_access_report
         .volume()
@@ -1384,7 +1404,7 @@ fn run_ui_fileprovider_observed_invalidation(
             let event_access_paths = fileprovider_event_access_paths(&event, previous.as_ref())?;
             let event_access_reports = InterfaceAccessReports::read_paths(
                 unique_fileprovider_paths(event_access_paths.iter().map(PathBuf::as_path)),
-            );
+            )?;
             access.extend(event_access_reports.access_checked(WORKER, || cancellation.check())?);
             cancellation.check()?;
             let (observed, snapshot) =
@@ -1863,7 +1883,8 @@ fn parse_package_traversal_mode(value: Option<&str>) -> Result<PackageTraversalM
 
 fn read_trash_restore_metadata(path: &Path) -> Result<BTreeMap<String, TrashEntryMetadata>> {
     const WORKER: &str = "ui trash metadata";
-    let access_report = InterfaceAccessReport::new(path.to_path_buf(), AccessIntent::Read);
+    let access_report =
+        InterfaceAccessReport::new_checked(path.to_path_buf(), AccessIntent::Read, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
     let path = access_report.path.clone();
@@ -1882,7 +1903,8 @@ fn read_trash_restore_metadata(path: &Path) -> Result<BTreeMap<String, TrashEntr
 
 fn read_finder_metadata(path: PathBuf) -> Result<FinderMetadataReport> {
     const WORKER: &str = "finder metadata";
-    let access_report = InterfaceAccessReport::new(path.clone(), AccessIntent::Read);
+    let access_report =
+        InterfaceAccessReport::new_checked(path.clone(), AccessIntent::Read, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
     crate::runtime::run_volume_task_cancellable(
