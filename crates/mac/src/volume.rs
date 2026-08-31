@@ -203,13 +203,27 @@ impl VolumeDescriptor {
     }
 
     pub fn for_path(path: impl AsRef<Path>) -> Result<Self> {
+        Self::for_path_checked(path, || Ok(()))
+    }
+
+    pub fn for_path_checked(
+        path: impl AsRef<Path>,
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check()?;
         let path = path.as_ref().to_path_buf();
+        check()?;
         let metadata = fs::metadata(&path).map_err(|err| GfmError::io(&path, err))?;
+        check()?;
         let id = volume_id(&metadata);
         let marker = marker_kind(&path);
+        check()?;
         let native = Some(gfm_mac_sys::copy_volume_description_for_path(&path));
+        check()?;
         let resource = Some(gfm_mac_sys::copy_volume_resource_values(&path));
+        check()?;
         let mount_table = Some(gfm_mac_sys::copy_volume_mount_table_entry(&path));
+        check()?;
         let native_status = native.as_ref().map(|native| native.status);
         let resource_status = resource.as_ref().map(|resource| resource.status);
         let mount_table_status = mount_table.as_ref().map(|mount_table| mount_table.status);
@@ -657,7 +671,7 @@ impl VolumeDiscoveryReport {
         let mut volumes = Vec::with_capacity(paths.len());
         for path in paths {
             check()?;
-            volumes.push(VolumeDescriptor::for_path(path)?);
+            volumes.push(VolumeDescriptor::for_path_checked(path, &mut check)?);
             check()?;
         }
         normalize_discovered_volumes(&mut volumes);
@@ -693,7 +707,7 @@ impl VolumeDiscoveryReport {
         let mut volumes = Vec::with_capacity(paths.len());
         for path in paths {
             check()?;
-            volumes.push(VolumeDescriptor::for_path(path)?);
+            volumes.push(VolumeDescriptor::for_path_checked(path, &mut check)?);
         }
         check()?;
         normalize_discovered_volumes(&mut volumes);
@@ -1873,7 +1887,7 @@ fn operation_volume_for_path_checked(
         return Ok(volume);
     }
     check()?;
-    VolumeDescriptor::for_path(path)
+    VolumeDescriptor::for_path_checked(path, check)
 }
 
 fn operation_targets_volume_root(path: &Path, volume_path: &Path) -> bool {
@@ -3385,6 +3399,37 @@ mod tests {
         assert_eq!(volume.kind, VolumeKind::Network);
 
         fs::remove_dir_all(volume.path.clone()).unwrap();
+    }
+
+    #[test]
+    fn checked_volume_descriptor_honors_pre_cancelled_work_before_metadata() {
+        let root = unique_temp_dir("gfm-volume-descriptor-pre-cancelled");
+
+        let err =
+            VolumeDescriptor::for_path_checked(&root, || Err(GfmError::Cancelled)).unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn checked_volume_descriptor_can_cancel_before_native_description_probe() {
+        let root = unique_temp_dir("gfm-volume-descriptor-native-cancelled");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let mut checks = 0;
+
+        let err = VolumeDescriptor::for_path_checked(&root, || {
+            checks += 1;
+            if checks >= 4 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
