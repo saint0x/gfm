@@ -285,11 +285,6 @@ struct ManifestAccessReport {
 }
 
 impl ManifestAccessReport {
-    fn new(path: PathBuf, intent: AccessIntent, worker: &'static str) -> Self {
-        Self::new_checked(path, intent, worker, || Ok(()))
-            .expect("uncancellable manifest access report cannot cancel")
-    }
-
     fn new_checked(
         path: PathBuf,
         intent: AccessIntent,
@@ -354,11 +349,12 @@ impl ManifestAccessReports {
         worker: &'static str,
     ) -> Result<Self> {
         let mut entries = Vec::with_capacity(candidates.len() + 1);
-        entries.push(ManifestAccessReport::new(
+        entries.push(ManifestAccessReport::new_checked(
             manifest_path.to_path_buf(),
             AccessIntent::Read,
             worker,
-        ));
+            || Ok(()),
+        )?);
         for candidate in candidates {
             entries.push(Self::cleanup_candidate_entry(
                 manifest_path,
@@ -406,17 +402,19 @@ impl ManifestAccessReports {
         archives: &[ContentArchiveManifestEntry],
     ) -> Result<Self> {
         let mut entries = Vec::with_capacity(archives.len() + 1);
-        entries.push(ManifestAccessReport::new(
+        entries.push(ManifestAccessReport::new_checked(
             write_probe_path(manifest_path)?.to_path_buf(),
             AccessIntent::Write,
             "content manifest write",
-        ));
+            || Ok(()),
+        )?);
         for archive in archives {
-            entries.push(ManifestAccessReport::new(
+            entries.push(ManifestAccessReport::new_checked(
                 resolve_manifest_path(manifest_path, &archive.path),
                 AccessIntent::Read,
                 "content manifest write archive",
-            ));
+                || Ok(()),
+            )?);
         }
         Ok(Self::new(entries))
     }
@@ -426,18 +424,20 @@ impl ManifestAccessReports {
         discovered: &[ContentArchiveManifestEntry],
     ) -> Result<Self> {
         let mut entries = Vec::with_capacity(discovered.len() + 1);
-        entries.push(ManifestAccessReport::new(
+        entries.push(ManifestAccessReport::new_checked(
             existing_read_probe_path(manifest_path)?.to_path_buf(),
             AccessIntent::Read,
             "content manifest recovery plan",
-        ));
+            || Ok(()),
+        )?);
         for entry in discovered {
-            entries.push(ManifestAccessReport::new(
+            entries.push(ManifestAccessReport::new_checked(
                 existing_read_probe_path(&resolve_manifest_path(manifest_path, &entry.path))?
                     .to_path_buf(),
                 AccessIntent::Read,
                 "content manifest recovery discovered archive",
-            ));
+                || Ok(()),
+            )?);
         }
         Ok(Self::new(entries))
     }
@@ -448,16 +448,18 @@ impl ManifestAccessReports {
         discovered: &[ContentArchiveManifestEntry],
     ) -> Result<Self> {
         let mut entries = Self::recovery_plan_for_paths(manifest_path, discovered)?.entries;
-        entries.push(ManifestAccessReport::new(
+        entries.push(ManifestAccessReport::new_checked(
             write_probe_path(manifest_path)?.to_path_buf(),
             AccessIntent::Write,
             "content manifest recovery manifest",
-        ));
-        entries.push(ManifestAccessReport::new(
+            || Ok(()),
+        )?);
+        entries.push(ManifestAccessReport::new_checked(
             write_probe_path(quarantine)?.to_path_buf(),
             AccessIntent::Write,
             "content manifest recovery quarantine",
-        ));
+            || Ok(()),
+        )?);
         Ok(Self::new(entries))
     }
 
@@ -467,28 +469,32 @@ impl ManifestAccessReports {
         retired_paths: &[PathBuf],
     ) -> Result<Self> {
         let mut entries = Vec::with_capacity(retired_paths.len() + 3);
-        entries.push(ManifestAccessReport::new(
+        entries.push(ManifestAccessReport::new_checked(
             manifest_path.to_path_buf(),
             AccessIntent::Read,
             "content manifest promotion manifest",
-        ));
-        entries.push(ManifestAccessReport::new(
+            || Ok(()),
+        )?);
+        entries.push(ManifestAccessReport::new_checked(
             write_probe_path(manifest_path)?.to_path_buf(),
             AccessIntent::Write,
             "content manifest promotion manifest",
-        ));
-        entries.push(ManifestAccessReport::new(
+            || Ok(()),
+        )?);
+        entries.push(ManifestAccessReport::new_checked(
             resolve_manifest_path(manifest_path, &new_archive.path),
             AccessIntent::Read,
             "content manifest promotion archive",
-        ));
+            || Ok(()),
+        )?);
         for path in retired_paths {
-            entries.push(ManifestAccessReport::new(
+            entries.push(ManifestAccessReport::new_checked(
                 existing_read_probe_path(&resolve_manifest_path(manifest_path, path))?
                     .to_path_buf(),
                 AccessIntent::Read,
                 "content manifest promotion retirement",
-            ));
+                || Ok(()),
+            )?);
         }
         Ok(Self::new(entries))
     }
@@ -496,42 +502,48 @@ impl ManifestAccessReports {
     fn promotion_recovery_plan_for_path(manifest_path: &Path) -> Result<Self> {
         let journal_path = content_manifest_promotion_journal_path(manifest_path);
         Ok(Self::new(vec![
-            ManifestAccessReport::new(
+            ManifestAccessReport::new_checked(
                 manifest_path.to_path_buf(),
                 AccessIntent::Read,
                 "content manifest promotion recovery plan",
-            ),
-            ManifestAccessReport::new(
+                || Ok(()),
+            )?,
+            ManifestAccessReport::new_checked(
                 existing_read_probe_path(&journal_path)?.to_path_buf(),
                 AccessIntent::Read,
                 "content manifest promotion recovery journal",
-            ),
+                || Ok(()),
+            )?,
         ]))
     }
 
     fn promotion_recovery_for_path(manifest_path: &Path) -> Result<Self> {
         let journal_path = content_manifest_promotion_journal_path(manifest_path);
         Ok(Self::new(vec![
-            ManifestAccessReport::new(
+            ManifestAccessReport::new_checked(
                 manifest_path.to_path_buf(),
                 AccessIntent::Read,
                 "content manifest promotion recovery",
-            ),
-            ManifestAccessReport::new(
+                || Ok(()),
+            )?,
+            ManifestAccessReport::new_checked(
                 write_probe_path(manifest_path)?.to_path_buf(),
                 AccessIntent::Write,
                 "content manifest promotion recovery",
-            ),
-            ManifestAccessReport::new(
+                || Ok(()),
+            )?,
+            ManifestAccessReport::new_checked(
                 existing_read_probe_path(&journal_path)?.to_path_buf(),
                 AccessIntent::Read,
                 "content manifest promotion recovery journal",
-            ),
-            ManifestAccessReport::new(
+                || Ok(()),
+            )?,
+            ManifestAccessReport::new_checked(
                 write_probe_path(&journal_path)?.to_path_buf(),
                 AccessIntent::Write,
                 "content manifest promotion recovery journal",
-            ),
+                || Ok(()),
+            )?,
         ]))
     }
 
@@ -627,11 +639,12 @@ fn run_manifest_write(
 }
 
 fn run_manifest_inspect(manifest_path: PathBuf) -> Result<Vec<String>> {
-    let access_report = ManifestAccessReport::new(
+    let access_report = ManifestAccessReport::new_checked(
         manifest_path.clone(),
         AccessIntent::Read,
         "content manifest inspect",
-    );
+        || Ok(()),
+    )?;
     access_report.preflight_volume()?;
     let volume = access_report.volume();
     run_volume_task_cancellable(
