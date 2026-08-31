@@ -1822,17 +1822,6 @@ impl VolumeOperationReport {
 
         let volume = operation_volume_for_path_checked(&path, &mut check)?;
         check()?;
-        if operation == VolumeOperation::Mount {
-            return Ok(Self::with_volume(
-                operation,
-                VolumeOperationDisposition::Unsupported,
-                None,
-                None,
-                volume,
-                "native-mount-requires-unmounted-disk-identity",
-            ));
-        }
-        check()?;
         if !operation_targets_volume_root(&path, &volume.path) {
             return Ok(Self::with_volume_path(
                 path,
@@ -1864,6 +1853,17 @@ impl VolumeOperationReport {
                 None,
                 volume,
                 reason,
+            ));
+        }
+        check()?;
+        if operation == VolumeOperation::Mount {
+            return Ok(Self::with_volume(
+                operation,
+                VolumeOperationDisposition::Unsupported,
+                None,
+                None,
+                volume,
+                "native-mount-requires-unmounted-disk-identity",
             ));
         }
         check()?;
@@ -3879,19 +3879,17 @@ mod tests {
     }
 
     #[test]
-    fn volume_mount_operation_is_typed_unsupported() {
+    fn volume_mount_operation_on_mounted_path_reports_disabled_policy() {
         let root = unique_temp_dir("gfm-volume-operation-mount");
         fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
 
         let report = VolumeOperationReport::execute(&root, VolumeOperation::Mount).unwrap();
 
-        assert_eq!(report.disposition, VolumeOperationDisposition::Unsupported);
+        assert_eq!(report.disposition, VolumeOperationDisposition::Refused);
         assert_eq!(report.native_status, None);
-        assert_eq!(
-            report.reason,
-            "native-mount-requires-unmounted-disk-identity"
-        );
+        assert_eq!(report.reason, "mount-command-disabled");
         assert!(report.as_tsv().starts_with("volume-operation\tmount\t"));
+        assert!(report.as_tsv().contains("\tmount=mounted\t"));
 
         fs::remove_dir_all(root).unwrap();
     }

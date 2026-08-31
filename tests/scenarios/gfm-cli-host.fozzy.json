@@ -4760,6 +4760,8 @@
         "tmp/gfm-fozzy-dist"
       ],
       "exit_code": 0,
+      "stdout": "volume-operation\tmount\tpath=tmp/gfm-fozzy-dist\tdisposition=refused\tnative-status=-\tdissenter-status=-\tvolume-kind=external\tmount=mounted\tstable-id=fixture-marker:external-removable:dev:16777230:tmp/gfm-fozzy-dist\treason=mount-command-disabled\n",
+      "stderr": "",
       "times": 1
     },
     {
