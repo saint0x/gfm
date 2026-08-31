@@ -1073,16 +1073,25 @@ impl From<gfm_mac_sys::NativeVolumeEventKind> for VolumeEventKind {
 
 impl VolumeEventReport {
     fn from_native(event: gfm_mac_sys::NativeVolumeEvent) -> Self {
+        Self::from_native_checked(event, || Ok(()))
+            .expect("non-cancellable native volume event conversion cannot cancel")
+    }
+
+    pub fn from_native_checked(
+        event: gfm_mac_sys::NativeVolumeEvent,
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check()?;
         let path = event.description.volume_path.clone();
         let kind = event.kind.into();
-        let descriptor = native_event_descriptor(kind, path.as_deref());
-        Self {
+        let descriptor = native_event_descriptor_checked(kind, path.as_deref(), &mut check)?;
+        Ok(Self {
             kind,
             native_status: event.description.status,
             path,
             descriptor,
             reason: event.description.reason,
-        }
+        })
     }
 
     pub fn as_tsv(&self) -> String {
@@ -1108,14 +1117,26 @@ impl VolumeEventReport {
     }
 }
 
-fn native_event_descriptor(kind: VolumeEventKind, path: Option<&Path>) -> Option<VolumeDescriptor> {
+fn native_event_descriptor_checked(
+    kind: VolumeEventKind,
+    path: Option<&Path>,
+    mut check: impl FnMut() -> Result<()>,
+) -> Result<Option<VolumeDescriptor>> {
+    check()?;
     if kind == VolumeEventKind::Unavailable {
-        return None;
+        return Ok(None);
     }
-    let path = path?;
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    check()?;
     match path.try_exists() {
-        Ok(true) => VolumeDescriptor::for_path(path).ok(),
-        Ok(false) | Err(_) => None,
+        Ok(true) => match VolumeDescriptor::for_path_checked(path, &mut check) {
+            Ok(descriptor) => Ok(Some(descriptor)),
+            Err(GfmError::Cancelled) => Err(GfmError::Cancelled),
+            Err(_) => Ok(None),
+        },
+        Ok(false) | Err(_) => Ok(None),
     }
 }
 
@@ -1566,6 +1587,18 @@ impl VolumeEventStream {
 
     pub fn try_recv(&self) -> Option<VolumeEventReport> {
         self.stream.try_recv().map(VolumeEventReport::from_native)
+    }
+
+    pub fn try_recv_checked(
+        &self,
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<Option<VolumeEventReport>> {
+        check()?;
+        let Some(event) = self.stream.try_recv() else {
+            return Ok(None);
+        };
+        check()?;
+        VolumeEventReport::from_native_checked(event, check).map(Some)
     }
 
     pub fn shutdown(self) -> VolumeEventShutdownReport {
@@ -4878,6 +4911,81 @@ mod tests {
         assert!(invalidation.invalidate_sidebar);
         assert!(invalidation.invalidate_operation_policy);
         assert!(invalidation.invalidate_index_admission);
+    }
+
+    #[test]
+    fn checked_native_volume_event_honors_pre_cancelled_work_before_descriptor_probe() {
+        let root = unique_temp_dir("gfm-native-volume-event-pre-cancelled");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let description = native_description(|description| {
+            description.volume_path = Some(root.clone());
+        });
+        let event = gfm_mac_sys::NativeVolumeEvent {
+            kind: gfm_mac_sys::NativeVolumeEventKind::Appeared,
+            description,
+        };
+
+        let err =
+            VolumeEventReport::from_native_checked(event, || Err(GfmError::Cancelled)).unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn checked_native_volume_event_can_cancel_before_descriptor_native_probe() {
+        let root = unique_temp_dir("gfm-native-volume-event-descriptor-cancelled");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let description = native_description(|description| {
+            description.volume_path = Some(root.clone());
+        });
+        let event = gfm_mac_sys::NativeVolumeEvent {
+            kind: gfm_mac_sys::NativeVolumeEventKind::DescriptionChanged,
+            description,
+        };
+        let mut checks = 0usize;
+
+        let err = VolumeEventReport::from_native_checked(event, || {
+            checks += 1;
+            if checks >= 6 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn checked_native_unavailable_event_preserves_typed_event_without_descriptor() {
+        let root = unique_temp_dir("gfm-native-volume-event-unavailable-checked");
+        fs::write(root.join(VOLUME_MARKER), "network-smb\n").unwrap();
+        let description = native_description(|description| {
+            description.status = NativeVolumeStatus::Unavailable;
+            description.volume_path = Some(root.clone());
+            description.reason = Some("diskarbitration event session unavailable".to_string());
+        });
+        let event = gfm_mac_sys::NativeVolumeEvent {
+            kind: gfm_mac_sys::NativeVolumeEventKind::Unavailable,
+            description,
+        };
+
+        let report = VolumeEventReport::from_native_checked(event, || Ok(())).unwrap();
+        let invalidation = VolumeEventInvalidationReport::from_event(&report);
+
+        assert_eq!(report.kind, VolumeEventKind::Unavailable);
+        assert_eq!(report.native_status, NativeVolumeStatus::Unavailable);
+        assert_eq!(report.path.as_deref(), Some(root.as_path()));
+        assert!(report.descriptor.is_none());
+        assert_eq!(invalidation.previous_kind, None);
+        assert_eq!(invalidation.current_kind, None);
+        assert!(invalidation.invalidate_sidebar);
+        assert!(invalidation.invalidate_operation_policy);
+        assert!(invalidation.invalidate_index_admission);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
