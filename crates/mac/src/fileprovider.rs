@@ -2051,6 +2051,9 @@ fn storage_state_for_path(
         if let Some(state) = native_storage_state(&hints.native) {
             return state;
         }
+        if hints.native.is_ubiquitous == Some(true) {
+            return CloudStorageState::Unknown;
+        }
     }
 
     if let Some(state) = xattr_storage_state(hints) {
@@ -5724,6 +5727,66 @@ mod tests {
         assert_eq!(
             report.materialization_source,
             CloudMaterializationSource::Filesystem
+        );
+    }
+
+    #[test]
+    fn native_ubiquitous_unknown_materialization_ignores_xattr_fallback_state() {
+        let path = PathBuf::from("/tmp/Downloaded.icloud.md");
+        let mut native = native_values();
+        native.is_ubiquitous = Some(true);
+        native.has_unresolved_conflicts = Some(false);
+        native.is_downloading = Some(false);
+        native.is_uploading = Some(false);
+        let hints = CloudHints {
+            native,
+            native_identity: identity_not_queried(),
+            xattrs: vec!["com.apple.fileprovider.state".to_string()],
+            xattr_values: vec!["isDownloaded=true; materialized=true".to_string()],
+            provider_identifier: None,
+            source: "native-url-resource+xattr".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.domain, FileProviderDomain::ICloudDrive);
+        assert_eq!(report.storage_state, CloudStorageState::Unknown);
+        assert_eq!(report.materialization, CloudMaterialization::Unknown);
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::NativeUrlResource
+        );
+        assert_eq!(
+            report.materialization_reason.as_deref(),
+            Some("native-url-resource-unknown")
+        );
+    }
+
+    #[test]
+    fn native_ubiquitous_unknown_materialization_ignores_filename_state_words() {
+        let path = PathBuf::from("/tmp/ConflictDownloading.icloud.md");
+        let mut native = native_values();
+        native.is_ubiquitous = Some(true);
+        native.has_unresolved_conflicts = Some(false);
+        native.is_downloading = Some(false);
+        native.is_uploading = Some(false);
+        let hints = CloudHints {
+            native,
+            native_identity: identity_not_queried(),
+            xattrs: Vec::new(),
+            xattr_values: Vec::new(),
+            provider_identifier: None,
+            source: "fixture-name+native-url-resource".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.domain, FileProviderDomain::ICloudDrive);
+        assert_eq!(report.storage_state, CloudStorageState::Unknown);
+        assert_eq!(report.materialization, CloudMaterialization::Unknown);
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::NativeUrlResource
         );
     }
 
