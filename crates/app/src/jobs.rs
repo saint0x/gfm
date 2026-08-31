@@ -1,14 +1,13 @@
+#[cfg(test)]
+use crate::access::preflight_access_scope_checked;
 use crate::access::{
-    preflight_access_scope_checked, preflight_access_scope_checked_with_volume_report,
-    preflight_volume_access_scope, preflight_volume_access_scope_with_report, ScopedAccessGuard,
+    preflight_access_scope_checked_with_volume_report, preflight_volume_access_scope_with_report,
+    ScopedAccessGuard,
 };
 use crate::runtime::{
     default_job_journal_path, run_scheduled_volume_task_cancellable, run_volume_task_cancellable,
 };
-use crate::{
-    parent_volume, parse_optional_scheduling_pressure, parse_u64_arg, parse_usize_arg,
-    required_path,
-};
+use crate::{parse_optional_scheduling_pressure, parse_u64_arg, parse_usize_arg, required_path};
 use gfm_jobs::{
     Cancellation, FailureClass, JobClass, JobFairnessPolicy, JobJournal, JobPayloadCatalog,
     JobPayloadKind, JobPayloadRecord, JobProgressCommand, JobProgressSnapshot, JobProgressState,
@@ -200,13 +199,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
 
 fn run_jobs_recover(journal: PathBuf) -> Result<Vec<String>> {
     const WORKER: &str = "jobs recover";
-    preflight_volume_access_scope(&journal, AccessIntent::Read, WORKER)?;
-    let volume = parent_volume(&journal);
+    let access_report = JobPathAccessReport::new(journal.clone(), AccessIntent::Read);
+    access_report.preflight_volume(WORKER)?;
+    let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = preflight_access_scope_checked(&journal, AccessIntent::Read, WORKER, || {
-            cancellation.check()
-        })?;
+        let _access = access_report.access_checked(WORKER, || cancellation.check())?;
         cancellation.check()?;
         let lines = JobJournal::new(journal)
             .recoverable_checked(RetryPolicy { max_attempts: 2 }, || cancellation.check())?
@@ -274,18 +272,59 @@ impl JobPathAccessReport {
     }
 }
 
+#[derive(Clone)]
+struct JobPathAccessReports {
+    entries: Vec<JobPathAccessReport>,
+}
+
+impl JobPathAccessReports {
+    fn payload_restore(catalog_path: &Path, progress_path: &Path) -> Result<Self> {
+        Ok(Self {
+            entries: vec![
+                JobPathAccessReport::new(catalog_path.to_path_buf(), AccessIntent::Read),
+                JobPathAccessReport::new(
+                    write_probe_path(progress_path)?.to_path_buf(),
+                    AccessIntent::Write,
+                ),
+            ],
+        })
+    }
+
+    fn preflight_volumes(&self, worker: &str) -> Result<()> {
+        for report in &self.entries {
+            report.preflight_volume(worker)?;
+        }
+        Ok(())
+    }
+
+    fn access_checked(
+        &self,
+        worker: &str,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<ScopedAccessGuard>> {
+        let mut guards = Vec::with_capacity(self.entries.len());
+        for report in &self.entries {
+            check_control()?;
+            guards.push(report.access_checked(worker, &mut check_control)?);
+        }
+        check_control()?;
+        Ok(guards)
+    }
+
+    fn first_volume(&self) -> Option<VolumeId> {
+        self.entries.iter().find_map(JobPathAccessReport::volume)
+    }
+}
+
 fn run_jobs_payload_catalog(path: PathBuf) -> Result<Vec<String>> {
     const WORKER: &str = "jobs payload catalog";
-    let probe = write_probe_path(&path)?.to_path_buf();
-    preflight_volume_access_scope(&probe, AccessIntent::Write, WORKER)?;
-    let volume = parent_volume(&probe);
+    let access_report =
+        JobPathAccessReport::new(write_probe_path(&path)?.to_path_buf(), AccessIntent::Write);
+    access_report.preflight_volume(WORKER)?;
+    let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let probe = write_probe_path(&path)?.to_path_buf();
-        cancellation.check()?;
-        let _access = preflight_access_scope_checked(&probe, AccessIntent::Write, WORKER, || {
-            cancellation.check()
-        })?;
+        let _access = access_report.access_checked(WORKER, || cancellation.check())?;
         cancellation.check()?;
         let catalog = JobPayloadCatalog::new(&path);
         let records = sample_payload_catalog_records();
@@ -302,16 +341,13 @@ fn run_jobs_payload_catalog(path: PathBuf) -> Result<Vec<String>> {
 
 fn run_jobs_progress_snapshot(path: PathBuf) -> Result<Vec<String>> {
     const WORKER: &str = "jobs progress snapshot";
-    let probe = write_probe_path(&path)?.to_path_buf();
-    preflight_volume_access_scope(&probe, AccessIntent::Write, WORKER)?;
-    let volume = parent_volume(&probe);
+    let access_report =
+        JobPathAccessReport::new(write_probe_path(&path)?.to_path_buf(), AccessIntent::Write);
+    access_report.preflight_volume(WORKER)?;
+    let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let probe = write_probe_path(&path)?.to_path_buf();
-        cancellation.check()?;
-        let _access = preflight_access_scope_checked(&probe, AccessIntent::Write, WORKER, || {
-            cancellation.check()
-        })?;
+        let _access = access_report.access_checked(WORKER, || cancellation.check())?;
         cancellation.check()?;
         let store = JobProgressStore::new(&path);
         for snapshot in sample_progress_snapshots() {
@@ -329,16 +365,13 @@ fn run_jobs_progress_snapshot(path: PathBuf) -> Result<Vec<String>> {
 
 fn run_jobs_progress_restore(path: PathBuf, updated_ms: u64) -> Result<Vec<String>> {
     const WORKER: &str = "jobs progress restore";
-    let probe = write_probe_path(&path)?.to_path_buf();
-    preflight_volume_access_scope(&probe, AccessIntent::Write, WORKER)?;
-    let volume = parent_volume(&probe);
+    let access_report =
+        JobPathAccessReport::new(write_probe_path(&path)?.to_path_buf(), AccessIntent::Write);
+    access_report.preflight_volume(WORKER)?;
+    let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let probe = write_probe_path(&path)?.to_path_buf();
-        cancellation.check()?;
-        let _access = preflight_access_scope_checked(&probe, AccessIntent::Write, WORKER, || {
-            cancellation.check()
-        })?;
+        let _access = access_report.access_checked(WORKER, || cancellation.check())?;
         cancellation.check()?;
         let lines = JobProgressStore::new(&path)
             .restore_interrupted_checked(updated_ms, || cancellation.check())?
@@ -356,16 +389,13 @@ fn run_jobs_progress_control(
     updated_ms: u64,
 ) -> Result<Vec<String>> {
     const WORKER: &str = "jobs progress control";
-    let probe = write_probe_path(&path)?.to_path_buf();
-    preflight_volume_access_scope(&probe, AccessIntent::Write, WORKER)?;
-    let volume = parent_volume(&probe);
+    let access_report =
+        JobPathAccessReport::new(write_probe_path(&path)?.to_path_buf(), AccessIntent::Write);
+    access_report.preflight_volume(WORKER)?;
+    let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let probe = write_probe_path(&path)?.to_path_buf();
-        cancellation.check()?;
-        let _access = preflight_access_scope_checked(&probe, AccessIntent::Write, WORKER, || {
-            cancellation.check()
-        })?;
+        let _access = access_report.access_checked(WORKER, || cancellation.check())?;
         cancellation.check()?;
         let snapshot = JobProgressStore::new(&path).apply_command_checked(
             gfm_jobs::JobId::from_raw(job_id),
@@ -392,14 +422,12 @@ fn run_jobs_payload_restore_plan(
     updated_ms: u64,
 ) -> Result<Vec<String>> {
     const WORKER: &str = "jobs payload restore plan";
-    preflight_payload_restore_volumes(&catalog_path, &progress_path)?;
-    let progress_probe = write_probe_path(&progress_path)?.to_path_buf();
-    let volume = parent_volume(&progress_probe).or_else(|| parent_volume(&catalog_path));
+    let access_reports = JobPathAccessReports::payload_restore(&catalog_path, &progress_path)?;
+    access_reports.preflight_volumes(WORKER)?;
+    let volume = access_reports.first_volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = retain_payload_restore_access_checked(&catalog_path, &progress_path, || {
-            cancellation.check()
-        })?;
+        let _access = access_reports.access_checked(WORKER, || cancellation.check())?;
         cancellation.check()?;
         let store = JobProgressStore::new(&progress_path);
         let restored = store.restore_interrupted_checked(updated_ms, || cancellation.check())?;
@@ -430,19 +458,7 @@ fn run_jobs_payload_restore_plan(
     })
 }
 
-fn preflight_payload_restore_volumes(catalog_path: &Path, progress_path: &Path) -> Result<()> {
-    preflight_volume_access_scope(
-        catalog_path,
-        AccessIntent::Read,
-        "jobs payload restore plan",
-    )?;
-    preflight_volume_access_scope(
-        write_probe_path(progress_path)?,
-        AccessIntent::Write,
-        "jobs payload restore plan",
-    )
-}
-
+#[cfg(test)]
 fn retain_payload_restore_access_checked(
     catalog_path: &Path,
     progress_path: &Path,
