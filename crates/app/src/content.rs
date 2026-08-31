@@ -15,7 +15,7 @@ use crate::runtime::{
     runtime_progress_store, RuntimeJobHandle,
 };
 use crate::{
-    detect_volume_id, optional_path_arg, parent_volume, parse_battery_state, parse_io_pressure,
+    optional_path_arg, parent_volume, parse_battery_state, parse_io_pressure,
     parse_optional_scheduling_pressure, parse_quarantine_failure_kind,
     parse_required_scheduling_pressure, parse_thermal_state, parse_u32, parse_u64,
     parse_user_activity, required_path, required_string,
@@ -1024,23 +1024,18 @@ fn run_index_footprint_inspect(
     spec: IndexFootprintSpec,
     worker: &'static str,
 ) -> Result<gfm_index::IndexFootprintReport> {
-    preflight_index_footprint_volumes(&spec, worker)?;
-    let volume = detect_volume_id(&spec.records)
-        .ok()
-        .or_else(|| parent_volume(&spec.records));
+    let access_reports = IndexFootprintAccessReports::for_spec(&spec, worker);
+    access_reports.preflight_volumes()?;
+    let volume = access_reports.first_volume();
     run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
         cancellation.check()?;
-        let _access =
-            retain_index_footprint_access_checked(&spec, worker, || cancellation.check())?;
+        let _access = access_reports.access_checked(|| cancellation.check())?;
         let archive_paths = index_footprint_content_archive_paths(&spec, &cancellation)?;
-        preflight_index_footprint_archive_volumes_checked(&archive_paths, worker, || {
-            cancellation.check()
-        })?;
+        let archive_access_reports =
+            IndexFootprintAccessReports::for_archive_paths(&archive_paths, worker);
+        archive_access_reports.preflight_volumes_checked(|| cancellation.check())?;
         cancellation.check()?;
-        let _archive_access =
-            retain_index_footprint_archive_access_checked(&archive_paths, worker, || {
-                cancellation.check()
-            })?;
+        let _archive_access = archive_access_reports.access_checked(|| cancellation.check())?;
         cancellation.check()?;
         gfm_index::inspect_index_footprint_checked(&spec, &cancellation)
     })
@@ -1057,6 +1052,123 @@ fn index_footprint_content_archive_paths(
     Ok(manifest.resolved_archive_paths(manifest_path))
 }
 
+#[derive(Clone)]
+struct IndexFootprintAccessReport {
+    path: PathBuf,
+    worker: String,
+    volume_report: VolumeDiscoveryReport,
+}
+
+impl IndexFootprintAccessReport {
+    fn new(path: PathBuf, worker: String) -> Self {
+        let volume_report = VolumeDiscoveryReport::for_containing_path(&path);
+        Self {
+            path,
+            worker,
+            volume_report,
+        }
+    }
+
+    fn preflight_volume(&self) -> Result<()> {
+        preflight_volume_access_scope_with_report(
+            &self.path,
+            AccessIntent::Read,
+            &self.worker,
+            &self.volume_report,
+        )
+    }
+
+    fn access_checked(
+        &self,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<ScopedAccessGuard> {
+        preflight_access_scope_checked_with_volume_report(
+            &self.path,
+            AccessIntent::Read,
+            &self.worker,
+            &self.volume_report,
+            &mut check_control,
+        )
+    }
+
+    fn volume(&self) -> Option<gfm_types::VolumeId> {
+        self.volume_report
+            .volume_for_path(&self.path)
+            .map(|volume| volume.id)
+    }
+}
+
+#[derive(Clone)]
+struct IndexFootprintAccessReports {
+    entries: Vec<IndexFootprintAccessReport>,
+}
+
+impl IndexFootprintAccessReports {
+    fn for_spec(spec: &IndexFootprintSpec, worker: &str) -> Self {
+        Self {
+            entries: unique_index_footprint_paths(spec)
+                .into_iter()
+                .map(|(path, role)| {
+                    IndexFootprintAccessReport::new(path.to_path_buf(), format!("{worker} {role}"))
+                })
+                .collect(),
+        }
+    }
+
+    fn for_archive_paths(paths: &[PathBuf], worker: &str) -> Self {
+        Self {
+            entries: unique_path_refs(paths.iter().map(PathBuf::as_path))
+                .into_iter()
+                .map(|path| {
+                    IndexFootprintAccessReport::new(
+                        path.to_path_buf(),
+                        format!("{worker} content archive"),
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    fn preflight_volumes(&self) -> Result<()> {
+        for report in &self.entries {
+            report.preflight_volume()?;
+        }
+        Ok(())
+    }
+
+    fn preflight_volumes_checked(
+        &self,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<()> {
+        for report in &self.entries {
+            check_control()?;
+            report.preflight_volume()?;
+        }
+        check_control()?;
+        Ok(())
+    }
+
+    fn access_checked(
+        &self,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<ScopedAccessGuard>> {
+        let mut guards = Vec::with_capacity(self.entries.len());
+        for report in &self.entries {
+            check_control()?;
+            guards.push(report.access_checked(&mut check_control)?);
+        }
+        check_control()?;
+        Ok(guards)
+    }
+
+    fn first_volume(&self) -> Option<gfm_types::VolumeId> {
+        self.entries
+            .iter()
+            .find_map(IndexFootprintAccessReport::volume)
+    }
+}
+
+#[cfg(test)]
 fn retain_index_footprint_access_checked(
     spec: &IndexFootprintSpec,
     worker: &str,
@@ -1076,6 +1188,7 @@ fn retain_index_footprint_access_checked(
     Ok(guards)
 }
 
+#[cfg(test)]
 fn retain_index_footprint_archive_access_checked(
     paths: &[PathBuf],
     worker: &str,
@@ -1095,13 +1208,7 @@ fn retain_index_footprint_archive_access_checked(
     Ok(guards)
 }
 
-fn preflight_index_footprint_volumes(spec: &IndexFootprintSpec, worker: &str) -> Result<()> {
-    for (path, role) in unique_index_footprint_paths(spec) {
-        preflight_volume_access_scope(path, AccessIntent::Read, &format!("{worker} {role}"))?;
-    }
-    Ok(())
-}
-
+#[cfg(test)]
 fn preflight_index_footprint_archive_volumes_checked(
     paths: &[PathBuf],
     worker: &str,

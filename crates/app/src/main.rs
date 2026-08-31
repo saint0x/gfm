@@ -9,7 +9,7 @@ use gfm_jobs::{
 };
 use gfm_mac::{
     current_host_profile, current_permission_onboarding, AccessIntent, MountState, SupportMatrix,
-    VolumeDescriptor, VolumeKind,
+    VolumeDescriptor, VolumeDiscoveryReport, VolumeKind,
 };
 use gfm_types::{GfmError, Result, VolumeId};
 use std::env;
@@ -124,16 +124,20 @@ fn run() -> Result<()> {
                 args.next(),
                 "permission-invalidation-compare requires a current state path",
             )?;
-            access::preflight_volume_access_scope(
-                &previous_path,
+            let previous_access = ControlPathAccessReport::new(
+                previous_path.clone(),
                 AccessIntent::Read,
                 "permission invalidation previous state",
-            )?;
-            access::preflight_volume_access_scope(
-                &current_path,
+            );
+            let current_access = ControlPathAccessReport::new(
+                current_path.clone(),
                 AccessIntent::Read,
                 "permission invalidation current state",
-            )?;
+            );
+            previous_access.preflight_volume()?;
+            current_access.preflight_volume()?;
+            let _previous_guard = previous_access.access_checked(|| Ok(()))?;
+            let _current_guard = current_access.access_checked(|| Ok(()))?;
             let previous = gfm_mac::PermissionStateSnapshot::read(&previous_path)?;
             let current = gfm_mac::PermissionStateSnapshot::read(&current_path)?;
             let report =
@@ -471,6 +475,54 @@ fn parse_usize(value: &str, message: &str) -> Result<usize> {
         .map_err(|_| GfmError::Format(format!("{message}; got `{value}`")))
 }
 
+#[derive(Clone)]
+struct ControlPathAccessReport {
+    path: PathBuf,
+    intent: AccessIntent,
+    worker: &'static str,
+    volume_report: VolumeDiscoveryReport,
+}
+
+impl ControlPathAccessReport {
+    fn new(path: PathBuf, intent: AccessIntent, worker: &'static str) -> Self {
+        let volume_report = VolumeDiscoveryReport::for_containing_path(&path);
+        Self {
+            path,
+            intent,
+            worker,
+            volume_report,
+        }
+    }
+
+    fn preflight_volume(&self) -> Result<()> {
+        access::preflight_volume_access_scope_with_report(
+            &self.path,
+            self.intent,
+            self.worker,
+            &self.volume_report,
+        )
+    }
+
+    fn access_checked(
+        &self,
+        check_control: impl FnMut() -> Result<()>,
+    ) -> Result<access::ScopedAccessGuard> {
+        access::preflight_access_scope_checked_with_volume_report(
+            &self.path,
+            self.intent,
+            self.worker,
+            &self.volume_report,
+            check_control,
+        )
+    }
+
+    fn volume(&self) -> Option<VolumeId> {
+        self.volume_report
+            .volume_for_path(&self.path)
+            .map(|volume| volume.id)
+    }
+}
+
 pub(crate) fn config_store(value: Option<String>) -> Result<ConfigStore> {
     value
         .map(|path| Ok(ConfigStore::new(path)))
@@ -479,12 +531,13 @@ pub(crate) fn config_store(value: Option<String>) -> Result<ConfigStore> {
 
 fn run_config_init(store: &ConfigStore) -> Result<GfmConfig> {
     const WORKER: &str = "config init";
-    preflight_config_init_volume(store)?;
-    let volume = config_volume(store)?;
+    let access_report = config_init_access_report(store)?;
+    access_report.preflight_volume()?;
+    let volume = access_report.volume();
     let store = store.clone();
     runtime::run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = preflight_config_init_checked(&store, || cancellation.check())?;
+        let _access = access_report.access_checked(|| cancellation.check())?;
         cancellation.check()?;
         store.load_or_create_default_checked(|| cancellation.check())
     })
@@ -492,12 +545,13 @@ fn run_config_init(store: &ConfigStore) -> Result<GfmConfig> {
 
 fn run_config_check(store: &ConfigStore) -> Result<GfmConfig> {
     const WORKER: &str = "config check";
-    access::preflight_volume_access_scope(store.path(), AccessIntent::Read, WORKER)?;
-    let volume = config_volume(store)?;
+    let access_report = config_read_access_report(store, WORKER);
+    access_report.preflight_volume()?;
+    let volume = access_report.volume();
     let store = store.clone();
     runtime::run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = preflight_config_read_checked(&store, WORKER, || cancellation.check())?;
+        let _access = access_report.access_checked(|| cancellation.check())?;
         cancellation.check()?;
         let config = store.load_checked(|| cancellation.check())?;
         config.validate()?;
@@ -507,62 +561,37 @@ fn run_config_check(store: &ConfigStore) -> Result<GfmConfig> {
 
 fn run_config_dump(store: &ConfigStore) -> Result<GfmConfig> {
     const WORKER: &str = "config dump";
-    access::preflight_volume_access_scope(store.path(), AccessIntent::Read, WORKER)?;
-    let volume = config_volume(store)?;
+    let access_report = config_read_access_report(store, WORKER);
+    access_report.preflight_volume()?;
+    let volume = access_report.volume();
     let store = store.clone();
     runtime::run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = preflight_config_read_checked(&store, WORKER, || cancellation.check())?;
+        let _access = access_report.access_checked(|| cancellation.check())?;
         cancellation.check()?;
         store.load_or_create_default_checked(|| cancellation.check())
     })
 }
 
-fn preflight_config_init_volume(store: &ConfigStore) -> Result<()> {
-    if config_path_exists(store.path())? {
-        access::preflight_volume_access_scope(store.path(), AccessIntent::Read, "config init")
-    } else {
-        access::preflight_volume_access_scope(
-            config_write_probe_path(store.path())?,
-            AccessIntent::Write,
-            "config init",
-        )
-    }
-}
-
-fn config_volume(store: &ConfigStore) -> Result<Option<VolumeId>> {
+fn config_init_access_report(store: &ConfigStore) -> Result<ControlPathAccessReport> {
     let probe = if config_path_exists(store.path())? {
-        store.path()
+        ControlPathAccessReport::new(
+            store.path().to_path_buf(),
+            AccessIntent::Read,
+            "config init",
+        )
     } else {
-        config_write_probe_path(store.path())?
-    };
-    Ok(detect_volume_id(probe)
-        .ok()
-        .or_else(|| parent_volume(probe)))
-}
-
-fn preflight_config_read_checked(
-    store: &ConfigStore,
-    worker: &str,
-    check_control: impl FnMut() -> Result<()>,
-) -> Result<access::ScopedAccessGuard> {
-    access::preflight_access_scope_checked(store.path(), AccessIntent::Read, worker, check_control)
-}
-
-fn preflight_config_init_checked(
-    store: &ConfigStore,
-    check_control: impl FnMut() -> Result<()>,
-) -> Result<access::ScopedAccessGuard> {
-    if config_path_exists(store.path())? {
-        preflight_config_read_checked(store, "config init", check_control)
-    } else {
-        access::preflight_access_scope_checked(
-            config_write_probe_path(store.path())?,
+        ControlPathAccessReport::new(
+            config_write_probe_path(store.path())?.to_path_buf(),
             AccessIntent::Write,
             "config init",
-            check_control,
         )
-    }
+    };
+    Ok(probe)
+}
+
+fn config_read_access_report(store: &ConfigStore, worker: &'static str) -> ControlPathAccessReport {
+    ControlPathAccessReport::new(store.path().to_path_buf(), AccessIntent::Read, worker)
 }
 
 fn config_path_exists(path: &Path) -> Result<bool> {
