@@ -1,5 +1,9 @@
 use crate::{
-    access::{preflight_access_scope_checked, preflight_volume_access_scope, ScopedAccessGuard},
+    access::{
+        preflight_access_scope_checked, preflight_access_scope_checked_with_volume_report,
+        preflight_volume_access_scope, preflight_volume_access_scope_with_report,
+        ScopedAccessGuard,
+    },
     parse_u64_arg, parse_usize_arg, path_volume, required_path,
     runtime::{
         run_retriable_volume_task_cancellable_with_payload_path, run_volume_task_cancellable,
@@ -11,7 +15,7 @@ use gfm_index::{
     Indexer, LiveIndex,
 };
 use gfm_jobs::{Cancellation, Priority};
-use gfm_mac::{AccessIntent, FileEventStream, WatchRoot};
+use gfm_mac::{AccessIntent, FileEventStream, VolumeDiscoveryReport, WatchRoot};
 use gfm_store::atomic_write_checked;
 use gfm_types::{FileEvent, FileEventKind, FileKind, GfmError, Result};
 use std::fs;
@@ -25,17 +29,26 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .next()
                 .map(PathBuf::from)
                 .unwrap_or(std::env::current_dir().unwrap());
-            preflight_volume_access_scope(&path, AccessIntent::Read, "directory listing")?;
-            let volume = path_volume(&path);
+            let volume_report = VolumeDiscoveryReport::for_containing_path(&path);
+            preflight_volume_access_scope_with_report(
+                &path,
+                AccessIntent::Read,
+                "directory listing",
+                &volume_report,
+            )?;
+            let volume = volume_report.volume_for_path(&path).map(|volume| volume.id);
             let page = run_volume_task_cancellable(
                 volume,
                 Priority::Visible,
                 "directory listing",
                 move |cancellation| {
                     cancellation.check()?;
-                    let _access = preflight_index_read_checked(&path, "directory listing", || {
-                        cancellation.check()
-                    })?;
+                    let _access = preflight_index_read_checked_with_volume_report(
+                        &path,
+                        "directory listing",
+                        &volume_report,
+                        || cancellation.check(),
+                    )?;
                     cancellation.check()?;
                     read_directory_checked(path, || cancellation.check())
                 },
@@ -666,11 +679,15 @@ fn run_index_read_task<T>(
 where
     T: Send + 'static,
 {
-    preflight_volume_access_scope(&path, AccessIntent::Read, worker)?;
-    let volume = path_volume(&path);
+    let volume_report = VolumeDiscoveryReport::for_containing_path(&path);
+    preflight_volume_access_scope_with_report(&path, AccessIntent::Read, worker, &volume_report)?;
+    let volume = volume_report.volume_for_path(&path).map(|volume| volume.id);
     run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
         cancellation.check()?;
-        let _access = preflight_index_read_checked(&path, worker, || cancellation.check())?;
+        let _access =
+            preflight_index_read_checked_with_volume_report(&path, worker, &volume_report, || {
+                cancellation.check()
+            })?;
         cancellation.check()?;
         read(path, &cancellation)
     })
@@ -697,6 +714,21 @@ fn preflight_index_read_checked(
     check_control: impl FnMut() -> Result<()>,
 ) -> Result<ScopedAccessGuard> {
     preflight_access_scope_checked(path, AccessIntent::Read, worker, check_control)
+}
+
+fn preflight_index_read_checked_with_volume_report(
+    path: &Path,
+    worker: &str,
+    volume_report: &VolumeDiscoveryReport,
+    check_control: impl FnMut() -> Result<()>,
+) -> Result<ScopedAccessGuard> {
+    preflight_access_scope_checked_with_volume_report(
+        path,
+        AccessIntent::Read,
+        worker,
+        volume_report,
+        check_control,
+    )
 }
 
 fn preflight_index_write(path: &Path, worker: &str) -> Result<ScopedAccessGuard> {
