@@ -398,6 +398,55 @@ impl ManifestCleanupAccessReports {
     }
 }
 
+#[derive(Clone)]
+struct ManifestWriteAccessReports {
+    entries: Vec<ManifestAccessReport>,
+}
+
+impl ManifestWriteAccessReports {
+    fn for_paths(manifest_path: &Path, archives: &[ContentArchiveManifestEntry]) -> Result<Self> {
+        let mut entries = Vec::with_capacity(archives.len() + 1);
+        entries.push(ManifestAccessReport::new(
+            write_probe_path(manifest_path)?.to_path_buf(),
+            AccessIntent::Write,
+            "content manifest write",
+        ));
+        for archive in archives {
+            entries.push(ManifestAccessReport::new(
+                resolve_manifest_path(manifest_path, &archive.path),
+                AccessIntent::Read,
+                "content manifest write archive",
+            ));
+        }
+        Ok(Self { entries })
+    }
+
+    fn preflight_volumes(&self) -> Result<()> {
+        for entry in &self.entries {
+            entry.preflight_volume()?;
+        }
+        Ok(())
+    }
+
+    fn access_checked(
+        &self,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<ScopedAccessGuard>> {
+        let mut guards = Vec::with_capacity(self.entries.len());
+        for entry in &self.entries {
+            check_control()?;
+            guards.push(entry.access_checked(&mut check_control)?);
+        }
+        check_control()?;
+        Ok(guards)
+    }
+
+    fn first_volume(&self) -> Option<VolumeId> {
+        self.entries.iter().find_map(ManifestAccessReport::volume)
+    }
+}
+
+#[cfg(test)]
 fn retain_manifest_write_access_checked(
     manifest_path: &Path,
     archives: &[ContentArchiveManifestEntry],
@@ -423,38 +472,17 @@ fn retain_manifest_write_access_checked(
     Ok(guards)
 }
 
-fn preflight_manifest_write_volumes(
-    manifest_path: &Path,
-    archives: &[ContentArchiveManifestEntry],
-) -> Result<()> {
-    preflight_volume_access_scope(
-        write_probe_path(manifest_path)?,
-        AccessIntent::Write,
-        "content manifest write",
-    )?;
-    for archive in archives {
-        preflight_volume_access_scope(
-            &resolve_manifest_path(manifest_path, &archive.path),
-            AccessIntent::Read,
-            "content manifest write archive",
-        )?;
-    }
-    Ok(())
-}
-
 fn run_manifest_write(
     manifest_path: PathBuf,
     archives: Vec<ContentArchiveManifestEntry>,
 ) -> Result<String> {
     const WORKER: &str = "content manifest write";
-    preflight_manifest_write_volumes(&manifest_path, &archives)?;
-    let manifest_probe = write_probe_path(&manifest_path)?.to_path_buf();
-    let volume = path_volume(&manifest_probe);
+    let access_reports = ManifestWriteAccessReports::for_paths(&manifest_path, &archives)?;
+    access_reports.preflight_volumes()?;
+    let volume = access_reports.first_volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = retain_manifest_write_access_checked(&manifest_path, &archives, || {
-            cancellation.check()
-        })?;
+        let _access = access_reports.access_checked(|| cancellation.check())?;
         cancellation.check()?;
         let manifest = ContentArchiveManifest::new(archives)?;
         manifest.write_checked(&manifest_path, || cancellation.check())?;
@@ -484,24 +512,20 @@ fn retain_manifest_inspect_archive_access_checked<'a>(
 }
 
 fn run_manifest_inspect(manifest_path: PathBuf) -> Result<Vec<String>> {
-    preflight_volume_access_scope(
-        &manifest_path,
+    let access_report = ManifestAccessReport::new(
+        manifest_path.clone(),
         AccessIntent::Read,
         "content manifest inspect",
-    )?;
-    let volume = path_volume(&manifest_path);
+    );
+    access_report.preflight_volume()?;
+    let volume = access_report.volume();
     run_volume_task_cancellable(
         volume,
         Priority::Visible,
         "content manifest inspect",
         move |cancellation| {
             cancellation.check()?;
-            let _manifest_access = preflight_access_scope_checked(
-                &manifest_path,
-                AccessIntent::Read,
-                "content manifest inspect",
-                || cancellation.check(),
-            )?;
+            let _manifest_access = access_report.access_checked(|| cancellation.check())?;
             let manifest =
                 ContentArchiveManifest::read_checked(&manifest_path, || cancellation.check())?;
             let paths = manifest.resolved_archive_paths(&manifest_path);

@@ -1,6 +1,7 @@
 use crate::access::{
-    preflight_access_scope_checked, preflight_volume_access_scope,
-    worker_admission_with_volume_report, ScopedAccessGuard,
+    preflight_access_scope_checked_with_volume_report, preflight_volume_access_scope,
+    preflight_volume_access_scope_with_report, worker_admission_with_volume_report,
+    ScopedAccessGuard,
 };
 use crate::permission_refresh::{refresh_permission_state, PermissionRefreshAudience};
 use crate::runtime::{
@@ -273,18 +274,65 @@ fn parse_required_conflict_policy(value: Option<String>, message: &str) -> Resul
     }
 }
 
+#[derive(Clone)]
+struct OperationPathAccessReport {
+    path: PathBuf,
+    intent: AccessIntent,
+    volume_report: VolumeDiscoveryReport,
+}
+
+impl OperationPathAccessReport {
+    fn new(path: PathBuf, intent: AccessIntent) -> Self {
+        let volume_report = VolumeDiscoveryReport::for_containing_path(&path);
+        Self {
+            path,
+            intent,
+            volume_report,
+        }
+    }
+
+    fn preflight_volume(&self, worker: &str) -> Result<()> {
+        preflight_volume_access_scope_with_report(
+            &self.path,
+            self.intent,
+            worker,
+            &self.volume_report,
+        )
+    }
+
+    fn access_checked(
+        &self,
+        worker: &str,
+        check_control: impl FnMut() -> Result<()>,
+    ) -> Result<ScopedAccessGuard> {
+        preflight_access_scope_checked_with_volume_report(
+            &self.path,
+            self.intent,
+            worker,
+            &self.volume_report,
+            check_control,
+        )
+    }
+
+    fn volume(&self) -> Option<VolumeId> {
+        self.volume_report
+            .volume_for_path(&self.path)
+            .map(|volume| volume.id)
+    }
+}
+
 fn recover_operations_from_journal(
     journal: PathBuf,
     policy: OperationRecoveryPolicy,
 ) -> Result<gfm_ops::OperationRecoveryReport> {
     const WORKER: &str = "operation journal";
     let journal_probe = write_probe_path(&journal)?.to_path_buf();
-    preflight_volume_access_scope(&journal_probe, AccessIntent::Write, WORKER)?;
-    let volume = control_file_volume(&journal_probe);
+    let access_report = OperationPathAccessReport::new(journal_probe, AccessIntent::Write);
+    access_report.preflight_volume(WORKER)?;
+    let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _journal_access =
-            preflight_operation_journal_write_checked(&journal, || cancellation.check())?;
+        let _journal_access = access_report.access_checked(WORKER, || cancellation.check())?;
         cancellation.check()?;
         Operator::new(OperationContext::new(journal)).recover_with_policy(policy)
     })
@@ -307,10 +355,14 @@ fn read_operation_conflicts(
     store: &OperationConflictStore,
 ) -> Result<Vec<RuntimeOperationConflict>> {
     const WORKER: &str = "operation conflict store";
-    preflight_volume_access_scope(store.path(), AccessIntent::Read, WORKER)?;
-    let volume = control_file_volume(store.path());
+    let access_report =
+        OperationPathAccessReport::new(store.path().to_path_buf(), AccessIntent::Read);
+    access_report.preflight_volume(WORKER)?;
+    let volume = access_report.volume();
     let path = store.path().to_path_buf();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = access_report.access_checked(WORKER, || cancellation.check())?;
         cancellation.check()?;
         let store = OperationConflictStore::new(path);
         store.read_checked(|| cancellation.check())
@@ -337,10 +389,13 @@ fn resolve_operation_conflicts(
 ) -> Result<Vec<RuntimeOperationConflict>> {
     const WORKER: &str = "operation conflict store";
     let store_probe = write_probe_path(store.path())?.to_path_buf();
-    preflight_volume_access_scope(&store_probe, AccessIntent::Write, WORKER)?;
-    let volume = control_file_volume(&store_probe);
+    let access_report = OperationPathAccessReport::new(store_probe, AccessIntent::Write);
+    access_report.preflight_volume(WORKER)?;
+    let volume = access_report.volume();
     let path = store.path().to_path_buf();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let _access = access_report.access_checked(WORKER, || cancellation.check())?;
         cancellation.check()?;
         let store = OperationConflictStore::new(path);
         store.resolve_targets_checked(&targets, conflict.as_str(), || cancellation.check())
@@ -742,19 +797,16 @@ fn preflight_operation_journal_write_checked(
     check_control()?;
     let probe = write_probe_path(path)?.to_path_buf();
     check_control()?;
-    preflight_access_scope_checked(
-        &probe,
-        AccessIntent::Write,
-        "operation journal",
-        check_control,
-    )
+    OperationPathAccessReport::new(probe, AccessIntent::Write)
+        .access_checked("operation journal", check_control)
 }
 
 fn preflight_trash_metadata_read_checked(
     path: &Path,
     check_control: impl FnMut() -> Result<()>,
 ) -> Result<ScopedAccessGuard> {
-    preflight_access_scope_checked(path, AccessIntent::Read, "trash metadata", check_control)
+    OperationPathAccessReport::new(path.to_path_buf(), AccessIntent::Read)
+        .access_checked("trash metadata", check_control)
 }
 
 fn preflight_trash_metadata_write_checked(
@@ -764,7 +816,8 @@ fn preflight_trash_metadata_write_checked(
     check_control()?;
     let probe = write_probe_path(path)?.to_path_buf();
     check_control()?;
-    preflight_access_scope_checked(&probe, AccessIntent::Write, "trash metadata", check_control)
+    OperationPathAccessReport::new(probe, AccessIntent::Write)
+        .access_checked("trash metadata", check_control)
 }
 
 fn preflight_operation_target_probe(operation: &Operation) -> Result<()> {
@@ -789,10 +842,6 @@ fn write_probe_path(path: &Path) -> Result<&Path> {
             format!("operation write path metadata unavailable: {err}"),
         )),
     }
-}
-
-fn control_file_volume(path: &Path) -> Option<VolumeId> {
-    detect_volume_id(path).ok().or_else(|| parent_volume(path))
 }
 
 fn operation_access_gate(
