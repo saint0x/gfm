@@ -1667,17 +1667,8 @@ impl FileProviderOperationReport {
     fn missing(
         path: PathBuf,
         operation: FileProviderOperation,
-        mut before: FileProviderStateReport,
+        before: FileProviderStateReport,
     ) -> Self {
-        if before.storage_state == CloudStorageState::Unknown && is_evicted_placeholder_path(&path)
-        {
-            before.storage_state = CloudStorageState::Evicted;
-            before.materialization = CloudMaterialization::RemotePlaceholder;
-            before.materialization_source = CloudMaterializationSource::PathFallback;
-            before.materialization_confidence = CloudMaterializationConfidence::PathFallback;
-            before.materialization_reason =
-                Some("fileprovider-path-missing-placeholder".to_string());
-        }
         Self {
             path,
             operation,
@@ -4980,7 +4971,16 @@ mod tests {
             FileProviderOperationDisposition::Missing
         );
         assert_eq!(report.reason.as_deref(), Some("fileprovider-path-missing"));
-        assert_eq!(report.before.storage_state, CloudStorageState::Evicted);
+        assert_eq!(report.before.storage_state, CloudStorageState::Unknown);
+        assert_eq!(report.before.materialization, CloudMaterialization::Unknown);
+        assert_eq!(
+            report.before.materialization_source,
+            CloudMaterializationSource::NativeUrlResourceMissing
+        );
+        assert_eq!(
+            report.before.materialization_confidence,
+            CloudMaterializationConfidence::Native
+        );
         assert!(report.as_tsv().contains("\tdisposition=missing\t"));
 
         fs::remove_dir_all(root).unwrap();

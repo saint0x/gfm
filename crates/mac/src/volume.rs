@@ -679,16 +679,6 @@ impl VolumeDiscoveryReport {
         Ok(Self { volumes })
     }
 
-    pub fn for_containing_path(path: impl AsRef<Path>) -> Self {
-        let path = path.as_ref();
-        let mut paths = containing_mounted_volume_paths(path);
-        paths.extend(marker_ancestor_volume_paths(path));
-        if paths.is_empty() {
-            paths = fallback_volume_paths();
-        }
-        Self::from_paths(paths)
-    }
-
     pub fn for_containing_path_checked(
         path: impl AsRef<Path>,
         mut check: impl FnMut() -> Result<()>,
@@ -2768,21 +2758,6 @@ fn mounted_volume_paths_checked(mut check: impl FnMut() -> Result<()>) -> Result
     Ok(paths)
 }
 
-fn containing_mounted_volume_paths(path: &Path) -> Vec<PathBuf> {
-    let mut paths = mounted_volume_paths()
-        .into_iter()
-        .filter(|root| path.starts_with(root))
-        .collect::<Vec<_>>();
-    if paths.is_empty() && path.try_exists().ok() == Some(false) {
-        paths = path
-            .ancestors()
-            .find(|ancestor| ancestor.try_exists().ok() == Some(true))
-            .map(mounted_volume_paths_for_existing_path)
-            .unwrap_or_default();
-    }
-    paths
-}
-
 fn containing_mounted_volume_paths_checked(
     path: &Path,
     mut check: impl FnMut() -> Result<()>,
@@ -2805,13 +2780,6 @@ fn containing_mounted_volume_paths_checked(
         }
     }
     Ok(paths)
-}
-
-fn mounted_volume_paths_for_existing_path(path: &Path) -> Vec<PathBuf> {
-    mounted_volume_paths()
-        .into_iter()
-        .filter(|root| path.starts_with(root))
-        .collect()
 }
 
 fn mounted_volume_paths_for_existing_path_checked(
@@ -2869,13 +2837,6 @@ fn fallback_volume_path_is_directory(path: &Path) -> Option<bool> {
 
 fn finder_visible_mount_path(path: &Path) -> bool {
     path == Path::new("/") || path.starts_with("/Volumes")
-}
-
-fn marker_ancestor_volume_paths(path: &Path) -> Vec<PathBuf> {
-    path.ancestors()
-        .filter(|ancestor| marker_kind(ancestor).is_some())
-        .map(PathBuf::from)
-        .collect()
 }
 
 fn marker_ancestor_volume_paths_checked(
@@ -3548,7 +3509,8 @@ mod tests {
         fs::write(root.join(VOLUME_MARKER), "network-smb\n").unwrap();
         fs::write(&nested, "%PDF-1.7\n").unwrap();
 
-        let report = VolumeDiscoveryReport::for_containing_path(&nested);
+        let report =
+            VolumeDiscoveryReport::for_containing_path_checked(&nested, || Ok(())).unwrap();
         let volume = report.volume_for_path(&nested).unwrap();
 
         assert_eq!(volume.path, root);
