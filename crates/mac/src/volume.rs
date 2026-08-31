@@ -151,7 +151,9 @@ pub struct VolumeDescriptor {
     pub capacity: VolumeCapacity,
     pub commands: VolumeCommandPolicy,
     pub native_status: Option<NativeVolumeStatus>,
+    pub native_reason: Option<String>,
     pub resource_status: Option<NativeVolumeStatus>,
+    pub resource_reason: Option<String>,
     pub resource_uuid: Option<String>,
     pub resource_automounted: Option<bool>,
     pub resource_browsable: Option<bool>,
@@ -163,6 +165,7 @@ pub struct VolumeDescriptor {
     pub resource_supports_sparse_files: Option<bool>,
     pub resource_remount_url: Option<String>,
     pub mount_table_status: Option<NativeVolumeStatus>,
+    pub mount_table_reason: Option<String>,
     pub mount_from: Option<String>,
     pub mount_filesystem: Option<String>,
     pub mount_flags: Option<u32>,
@@ -333,7 +336,11 @@ impl VolumeDescriptor {
             capacity,
             commands,
             native_status,
+            native_reason: native.as_ref().and_then(|native| native.reason.clone()),
             resource_status,
+            resource_reason: resource
+                .as_ref()
+                .and_then(|resource| resource.reason.clone()),
             resource_uuid: resource
                 .as_ref()
                 .and_then(|resource| resource.volume_uuid.clone()),
@@ -359,6 +366,9 @@ impl VolumeDescriptor {
                 .as_ref()
                 .and_then(|resource| resource.remount_url.clone()),
             mount_table_status,
+            mount_table_reason: mount_table
+                .as_ref()
+                .and_then(|mount_table| mount_table.reason.clone()),
             mount_from: mount_table
                 .as_ref()
                 .and_then(|mount_table| mount_table.mounted_from.clone()),
@@ -438,7 +448,7 @@ impl VolumeDescriptor {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume\t{}\t{}\tpath={}\tkind={}\tmount={}\tremovable={}\tnetwork={}\treachable={}\tejectable={}\ttotal={}\tavailable={}\teject={}\tmount={}\tunmount={}\tsource={}\treason={}\tstable-id={}\tnative-status={}\twritable={}\tread-only={}\tcase-sensitive={}\tcase-preserving={}\tlocal={}\tinternal={}\tmountable={}\tbsd={}\tbsd-major={}\tbsd-minor={}\tbsd-unit={}\tvolume-uuid={}\tapfs-container-uuid={}\tapfs-role={}\tmedia-uuid={}\tfs={}\tmedia-content={}\tprotocol={}\tmodel={}\tvendor={}\tresource-status={}\tresource-uuid={}\tresource-automounted={}\tresource-browsable={}\tresource-encrypted={}\tresource-reachable={}\tresource-root-filesystem={}\tresource-supports-file-cloning={}\tresource-supports-hard-links={}\tresource-supports-sparse-files={}\tresource-remount-url={}\tmount-status={}\tmount-from={}\tmount-fs={}\tmount-flags={}\tmount-read-only={}\tmount-local={}\tvolume-type={}\tmedia-kind={}\tmedia-name={}\tmedia-path={}\tmedia-type={}\tmedia-leaf={}\tmedia-whole={}\tmedia-encrypted={}\tmedia-block-size={}\tmedia-size={}\tdevice-path={}",
+            "volume\t{}\t{}\tpath={}\tkind={}\tmount={}\tremovable={}\tnetwork={}\treachable={}\tejectable={}\ttotal={}\tavailable={}\teject={}\tmount={}\tunmount={}\tsource={}\treason={}\tstable-id={}\tnative-status={}\tnative-reason={}\twritable={}\tread-only={}\tcase-sensitive={}\tcase-preserving={}\tlocal={}\tinternal={}\tmountable={}\tbsd={}\tbsd-major={}\tbsd-minor={}\tbsd-unit={}\tvolume-uuid={}\tapfs-container-uuid={}\tapfs-role={}\tmedia-uuid={}\tfs={}\tmedia-content={}\tprotocol={}\tmodel={}\tvendor={}\tresource-status={}\tresource-reason={}\tresource-uuid={}\tresource-automounted={}\tresource-browsable={}\tresource-encrypted={}\tresource-reachable={}\tresource-root-filesystem={}\tresource-supports-file-cloning={}\tresource-supports-hard-links={}\tresource-supports-sparse-files={}\tresource-remount-url={}\tmount-status={}\tmount-reason={}\tmount-from={}\tmount-fs={}\tmount-flags={}\tmount-read-only={}\tmount-local={}\tvolume-type={}\tmedia-kind={}\tmedia-name={}\tmedia-path={}\tmedia-type={}\tmedia-leaf={}\tmedia-whole={}\tmedia-encrypted={}\tmedia-block-size={}\tmedia-size={}\tdevice-path={}",
             self.id.0,
             escape_field(&self.label),
             self.path.display(),
@@ -465,6 +475,10 @@ impl VolumeDescriptor {
             self.native_status
                 .map(NativeVolumeStatus::as_str)
                 .unwrap_or("-"),
+            self.native_reason
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "-".to_string()),
             self.writable,
             self.read_only,
             self.case_sensitive
@@ -533,6 +547,10 @@ impl VolumeDescriptor {
             self.resource_status
                 .map(NativeVolumeStatus::as_str)
                 .unwrap_or("-"),
+            self.resource_reason
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "-".to_string()),
             self.resource_uuid
                 .as_deref()
                 .map(escape_field)
@@ -568,6 +586,10 @@ impl VolumeDescriptor {
             self.mount_table_status
                 .map(NativeVolumeStatus::as_str)
                 .unwrap_or("-"),
+            self.mount_table_reason
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "-".to_string()),
             self.mount_from
                 .as_deref()
                 .map(escape_field)
@@ -3292,6 +3314,30 @@ mod tests {
 
         descriptor.mount_table_status = Some(NativeVolumeStatus::Available);
         assert!(!descriptor.platform_state_unavailable());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn descriptor_preserves_native_volume_api_reasons() {
+        let root = unique_temp_dir("gfm-volume-api-reasons");
+        let mut descriptor = VolumeDescriptor::for_path(&root).unwrap();
+
+        descriptor.native_status = Some(NativeVolumeStatus::Unavailable);
+        descriptor.native_reason = Some("DiskArbitration denied by host".to_string());
+        descriptor.resource_status = Some(NativeVolumeStatus::Unavailable);
+        descriptor.resource_reason = Some("NSURL resource values unavailable".to_string());
+        descriptor.mount_table_status = Some(NativeVolumeStatus::Unavailable);
+        descriptor.mount_table_reason = Some("statfs failed".to_string());
+
+        let tsv = descriptor.as_tsv();
+        assert!(tsv.contains(
+            "\tnative-status=unavailable\tnative-reason=DiskArbitration denied by host\t"
+        ));
+        assert!(tsv.contains(
+            "\tresource-status=unavailable\tresource-reason=NSURL resource values unavailable\t"
+        ));
+        assert!(tsv.contains("\tmount-status=unavailable\tmount-reason=statfs failed\t"));
 
         fs::remove_dir_all(root).unwrap();
     }

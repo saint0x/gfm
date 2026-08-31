@@ -98,19 +98,39 @@ fn native_status_for_event_descriptor(descriptor: &VolumeDescriptor) -> NativeVo
 }
 
 fn native_reason_for_event_descriptor(descriptor: &VolumeDescriptor) -> Option<String> {
-    descriptor
-        .native_status
-        .and_then(|status| status_reason("diskarbitration-volume", status))
-        .or_else(|| {
-            descriptor
-                .resource_status
-                .and_then(|status| status_reason("url-resource-volume", status))
-        })
-        .or_else(|| {
-            descriptor
-                .mount_table_status
-                .and_then(|status| status_reason("mount-table-volume", status))
-        })
+    status_or_reason(
+        "diskarbitration-volume",
+        descriptor.native_status,
+        descriptor.native_reason.as_deref(),
+    )
+    .or_else(|| {
+        status_or_reason(
+            "url-resource-volume",
+            descriptor.resource_status,
+            descriptor.resource_reason.as_deref(),
+        )
+    })
+    .or_else(|| {
+        status_or_reason(
+            "mount-table-volume",
+            descriptor.mount_table_status,
+            descriptor.mount_table_reason.as_deref(),
+        )
+    })
+}
+
+fn status_or_reason(
+    prefix: &str,
+    status: Option<NativeVolumeStatus>,
+    reason: Option<&str>,
+) -> Option<String> {
+    let status = status?;
+    if status == NativeVolumeStatus::Available {
+        return None;
+    }
+    reason
+        .map(str::to_string)
+        .or_else(|| status_reason(prefix, status))
 }
 
 fn status_reason(prefix: &str, status: NativeVolumeStatus) -> Option<String> {
@@ -205,6 +225,7 @@ mod tests {
         std::fs::create_dir_all(&path).unwrap();
         let mut descriptor = VolumeDescriptor::for_path(&path).unwrap();
         descriptor.native_status = Some(NativeVolumeStatus::Unavailable);
+        descriptor.native_reason = None;
 
         let report = descriptor_event_invalidation(&path, &descriptor);
 
@@ -219,6 +240,59 @@ mod tests {
         assert!(report
             .as_tsv()
             .ends_with("reason=diskarbitration-volume-unavailable"));
+
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn descriptor_native_failure_reason_is_preserved_for_event_reason() {
+        let path = std::env::temp_dir().join(format!(
+            "gfm-volume-event-descriptor-native-reason-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        let mut descriptor = VolumeDescriptor::for_path(&path).unwrap();
+        descriptor.native_status = Some(NativeVolumeStatus::Unavailable);
+        descriptor.native_reason =
+            Some("DiskArbitration did not return a disk description".to_string());
+
+        let report = descriptor_event_invalidation(&path, &descriptor);
+
+        assert_eq!(
+            native_reason_for_event_descriptor(&descriptor).as_deref(),
+            Some("DiskArbitration did not return a disk description")
+        );
+        assert_eq!(
+            report.reason,
+            "DiskArbitration did not return a disk description"
+        );
+
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn descriptor_resource_failure_reason_precedes_synthetic_status_reason() {
+        let path = std::env::temp_dir().join(format!(
+            "gfm-volume-event-descriptor-resource-native-reason-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        let mut descriptor = VolumeDescriptor::for_path(&path).unwrap();
+        descriptor.native_status = Some(NativeVolumeStatus::Available);
+        descriptor.resource_status = Some(NativeVolumeStatus::Unavailable);
+        descriptor.resource_reason =
+            Some("native volume URL resource values unavailable".to_string());
+
+        let report = descriptor_event_invalidation(&path, &descriptor);
+
+        assert_eq!(
+            native_reason_for_event_descriptor(&descriptor).as_deref(),
+            Some("native volume URL resource values unavailable")
+        );
+        assert_eq!(
+            report.reason,
+            "native volume URL resource values unavailable"
+        );
 
         std::fs::remove_dir_all(path).unwrap();
     }

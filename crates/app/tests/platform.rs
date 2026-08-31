@@ -5681,7 +5681,11 @@ fn reports_volume_event_invalidation_from_binary() {
     assert!(stdout.contains("\tsidebar=true\toperation-policy=true\t"));
     assert!(stdout.contains("\tindex-admission=true\trescan-index=true\t"));
     if stdout.contains("\tnative-status=unavailable\t") {
-        assert!(stdout.ends_with("reason=diskarbitration-volume-unavailable\n"));
+        assert!(!stdout.ends_with("reason=-\n"), "{stdout}");
+        assert!(
+            !stdout.ends_with("reason=volume-event-description-changed\n"),
+            "{stdout}"
+        );
     } else {
         assert!(stdout.ends_with("reason=volume-event-description-changed\n"));
     }
