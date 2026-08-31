@@ -3031,7 +3031,10 @@ fn run_preview_cache_fileprovider_invalidation(
         cancellation.check()?;
         let record = record_for_path_checked(&path, None, false, || cancellation.check())?;
         cancellation.check()?;
-        let report = FileProviderInvalidationReport::evaluate(path.clone(), previous)?;
+        let report =
+            FileProviderInvalidationReport::evaluate_checked(path.clone(), previous, || {
+                cancellation.check()
+            })?;
         let key = PreviewRequestKey::new(record.id, path, kind);
         cancellation.check()?;
         let mut cache =
@@ -3089,20 +3092,9 @@ fn run_fileprovider_invalidation_scan(
         cancellation.check()?;
         let _access = access_reports.access_checked(WORKER, || cancellation.check())?;
         cancellation.check()?;
-        let previous = if fileprovider_state_file_exists(&state_path, WORKER)? {
-            Some(FileProviderStateSnapshot::read_checked(
-                &state_path,
-                || cancellation.check(),
-            )?)
-        } else {
-            None
-        };
-        cancellation.check()?;
-        let (report, snapshot) =
-            FileProviderStateInvalidationReport::evaluate(previous.as_ref(), paths)?;
-        cancellation.check()?;
-        snapshot.write_checked(&state_path, || cancellation.check())?;
-        Ok(report)
+        evaluate_fileprovider_state_invalidation_checked(&state_path, paths, WORKER, || {
+            cancellation.check()
+        })
     })
 }
 
@@ -3117,6 +3109,32 @@ fn run_fileprovider_observed_invalidation(
     run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
         evaluate_fileprovider_observed_invalidation(&state_path, event, worker, &cancellation)
     })
+}
+
+fn evaluate_fileprovider_state_invalidation_checked(
+    state_path: &Path,
+    paths: Vec<PathBuf>,
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<FileProviderStateInvalidationReport> {
+    check_control()?;
+    let previous = if fileprovider_state_file_exists(state_path, worker)? {
+        Some(FileProviderStateSnapshot::read_checked(
+            state_path,
+            &mut check_control,
+        )?)
+    } else {
+        None
+    };
+    check_control()?;
+    let (report, snapshot) = FileProviderStateInvalidationReport::evaluate_checked(
+        previous.as_ref(),
+        paths,
+        &mut check_control,
+    )?;
+    check_control()?;
+    snapshot.write_checked(state_path, &mut check_control)?;
+    Ok(report)
 }
 
 fn evaluate_fileprovider_observed_invalidation(
@@ -3158,8 +3176,11 @@ fn evaluate_fileprovider_observed_invalidation_checked(
         &mut check_control,
     )?);
     check_control()?;
-    let (observed, snapshot) =
-        FileProviderObservedInvalidation::evaluate(previous.as_ref(), [event])?;
+    let (observed, snapshot) = FileProviderObservedInvalidation::evaluate_checked(
+        previous.as_ref(),
+        [event],
+        &mut check_control,
+    )?;
     check_control()?;
     snapshot.write_checked(state_path, &mut check_control)?;
     Ok(observed)
@@ -3916,6 +3937,48 @@ mod tests {
     }
 
     #[test]
+    fn fileprovider_observed_invalidation_checks_control_before_event_evaluation() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-platform-fileprovider-observed-evaluate-cancel-{}",
+            std::process::id()
+        ));
+        let state_path = root.join("state.tsv");
+        let tracked = root.join("Remote.icloud-placeholder");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(&tracked, "placeholder").unwrap();
+        let previous = FileProviderStateSnapshot {
+            entries: vec![FileProviderStateSnapshotEntry {
+                path: tracked.clone(),
+                state: CloudStorageState::Downloaded,
+            }],
+        };
+        previous.write(&state_path).unwrap();
+        let before = std::fs::read(&state_path).unwrap();
+        let event = FileEvent::new(tracked, FileEventKind::Metadata);
+        let mut checks = 0usize;
+
+        let err = evaluate_fileprovider_observed_invalidation_checked(
+            &state_path,
+            event,
+            "fileprovider observed invalidation",
+            || {
+                checks += 1;
+                if checks >= 6 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .expect_err("observed invalidation should pass cancellation into event evaluation");
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert_eq!(std::fs::read(&state_path).unwrap(), before);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn preview_fileprovider_materialization_honors_pre_cancelled_token_before_state_read() {
         let cancellation = Cancellation::default();
         cancellation.cancel();
@@ -4038,6 +4101,47 @@ mod tests {
             })
             .count();
         assert_eq!(leftovers, 0);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fileprovider_scan_invalidation_passes_cancellation_into_state_evaluation() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-platform-fileprovider-scan-evaluate-cancel-{}",
+            std::process::id()
+        ));
+        let state_path = root.join("state.tsv");
+        let tracked = root.join("Remote.icloud-placeholder");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(&tracked, "placeholder").unwrap();
+        let previous = FileProviderStateSnapshot {
+            entries: vec![FileProviderStateSnapshotEntry {
+                path: tracked.clone(),
+                state: CloudStorageState::Downloaded,
+            }],
+        };
+        previous.write(&state_path).unwrap();
+        let before = std::fs::read(&state_path).unwrap();
+
+        let mut checks = 0usize;
+        let err = evaluate_fileprovider_state_invalidation_checked(
+            &state_path,
+            vec![tracked],
+            "fileprovider invalidation scan",
+            || {
+                checks += 1;
+                if checks >= 6 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .expect_err("scan invalidation should pass cancellation into state evaluation");
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert_eq!(std::fs::read(&state_path).unwrap(), before);
         std::fs::remove_dir_all(root).unwrap();
     }
 
