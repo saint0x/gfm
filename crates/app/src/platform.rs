@@ -1419,13 +1419,13 @@ fn volume_event_description_api_status() -> Result<VolumeEventInvalidationReport
 
 fn publish_fileprovider_progress_job(
     path: PathBuf,
+    volume: Option<VolumeId>,
     cancellation: &Cancellation,
 ) -> Result<FileProviderProgressReport> {
     maybe_fail_fileprovider_progress_retry_probe(cancellation)?;
     let report = FileProviderProgressReport::read_path_checked(&path, || cancellation.check())?;
     let mut scheduler = Scheduler::new();
     let label = fileprovider_progress_label(report.state.progress.direction);
-    let volume = PlatformAccessReport::new(path.clone(), AccessIntent::Read).volume();
     let job = if let Some(volume) = volume {
         scheduler.schedule_on_volume_in_class(Priority::Visible, JobClass::Visible, label, volume)
     } else {
@@ -2342,7 +2342,7 @@ fn run_fileprovider_progress_job(
         if cancel_after_access {
             cancellation.cancel();
         }
-        publish_fileprovider_progress_job(path, &cancellation)
+        publish_fileprovider_progress_job(path, volume, &cancellation)
     })
 }
 
