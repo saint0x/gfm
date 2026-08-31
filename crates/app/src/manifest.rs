@@ -1,5 +1,6 @@
 use crate::access::{
-    preflight_access_scope_checked, preflight_volume_access_scope, ScopedAccessGuard,
+    preflight_access_scope_checked, preflight_access_scope_checked_with_volume_report,
+    preflight_volume_access_scope, preflight_volume_access_scope_with_report, ScopedAccessGuard,
 };
 use crate::runtime::run_volume_task_cancellable;
 use crate::{parse_u64_arg, parse_usize_arg, path_volume, required_path};
@@ -8,7 +9,7 @@ use gfm_index::{
     ContentMergeTier,
 };
 use gfm_jobs::Priority;
-use gfm_mac::AccessIntent;
+use gfm_mac::{AccessIntent, VolumeDiscoveryReport};
 use gfm_store::{
     cleanup_inactive_content_archives_checked, content_manifest_promotion_journal_path,
     plan_content_manifest_promotion_recovery_checked, plan_content_manifest_recovery_checked,
@@ -16,7 +17,7 @@ use gfm_store::{
     recover_content_manifest_checked, recover_content_manifest_promotion_checked,
     ContentArchiveHealth, ContentManifestPromotionJournal, MmapContentSet,
 };
-use gfm_types::{GfmError, Result};
+use gfm_types::{GfmError, Result, VolumeId};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -163,17 +164,13 @@ fn run_manifest_cleanup(
     candidates: Vec<PathBuf>,
 ) -> Result<(String, Vec<String>)> {
     const WORKER: &str = "content manifest cleanup";
-    preflight_manifest_cleanup_volumes(&manifest_path, &candidates, true, WORKER)?;
-    let volume = path_volume(&manifest_path);
+    let access_reports =
+        ManifestCleanupAccessReports::for_paths(&manifest_path, &candidates, true, WORKER)?;
+    access_reports.preflight_volumes()?;
+    let volume = access_reports.first_volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = retain_manifest_cleanup_access_checked(
-            &manifest_path,
-            &candidates,
-            true,
-            WORKER,
-            || cancellation.check(),
-        )?;
+        let _access = access_reports.access_checked(|| cancellation.check())?;
         cancellation.check()?;
         render_manifest_cleanup(&manifest_path, &candidates, || cancellation.check())
     })
@@ -186,17 +183,13 @@ fn run_content_cleanup_plan(
 ) -> Result<(String, Vec<String>)> {
     const WORKER: &str = "content cleanup plan";
     const ACTIVE_ARCHIVE_WORKER: &str = "content cleanup plan active archive";
-    preflight_manifest_cleanup_volumes(&manifest_path, &candidates, false, WORKER)?;
-    let volume = path_volume(&manifest_path);
+    let access_reports =
+        ManifestCleanupAccessReports::for_paths(&manifest_path, &candidates, false, WORKER)?;
+    access_reports.preflight_volumes()?;
+    let volume = access_reports.first_volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = retain_manifest_cleanup_access_checked(
-            &manifest_path,
-            &candidates,
-            false,
-            WORKER,
-            || cancellation.check(),
-        )?;
+        let _access = access_reports.access_checked(|| cancellation.check())?;
         let manifest =
             ContentArchiveManifest::read_checked(&manifest_path, || cancellation.check())?;
         let active_archive_paths = manifest.resolved_archive_paths(&manifest_path);
@@ -279,30 +272,130 @@ fn render_cleanup_plan(
     Ok((summary, lines))
 }
 
-fn preflight_manifest_cleanup_volumes(
-    manifest_path: &Path,
-    candidates: &[PathBuf],
-    removes_candidates: bool,
-    worker: &str,
-) -> Result<()> {
-    preflight_volume_access_scope(manifest_path, AccessIntent::Read, worker)?;
-    for candidate in candidates {
+fn preflight_manifest_cleanup_archive_volumes(paths: &[PathBuf], worker: &str) -> Result<()> {
+    for path in paths {
+        preflight_volume_access_scope(path, AccessIntent::Read, worker)?;
+    }
+    Ok(())
+}
+
+#[derive(Clone)]
+struct ManifestAccessReport {
+    path: PathBuf,
+    intent: AccessIntent,
+    worker: &'static str,
+    volume_report: VolumeDiscoveryReport,
+}
+
+impl ManifestAccessReport {
+    fn new(path: PathBuf, intent: AccessIntent, worker: &'static str) -> Self {
+        let volume_report = VolumeDiscoveryReport::for_containing_path(&path);
+        Self {
+            path,
+            intent,
+            worker,
+            volume_report,
+        }
+    }
+
+    fn preflight_volume(&self) -> Result<()> {
+        preflight_volume_access_scope_with_report(
+            &self.path,
+            self.intent,
+            self.worker,
+            &self.volume_report,
+        )
+    }
+
+    fn access_checked(
+        &self,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<ScopedAccessGuard> {
+        preflight_access_scope_checked_with_volume_report(
+            &self.path,
+            self.intent,
+            self.worker,
+            &self.volume_report,
+            &mut check_control,
+        )
+    }
+
+    fn volume(&self) -> Option<VolumeId> {
+        self.volume_report
+            .volume_for_path(&self.path)
+            .map(|volume| volume.id)
+    }
+}
+
+#[derive(Clone)]
+struct ManifestCleanupAccessReports {
+    entries: Vec<ManifestAccessReport>,
+}
+
+impl ManifestCleanupAccessReports {
+    fn for_paths(
+        manifest_path: &Path,
+        candidates: &[PathBuf],
+        removes_candidates: bool,
+        worker: &'static str,
+    ) -> Result<Self> {
+        let mut entries = Vec::with_capacity(candidates.len() + 1);
+        entries.push(ManifestAccessReport::new(
+            manifest_path.to_path_buf(),
+            AccessIntent::Read,
+            worker,
+        ));
+        for candidate in candidates {
+            entries.push(Self::candidate_entry(
+                manifest_path,
+                candidate,
+                removes_candidates,
+            )?);
+        }
+        Ok(Self { entries })
+    }
+
+    fn candidate_entry(
+        manifest_path: &Path,
+        candidate: &Path,
+        removes_candidates: bool,
+    ) -> Result<ManifestAccessReport> {
         let path = resolve_manifest_path(manifest_path, candidate);
         let (path, intent) = if removes_candidates {
             (write_probe_path(&path)?, AccessIntent::Write)
         } else {
             (existing_read_probe_path(&path)?, AccessIntent::Read)
         };
-        preflight_volume_access_scope(path, intent, "content manifest cleanup candidate")?;
+        Ok(ManifestAccessReport::new(
+            path.to_path_buf(),
+            intent,
+            "content manifest cleanup candidate",
+        ))
     }
-    Ok(())
-}
 
-fn preflight_manifest_cleanup_archive_volumes(paths: &[PathBuf], worker: &str) -> Result<()> {
-    for path in paths {
-        preflight_volume_access_scope(path, AccessIntent::Read, worker)?;
+    fn preflight_volumes(&self) -> Result<()> {
+        for entry in &self.entries {
+            entry.preflight_volume()?;
+        }
+        Ok(())
     }
-    Ok(())
+
+    fn access_checked(
+        &self,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<ScopedAccessGuard>> {
+        let mut guards = Vec::with_capacity(self.entries.len());
+        for entry in &self.entries {
+            check_control()?;
+            guards.push(entry.access_checked(&mut check_control)?);
+        }
+        check_control()?;
+        Ok(guards)
+    }
+
+    fn first_volume(&self) -> Option<VolumeId> {
+        self.entries.iter().find_map(ManifestAccessReport::volume)
+    }
 }
 
 fn retain_manifest_write_access_checked(
@@ -951,36 +1044,29 @@ fn retain_manifest_promotion_recovery_access_checked(
     ])
 }
 
+#[cfg(test)]
 fn retain_manifest_cleanup_access_checked(
     manifest_path: &Path,
     candidates: &[PathBuf],
     removes_candidates: bool,
-    worker: &str,
+    worker: &'static str,
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
     check_control()?;
-    let mut guards = vec![preflight_access_scope_checked(
-        manifest_path,
-        AccessIntent::Read,
-        worker,
-        &mut check_control,
-    )?];
+    let mut guards =
+        vec![
+            ManifestAccessReport::new(manifest_path.to_path_buf(), AccessIntent::Read, worker)
+                .access_checked(&mut check_control)?,
+        ];
     for candidate in candidates {
         check_control()?;
-        let path = resolve_manifest_path(manifest_path, candidate);
-        let (path, intent) = if removes_candidates {
-            (write_probe_path(&path)?, AccessIntent::Write)
-        } else {
-            (existing_read_probe_path(&path)?, AccessIntent::Read)
-        };
-        let path = path.to_path_buf();
+        let report = ManifestCleanupAccessReports::candidate_entry(
+            manifest_path,
+            candidate,
+            removes_candidates,
+        )?;
         check_control()?;
-        guards.push(preflight_access_scope_checked(
-            &path,
-            intent,
-            "content manifest cleanup candidate",
-            &mut check_control,
-        )?);
+        guards.push(report.access_checked(&mut check_control)?);
     }
     check_control()?;
     Ok(guards)

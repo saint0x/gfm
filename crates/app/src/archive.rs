@@ -1,5 +1,6 @@
 use crate::access::{
-    preflight_access_scope_checked, preflight_volume_access_scope, ScopedAccessGuard,
+    preflight_access_scope_checked, preflight_access_scope_checked_with_volume_report,
+    preflight_volume_access_scope, preflight_volume_access_scope_with_report, ScopedAccessGuard,
 };
 use crate::runtime::{
     run_retriable_volume_task_cancellable_with_payload_path,
@@ -12,7 +13,7 @@ use crate::{
 };
 use gfm_index::{ContentArchiveManifestEntry, ContentMergeTier};
 use gfm_jobs::{Cancellation, Priority};
-use gfm_mac::AccessIntent;
+use gfm_mac::{AccessIntent, VolumeDiscoveryReport};
 use gfm_store::{
     atomic_write_checked, dictionary_term_report_from_records, fuzzy_postings_from_records,
     inspect_archive_schema_checked, metadata_postings_from_records,
@@ -612,14 +613,6 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
     Ok(true)
 }
 
-fn retain_archive_read_access_checked(
-    path: &Path,
-    worker: &str,
-    check_control: impl FnMut() -> Result<()>,
-) -> Result<ScopedAccessGuard> {
-    preflight_access_scope_checked(path, AccessIntent::Read, worker, check_control)
-}
-
 fn run_archive_read_cancellable<T>(
     path: PathBuf,
     worker: &'static str,
@@ -628,16 +621,146 @@ fn run_archive_read_cancellable<T>(
 where
     T: Send + 'static,
 {
-    preflight_volume_access_scope(&path, AccessIntent::Read, worker)?;
-    let volume = detect_volume_id(&path)
-        .ok()
-        .or_else(|| parent_volume(&path));
+    let access_report = ArchiveAccessReport::new(path.clone(), AccessIntent::Read);
+    access_report.preflight_volume(worker)?;
+    let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
         cancellation.check()?;
-        let _access = retain_archive_read_access_checked(&path, worker, || cancellation.check())?;
+        let _access = access_report.access_checked(worker, || cancellation.check())?;
         cancellation.check()?;
         read(path, &cancellation)
     })
+}
+
+#[derive(Clone)]
+struct ArchiveAccessReport {
+    path: PathBuf,
+    intent: AccessIntent,
+    volume_report: VolumeDiscoveryReport,
+}
+
+impl ArchiveAccessReport {
+    fn new(path: PathBuf, intent: AccessIntent) -> Self {
+        let volume_report = VolumeDiscoveryReport::for_containing_path(&path);
+        Self {
+            path,
+            intent,
+            volume_report,
+        }
+    }
+
+    fn preflight_volume(&self, worker: &str) -> Result<()> {
+        preflight_volume_access_scope_with_report(
+            &self.path,
+            self.intent,
+            worker,
+            &self.volume_report,
+        )
+    }
+
+    fn access_checked(
+        &self,
+        worker: &str,
+        check_control: impl FnMut() -> Result<()>,
+    ) -> Result<ScopedAccessGuard> {
+        preflight_access_scope_checked_with_volume_report(
+            &self.path,
+            self.intent,
+            worker,
+            &self.volume_report,
+            check_control,
+        )
+    }
+
+    fn volume(&self) -> Option<VolumeId> {
+        self.volume_report
+            .volume_for_path(&self.path)
+            .map(|volume| volume.id)
+    }
+}
+
+#[derive(Clone)]
+struct LabeledArchiveAccessReport {
+    worker: String,
+    report: ArchiveAccessReport,
+}
+
+#[derive(Clone)]
+struct RecordSidecarBuildAccessReports {
+    entries: [LabeledArchiveAccessReport; 2],
+}
+
+impl RecordSidecarBuildAccessReports {
+    fn for_paths(records: &Path, output: &Path) -> Result<Self> {
+        Ok(Self {
+            entries: [
+                LabeledArchiveAccessReport {
+                    worker: "records".to_string(),
+                    report: ArchiveAccessReport::new(records.to_path_buf(), AccessIntent::Read),
+                },
+                LabeledArchiveAccessReport {
+                    worker: "output".to_string(),
+                    report: ArchiveAccessReport::new(
+                        write_probe_path(output)?.to_path_buf(),
+                        AccessIntent::Write,
+                    ),
+                },
+            ],
+        })
+    }
+
+    fn preflight_volumes(&self, worker: &str) -> Result<()> {
+        for entry in &self.entries {
+            entry
+                .report
+                .preflight_volume(&format!("{worker} {}", entry.worker))?;
+        }
+        Ok(())
+    }
+
+    fn access_checked(
+        &self,
+        worker: &str,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<ScopedAccessGuard>> {
+        let mut guards = Vec::with_capacity(self.entries.len());
+        for entry in &self.entries {
+            check_control()?;
+            guards.push(
+                entry
+                    .report
+                    .access_checked(&format!("{worker} {}", entry.worker), &mut check_control)?,
+            );
+        }
+        check_control()?;
+        Ok(guards)
+    }
+
+    fn first_volume(&self) -> Option<VolumeId> {
+        self.entries.iter().find_map(|entry| entry.report.volume())
+    }
+}
+
+#[cfg(test)]
+fn retain_archive_read_access_checked(
+    path: &Path,
+    worker: &str,
+    check_control: impl FnMut() -> Result<()>,
+) -> Result<ScopedAccessGuard> {
+    ArchiveAccessReport::new(path.to_path_buf(), AccessIntent::Read)
+        .access_checked(worker, check_control)
+}
+
+#[cfg(test)]
+fn retain_record_sidecar_build_access_checked(
+    records: &Path,
+    output: &Path,
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Vec<ScopedAccessGuard>> {
+    check_control()?;
+    let access_reports = RecordSidecarBuildAccessReports::for_paths(records, output)?;
+    access_reports.access_checked(worker, &mut check_control)
 }
 
 fn run_archive_rebuild_plan(inputs: ArchiveRebuildInputs) -> Result<Vec<String>> {
@@ -755,46 +878,6 @@ fn run_sidecar_recovery_plan(
     })
 }
 
-fn retain_record_sidecar_build_access_checked(
-    records: &Path,
-    output: &Path,
-    worker: &str,
-    mut check_control: impl FnMut() -> Result<()>,
-) -> Result<Vec<ScopedAccessGuard>> {
-    check_control()?;
-    let output_probe = write_probe_path(output)?.to_path_buf();
-    check_control()?;
-    let records_worker = format!("{worker} records");
-    let output_worker = format!("{worker} output");
-    Ok(vec![
-        preflight_access_scope_checked(
-            records,
-            AccessIntent::Read,
-            &records_worker,
-            &mut check_control,
-        )?,
-        preflight_access_scope_checked(
-            &output_probe,
-            AccessIntent::Write,
-            &output_worker,
-            &mut check_control,
-        )?,
-    ])
-}
-
-fn preflight_record_sidecar_build_volumes(
-    records: &Path,
-    output: &Path,
-    worker: &str,
-) -> Result<()> {
-    preflight_volume_access_scope(records, AccessIntent::Read, &format!("{worker} records"))?;
-    preflight_volume_access_scope(
-        write_probe_path(output)?,
-        AccessIntent::Write,
-        &format!("{worker} output"),
-    )
-}
-
 fn build_record_sidecar<T>(
     records: PathBuf,
     output: PathBuf,
@@ -804,16 +887,12 @@ fn build_record_sidecar<T>(
 where
     T: Send + 'static,
 {
-    preflight_record_sidecar_build_volumes(&records, &output, worker)?;
-    let volume = detect_volume_id(&records)
-        .ok()
-        .or_else(|| parent_volume(&records));
+    let access_reports = RecordSidecarBuildAccessReports::for_paths(&records, &output)?;
+    access_reports.preflight_volumes(worker)?;
+    let volume = access_reports.first_volume();
     run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
         cancellation.check()?;
-        let _access =
-            retain_record_sidecar_build_access_checked(&records, &output, worker, || {
-                cancellation.check()
-            })?;
+        let _access = access_reports.access_checked(worker, || cancellation.check())?;
         cancellation.check()?;
         let archive = MmapRecordArchive::open_checked(records, || cancellation.check())?;
         cancellation.check()?;
