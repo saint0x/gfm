@@ -88,10 +88,13 @@ pub(crate) fn preflight_access_scope_checked(
     path: &Path,
     intent: AccessIntent,
     worker: &str,
-    check_control: impl FnMut() -> Result<()>,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<ScopedAccessGuard> {
+    check_control()?;
     let volume_path = absolute_volume_probe_path(path);
-    let volume_report = VolumeDiscoveryReport::for_containing_path(&volume_path);
+    let volume_report =
+        VolumeDiscoveryReport::for_containing_path_checked(&volume_path, &mut check_control)?;
+    check_control()?;
     preflight_access_scope_checked_with_volume_report(
         path,
         intent,
@@ -147,9 +150,17 @@ pub(crate) fn preflight_volume_access_scope_with_report(
     preflight_volume_access_in_report(path, &volume_path, intent, worker, volume_report)
 }
 
-fn preflight_volume_access(path: &Path, intent: AccessIntent, worker: &str) -> Result<()> {
+fn preflight_volume_access_checked(
+    path: &Path,
+    intent: AccessIntent,
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    check_control()?;
     let volume_path = absolute_volume_probe_path(path);
-    let report = VolumeDiscoveryReport::for_containing_path(&volume_path);
+    let report =
+        VolumeDiscoveryReport::for_containing_path_checked(&volume_path, &mut check_control)?;
+    check_control()?;
     preflight_volume_access_in_report(path, &volume_path, intent, worker, &report)
 }
 
@@ -278,7 +289,12 @@ fn retained_security_accesses_from_store_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<SecurityScopedBookmarkAccess>> {
     check_control()?;
-    preflight_volume_access(store.path(), AccessIntent::Read, "security bookmark store")?;
+    preflight_volume_access_checked(
+        store.path(),
+        AccessIntent::Read,
+        "security bookmark store",
+        &mut check_control,
+    )?;
     check_control()?;
     let lookup = store.start_access_for_path_checked(
         &report.path,
@@ -439,6 +455,37 @@ mod tests {
 
         assert_eq!(err, GfmError::Cancelled);
         assert!(!store.path().exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn access_scope_checked_honors_pre_cancelled_control_before_volume_discovery() {
+        let root = unique_temp_dir("gfm-access-scope-volume-pre-cancel");
+        let path = root.join("Preview.pdf");
+        fs::write(&path, "%PDF-1.7\n").unwrap();
+
+        let result =
+            preflight_access_scope_checked(&path, AccessIntent::Preview, "preview", || {
+                Err(GfmError::Cancelled)
+            });
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bookmark_store_volume_preflight_checked_honors_pre_cancelled_control() {
+        let root = unique_temp_dir("gfm-access-bookmark-store-volume-pre-cancel");
+        let store_path = root.join("bookmarks.tsv");
+
+        let result = preflight_volume_access_checked(
+            &store_path,
+            AccessIntent::Read,
+            "security bookmark store",
+            || Err(GfmError::Cancelled),
+        );
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
         fs::remove_dir_all(root).unwrap();
     }
 
