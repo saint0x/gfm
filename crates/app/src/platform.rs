@@ -1817,11 +1817,6 @@ struct PreviewAccessReport {
 }
 
 impl PreviewAccessReport {
-    fn new(path: PathBuf) -> Self {
-        Self::new_checked(path, || Ok(()))
-            .expect("uncancellable preview access report cannot cancel")
-    }
-
     fn new_checked(path: PathBuf, mut check_control: impl FnMut() -> Result<()>) -> Result<Self> {
         let volume_path = absolute_preview_path(&path);
         check_control()?;
@@ -2521,7 +2516,7 @@ fn run_volume_operation(
 
 fn run_native_icon(path: PathBuf) -> Result<NativeIconDescriptor> {
     const WORKER: &str = "native icon";
-    let access_report = PreviewAccessReport::new(path);
+    let access_report = PreviewAccessReport::new_checked(path, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
@@ -2537,7 +2532,7 @@ fn run_native_icon(path: PathBuf) -> Result<NativeIconDescriptor> {
 
 fn run_native_icon_bridge(path: PathBuf) -> Result<NativeIconBridgeContract> {
     const WORKER: &str = "native icon bridge";
-    let access_report = PreviewAccessReport::new(path);
+    let access_report = PreviewAccessReport::new_checked(path, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
@@ -2556,7 +2551,7 @@ fn run_native_icon_bridge(path: PathBuf) -> Result<NativeIconBridgeContract> {
 
 fn run_icon_preview(path: PathBuf) -> Result<IconPreviewContract> {
     const WORKER: &str = "icon preview";
-    let access_report = PreviewAccessReport::new(path);
+    let access_report = PreviewAccessReport::new_checked(path, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
     let payload_path = access_report.path.clone();
@@ -2573,7 +2568,7 @@ fn run_icon_preview_retry_probe(
     attempt_state: PathBuf,
 ) -> Result<IconPreviewContract> {
     const WORKER: &str = "icon preview";
-    let access_report = PreviewAccessReport::new(path);
+    let access_report = PreviewAccessReport::new_checked(path, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     PlatformAccessReport::new(
         write_probe_path(&attempt_state)?.to_path_buf(),
@@ -2595,7 +2590,7 @@ fn run_icon_preview_retry_probe(
 
 fn run_quicklook_session(path: PathBuf) -> Result<QuickLookSessionContract> {
     const WORKER: &str = "quicklook preview";
-    let access_report = PreviewAccessReport::new(path);
+    let access_report = PreviewAccessReport::new_checked(path, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
     let payload_path = access_report.path.clone();
@@ -2612,7 +2607,7 @@ fn run_quicklook_session_retry_probe(
     attempt_state: PathBuf,
 ) -> Result<QuickLookSessionContract> {
     const WORKER: &str = "quicklook preview";
-    let access_report = PreviewAccessReport::new(path);
+    let access_report = PreviewAccessReport::new_checked(path, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     PlatformAccessReport::new(
         write_probe_path(&attempt_state)?.to_path_buf(),
@@ -2634,7 +2629,7 @@ fn run_quicklook_session_retry_probe(
 
 fn run_thumbnail_generation(path: PathBuf) -> Result<ThumbnailGenerationContract> {
     const WORKER: &str = "thumbnail generation";
-    let access_report = PreviewAccessReport::new(path);
+    let access_report = PreviewAccessReport::new_checked(path, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
     let payload_path = access_report.path.clone();
@@ -2653,7 +2648,7 @@ fn run_thumbnail_generation_retry_probe(
     attempt_state: PathBuf,
 ) -> Result<ThumbnailGenerationContract> {
     const WORKER: &str = "thumbnail generation";
-    let access_report = PreviewAccessReport::new(path);
+    let access_report = PreviewAccessReport::new_checked(path, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     PlatformAccessReport::new(
         write_probe_path(&attempt_state)?.to_path_buf(),
@@ -2795,7 +2790,7 @@ fn run_adaptive_quicklook_session(
     cancel_after_access: bool,
 ) -> Result<crate::runtime::ScheduledTaskOutcome<QuickLookSessionContract>> {
     const WORKER: &str = "adaptive quicklook preview";
-    let access_report = PreviewAccessReport::new(path);
+    let access_report = PreviewAccessReport::new_checked(path, || Ok(()))?;
     let volume_access_report = access_report.clone();
     let payload_path = access_report.path.clone();
     run_preview_contract_adaptive_with_volume_and_payload_path(
@@ -2855,7 +2850,7 @@ fn run_adaptive_thumbnail_generation(
 ) -> Result<crate::runtime::ScheduledTaskOutcome<ThumbnailGenerationContract>> {
     const VOLUME_WORKER: &str = "adaptive thumbnail generation volume";
     const WORKER: &str = "adaptive thumbnail generation";
-    let access_report = PreviewAccessReport::new(path);
+    let access_report = PreviewAccessReport::new_checked(path, || Ok(()))?;
     let volume_access_report = access_report.clone();
     let payload_path = access_report.path.clone();
     run_preview_contract_adaptive_with_volume_and_payload_path(
