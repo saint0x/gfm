@@ -607,10 +607,6 @@ pub(crate) fn parent_volume(path: &Path) -> Option<VolumeId> {
     }
 }
 
-pub(crate) fn path_volume(path: &Path) -> Option<VolumeId> {
-    detect_volume_id(path).ok().or_else(|| parent_volume(path))
-}
-
 pub(crate) fn run_preview_contract_cancellable_with_payload_path<T>(
     volume: Option<VolumeId>,
     label: &'static str,
