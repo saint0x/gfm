@@ -162,8 +162,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let path = required_path(args.next(), "extract-worker-adaptive requires a path")?;
             let pressure = parse_required_scheduling_pressure(args, "extract worker")?;
             let _scratch_access = preflight_adaptive_extraction_worker_scratch()?;
-            let access_report =
-                ForegroundContentIndexAccessReports::entry(path.clone(), AccessIntent::Read);
+            let access_report = ForegroundContentIndexAccessReports::entry_checked(
+                path.clone(),
+                AccessIntent::Read,
+                || Ok(()),
+            )?;
             let volume_report = access_report.clone();
             let outcome = run_scheduled_volume_task_cancellable_with_volume_and_payload_path(
                 Priority::Background,
@@ -871,8 +874,11 @@ fn run_extraction_report(
     extractor: Extractor,
     retry_probe: Option<PathBuf>,
 ) -> Result<String> {
-    let access_report =
-        ForegroundContentIndexAccessReports::entry(path.clone(), AccessIntent::Read);
+    let access_report = ForegroundContentIndexAccessReports::entry_checked(
+        path.clone(),
+        AccessIntent::Read,
+        || Ok(()),
+    )?;
     let retry_probe_access_report = retry_probe_access_report(retry_probe.as_deref())?;
     access_report.preflight_volume(worker)?;
     if matches!(fs::metadata(&path), Err(err) if err.kind() == io::ErrorKind::NotFound) {
@@ -919,8 +925,11 @@ fn run_extraction_report(
 
 fn run_extraction_cache(path: PathBuf) -> Result<String> {
     const WORKER: &str = "content extraction cache";
-    let access_report =
-        ForegroundContentIndexAccessReports::entry(path.clone(), AccessIntent::Read);
+    let access_report = ForegroundContentIndexAccessReports::entry_checked(
+        path.clone(),
+        AccessIntent::Read,
+        || Ok(()),
+    )?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
@@ -1010,7 +1019,7 @@ fn load_resumable_content_job_spec(
     journal: &JobJournal,
 ) -> Result<Option<(RecoverableContentJobs, ContentIndexJobSpec)>> {
     const WORKER: &str = "resume background content recovery";
-    let access_reports = BackgroundContentRecoveryAccessReports::for_paths(&spec_path, journal);
+    let access_reports = BackgroundContentRecoveryAccessReports::for_paths(&spec_path, journal)?;
     access_reports.preflight_recovery_stores()?;
     let volume = access_reports.first_volume();
     let journal = JobJournal::new(journal.path().to_path_buf());
@@ -1747,7 +1756,7 @@ mod tests {
     fn optional_recovery_store_access_checked_honors_pre_cancelled_control() {
         let root = unique_temp_dir("gfm-optional-recovery-access-pre-cancel");
         let store = root.join("journal.tsv");
-        let reports = OptionalRecoveryStoreAccessReports::for_path(&store);
+        let reports = OptionalRecoveryStoreAccessReports::for_path(&store).unwrap();
 
         let result = reports.access_checked("background content recovery journal", || {
             Err(GfmError::Cancelled)
@@ -1812,16 +1821,18 @@ struct BackgroundContentRecoveryAccessReports {
 }
 
 impl BackgroundContentRecoveryAccessReports {
-    fn for_paths(spec_path: &Path, journal: &JobJournal) -> Self {
-        Self {
-            journal: OptionalRecoveryStoreAccessReports::for_path(journal.path()),
+    fn for_paths(spec_path: &Path, journal: &JobJournal) -> Result<Self> {
+        Ok(Self {
+            journal: OptionalRecoveryStoreAccessReports::for_path(journal.path())?,
             progress: runtime_progress_store()
-                .map(|store| OptionalRecoveryStoreAccessReports::for_path(store.path())),
-            spec: ForegroundContentIndexAccessReports::entry(
+                .map(|store| OptionalRecoveryStoreAccessReports::for_path(store.path()))
+                .transpose()?,
+            spec: ForegroundContentIndexAccessReports::entry_checked(
                 spec_path.to_path_buf(),
                 AccessIntent::Read,
-            ),
-        }
+                || Ok(()),
+            )?,
+        })
     }
 
     fn preflight_recovery_stores(&self) -> Result<()> {
@@ -1852,17 +1863,19 @@ struct OptionalRecoveryStoreAccessReports {
 }
 
 impl OptionalRecoveryStoreAccessReports {
-    fn for_path(path: &Path) -> Self {
-        Self {
-            parent: ForegroundContentIndexAccessReports::entry(
+    fn for_path(path: &Path) -> Result<Self> {
+        Ok(Self {
+            parent: ForegroundContentIndexAccessReports::entry_checked(
                 crate::parent_or_cwd(path).to_path_buf(),
                 AccessIntent::Read,
-            ),
-            store: ForegroundContentIndexAccessReports::entry(
+                || Ok(()),
+            )?,
+            store: ForegroundContentIndexAccessReports::entry_checked(
                 path.to_path_buf(),
                 AccessIntent::Read,
-            ),
-        }
+                || Ok(()),
+            )?,
+        })
     }
 
     fn preflight_volumes(&self, worker: &str) -> Result<()> {
@@ -1920,11 +1933,16 @@ impl ExtractionQuarantineAccessReports {
     fn for_paths(path: &Path, store: &Path) -> Result<Self> {
         Ok(Self {
             entries: [
-                ForegroundContentIndexAccessReports::entry(path.to_path_buf(), AccessIntent::Read),
-                ForegroundContentIndexAccessReports::entry(
+                ForegroundContentIndexAccessReports::entry_checked(
+                    path.to_path_buf(),
+                    AccessIntent::Read,
+                    || Ok(()),
+                )?,
+                ForegroundContentIndexAccessReports::entry_checked(
                     checked_write_probe_path(store)?.to_path_buf(),
                     AccessIntent::Write,
-                ),
+                    || Ok(()),
+                )?,
             ],
         })
     }
@@ -2079,11 +2097,6 @@ impl ForegroundContentIndexAccessReports {
                 Self::entry_checked(content_probe, AccessIntent::Write, &mut check_control)?,
             ],
         })
-    }
-
-    fn entry(path: PathBuf, intent: AccessIntent) -> ForegroundContentIndexAccessReport {
-        Self::entry_checked(path, intent, || Ok(()))
-            .expect("uncancellable foreground content access report cannot cancel")
     }
 
     fn entry_checked(

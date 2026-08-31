@@ -278,10 +278,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             access_reports.preflight_volumes()?;
             let volume = access_reports.first_volume();
             if let Some(retry_probe) = retry_probe.as_ref() {
-                ArchiveAccessReport::new(
+                ArchiveAccessReport::new_checked(
                     write_probe_path(retry_probe)?.to_path_buf(),
                     AccessIntent::Write,
-                )
+                    || Ok(()),
+                )?
                 .preflight_volume("derived sidecar rebuild")?;
             }
             let rebuild = run_retriable_volume_task_cancellable_with_payload_path(
@@ -508,10 +509,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             access_reports.preflight_volumes()?;
             let volume = access_reports.first_volume();
             if let Some(retry_probe) = retry_probe.as_ref() {
-                ArchiveAccessReport::new(
+                ArchiveAccessReport::new_checked(
                     write_probe_path(retry_probe)?.to_path_buf(),
                     AccessIntent::Write,
-                )
+                    || Ok(()),
+                )?
                 .preflight_volume("sidecar repair")?;
             }
             let report = run_retriable_volume_task_cancellable_with_payload_path(
@@ -603,7 +605,8 @@ fn run_archive_read_cancellable<T>(
 where
     T: Send + 'static,
 {
-    let access_report = ArchiveAccessReport::new(path.clone(), AccessIntent::Read);
+    let access_report =
+        ArchiveAccessReport::new_checked(path.clone(), AccessIntent::Read, || Ok(()))?;
     access_report.preflight_volume(worker)?;
     let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
@@ -622,11 +625,6 @@ struct ArchiveAccessReport {
 }
 
 impl ArchiveAccessReport {
-    fn new(path: PathBuf, intent: AccessIntent) -> Self {
-        Self::new_checked(path, intent, || Ok(()))
-            .expect("uncancellable archive access report cannot cancel")
-    }
-
     fn new_checked(
         path: PathBuf,
         intent: AccessIntent,
@@ -685,10 +683,6 @@ struct ArchiveAccessReports {
 }
 
 impl ArchiveAccessReports {
-    fn new(entries: Vec<(PathBuf, AccessIntent, String)>) -> Self {
-        Self::new_checked(entries, || Ok(())).expect("uncancellable archive reports cannot cancel")
-    }
-
     fn new_checked(
         entries: Vec<(PathBuf, AccessIntent, String)>,
         mut check_control: impl FnMut() -> Result<()>,
@@ -835,7 +829,7 @@ fn retain_record_sidecar_build_access_checked(
 
 fn run_archive_rebuild_plan(inputs: ArchiveRebuildInputs) -> Result<Vec<String>> {
     const WORKER: &str = "archive rebuild plan";
-    let access_reports = archive_rebuild_plan_access_reports(&inputs);
+    let access_reports = archive_rebuild_plan_access_reports(&inputs)?;
     access_reports.preflight_volumes()?;
     let volume = access_reports.first_volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
@@ -868,7 +862,7 @@ where
 
 fn run_columns_rebuild_plan(records: PathBuf, columns: PathBuf) -> Result<String> {
     const WORKER: &str = "columns rebuild plan";
-    let access_reports = columns_rebuild_plan_access_reports(&records, &columns);
+    let access_reports = columns_rebuild_plan_access_reports(&records, &columns)?;
     access_reports.preflight_volumes()?;
     let volume = access_reports.first_volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
@@ -902,7 +896,7 @@ fn run_derived_sidecar_rebuild_plan(
     sidecar: PathBuf,
 ) -> Result<String> {
     const WORKER: &str = "derived sidecar rebuild plan";
-    let access_reports = derived_sidecar_rebuild_plan_access_reports(&records, &sidecar);
+    let access_reports = derived_sidecar_rebuild_plan_access_reports(&records, &sidecar)?;
     access_reports.preflight_volumes()?;
     let volume = access_reports.first_volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
@@ -918,7 +912,7 @@ fn run_sidecar_recovery_plan(
     sidecars: SidecarPaths,
 ) -> Result<SidecarRecoveryPlan> {
     const WORKER: &str = "sidecar repair plan";
-    let access_reports = sidecar_recovery_plan_access_reports(&records, &sidecars);
+    let access_reports = sidecar_recovery_plan_access_reports(&records, &sidecars)?;
     access_reports.preflight_volumes()?;
     let volume = access_reports.first_volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
@@ -958,38 +952,47 @@ fn archive_migration_access_reports(
     backup_dir: &Path,
     worker: &str,
 ) -> Result<ArchiveAccessReports> {
-    Ok(ArchiveAccessReports::new(vec![
-        (
-            archive.to_path_buf(),
-            AccessIntent::Read,
-            format!("{worker} archive"),
-        ),
-        (
-            write_probe_path(archive)?.to_path_buf(),
-            AccessIntent::Write,
-            format!("{worker} archive"),
-        ),
-        (
-            write_probe_path(backup_dir)?.to_path_buf(),
-            AccessIntent::Write,
-            format!("{worker} backup"),
-        ),
-    ]))
+    ArchiveAccessReports::new_checked(
+        vec![
+            (
+                archive.to_path_buf(),
+                AccessIntent::Read,
+                format!("{worker} archive"),
+            ),
+            (
+                write_probe_path(archive)?.to_path_buf(),
+                AccessIntent::Write,
+                format!("{worker} archive"),
+            ),
+            (
+                write_probe_path(backup_dir)?.to_path_buf(),
+                AccessIntent::Write,
+                format!("{worker} backup"),
+            ),
+        ],
+        || Ok(()),
+    )
 }
 
-fn columns_rebuild_plan_access_reports(records: &Path, columns: &Path) -> ArchiveAccessReports {
-    ArchiveAccessReports::new(vec![
-        (
-            records.to_path_buf(),
-            AccessIntent::Read,
-            "columns rebuild plan records".to_string(),
-        ),
-        (
-            archive_probe_path(columns).to_path_buf(),
-            AccessIntent::Read,
-            "columns rebuild plan columns".to_string(),
-        ),
-    ])
+fn columns_rebuild_plan_access_reports(
+    records: &Path,
+    columns: &Path,
+) -> Result<ArchiveAccessReports> {
+    ArchiveAccessReports::new_checked(
+        vec![
+            (
+                records.to_path_buf(),
+                AccessIntent::Read,
+                "columns rebuild plan records".to_string(),
+            ),
+            (
+                archive_probe_path(columns).to_path_buf(),
+                AccessIntent::Read,
+                "columns rebuild plan columns".to_string(),
+            ),
+        ],
+        || Ok(()),
+    )
 }
 
 fn columns_rebuild_access_reports(
@@ -997,46 +1000,52 @@ fn columns_rebuild_access_reports(
     columns: &Path,
     backup_dir: &Path,
 ) -> Result<ArchiveAccessReports> {
-    Ok(ArchiveAccessReports::new(vec![
-        (
-            records.to_path_buf(),
-            AccessIntent::Read,
-            "columns rebuild records".to_string(),
-        ),
-        (
-            archive_probe_path(columns).to_path_buf(),
-            AccessIntent::Read,
-            "columns rebuild columns".to_string(),
-        ),
-        (
-            write_probe_path(columns)?.to_path_buf(),
-            AccessIntent::Write,
-            "columns rebuild output".to_string(),
-        ),
-        (
-            write_probe_path(backup_dir)?.to_path_buf(),
-            AccessIntent::Write,
-            "columns rebuild backup".to_string(),
-        ),
-    ]))
+    ArchiveAccessReports::new_checked(
+        vec![
+            (
+                records.to_path_buf(),
+                AccessIntent::Read,
+                "columns rebuild records".to_string(),
+            ),
+            (
+                archive_probe_path(columns).to_path_buf(),
+                AccessIntent::Read,
+                "columns rebuild columns".to_string(),
+            ),
+            (
+                write_probe_path(columns)?.to_path_buf(),
+                AccessIntent::Write,
+                "columns rebuild output".to_string(),
+            ),
+            (
+                write_probe_path(backup_dir)?.to_path_buf(),
+                AccessIntent::Write,
+                "columns rebuild backup".to_string(),
+            ),
+        ],
+        || Ok(()),
+    )
 }
 
 fn derived_sidecar_rebuild_plan_access_reports(
     records: &Path,
     sidecar: &Path,
-) -> ArchiveAccessReports {
-    ArchiveAccessReports::new(vec![
-        (
-            records.to_path_buf(),
-            AccessIntent::Read,
-            "derived sidecar rebuild plan records".to_string(),
-        ),
-        (
-            archive_probe_path(sidecar).to_path_buf(),
-            AccessIntent::Read,
-            "derived sidecar rebuild plan sidecar".to_string(),
-        ),
-    ])
+) -> Result<ArchiveAccessReports> {
+    ArchiveAccessReports::new_checked(
+        vec![
+            (
+                records.to_path_buf(),
+                AccessIntent::Read,
+                "derived sidecar rebuild plan records".to_string(),
+            ),
+            (
+                archive_probe_path(sidecar).to_path_buf(),
+                AccessIntent::Read,
+                "derived sidecar rebuild plan sidecar".to_string(),
+            ),
+        ],
+        || Ok(()),
+    )
 }
 
 #[cfg(test)]
@@ -1044,15 +1053,18 @@ fn retain_archive_rebuild_plan_access_checked(
     inputs: &ArchiveRebuildInputs,
     check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
-    archive_rebuild_plan_access_reports(inputs).access_checked(check_control)
+    archive_rebuild_plan_access_reports(inputs)?.access_checked(check_control)
 }
 
-fn archive_rebuild_plan_access_reports(inputs: &ArchiveRebuildInputs) -> ArchiveAccessReports {
-    ArchiveAccessReports::new(
+fn archive_rebuild_plan_access_reports(
+    inputs: &ArchiveRebuildInputs,
+) -> Result<ArchiveAccessReports> {
+    ArchiveAccessReports::new_checked(
         archive_rebuild_plan_read_paths(inputs)
             .into_iter()
             .map(|(path, worker)| (path.to_path_buf(), AccessIntent::Read, worker.to_string()))
             .collect(),
+        || Ok(()),
     )
 }
 
@@ -1109,23 +1121,26 @@ fn derived_sidecar_rebuild_access_reports(
     sidecar: &Path,
     backup_dir: &Path,
 ) -> Result<ArchiveAccessReports> {
-    Ok(ArchiveAccessReports::new(vec![
-        (
-            records.to_path_buf(),
-            AccessIntent::Read,
-            "derived sidecar rebuild records".to_string(),
-        ),
-        (
-            write_probe_path(sidecar)?.to_path_buf(),
-            AccessIntent::Write,
-            "derived sidecar rebuild output".to_string(),
-        ),
-        (
-            write_probe_path(backup_dir)?.to_path_buf(),
-            AccessIntent::Write,
-            "derived sidecar rebuild backup".to_string(),
-        ),
-    ]))
+    ArchiveAccessReports::new_checked(
+        vec![
+            (
+                records.to_path_buf(),
+                AccessIntent::Read,
+                "derived sidecar rebuild records".to_string(),
+            ),
+            (
+                write_probe_path(sidecar)?.to_path_buf(),
+                AccessIntent::Write,
+                "derived sidecar rebuild output".to_string(),
+            ),
+            (
+                write_probe_path(backup_dir)?.to_path_buf(),
+                AccessIntent::Write,
+                "derived sidecar rebuild backup".to_string(),
+            ),
+        ],
+        || Ok(()),
+    )
 }
 
 #[cfg(test)]
@@ -1134,13 +1149,13 @@ fn retain_sidecar_recovery_plan_access_checked(
     sidecars: &SidecarPaths,
     check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
-    sidecar_recovery_plan_access_reports(records, sidecars).access_checked(check_control)
+    sidecar_recovery_plan_access_reports(records, sidecars)?.access_checked(check_control)
 }
 
 fn sidecar_recovery_plan_access_reports(
     records: &Path,
     sidecars: &SidecarPaths,
-) -> ArchiveAccessReports {
+) -> Result<ArchiveAccessReports> {
     let mut entries = vec![(
         records.to_path_buf(),
         AccessIntent::Read,
@@ -1153,7 +1168,7 @@ fn sidecar_recovery_plan_access_reports(
             "sidecar repair plan sidecar".to_string(),
         )
     }));
-    ArchiveAccessReports::new(entries)
+    ArchiveAccessReports::new_checked(entries, || Ok(()))
 }
 
 #[cfg(test)]
@@ -1190,7 +1205,7 @@ fn sidecar_recovery_access_reports(
             "sidecar repair output".to_string(),
         ));
     }
-    Ok(ArchiveAccessReports::new(entries))
+    ArchiveAccessReports::new_checked(entries, || Ok(()))
 }
 
 fn sidecar_paths(sidecars: &SidecarPaths) -> impl Iterator<Item = &Path> {
