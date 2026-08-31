@@ -1,10 +1,9 @@
 use crate::{
     access::{
         preflight_access_scope_checked, preflight_access_scope_checked_with_volume_report,
-        preflight_volume_access_scope, preflight_volume_access_scope_with_report,
-        ScopedAccessGuard,
+        preflight_volume_access_scope_with_report, ScopedAccessGuard,
     },
-    parse_u64_arg, parse_usize_arg, path_volume, required_path,
+    parse_u64_arg, parse_usize_arg, required_path,
     runtime::{
         run_retriable_volume_task_cancellable_with_payload_path, run_volume_task_cancellable,
     },
@@ -972,10 +971,6 @@ fn enforce_index_access_checked(
     preflight_access_scope_checked(root, AccessIntent::Index, "index", check_control)
 }
 
-fn preflight_index_volume_access(root: &Path) -> Result<()> {
-    preflight_volume_access_scope(root, AccessIntent::Index, "index")
-}
-
 fn preflight_index_read_checked_with_volume_report(
     path: &Path,
     worker: &str,
@@ -1004,10 +999,6 @@ fn preflight_index_write_checked(
     let probe_path = write_probe_path(path)?;
     check_control()?;
     preflight_access_scope_checked(probe_path, AccessIntent::Write, worker, check_control)
-}
-
-fn preflight_index_write_volume(path: &Path, worker: &str) -> Result<()> {
-    preflight_volume_access_scope(write_probe_path(path)?, AccessIntent::Write, worker)
 }
 
 fn write_probe_path(path: &Path) -> Result<&Path> {
