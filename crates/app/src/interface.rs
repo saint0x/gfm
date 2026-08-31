@@ -266,7 +266,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let path = default_current_path(args.next());
             println!(
                 "{}",
-                SidebarContract::discover_with_volumes(path, native_sidebar_volumes()).as_tsv()
+                SidebarContract::discover_with_volumes(
+                    path,
+                    native_sidebar_volumes_checked(|| Ok(()))?
+                )
+                .as_tsv()
             );
         }
         "ui-sidebar-fileprovider-contract" => {
@@ -862,11 +866,6 @@ fn runtime_operation_conflict_input(
     } else {
         input
     }
-}
-
-fn native_sidebar_volumes() -> Vec<SidebarVolumeSpec> {
-    native_sidebar_volumes_checked(|| Ok(()))
-        .expect("non-cancellable native sidebar volume discovery cannot cancel")
 }
 
 fn native_sidebar_volumes_checked(
