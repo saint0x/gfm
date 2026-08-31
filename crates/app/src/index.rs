@@ -505,28 +505,22 @@ fn run_fsevents_cursor_checkpoint(
     event_id: u64,
     health: FseventsCursorHealth,
 ) -> Result<FseventsCursor> {
-    preflight_volume_access_scope(
-        &state,
-        AccessIntent::Read,
-        "fsevents cursor checkpoint state",
-    )?;
-    preflight_index_write_volume(&cursor, "fsevents cursor checkpoint")?;
-    let cursor_probe = write_probe_path(&cursor)?.to_path_buf();
-    let volume = path_volume(&state).or_else(|| path_volume(&cursor_probe));
+    let access_reports =
+        FseventsCursorCheckpointAccessReports::for_state_and_cursor(&state, &cursor)?;
+    access_reports.preflight_volumes()?;
+    let volume = access_reports.first_volume();
     run_volume_task_cancellable(
         volume,
         Priority::Visible,
         "fsevents cursor checkpoint",
         move |cancellation| {
             cancellation.check()?;
-            let _state_access =
-                preflight_index_read_checked(&state, "fsevents cursor checkpoint state", || {
-                    cancellation.check()
-                })?;
-            let _cursor_access =
-                preflight_index_write_checked(&cursor, "fsevents cursor checkpoint", || {
-                    cancellation.check()
-                })?;
+            let _state_access = access_reports
+                .state
+                .access_checked(|| cancellation.check())?;
+            let _cursor_access = access_reports
+                .cursor
+                .access_checked(|| cancellation.check())?;
             cancellation.check()?;
             Indexer::default().checkpoint_fsevents_cursor_cancellable(
                 state,
@@ -543,23 +537,21 @@ fn run_fsevents_cursor_resume(
     state: PathBuf,
     cursor: PathBuf,
 ) -> Result<gfm_index::FseventsResumePlan> {
-    preflight_volume_access_scope(&state, AccessIntent::Read, "fsevents cursor resume state")?;
-    preflight_volume_access_scope(&cursor, AccessIntent::Read, "fsevents cursor resume")?;
-    let volume = path_volume(&state).or_else(|| path_volume(&cursor));
+    let access_reports = FseventsCursorResumeAccessReports::for_state_and_cursor(&state, &cursor);
+    access_reports.preflight_volumes()?;
+    let volume = access_reports.first_volume();
     run_volume_task_cancellable(
         volume,
         Priority::Visible,
         "fsevents cursor resume",
         move |cancellation| {
             cancellation.check()?;
-            let _state_access =
-                preflight_index_read_checked(&state, "fsevents cursor resume state", || {
-                    cancellation.check()
-                })?;
-            let _cursor_access =
-                preflight_index_read_checked(&cursor, "fsevents cursor resume", || {
-                    cancellation.check()
-                })?;
+            let _state_access = access_reports
+                .state
+                .access_checked(|| cancellation.check())?;
+            let _cursor_access = access_reports
+                .cursor
+                .access_checked(|| cancellation.check())?;
             cancellation.check()?;
             Indexer::default().fsevents_resume_plan_cancellable(state, cursor, &cancellation)
         },
@@ -574,18 +566,13 @@ fn run_fsevents_repair_schedule(
     dropped_roots: Vec<PathBuf>,
     retry_probe: Option<PathBuf>,
 ) -> Result<gfm_index::RepairSchedule> {
-    preflight_volume_access_scope(&state, AccessIntent::Read, "fsevents repair schedule state")?;
-    preflight_volume_access_scope(
-        &cursor,
-        AccessIntent::Read,
-        "fsevents repair schedule cursor",
-    )?;
+    let access_reports =
+        FseventsRepairScheduleAccessReports::for_paths(&state, &cursor, &dropped_roots);
+    access_reports.preflight_state_and_cursor_volumes()?;
     if let Some(retry_probe) = retry_probe.as_ref() {
         preflight_index_write(retry_probe, "fsevents repair schedule")?;
     }
-    let volume = path_volume(&state)
-        .or_else(|| path_volume(&cursor))
-        .or_else(|| dropped_roots.iter().find_map(|root| path_volume(root)));
+    let volume = access_reports.first_volume();
     run_retriable_volume_task_cancellable_with_payload_path(
         volume,
         Priority::Visible,
@@ -596,8 +583,8 @@ fn run_fsevents_repair_schedule(
             let cursor = cursor.clone();
             let observed_event_ids = observed_event_ids.clone();
             let reason = reason.clone();
-            let dropped_roots = dropped_roots.clone();
             let retry_probe = retry_probe.clone();
+            let access_reports = access_reports.clone();
             cancellation.check()?;
             if let Some(retry_probe) = retry_probe.as_ref() {
                 fail_first_index_retry_probe_attempt(
@@ -606,26 +593,24 @@ fn run_fsevents_repair_schedule(
                     &cancellation,
                 )?;
             }
-            let existing_dropped_roots =
-                existing_dropped_roots_checked(&dropped_roots, || cancellation.check())?;
+            let existing_dropped_root_reports =
+                access_reports.existing_dropped_roots_checked(|| cancellation.check())?;
+            let existing_dropped_roots = existing_dropped_root_reports
+                .iter()
+                .map(|entry| entry.path.clone())
+                .collect::<Vec<_>>();
             cancellation.check()?;
-            let _state_access =
-                preflight_index_read_checked(&state, "fsevents repair schedule state", || {
-                    cancellation.check()
-                })?;
-            let _cursor_access =
-                preflight_index_read_checked(&cursor, "fsevents repair schedule cursor", || {
-                    cancellation.check()
-                })?;
-            let _dropped_access = existing_dropped_roots
+            let _state_access = access_reports
+                .state
+                .access_checked(|| cancellation.check())?;
+            let _cursor_access = access_reports
+                .cursor
+                .access_checked(|| cancellation.check())?;
+            let _dropped_access = existing_dropped_root_reports
                 .iter()
                 .map(|root| {
                     cancellation.check()?;
-                    preflight_index_read_checked(
-                        root,
-                        "fsevents repair schedule dropped root",
-                        || cancellation.check(),
-                    )
+                    root.access_checked(|| cancellation.check())
                 })
                 .collect::<Result<Vec<_>>>()?;
             cancellation.check()?;
@@ -641,27 +626,129 @@ fn run_fsevents_repair_schedule(
     )
 }
 
-fn existing_dropped_roots_checked(
-    dropped_roots: &[PathBuf],
+fn fsevents_state_access_report(path: &Path, worker: &'static str) -> IndexPathAccessReport {
+    IndexPathAccessReport::new(path.to_path_buf(), AccessIntent::Read, worker)
+}
+
+#[derive(Clone)]
+struct FseventsCursorCheckpointAccessReports {
+    state: IndexPathAccessReport,
+    cursor: IndexPathAccessReport,
+}
+
+impl FseventsCursorCheckpointAccessReports {
+    fn for_state_and_cursor(state: &Path, cursor: &Path) -> Result<Self> {
+        Ok(Self {
+            state: fsevents_state_access_report(state, "fsevents cursor checkpoint state"),
+            cursor: IndexPathAccessReport::write_probe(cursor, "fsevents cursor checkpoint")?,
+        })
+    }
+
+    fn preflight_volumes(&self) -> Result<()> {
+        self.state.preflight_volume()?;
+        self.cursor.preflight_volume()
+    }
+
+    fn first_volume(&self) -> Option<gfm_types::VolumeId> {
+        first_access_report_volume([&self.state, &self.cursor])
+    }
+}
+
+#[derive(Clone)]
+struct FseventsCursorResumeAccessReports {
+    state: IndexPathAccessReport,
+    cursor: IndexPathAccessReport,
+}
+
+impl FseventsCursorResumeAccessReports {
+    fn for_state_and_cursor(state: &Path, cursor: &Path) -> Self {
+        Self {
+            state: fsevents_state_access_report(state, "fsevents cursor resume state"),
+            cursor: IndexPathAccessReport::new(
+                cursor.to_path_buf(),
+                AccessIntent::Read,
+                "fsevents cursor resume",
+            ),
+        }
+    }
+
+    fn preflight_volumes(&self) -> Result<()> {
+        self.state.preflight_volume()?;
+        self.cursor.preflight_volume()
+    }
+
+    fn first_volume(&self) -> Option<gfm_types::VolumeId> {
+        first_access_report_volume([&self.state, &self.cursor])
+    }
+}
+
+#[derive(Clone)]
+struct FseventsRepairScheduleAccessReports {
+    state: IndexPathAccessReport,
+    cursor: IndexPathAccessReport,
+    dropped_roots: Vec<IndexPathAccessReport>,
+}
+
+impl FseventsRepairScheduleAccessReports {
+    fn for_paths(state: &Path, cursor: &Path, dropped_roots: &[PathBuf]) -> Self {
+        Self {
+            state: fsevents_state_access_report(state, "fsevents repair schedule state"),
+            cursor: IndexPathAccessReport::new(
+                cursor.to_path_buf(),
+                AccessIntent::Read,
+                "fsevents repair schedule cursor",
+            ),
+            dropped_roots: dropped_roots
+                .iter()
+                .map(|root| {
+                    IndexPathAccessReport::new(
+                        root.clone(),
+                        AccessIntent::Read,
+                        "fsevents repair schedule dropped root",
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    fn preflight_state_and_cursor_volumes(&self) -> Result<()> {
+        self.state.preflight_volume()?;
+        self.cursor.preflight_volume()
+    }
+
+    fn existing_dropped_roots_checked(
+        &self,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<IndexPathAccessReport>> {
+        existing_dropped_root_reports_checked(&self.dropped_roots, &mut check_control)
+    }
+
+    fn first_volume(&self) -> Option<gfm_types::VolumeId> {
+        first_access_report_volume(
+            [&self.state, &self.cursor]
+                .into_iter()
+                .chain(self.dropped_roots.iter()),
+        )
+    }
+}
+
+fn existing_dropped_root_reports_checked(
+    dropped_roots: &[IndexPathAccessReport],
     mut check_control: impl FnMut() -> Result<()>,
-) -> Result<Vec<PathBuf>> {
+) -> Result<Vec<IndexPathAccessReport>> {
     let mut existing = Vec::new();
     for root in dropped_roots {
         check_control()?;
-        if !root.try_exists().map_err(|err| {
+        if !root.path.try_exists().map_err(|err| {
             GfmError::io(
-                root,
+                &root.path,
                 format!("fsevents repair dropped root existence unavailable: {err}"),
             )
         })? {
             continue;
         }
         check_control()?;
-        preflight_volume_access_scope(
-            root,
-            AccessIntent::Read,
-            "fsevents repair schedule dropped root",
-        )?;
+        root.preflight_volume()?;
         check_control()?;
         existing.push(root.clone());
     }
@@ -699,6 +786,60 @@ struct IndexPathAccessReport {
     volume_report: VolumeDiscoveryReport,
 }
 
+impl IndexPathAccessReport {
+    fn new(path: PathBuf, intent: AccessIntent, worker: &'static str) -> Self {
+        let volume_report = VolumeDiscoveryReport::for_containing_path(&path);
+        Self {
+            path,
+            intent,
+            worker,
+            volume_report,
+        }
+    }
+
+    fn write_probe(path: &Path, worker: &'static str) -> Result<Self> {
+        Ok(Self::new(
+            write_probe_path(path)?.to_path_buf(),
+            AccessIntent::Write,
+            worker,
+        ))
+    }
+
+    fn preflight_volume(&self) -> Result<()> {
+        preflight_volume_access_scope_with_report(
+            &self.path,
+            self.intent,
+            self.worker,
+            &self.volume_report,
+        )
+    }
+
+    fn access_checked(
+        &self,
+        check_control: impl FnMut() -> Result<()>,
+    ) -> Result<ScopedAccessGuard> {
+        preflight_access_scope_checked_with_volume_report(
+            &self.path,
+            self.intent,
+            self.worker,
+            &self.volume_report,
+            check_control,
+        )
+    }
+
+    fn volume(&self) -> Option<gfm_types::VolumeId> {
+        self.volume_report
+            .volume_for_path(&self.path)
+            .map(|volume| volume.id)
+    }
+}
+
+fn first_access_report_volume<'a>(
+    reports: impl IntoIterator<Item = &'a IndexPathAccessReport>,
+) -> Option<gfm_types::VolumeId> {
+    reports.into_iter().find_map(IndexPathAccessReport::volume)
+}
+
 #[derive(Clone)]
 struct IndexBuildAccessReports {
     root: IndexPathAccessReport,
@@ -715,23 +856,12 @@ impl IndexBuildAccessReports {
     }
 
     fn entry(path: PathBuf, intent: AccessIntent, worker: &'static str) -> IndexPathAccessReport {
-        let volume_report = VolumeDiscoveryReport::for_containing_path(&path);
-        IndexPathAccessReport {
-            path,
-            intent,
-            worker,
-            volume_report,
-        }
+        IndexPathAccessReport::new(path, intent, worker)
     }
 
     fn preflight_volumes(&self) -> Result<()> {
         for entry in [&self.root, &self.output] {
-            preflight_volume_access_scope_with_report(
-                &entry.path,
-                entry.intent,
-                entry.worker,
-                &entry.volume_report,
-            )?;
+            entry.preflight_volume()?;
         }
         Ok(())
     }
@@ -740,35 +870,18 @@ impl IndexBuildAccessReports {
         &self,
         check_control: impl FnMut() -> Result<()>,
     ) -> Result<ScopedAccessGuard> {
-        preflight_access_scope_checked_with_volume_report(
-            &self.root.path,
-            self.root.intent,
-            self.root.worker,
-            &self.root.volume_report,
-            check_control,
-        )
+        self.root.access_checked(check_control)
     }
 
     fn preflight_output_access_checked(
         &self,
         check_control: impl FnMut() -> Result<()>,
     ) -> Result<ScopedAccessGuard> {
-        preflight_access_scope_checked_with_volume_report(
-            &self.output.path,
-            self.output.intent,
-            self.output.worker,
-            &self.output.volume_report,
-            check_control,
-        )
+        self.output.access_checked(check_control)
     }
 
     fn first_volume(&self) -> Option<gfm_types::VolumeId> {
-        [&self.root, &self.output].into_iter().find_map(|entry| {
-            entry
-                .volume_report
-                .volume_for_path(&entry.path)
-                .map(|volume| volume.id)
-        })
+        first_access_report_volume([&self.root, &self.output])
     }
 }
 
@@ -785,14 +898,6 @@ fn enforce_index_access_checked(
 
 fn preflight_index_volume_access(root: &Path) -> Result<()> {
     preflight_volume_access_scope(root, AccessIntent::Index, "index")
-}
-
-fn preflight_index_read_checked(
-    path: &Path,
-    worker: &str,
-    check_control: impl FnMut() -> Result<()>,
-) -> Result<ScopedAccessGuard> {
-    preflight_access_scope_checked(path, AccessIntent::Read, worker, check_control)
 }
 
 fn preflight_index_read_checked_with_volume_report(
@@ -963,7 +1068,7 @@ mod tests {
             },
         );
 
-        assert_eq!(result, Err(GfmError::Cancelled));
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
         fs::remove_file(path).unwrap();
     }
 
@@ -1012,10 +1117,15 @@ mod tests {
         let path = std::env::temp_dir()
             .join(format!("gfm-repair-root-cancel-{}", std::process::id()))
             .join("root-that-should-not-be-probed");
+        let report = IndexPathAccessReport::new(
+            path,
+            AccessIntent::Read,
+            "fsevents repair schedule dropped root",
+        );
 
-        let result = existing_dropped_roots_checked(&[path], || Err(GfmError::Cancelled));
+        let result = existing_dropped_root_reports_checked(&[report], || Err(GfmError::Cancelled));
 
-        assert_eq!(result, Err(GfmError::Cancelled));
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
     }
 
     #[test]
@@ -1028,9 +1138,19 @@ mod tests {
         let second = root.join("second");
         fs::create_dir_all(&first).unwrap();
         fs::create_dir_all(&second).unwrap();
+        let reports = [first, second]
+            .into_iter()
+            .map(|path| {
+                IndexPathAccessReport::new(
+                    path,
+                    AccessIntent::Read,
+                    "fsevents repair schedule dropped root",
+                )
+            })
+            .collect::<Vec<_>>();
         let mut checks = 0;
 
-        let result = existing_dropped_roots_checked(&[first, second], || {
+        let result = existing_dropped_root_reports_checked(&reports, || {
             checks += 1;
             if checks > 3 {
                 Err(GfmError::Cancelled)
@@ -1039,7 +1159,7 @@ mod tests {
             }
         });
 
-        assert_eq!(result, Err(GfmError::Cancelled));
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
         fs::remove_dir_all(root).unwrap();
     }
 }
