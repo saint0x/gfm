@@ -1656,12 +1656,12 @@ fn run_search_index_columns(
     retry_probe: Option<PathBuf>,
 ) -> Result<SearchIndexColumnsOutput> {
     const WORKER: &str = "search index columns";
-    preflight_volume_access_scope(&records, AccessIntent::Read, "search index columns records")?;
-    preflight_volume_access_scope(&columns, AccessIntent::Read, "search index columns columns")?;
+    let volume_reports = SearchIndexColumnsVolumeAccessReports::for_paths(&records, &columns);
+    volume_reports.preflight_volumes()?;
     if let Some(retry_probe) = retry_probe.as_ref() {
         preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, WORKER)?;
     }
-    let volume = path_volume(&records).or_else(|| path_volume(&columns));
+    let volume = volume_reports.first_volume();
     run_retriable_volume_task_cancellable_with_payload_path(
         volume,
         Priority::Visible,
@@ -1676,10 +1676,9 @@ fn run_search_index_columns(
             if let Some(retry_probe) = retry_probe.as_ref() {
                 fail_first_search_retry_probe_attempt(retry_probe, WORKER, &cancellation)?;
             }
-            let _access =
-                preflight_search_index_columns_access_checked(&records, &columns, || {
-                    cancellation.check()
-                })?;
+            let _access = preflight_search_index_columns_access_checked(&volume_reports, || {
+                cancellation.check()
+            })?;
             cancellation.check()?;
             let records = MmapRecordArchive::open_checked(records, || cancellation.check())?;
             cancellation.check()?;
@@ -1715,6 +1714,58 @@ fn run_search_index_columns(
             })
         },
     )
+}
+
+#[derive(Clone)]
+struct SearchIndexColumnsVolumeAccessReport {
+    path: PathBuf,
+    worker: &'static str,
+    volume_report: VolumeDiscoveryReport,
+}
+
+#[derive(Clone)]
+struct SearchIndexColumnsVolumeAccessReports {
+    entries: [SearchIndexColumnsVolumeAccessReport; 2],
+}
+
+impl SearchIndexColumnsVolumeAccessReports {
+    fn for_paths(records: &Path, columns: &Path) -> Self {
+        Self {
+            entries: [
+                Self::entry(records, "search index columns records"),
+                Self::entry(columns, "search index columns columns"),
+            ],
+        }
+    }
+
+    fn entry(path: &Path, worker: &'static str) -> SearchIndexColumnsVolumeAccessReport {
+        SearchIndexColumnsVolumeAccessReport {
+            path: path.to_path_buf(),
+            worker,
+            volume_report: VolumeDiscoveryReport::for_containing_path(path),
+        }
+    }
+
+    fn preflight_volumes(&self) -> Result<()> {
+        for entry in &self.entries {
+            preflight_volume_access_scope_with_report(
+                &entry.path,
+                AccessIntent::Read,
+                entry.worker,
+                &entry.volume_report,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn first_volume(&self) -> Option<VolumeId> {
+        self.entries.iter().find_map(|entry| {
+            entry
+                .volume_report
+                .volume_for_path(&entry.path)
+                .map(|volume| volume.id)
+        })
+    }
 }
 
 fn run_content_index_search(
@@ -2110,36 +2161,36 @@ fn preflight_content_manifest_access_checked_with_volume_report(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
     check_control()?;
-    let mut guards = manifest_volume_reports.preflight_access_checked(worker, &mut check_control)?;
+    let mut guards =
+        manifest_volume_reports.preflight_access_checked(worker, &mut check_control)?;
     check_control()?;
     let manifest = ContentArchiveManifest::read_checked(manifest_path, &mut check_control)?;
     check_control()?;
+    let archive_paths = manifest.resolved_archive_paths(manifest_path);
     let archive_volume_reports =
-        ArchiveVolumeAccessReports::for_paths(manifest.resolved_archive_paths(manifest_path));
+        ArchiveVolumeAccessReports::for_paths(archive_paths.iter().map(PathBuf::as_path));
     guards.extend(archive_volume_reports.preflight_access_checked(worker, &mut check_control)?);
     check_control()?;
     Ok(guards)
 }
 
 fn preflight_search_index_columns_access_checked(
-    records: &Path,
-    columns: &Path,
+    reports: &SearchIndexColumnsVolumeAccessReports,
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
-    Ok(vec![
-        preflight_access_scope_checked(
-            records,
-            AccessIntent::Read,
-            "search index columns records",
-            &mut check_control,
-        )?,
-        preflight_access_scope_checked(
-            columns,
-            AccessIntent::Read,
-            "search index columns columns",
-            &mut check_control,
-        )?,
-    ])
+    reports
+        .entries
+        .iter()
+        .map(|entry| {
+            preflight_access_scope_checked_with_volume_report(
+                &entry.path,
+                AccessIntent::Read,
+                entry.worker,
+                &entry.volume_report,
+                &mut check_control,
+            )
+        })
+        .collect()
 }
 
 fn preflight_content_index_search_access_checked(
@@ -3018,6 +3069,24 @@ mod tests {
 
         assert_eq!(result.err(), Some(GfmError::Cancelled));
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn search_index_columns_access_checked_honors_pre_cancelled_control() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-search-index-columns-access-pre-cancel-{}",
+            std::process::id()
+        ));
+        let records = root.join("records.gfmidx");
+        let columns = root.join("columns.gfmcols");
+        let volume_reports = SearchIndexColumnsVolumeAccessReports::for_paths(&records, &columns);
+
+        let result = preflight_search_index_columns_access_checked(&volume_reports, || {
+            Err(GfmError::Cancelled)
+        });
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!root.exists());
     }
 
     #[test]
