@@ -628,14 +628,6 @@ pub(crate) fn parent_or_cwd(path: &Path) -> &Path {
     }
 }
 
-pub(crate) fn parent_volume(path: &Path) -> Option<VolumeId> {
-    match path.parent() {
-        Some(parent) if !parent.as_os_str().is_empty() => detect_volume_id(parent).ok(),
-        Some(_) => detect_volume_id(Path::new(".")).ok(),
-        None => None,
-    }
-}
-
 pub(crate) fn run_preview_contract_cancellable_with_payload_path<T>(
     volume: Option<VolumeId>,
     label: &'static str,
@@ -673,22 +665,6 @@ where
         payload_path,
         build,
     )
-}
-
-pub(crate) fn detect_volume_id(path: &Path) -> Result<VolumeId> {
-    volume_id_from_metadata(&std::fs::metadata(path).map_err(|err| GfmError::io(path, err))?)
-}
-
-#[cfg(unix)]
-fn volume_id_from_metadata(metadata: &std::fs::Metadata) -> Result<VolumeId> {
-    use std::os::unix::fs::MetadataExt;
-
-    Ok(VolumeId(metadata.dev()))
-}
-
-#[cfg(not(unix))]
-fn volume_id_from_metadata(_metadata: &std::fs::Metadata) -> Result<VolumeId> {
-    Ok(VolumeId(0))
 }
 
 fn escape_output_field(input: &str) -> String {

@@ -1,10 +1,13 @@
 use crate::{
-    access::{preflight_access_scope_checked, preflight_volume_access_scope, ScopedAccessGuard},
-    detect_volume_id, parent_volume, parse_u32_arg, parse_usize_arg, required_path,
+    access::{
+        preflight_access_scope_checked_with_volume_report,
+        preflight_volume_access_scope_with_report, ScopedAccessGuard,
+    },
+    parse_u32_arg, parse_usize_arg, required_path,
     runtime::run_volume_task_cancellable,
 };
 use gfm_jobs::Priority;
-use gfm_mac::AccessIntent;
+use gfm_mac::{AccessIntent, VolumeDiscoveryReport};
 use gfm_testkit::{
     diff_rgba_files, evaluate_pixel_threshold, materialize_macrobench_fixture_report,
     materialize_parity_fixture, read_governed_mask_file, read_mask_file, run_large_sidecar_gate,
@@ -125,22 +128,17 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let height = parse_u32_arg(args.next(), "pixel-diff requires a height")?;
             let size = PixelSize::new(width, height);
             let mask_path = args.next().map(PathBuf::from);
-            preflight_pixel_diff_volumes(&expected, &actual, mask_path.as_deref())?;
-            let volume = primary_volume(&expected)
-                .or_else(|| primary_volume(&actual))
-                .or_else(|| mask_path.as_deref().and_then(primary_volume));
+            let access_reports =
+                pixel_diff_access_reports(&expected, &actual, mask_path.as_deref());
+            access_reports.preflight_volumes()?;
+            let volume = access_reports.first_volume();
             let report = run_volume_task_cancellable(
                 volume,
                 Priority::Visible,
                 "pixel diff",
                 move |cancellation| {
                     cancellation.check()?;
-                    let _access = retain_pixel_diff_access_checked(
-                        &expected,
-                        &actual,
-                        mask_path.as_deref(),
-                        || cancellation.check(),
-                    )?;
+                    let _access = access_reports.access_checked(|| cancellation.check())?;
                     cancellation.check()?;
                     let masks = mask_path
                         .as_ref()
@@ -204,22 +202,17 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let height = parse_u32_arg(args.next(), "pixel-threshold-check requires a height")?;
             let size = PixelSize::new(width, height);
             let mask_path = args.next().map(PathBuf::from);
-            preflight_pixel_diff_volumes(&expected, &actual, mask_path.as_deref())?;
-            let volume = primary_volume(&expected)
-                .or_else(|| primary_volume(&actual))
-                .or_else(|| mask_path.as_deref().and_then(primary_volume));
+            let access_reports =
+                pixel_diff_access_reports(&expected, &actual, mask_path.as_deref());
+            access_reports.preflight_volumes()?;
+            let volume = access_reports.first_volume();
             let report = run_volume_task_cancellable(
                 volume,
                 Priority::Visible,
                 "pixel threshold",
                 move |cancellation| {
                     cancellation.check()?;
-                    let _access = retain_pixel_diff_access_checked(
-                        &expected,
-                        &actual,
-                        mask_path.as_deref(),
-                        || cancellation.check(),
-                    )?;
+                    let _access = access_reports.access_checked(|| cancellation.check())?;
                     cancellation.check()?;
                     let masks = mask_path
                         .as_ref()
@@ -254,8 +247,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "parity-gate" => {
             let manifest = required_path(args.next(), "parity-gate requires a manifest path")?;
-            preflight_volume_access_scope(&manifest, AccessIntent::Read, "parity gate")?;
-            let volume = primary_volume(&manifest);
+            let manifest_access =
+                GateAccessReport::new(manifest.clone(), AccessIntent::Read, "parity gate");
+            manifest_access.preflight_volume()?;
+            let volume = manifest_access.volume();
             let manifest_for_worker = manifest.clone();
             let report = run_volume_task_cancellable(
                 volume,
@@ -263,12 +258,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "parity gate",
                 move |cancellation| {
                     cancellation.check()?;
-                    let _access = preflight_access_scope_checked(
-                        &manifest_for_worker,
-                        AccessIntent::Read,
-                        "parity gate",
-                        || cancellation.check(),
-                    )?;
+                    let _access = manifest_access.access_checked(|| cancellation.check())?;
                     cancellation.check()?;
                     run_parity_gate_manifest(&manifest_for_worker)
                 },
@@ -307,14 +297,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let manifest = required_path(args.next(), "parity-review requires a manifest path")?;
             let output_dir =
                 required_path(args.next(), "parity-review requires an output directory")?;
-            preflight_volume_access_scope(&manifest, AccessIntent::Read, "parity review manifest")?;
-            preflight_volume_access_scope(
-                write_probe_path(&output_dir)?,
-                AccessIntent::Write,
-                "parity review output",
-            )?;
-            let output_probe = write_probe_path(&output_dir)?.to_path_buf();
-            let volume = primary_volume(&manifest).or_else(|| primary_volume(&output_probe));
+            let access_reports = parity_review_access_reports(&manifest, &output_dir)?;
+            access_reports.preflight_volumes()?;
+            let volume = access_reports.first_volume();
             let manifest_for_worker = manifest.clone();
             let output_dir_for_worker = output_dir.clone();
             let bundle = run_volume_task_cancellable(
@@ -323,11 +308,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "parity review",
                 move |cancellation| {
                     cancellation.check()?;
-                    let _access = retain_parity_review_access_checked(
-                        &manifest_for_worker,
-                        &output_dir_for_worker,
-                        || cancellation.check(),
-                    )?;
+                    let _access = access_reports.access_checked(|| cancellation.check())?;
                     cancellation.check()?;
                     write_parity_review_bundle_manifest(
                         &manifest_for_worker,
@@ -618,17 +599,129 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
     Ok(true)
 }
 
-fn preflight_pixel_diff_volumes(expected: &Path, actual: &Path, mask: Option<&Path>) -> Result<()> {
-    preflight_volume_access_scope(expected, AccessIntent::Read, "pixel expected")?;
-    preflight_volume_access_scope(actual, AccessIntent::Read, "pixel actual")?;
-    if let Some(mask) = mask {
-        preflight_volume_access_scope(mask, AccessIntent::Read, "pixel mask")?;
-    }
-    Ok(())
+#[derive(Clone)]
+struct GateAccessReport {
+    path: PathBuf,
+    intent: AccessIntent,
+    worker: String,
+    volume_report: VolumeDiscoveryReport,
 }
 
-fn primary_volume(path: &Path) -> Option<gfm_types::VolumeId> {
-    detect_volume_id(path).ok().or_else(|| parent_volume(path))
+impl GateAccessReport {
+    fn new(path: PathBuf, intent: AccessIntent, worker: impl Into<String>) -> Self {
+        let volume_report = VolumeDiscoveryReport::for_containing_path(&path);
+        Self {
+            path,
+            intent,
+            worker: worker.into(),
+            volume_report,
+        }
+    }
+
+    fn preflight_volume(&self) -> Result<()> {
+        preflight_volume_access_scope_with_report(
+            &self.path,
+            self.intent,
+            &self.worker,
+            &self.volume_report,
+        )
+    }
+
+    fn access_checked(
+        &self,
+        check_control: impl FnMut() -> Result<()>,
+    ) -> Result<ScopedAccessGuard> {
+        preflight_access_scope_checked_with_volume_report(
+            &self.path,
+            self.intent,
+            &self.worker,
+            &self.volume_report,
+            check_control,
+        )
+    }
+
+    fn volume(&self) -> Option<gfm_types::VolumeId> {
+        self.volume_report
+            .volume_for_path(&self.path)
+            .map(|volume| volume.id)
+    }
+}
+
+#[derive(Clone)]
+struct GateAccessReports {
+    entries: Vec<GateAccessReport>,
+}
+
+impl GateAccessReports {
+    fn new(entries: Vec<GateAccessReport>) -> Self {
+        Self { entries }
+    }
+
+    fn preflight_volumes(&self) -> Result<()> {
+        for entry in &self.entries {
+            entry.preflight_volume()?;
+        }
+        Ok(())
+    }
+
+    fn access_checked(
+        &self,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<ScopedAccessGuard>> {
+        let mut guards = Vec::with_capacity(self.entries.len());
+        for entry in &self.entries {
+            check_control()?;
+            guards.push(entry.access_checked(&mut check_control)?);
+        }
+        check_control()?;
+        Ok(guards)
+    }
+
+    fn first_volume(&self) -> Option<gfm_types::VolumeId> {
+        self.entries.iter().find_map(GateAccessReport::volume)
+    }
+}
+
+fn pixel_diff_access_reports(
+    expected: &Path,
+    actual: &Path,
+    mask: Option<&Path>,
+) -> GateAccessReports {
+    let mut entries = vec![
+        GateAccessReport::new(expected.to_path_buf(), AccessIntent::Read, "pixel expected"),
+        GateAccessReport::new(actual.to_path_buf(), AccessIntent::Read, "pixel actual"),
+    ];
+    if let Some(mask) = mask {
+        entries.push(GateAccessReport::new(
+            mask.to_path_buf(),
+            AccessIntent::Read,
+            "pixel mask",
+        ));
+    }
+    GateAccessReports::new(entries)
+}
+
+fn parity_review_access_reports(manifest: &Path, output_dir: &Path) -> Result<GateAccessReports> {
+    Ok(GateAccessReports::new(vec![
+        GateAccessReport::new(
+            manifest.to_path_buf(),
+            AccessIntent::Read,
+            "parity review manifest",
+        ),
+        GateAccessReport::new(
+            write_probe_path(output_dir)?.to_path_buf(),
+            AccessIntent::Write,
+            "parity review output",
+        ),
+    ]))
+}
+
+fn workspace_write_access_report(workspace: &Path, worker: &str) -> Result<GateAccessReport> {
+    Ok(GateAccessReport::new(
+        write_probe_path(workspace)?.to_path_buf(),
+        AccessIntent::Write,
+        worker,
+    ))
 }
 
 fn run_workspace_write_task<T>(
@@ -640,18 +733,18 @@ where
     T: Send + 'static,
 {
     let workspace = workspace.to_path_buf();
-    let probe = write_probe_path(&workspace)?.to_path_buf();
-    preflight_volume_access_scope(&probe, AccessIntent::Write, worker)?;
-    let volume = primary_volume(&probe);
+    let access_report = workspace_write_access_report(&workspace, worker)?;
+    access_report.preflight_volume()?;
+    let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
         cancellation.check()?;
-        let _access =
-            retain_workspace_write_access_checked(&workspace, worker, || cancellation.check())?;
+        let _access = access_report.access_checked(|| cancellation.check())?;
         cancellation.check()?;
         work(cancellation)
     })
 }
 
+#[cfg(test)]
 fn retain_pixel_diff_access_checked(
     expected: &Path,
     actual: &Path,
@@ -659,65 +752,27 @@ fn retain_pixel_diff_access_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
     check_control()?;
-    let mut guards = vec![
-        preflight_access_scope_checked(
-            expected,
-            AccessIntent::Read,
-            "pixel expected",
-            &mut check_control,
-        )?,
-        preflight_access_scope_checked(
-            actual,
-            AccessIntent::Read,
-            "pixel actual",
-            &mut check_control,
-        )?,
-    ];
-    if let Some(mask) = mask {
-        guards.push(preflight_access_scope_checked(
-            mask,
-            AccessIntent::Read,
-            "pixel mask",
-            &mut check_control,
-        )?);
-    }
-    check_control()?;
-    Ok(guards)
+    pixel_diff_access_reports(expected, actual, mask).access_checked(check_control)
 }
 
+#[cfg(test)]
 fn retain_parity_review_access_checked(
     manifest: &Path,
     output_dir: &Path,
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
     check_control()?;
-    let output_probe = write_probe_path(output_dir)?.to_path_buf();
-    check_control()?;
-    Ok(vec![
-        preflight_access_scope_checked(
-            manifest,
-            AccessIntent::Read,
-            "parity review manifest",
-            &mut check_control,
-        )?,
-        preflight_access_scope_checked(
-            &output_probe,
-            AccessIntent::Write,
-            "parity review output",
-            &mut check_control,
-        )?,
-    ])
+    parity_review_access_reports(manifest, output_dir)?.access_checked(check_control)
 }
 
+#[cfg(test)]
 fn retain_workspace_write_access_checked(
     path: &Path,
     worker: &str,
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<ScopedAccessGuard> {
     check_control()?;
-    let probe = write_probe_path(path)?.to_path_buf();
-    check_control()?;
-    preflight_access_scope_checked(&probe, AccessIntent::Write, worker, check_control)
+    workspace_write_access_report(path, worker)?.access_checked(check_control)
 }
 
 fn write_probe_path(path: &Path) -> Result<&Path> {
