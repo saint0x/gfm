@@ -485,13 +485,26 @@ struct ControlPathAccessReport {
 
 impl ControlPathAccessReport {
     fn new(path: PathBuf, intent: AccessIntent, worker: &'static str) -> Self {
-        let volume_report = VolumeDiscoveryReport::for_containing_path(&path);
-        Self {
+        Self::new_checked(path, intent, worker, || Ok(()))
+            .expect("uncancellable control path access report cannot cancel")
+    }
+
+    fn new_checked(
+        path: PathBuf,
+        intent: AccessIntent,
+        worker: &'static str,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check_control()?;
+        let volume_report =
+            VolumeDiscoveryReport::for_containing_path_checked(&path, &mut check_control)?;
+        check_control()?;
+        Ok(Self {
             path,
             intent,
             worker,
             volume_report,
-        }
+        })
     }
 
     fn preflight_volume(&self) -> Result<()> {
@@ -951,6 +964,26 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn control_path_access_report_checked_honors_pre_cancelled_control_before_volume_discovery() {
+        let path = std::env::temp_dir()
+            .join(format!(
+                "gfm-control-path-report-pre-cancel-{}",
+                std::process::id()
+            ))
+            .join("config.toml");
+
+        let result = ControlPathAccessReport::new_checked(
+            path.clone(),
+            AccessIntent::Read,
+            "config check",
+            || Err(GfmError::Cancelled),
+        );
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!path.exists());
+    }
 
     #[test]
     fn index_volume_signature_includes_native_apfs_and_media_identity() {

@@ -1,5 +1,3 @@
-#[cfg(test)]
-use crate::access::preflight_access_scope_checked;
 use crate::access::{
     preflight_access_scope_checked_with_volume_report, preflight_volume_access_scope_with_report,
     ScopedAccessGuard,
@@ -211,13 +209,26 @@ struct PackagingAccessReport {
 
 impl PackagingAccessReport {
     fn new(path: PathBuf, intent: AccessIntent, worker: &'static str) -> Self {
-        let volume_report = VolumeDiscoveryReport::for_containing_path(&path);
-        Self {
+        Self::new_checked(path, intent, worker, || Ok(()))
+            .expect("uncancellable packaging access report cannot cancel")
+    }
+
+    fn new_checked(
+        path: PathBuf,
+        intent: AccessIntent,
+        worker: &'static str,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check_control()?;
+        let volume_report =
+            VolumeDiscoveryReport::for_containing_path_checked(&path, &mut check_control)?;
+        check_control()?;
+        Ok(Self {
             path,
             intent,
             worker,
             volume_report,
-        }
+        })
     }
 
     fn preflight_volume(&self) -> Result<()> {
@@ -256,42 +267,73 @@ struct PackagingAccessReports {
 
 impl PackagingAccessReports {
     fn bundle(spec: &AppBundleSpec) -> Result<Self> {
+        Self::bundle_checked(spec, || Ok(()))
+    }
+
+    fn bundle_checked(
+        spec: &AppBundleSpec,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check_control()?;
+        let output_probe = write_probe_path(&spec.output_dir)?.to_path_buf();
+        check_control()?;
         Ok(Self {
             entries: vec![
-                PackagingAccessReport::new(
+                PackagingAccessReport::new_checked(
                     spec.executable.clone(),
                     AccessIntent::Read,
                     "bundle app executable",
-                ),
-                PackagingAccessReport::new(
+                    &mut check_control,
+                )?,
+                PackagingAccessReport::new_checked(
                     spec.icon.clone(),
                     AccessIntent::Read,
                     "bundle app icon",
-                ),
-                PackagingAccessReport::new(
-                    write_probe_path(&spec.output_dir)?.to_path_buf(),
+                    &mut check_control,
+                )?,
+                PackagingAccessReport::new_checked(
+                    output_probe,
                     AccessIntent::Write,
                     "bundle app output",
-                ),
+                    &mut check_control,
+                )?,
             ],
         })
     }
 
     fn notarize(spec: &NotarizationSpec) -> Result<Self> {
+        Self::notarize_checked(spec, || Ok(()))
+    }
+
+    fn notarize_checked(
+        spec: &NotarizationSpec,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check_control()?;
+        let output_probe = write_probe_path(&spec.output_dir)?.to_path_buf();
+        check_control()?;
         let mut entries = vec![
-            PackagingAccessReport::new(spec.app_path.clone(), AccessIntent::Read, "notarize app"),
-            PackagingAccessReport::new(
-                write_probe_path(&spec.output_dir)?.to_path_buf(),
+            PackagingAccessReport::new_checked(
+                spec.app_path.clone(),
+                AccessIntent::Read,
+                "notarize app",
+                &mut check_control,
+            )?,
+            PackagingAccessReport::new_checked(
+                output_probe,
                 AccessIntent::Write,
                 "notarize output",
-            ),
+                &mut check_control,
+            )?,
         ];
         if let NotarizationCredentials::ApiKey { key_path, .. } = &spec.credentials {
-            entries.push(PackagingAccessReport::new(
+            check_control()?;
+            entries.push(PackagingAccessReport::new_checked(
                 key_path.clone(),
                 AccessIntent::Read,
                 "notarize api key",
-            ));
+                &mut check_control,
+            )?);
         }
         Ok(Self { entries })
     }
@@ -322,15 +364,6 @@ impl PackagingAccessReports {
 }
 
 #[cfg(test)]
-fn retain_packaging_read_access_checked(
-    path: &Path,
-    worker: &str,
-    check_control: impl FnMut() -> Result<()>,
-) -> Result<ScopedAccessGuard> {
-    preflight_access_scope_checked(path, AccessIntent::Read, worker, check_control)
-}
-
-#[cfg(test)]
 fn retain_bundle_access_checked(
     executable: &Path,
     icon: &Path,
@@ -338,22 +371,15 @@ fn retain_bundle_access_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
     check_control()?;
-    let output_probe = write_probe_path(output_dir)?.to_path_buf();
-    check_control()?;
-    Ok(vec![
-        retain_packaging_read_access_checked(
-            executable,
-            "bundle app executable",
-            &mut check_control,
-        )?,
-        retain_packaging_read_access_checked(icon, "bundle app icon", &mut check_control)?,
-        preflight_access_scope_checked(
-            &output_probe,
-            AccessIntent::Write,
-            "bundle app output",
-            &mut check_control,
-        )?,
-    ])
+    let access_reports = PackagingAccessReports::bundle_checked(
+        &AppBundleSpec::new(
+            executable.to_path_buf(),
+            icon.to_path_buf(),
+            output_dir.to_path_buf(),
+        ),
+        &mut check_control,
+    )?;
+    access_reports.access_checked(&mut check_control)
 }
 
 #[cfg(test)]
@@ -364,27 +390,15 @@ fn retain_notarize_access_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
     check_control()?;
-    let output_probe = write_probe_path(output_dir)?.to_path_buf();
-    check_control()?;
-    let mut guards = vec![
-        retain_packaging_read_access_checked(app_path, "notarize app", &mut check_control)?,
-        preflight_access_scope_checked(
-            &output_probe,
-            AccessIntent::Write,
-            "notarize output",
-            &mut check_control,
-        )?,
-    ];
-    if let NotarizationCredentials::ApiKey { key_path, .. } = credentials {
-        check_control()?;
-        guards.push(retain_packaging_read_access_checked(
-            key_path,
-            "notarize api key",
-            &mut check_control,
-        )?);
-    }
-    check_control()?;
-    Ok(guards)
+    let access_reports = PackagingAccessReports::notarize_checked(
+        &NotarizationSpec::new(
+            app_path.to_path_buf(),
+            output_dir.to_path_buf(),
+            credentials.clone(),
+        ),
+        &mut check_control,
+    )?;
+    access_reports.access_checked(&mut check_control)
 }
 
 fn write_probe_path(path: &Path) -> Result<&Path> {
@@ -482,6 +496,26 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    #[test]
+    fn packaging_access_report_checked_honors_pre_cancelled_control_before_volume_discovery() {
+        let path = std::env::temp_dir()
+            .join(format!(
+                "gfm-packaging-report-pre-cancel-{}",
+                std::process::id()
+            ))
+            .join("GFM.app");
+
+        let result = PackagingAccessReport::new_checked(
+            path.clone(),
+            AccessIntent::Read,
+            "release validate",
+            || Err(GfmError::Cancelled),
+        );
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!path.exists());
+    }
 
     #[test]
     fn bundle_access_checked_honors_pre_cancelled_control() {
