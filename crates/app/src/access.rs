@@ -75,13 +75,21 @@ pub(crate) fn worker_admission_with_volume_report(
     access.worker_admission(worker)
 }
 
-pub(crate) fn worker_admissions_with_shared_volume_report(
+pub(crate) fn worker_admissions_with_shared_volume_report_checked(
     path: &Path,
     requests: &[WorkerAdmissionRequest],
-) -> Vec<SecurityWorkerAdmissionReport> {
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Vec<SecurityWorkerAdmissionReport>> {
+    check_control()?;
     let volume_path = absolute_volume_probe_path(path);
-    let volume_report = VolumeDiscoveryReport::for_containing_path(&volume_path);
-    worker_admissions_with_volume_report(path, requests, &volume_report)
+    let volume_report =
+        VolumeDiscoveryReport::for_containing_path_checked(&volume_path, &mut check_control)?;
+    check_control()?;
+    Ok(worker_admissions_with_volume_report(
+        path,
+        requests,
+        &volume_report,
+    ))
 }
 
 pub(crate) fn worker_admissions_with_volume_report(
@@ -595,7 +603,9 @@ mod tests {
             },
         ];
 
-        let admissions = worker_admissions_with_shared_volume_report(&path, &requests);
+        let admissions =
+            worker_admissions_with_shared_volume_report_checked(&path, &requests, || Ok(()))
+                .unwrap();
 
         assert_eq!(admissions.len(), requests.len());
         for (admission, request) in admissions.iter().zip(requests.iter()) {
@@ -612,6 +622,24 @@ mod tests {
             assert!(!admission.as_tsv().contains("\tprobe=missing\t"));
         }
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn worker_admission_fanout_checked_honors_pre_cancelled_control() {
+        let root = unique_temp_dir("gfm-access-admission-fanout-pre-cancel");
+        let path = root.join("Preview.pdf");
+        fs::write(&path, "%PDF-1.7\n").unwrap();
+        let requests = [WorkerAdmissionRequest {
+            worker: "index worker".to_string(),
+            intent: AccessIntent::Index,
+        }];
+
+        let result = worker_admissions_with_shared_volume_report_checked(&path, &requests, || {
+            Err(GfmError::Cancelled)
+        });
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
         fs::remove_dir_all(root).unwrap();
     }
 

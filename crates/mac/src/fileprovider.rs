@@ -292,8 +292,15 @@ pub struct FileProviderDomainEnumerationReport {
 
 impl FileProviderDomainEnumerationReport {
     pub fn discover() -> Self {
+        Self::discover_checked(|| Ok(()))
+            .expect("non-cancellable FileProvider domain discovery cannot cancel")
+    }
+
+    pub fn discover_checked(mut check: impl FnMut() -> Result<()>) -> Result<Self> {
+        check()?;
         let native = enumerate_fileprovider_domains();
-        Self::from_native(native)
+        check()?;
+        Ok(Self::from_native(native))
     }
 
     fn from_native(native: NativeFileProviderDomainEnumeration) -> Self {
@@ -319,6 +326,23 @@ impl FileProviderDomainEnumerationReport {
                 })
                 .collect(),
             reason: native.reason,
+        }
+    }
+
+    fn into_native(self) -> NativeFileProviderDomainEnumeration {
+        NativeFileProviderDomainEnumeration {
+            status: self.status,
+            domains: self
+                .domains
+                .into_iter()
+                .map(|domain| NativeFileProviderDomain {
+                    identifier: domain.identifier,
+                    display_name: domain.display_name,
+                    path_relative_to_document_storage: domain.path_relative_to_document_storage,
+                    disconnected: domain.disconnected,
+                })
+                .collect(),
+            reason: self.reason,
         }
     }
 
@@ -377,9 +401,13 @@ impl FileProviderDomainReport {
         check()?;
         let hints = CloudHints::read_with_identity_checked(&path, &mut check)?;
         check()?;
-        let domains = enumerate_fileprovider_domains();
+        let domains = FileProviderDomainEnumerationReport::discover_checked(&mut check)?;
         check()?;
-        Ok(Self::from_hints_and_domains(path, hints, domains))
+        Ok(Self::from_hints_and_domains(
+            path,
+            hints,
+            domains.into_native(),
+        ))
     }
 
     fn from_hints_and_domains(
@@ -4773,6 +4801,15 @@ mod tests {
         assert!(tsv.contains(
             "domain\tkind=fileprovider\tidentifier=com.example.drive.account\tdisplay-name=Example Drive"
         ));
+    }
+
+    #[test]
+    fn checked_domain_enumeration_honors_pre_cancelled_control() {
+        let err =
+            FileProviderDomainEnumerationReport::discover_checked(|| Err(GfmError::Cancelled))
+                .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
     }
 
     #[test]

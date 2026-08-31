@@ -136,7 +136,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 crate::permission_refresh::PermissionRefreshAudience::Ui,
                 "permission-access",
             )?;
-            let admission = crate::access::worker_admission_with_volume_gate(&path, intent, worker);
+            let admission = crate::access::worker_admission_with_volume_gate_checked(
+                &path,
+                intent,
+                worker,
+                || Ok(()),
+            )?;
             print_permission_access_contract(
                 &admission,
                 refresh.as_ref().map(permission_refresh_contract),

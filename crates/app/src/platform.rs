@@ -1,7 +1,7 @@
 use crate::access::{
     preflight_access_scope_checked, preflight_access_scope_checked_with_volume_report,
     preflight_volume_access_scope_with_report, worker_admission_with_volume_gate,
-    worker_admissions_with_shared_volume_report, worker_admissions_with_volume_report,
+    worker_admissions_with_shared_volume_report_checked, worker_admissions_with_volume_report,
     ScopedAccessGuard, WorkerAdmissionRequest,
 };
 use crate::volume::{resolve_volume_event_path, volume_event_invalidation_for_descriptor};
@@ -95,7 +95,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "security-worker-admission-fanout requires a path",
             )?;
             let requests = parse_worker_admission_requests(args)?;
-            let admissions = worker_admissions_with_shared_volume_report(&path, &requests);
+            let admissions =
+                worker_admissions_with_shared_volume_report_checked(&path, &requests, || Ok(()))?;
             println!("{}", worker_admission_fanout_summary(&admissions));
             for admission in admissions {
                 println!("{}", admission.as_tsv());
