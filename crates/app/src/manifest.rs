@@ -195,8 +195,11 @@ fn run_content_cleanup_plan(
         let manifest =
             ContentArchiveManifest::read_checked(&manifest_path, || cancellation.check())?;
         let active_archive_paths = manifest.resolved_archive_paths(&manifest_path);
-        let active_archive_access_reports =
-            ManifestAccessReports::read_paths(&active_archive_paths, ACTIVE_ARCHIVE_WORKER);
+        let active_archive_access_reports = ManifestAccessReports::read_paths_checked(
+            &active_archive_paths,
+            ACTIVE_ARCHIVE_WORKER,
+            || cancellation.check(),
+        )?;
         active_archive_access_reports.preflight_volumes()?;
         cancellation.check()?;
         let _active_archive_access =
@@ -283,13 +286,26 @@ struct ManifestAccessReport {
 
 impl ManifestAccessReport {
     fn new(path: PathBuf, intent: AccessIntent, worker: &'static str) -> Self {
-        let volume_report = VolumeDiscoveryReport::for_containing_path(&path);
-        Self {
+        Self::new_checked(path, intent, worker, || Ok(()))
+            .expect("uncancellable manifest access report cannot cancel")
+    }
+
+    fn new_checked(
+        path: PathBuf,
+        intent: AccessIntent,
+        worker: &'static str,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check_control()?;
+        let volume_report =
+            VolumeDiscoveryReport::for_containing_path_checked(&path, &mut check_control)?;
+        check_control()?;
+        Ok(Self {
             path,
             intent,
             worker,
             volume_report,
-        }
+        })
     }
 
     fn preflight_volume(&self) -> Result<()> {
@@ -358,17 +374,31 @@ impl ManifestAccessReports {
         candidate: &Path,
         removes_candidates: bool,
     ) -> Result<ManifestAccessReport> {
+        Self::cleanup_candidate_entry_checked(manifest_path, candidate, removes_candidates, || {
+            Ok(())
+        })
+    }
+
+    fn cleanup_candidate_entry_checked(
+        manifest_path: &Path,
+        candidate: &Path,
+        removes_candidates: bool,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<ManifestAccessReport> {
+        check_control()?;
         let path = resolve_manifest_path(manifest_path, candidate);
         let (path, intent) = if removes_candidates {
             (write_probe_path(&path)?, AccessIntent::Write)
         } else {
             (existing_read_probe_path(&path)?, AccessIntent::Read)
         };
-        Ok(ManifestAccessReport::new(
+        check_control()?;
+        ManifestAccessReport::new_checked(
             path.to_path_buf(),
             intent,
             "content manifest cleanup candidate",
-        ))
+            &mut check_control,
+        )
     }
 
     fn write_for_paths(
@@ -505,13 +535,23 @@ impl ManifestAccessReports {
         ]))
     }
 
-    fn read_paths(paths: &[PathBuf], worker: &'static str) -> Self {
-        Self::new(
-            paths
-                .iter()
-                .map(|path| ManifestAccessReport::new(path.clone(), AccessIntent::Read, worker))
-                .collect(),
-        )
+    fn read_paths_checked(
+        paths: &[PathBuf],
+        worker: &'static str,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        let mut entries = Vec::with_capacity(paths.len());
+        for path in paths {
+            check_control()?;
+            entries.push(ManifestAccessReport::new_checked(
+                path.clone(),
+                AccessIntent::Read,
+                worker,
+                &mut check_control,
+            )?);
+        }
+        check_control()?;
+        Ok(Self::new(entries))
     }
 
     fn preflight_volumes(&self) -> Result<()> {
@@ -604,8 +644,11 @@ fn run_manifest_inspect(manifest_path: PathBuf) -> Result<Vec<String>> {
             let manifest =
                 ContentArchiveManifest::read_checked(&manifest_path, || cancellation.check())?;
             let paths = manifest.resolved_archive_paths(&manifest_path);
-            let archive_access_reports =
-                ManifestAccessReports::read_paths(&paths, "content manifest inspect archive");
+            let archive_access_reports = ManifestAccessReports::read_paths_checked(
+                &paths,
+                "content manifest inspect archive",
+                || cancellation.check(),
+            )?;
             archive_access_reports.preflight_volumes()?;
             cancellation.check()?;
             let _archive_access = archive_access_reports.access_checked(|| cancellation.check())?;
@@ -760,7 +803,9 @@ fn run_manifest_promotion_recovery_plan(manifest_path: PathBuf) -> Result<String
             Vec::new()
         };
         let archive_access_reports =
-            ManifestAccessReports::read_paths(&archive_paths, ARCHIVE_WORKER);
+            ManifestAccessReports::read_paths_checked(&archive_paths, ARCHIVE_WORKER, || {
+                cancellation.check()
+            })?;
         archive_access_reports.preflight_volumes()?;
         cancellation.check()?;
         let _archive_access = archive_access_reports.access_checked(|| cancellation.check())?;
@@ -793,7 +838,9 @@ fn run_manifest_promotion_recover(manifest_path: PathBuf) -> Result<Vec<String>>
             Vec::new()
         };
         let archive_access_reports =
-            ManifestAccessReports::read_paths(&archive_paths, ARCHIVE_WORKER);
+            ManifestAccessReports::read_paths_checked(&archive_paths, ARCHIVE_WORKER, || {
+                cancellation.check()
+            })?;
         archive_access_reports.preflight_volumes()?;
         cancellation.check()?;
         let _archive_access = archive_access_reports.access_checked(|| cancellation.check())?;
@@ -832,17 +879,20 @@ fn retain_manifest_cleanup_access_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
     check_control()?;
-    let mut guards =
-        vec![
-            ManifestAccessReport::new(manifest_path.to_path_buf(), AccessIntent::Read, worker)
-                .access_checked(&mut check_control)?,
-        ];
+    let mut guards = vec![ManifestAccessReport::new_checked(
+        manifest_path.to_path_buf(),
+        AccessIntent::Read,
+        worker,
+        &mut check_control,
+    )?
+    .access_checked(&mut check_control)?];
     for candidate in candidates {
         check_control()?;
-        let report = ManifestAccessReports::cleanup_candidate_entry(
+        let report = ManifestAccessReports::cleanup_candidate_entry_checked(
             manifest_path,
             candidate,
             removes_candidates,
+            &mut check_control,
         )?;
         check_control()?;
         guards.push(report.access_checked(&mut check_control)?);
@@ -968,6 +1018,53 @@ mod tests {
     }
 
     #[test]
+    fn manifest_access_report_checked_honors_pre_cancelled_control_before_volume_discovery() {
+        let path = std::env::temp_dir()
+            .join(format!(
+                "gfm-manifest-report-pre-cancel-{}",
+                std::process::id()
+            ))
+            .join("content-manifest.tsv");
+
+        let result = ManifestAccessReport::new_checked(
+            path.clone(),
+            AccessIntent::Read,
+            "content manifest inspect",
+            || Err(GfmError::Cancelled),
+        );
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn manifest_read_paths_checked_can_cancel_between_paths() {
+        let root = unique_temp_dir("gfm-manifest-read-report-cancelled");
+        let first = root.join("first.gfmcontent");
+        let second = root.join("second.gfmcontent");
+        fs::write(&first, b"first").expect("write first archive");
+        fs::write(&second, b"second").expect("write second archive");
+        let calls = AtomicUsize::new(0);
+
+        let result = ManifestAccessReports::read_paths_checked(
+            &[first, second],
+            "content manifest inspect archive",
+            || {
+                let call = calls.fetch_add(1, Ordering::SeqCst);
+                if call >= 4 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        );
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(calls.load(Ordering::SeqCst) > 4);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn manifest_cleanup_access_checked_rechecks_control_during_candidate_walk() {
         let root = unique_temp_dir("gfm-manifest-cleanup-access-cancelled");
         let manifest_path = root.join("content-manifest.tsv");
@@ -1003,10 +1100,12 @@ mod tests {
         let root = unique_temp_dir("gfm-manifest-promotion-archive-access-cancelled");
         let archive = root.join("active.gfmcontent");
         fs::write(&archive, b"archive").expect("write active archive");
-        let access_reports = ManifestAccessReports::read_paths(
+        let access_reports = ManifestAccessReports::read_paths_checked(
             &[archive],
             "content manifest promotion recovery archive",
-        );
+            || Ok(()),
+        )
+        .unwrap();
 
         let result = access_reports.access_checked(|| Err(GfmError::Cancelled));
 
