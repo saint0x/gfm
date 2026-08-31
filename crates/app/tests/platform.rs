@@ -6509,6 +6509,32 @@ fn volume_operation_refuses_unreachable_volume_before_descriptor_from_binary() {
 }
 
 #[test]
+fn volume_operation_cancel_after_access_stops_before_native_execution_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-volume-operation-cancel-after-access-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-operation-cancel-after-access")
+        .arg("eject")
+        .arg(&root)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("volume-operation\t"), "{stdout}");
+    assert!(stderr.contains("operation was cancelled"), "{stderr}");
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn operation_access_refuses_unavailable_volume_api_state_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-operation-access-api-unavailable-{}",

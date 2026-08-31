@@ -1602,7 +1602,17 @@ pub struct VolumeOperationReport {
 
 impl VolumeOperationReport {
     pub fn execute(path: impl AsRef<Path>, operation: VolumeOperation) -> Result<Self> {
+        Self::execute_checked(path, operation, || Ok(()))
+    }
+
+    pub fn execute_checked(
+        path: impl AsRef<Path>,
+        operation: VolumeOperation,
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check()?;
         let path = path.as_ref().to_path_buf();
+        check()?;
         match path.try_exists() {
             Ok(true) => {}
             Ok(false) => {
@@ -1622,8 +1632,10 @@ impl VolumeOperationReport {
                 ));
             }
         }
+        check()?;
 
         let volume = operation_volume_for_path(&path)?;
+        check()?;
         if operation == VolumeOperation::Mount {
             return Ok(Self::with_volume(
                 operation,
@@ -1634,6 +1646,7 @@ impl VolumeOperationReport {
                 "native-mount-requires-unmounted-disk-identity",
             ));
         }
+        check()?;
         if !operation_targets_volume_root(&path, &volume.path) {
             return Ok(Self::with_volume_path(
                 path,
@@ -1645,6 +1658,7 @@ impl VolumeOperationReport {
                 "native-volume-operation-requires-volume-root",
             ));
         }
+        check()?;
         if path == Path::new("/") {
             return Ok(Self::with_volume(
                 operation,
@@ -1655,6 +1669,7 @@ impl VolumeOperationReport {
                 "system-volume-operation-refused",
             ));
         }
+        check()?;
         if let Some(reason) = disabled_command_reason(operation, &volume) {
             return Ok(Self::with_volume(
                 operation,
@@ -1665,6 +1680,7 @@ impl VolumeOperationReport {
                 reason,
             ));
         }
+        check()?;
         if volume.source.starts_with("fixture-marker:") {
             return Ok(Self::with_volume(
                 operation,
@@ -1675,6 +1691,7 @@ impl VolumeOperationReport {
                 "fixture-volume-native-operation-disabled",
             ));
         }
+        check()?;
         if !path.starts_with("/Volumes") {
             return Ok(Self::with_volume(
                 operation,
@@ -1685,6 +1702,7 @@ impl VolumeOperationReport {
                 "native-volume-operation-requires-volumes-root",
             ));
         }
+        check()?;
         if volume.native_status != Some(NativeVolumeStatus::Available) {
             return Ok(Self::with_volume(
                 operation,
@@ -1695,12 +1713,15 @@ impl VolumeOperationReport {
                 "diskarbitration-volume-unavailable",
             ));
         }
+        check()?;
         let native_operation = match operation {
             VolumeOperation::Eject => NativeVolumeOperation::Eject,
             VolumeOperation::Unmount => NativeVolumeOperation::Unmount,
             VolumeOperation::Mount => unreachable!("mount is handled before native submission"),
         };
+        check()?;
         let native = gfm_mac_sys::submit_volume_operation(&path, native_operation);
+        check()?;
         let disposition = disposition_for_native_operation(native.status);
         Ok(Self::with_volume(
             operation,
@@ -3447,6 +3468,19 @@ mod tests {
         assert_eq!(report.reason, "system-volume-operation-refused");
         assert!(report.as_tsv().contains("\tdisposition=refused\t"));
         assert!(report.as_tsv().contains("\tdissenter-status=-\t"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checked_volume_operation_honors_pre_cancelled_work_before_path_probe() {
+        let path = invalid_path("gfm-volume-operation-cancelled");
+
+        let err = VolumeOperationReport::execute_checked(&path, VolumeOperation::Eject, || {
+            Err(GfmError::Cancelled)
+        })
+        .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
     }
 
     #[test]

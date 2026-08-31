@@ -714,24 +714,16 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 println!("{line}");
             }
         }
-        "volume-operation" => {
+        "volume-operation" | "volume-operation-cancel-after-access" => {
+            let cancel_after_access = command == "volume-operation-cancel-after-access";
             let operation = VolumeOperation::parse(&required_string(
                 args.next(),
                 "volume-operation requires an operation",
             )?)?;
             let path = required_path(args.next(), "volume-operation requires a path")?;
-            let _access = match path.try_exists() {
-                Ok(true) => Some(preflight_access_scope_checked(
-                    &path,
-                    AccessIntent::Operate,
-                    "volume operation",
-                    || Ok(()),
-                )?),
-                Ok(false) | Err(_) => None,
-            };
             println!(
                 "{}",
-                VolumeOperationReport::execute(path, operation)?.as_tsv()
+                run_volume_operation(path, operation, cancel_after_access)?.as_tsv()
             );
         }
         "volume-mount-bsd" => {
@@ -2374,6 +2366,31 @@ fn run_fileprovider_operation(
         let _access = access_report.access_checked(WORKER, || cancellation.check())?;
         cancellation.check()?;
         FileProviderOperationReport::execute_checked(path, operation, || cancellation.check())
+    })
+}
+
+fn run_volume_operation(
+    path: PathBuf,
+    operation: VolumeOperation,
+    cancel_after_access: bool,
+) -> Result<VolumeOperationReport> {
+    const WORKER: &str = "volume operation";
+    match path.try_exists() {
+        Ok(true) => {}
+        Ok(false) | Err(_) => return VolumeOperationReport::execute(path, operation),
+    }
+    let access_report = PlatformAccessReport::new(path, AccessIntent::Operate);
+    access_report.preflight_volume(WORKER)?;
+    let volume = access_report.volume();
+    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
+        cancellation.check()?;
+        let path = access_report.path.clone();
+        let _access = access_report.access_checked(WORKER, || cancellation.check())?;
+        cancellation.check()?;
+        if cancel_after_access {
+            cancellation.cancel();
+        }
+        VolumeOperationReport::execute_checked(path, operation, || cancellation.check())
     })
 }
 
