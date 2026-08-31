@@ -372,9 +372,10 @@ fn badges_for_record_on_volume(
     if is_package(record) {
         badges.push(NativeIconBadge::Package);
     }
-    let cloud = FileProviderStateReport::from_path(record.path.clone());
-    if cloud.domain != FileProviderDomain::Local {
-        badges.extend(cloud.badges.into_iter().map(cloud_badge));
+    if let Ok(cloud) = FileProviderStateReport::from_path(record.path.clone()) {
+        if cloud.domain != FileProviderDomain::Local {
+            badges.extend(cloud.badges.iter().copied().map(cloud_badge));
+        }
     }
     if let Some(volume) = volume.filter(|volume| record_is_volume_root(record, volume)) {
         badges.extend(volume_badges(volume));

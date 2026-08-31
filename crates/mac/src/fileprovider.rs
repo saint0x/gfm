@@ -291,11 +291,6 @@ pub struct FileProviderDomainEnumerationReport {
 }
 
 impl FileProviderDomainEnumerationReport {
-    pub fn discover() -> Self {
-        Self::discover_checked(|| Ok(()))
-            .expect("non-cancellable FileProvider domain discovery cannot cancel")
-    }
-
     pub fn discover_checked(mut check: impl FnMut() -> Result<()>) -> Result<Self> {
         check()?;
         let native = enumerate_fileprovider_domains();
@@ -1717,9 +1712,9 @@ impl FileProviderStateReport {
         Self::from_path_checked(path, check)
     }
 
-    pub fn from_path(path: PathBuf) -> Self {
-        let hints = CloudHints::read(&path);
-        Self::from_hints(path, hints)
+    pub fn from_path(path: PathBuf) -> Result<Self> {
+        let hints = CloudHints::read(&path)?;
+        Ok(Self::from_hints(path, hints))
     }
 
     pub fn from_path_checked(path: PathBuf, mut check: impl FnMut() -> Result<()>) -> Result<Self> {
@@ -1729,9 +1724,9 @@ impl FileProviderStateReport {
         Ok(Self::from_hints(path, hints))
     }
 
-    pub fn from_path_with_native_identity(path: PathBuf) -> Self {
-        let hints = CloudHints::read_with_identity(&path);
-        Self::from_hints(path, hints)
+    pub fn from_path_with_native_identity(path: PathBuf) -> Result<Self> {
+        let hints = CloudHints::read_with_identity(&path)?;
+        Ok(Self::from_hints(path, hints))
     }
 
     pub fn from_path_with_native_identity_checked(
@@ -1867,20 +1862,24 @@ struct CloudHints {
 }
 
 impl CloudHints {
-    fn read(path: &Path) -> Self {
-        Self::read_with_optional_identity(path, None)
+    fn read(path: &Path) -> Result<Self> {
+        Self::read_with_optional_identity_checked(path, None, &mut || Ok(()))
     }
 
     fn read_checked(path: &Path, check: &mut impl FnMut() -> Result<()>) -> Result<Self> {
         Self::read_with_optional_identity_checked(path, None, check)
     }
 
-    fn read_with_identity(path: &Path) -> Self {
-        let hints = Self::read(path);
+    fn read_with_identity(path: &Path) -> Result<Self> {
+        let hints = Self::read(path)?;
         if should_query_native_fileprovider_identity(path, &hints) {
-            Self::read_with_optional_identity(path, Some(copy_fileprovider_identity(path)))
+            Self::read_with_optional_identity_checked(
+                path,
+                Some(copy_fileprovider_identity(path)),
+                &mut || Ok(()),
+            )
         } else {
-            hints
+            Ok(hints)
         }
     }
 
@@ -1899,14 +1898,6 @@ impl CloudHints {
         } else {
             Ok(hints)
         }
-    }
-
-    fn read_with_optional_identity(
-        path: &Path,
-        native_identity: Option<NativeFileProviderIdentity>,
-    ) -> Self {
-        Self::read_with_optional_identity_checked(path, native_identity, &mut || Ok(()))
-            .expect("non-cancellable FileProvider hint read cannot cancel")
     }
 
     fn read_with_optional_identity_checked(
@@ -4471,7 +4462,7 @@ mod tests {
         let path = root.join("Downloaded.icloud.md");
         fs::write(&path, "downloaded").unwrap();
 
-        let hints = CloudHints::read(&path);
+        let hints = CloudHints::read(&path).unwrap();
         let report = FileProviderStateReport::read_path(&path).unwrap();
 
         assert_eq!(
