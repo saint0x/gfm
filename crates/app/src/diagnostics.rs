@@ -1,14 +1,14 @@
 use crate::access::{
-    preflight_access_scope_checked, preflight_access_scope_checked_with_volume_report,
-    preflight_volume_access_scope, preflight_volume_access_scope_with_report, ScopedAccessGuard,
+    preflight_access_scope_checked_with_volume_report, preflight_volume_access_scope_with_report,
+    ScopedAccessGuard,
 };
 use crate::runtime::{
     run_scheduled_volume_task_cancellable_with_volume_and_payload_path,
     run_volume_task_cancellable, run_volume_task_cancellable_with_payload_path,
 };
 use crate::{
-    config_store, config_write_probe_path, detect_volume_id, existing_read_probe_path,
-    parent_volume, parse_required_scheduling_pressure, required_path,
+    config_store, config_write_probe_path, existing_read_probe_path,
+    parse_required_scheduling_pressure, required_path,
 };
 use gfm_config::ConfigStore;
 use gfm_diagnostics::{
@@ -39,10 +39,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 Some(content) => RebuildSpec::with_content(root, records, PathBuf::from(content)),
                 None => RebuildSpec::records(root, records),
             };
-            let volume = detect_volume_id(&spec.root)
-                .ok()
-                .or_else(|| parent_volume(&spec.records_path));
-            preflight_rebuild_volumes(&spec)?;
+            let access_reports = rebuild_access_reports(&spec)?;
+            access_reports.preflight_volumes()?;
+            let volume = access_reports.first_volume();
             let report = run_volume_task_cancellable_with_payload_path(
                 volume,
                 Priority::Visible,
@@ -50,7 +49,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 spec.records_path.clone(),
                 move |cancellation| {
                     cancellation.check()?;
-                    let _access = retain_rebuild_access_checked(&spec, || cancellation.check())?;
+                    let _access = access_reports.access_checked(|| cancellation.check())?;
                     cancellation.check()?;
                     rebuild_index_cancellable(&spec, &cancellation)
                 },
@@ -82,22 +81,20 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         move |cancellation| rebuild_index_cancellable(&spec, &cancellation),
                     )?
                 } else {
-                    let volume_spec = spec.clone();
+                    let access_reports = rebuild_access_reports(&spec)?;
+                    let volume_access_reports = access_reports.clone();
                     run_scheduled_volume_task_cancellable_with_volume_and_payload_path(
                         Priority::Background,
                         "index rebuild",
                         pressure,
                         move || {
-                            preflight_rebuild_volumes(&volume_spec)?;
-                            Ok(detect_volume_id(&volume_spec.root)
-                                .ok()
-                                .or_else(|| parent_volume(&volume_spec.records_path)))
+                            volume_access_reports.preflight_volumes()?;
+                            Ok(volume_access_reports.first_volume())
                         },
                         spec.records_path.clone(),
                         move |cancellation| {
                             cancellation.check()?;
-                            let _access =
-                                retain_rebuild_access_checked(&spec, || cancellation.check())?;
+                            let _access = access_reports.access_checked(|| cancellation.check())?;
                             cancellation.check()?;
                             rebuild_index_cancellable(&spec, &cancellation)
                         },
@@ -154,10 +151,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .map(PathBuf::from)
                 .unwrap_or_else(|| records.with_extension("quarantine"));
             let spec = PersistentIndexRecoverySpec::new(root, records, state, quarantine);
-            let volume = detect_volume_id(&spec.root)
-                .ok()
-                .or_else(|| parent_volume(&spec.records_path));
-            preflight_recovery_volumes(&spec)?;
+            let access_reports = recovery_access_reports(&spec)?;
+            access_reports.preflight_volumes()?;
+            let volume = access_reports.first_volume();
             let report = run_volume_task_cancellable_with_payload_path(
                 volume,
                 Priority::Visible,
@@ -165,7 +161,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 spec.state_path.clone(),
                 move |cancellation| {
                     cancellation.check()?;
-                    let _access = retain_recovery_access_checked(&spec, || cancellation.check())?;
+                    let _access = access_reports.access_checked(|| cancellation.check())?;
                     cancellation.check()?;
                     recover_index_cancellable(&spec, &cancellation)
                 },
@@ -202,22 +198,20 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         move |cancellation| recover_index_cancellable(&spec, &cancellation),
                     )?
                 } else {
-                    let volume_spec = spec.clone();
+                    let access_reports = recovery_access_reports(&spec)?;
+                    let volume_access_reports = access_reports.clone();
                     run_scheduled_volume_task_cancellable_with_volume_and_payload_path(
                         Priority::Background,
                         "persistent index repair",
                         pressure,
                         move || {
-                            preflight_recovery_volumes(&volume_spec)?;
-                            Ok(detect_volume_id(&volume_spec.root)
-                                .ok()
-                                .or_else(|| parent_volume(&volume_spec.records_path)))
+                            volume_access_reports.preflight_volumes()?;
+                            Ok(volume_access_reports.first_volume())
                         },
                         spec.state_path.clone(),
                         move |cancellation| {
                             cancellation.check()?;
-                            let _access =
-                                retain_recovery_access_checked(&spec, || cancellation.check())?;
+                            let _access = access_reports.access_checked(|| cancellation.check())?;
                             cancellation.check()?;
                             recover_index_cancellable(&spec, &cancellation)
                         },
@@ -269,150 +263,82 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
     Ok(true)
 }
 
-fn retain_rebuild_access_checked(
-    spec: &RebuildSpec,
-    mut check_control: impl FnMut() -> Result<()>,
-) -> Result<Vec<ScopedAccessGuard>> {
-    check_control()?;
-    let records_probe = write_probe_path(&spec.records_path)?.to_path_buf();
-    check_control()?;
-    let content_probe = spec
-        .content_path
-        .as_ref()
-        .map(|content_path| write_probe_path(content_path).map(Path::to_path_buf))
-        .transpose()?;
-    check_control()?;
-    let mut guards = Vec::new();
-    guards.push(preflight_access_scope_checked(
-        &spec.root,
-        AccessIntent::Index,
-        "index rebuild root",
-        &mut check_control,
-    )?);
-    guards.push(preflight_access_scope_checked(
-        &records_probe,
-        AccessIntent::Write,
-        "index rebuild records",
-        &mut check_control,
-    )?);
-    if let Some(content_probe) = &content_probe {
-        guards.push(preflight_access_scope_checked(
-            content_probe,
+fn rebuild_access_reports(spec: &RebuildSpec) -> Result<DiagnosticsAccessReports> {
+    let mut entries = vec![
+        DiagnosticsAccessReportEntry::new(
+            spec.root.clone(),
+            AccessIntent::Index,
+            "index rebuild root",
+        ),
+        DiagnosticsAccessReportEntry::new(
+            write_probe_path(&spec.records_path)?.to_path_buf(),
+            AccessIntent::Write,
+            "index rebuild records",
+        ),
+    ];
+    if let Some(content_path) = &spec.content_path {
+        entries.push(DiagnosticsAccessReportEntry::new(
+            write_probe_path(content_path)?.to_path_buf(),
             AccessIntent::Write,
             "index rebuild content",
-            &mut check_control,
-        )?);
+        ));
     }
-    check_control()?;
-    Ok(guards)
+    Ok(DiagnosticsAccessReports::new(entries))
 }
 
-fn preflight_rebuild_volumes(spec: &RebuildSpec) -> Result<()> {
-    preflight_volume_access_scope(&spec.root, AccessIntent::Index, "index rebuild root")?;
-    preflight_volume_access_scope(
-        write_probe_path(&spec.records_path)?,
-        AccessIntent::Write,
-        "index rebuild records",
-    )?;
-    if let Some(content_path) = &spec.content_path {
-        preflight_volume_access_scope(
-            write_probe_path(content_path)?,
-            AccessIntent::Write,
-            "index rebuild content",
-        )?;
-    }
-    Ok(())
+#[cfg(test)]
+fn retain_rebuild_access_checked(
+    spec: &RebuildSpec,
+    check_control: impl FnMut() -> Result<()>,
+) -> Result<Vec<ScopedAccessGuard>> {
+    rebuild_access_reports(spec)?.access_checked(check_control)
 }
 
 fn run_recovery_plan(spec: PersistentIndexRecoverySpec) -> Result<PersistentIndexPlan> {
     const WORKER: &str = "persistent index repair plan";
-    preflight_volume_access_scope(&spec.root, AccessIntent::Index, WORKER)?;
-    let volume = detect_volume_id(&spec.root)
-        .ok()
-        .or_else(|| parent_volume(&spec.records_path));
+    let access_report = DiagnosticsAccessReport::new(spec.root.clone(), AccessIntent::Index);
+    access_report.preflight_volume(WORKER)?;
+    let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = retain_recovery_plan_access_checked(&spec, || cancellation.check())?;
+        let _access = access_report
+            .access_checked("persistent index repair root", || cancellation.check())?;
         cancellation.check()?;
         plan_index_recovery_cancellable(&spec, &cancellation)
     })
 }
 
-fn retain_recovery_plan_access_checked(
+fn recovery_access_reports(spec: &PersistentIndexRecoverySpec) -> Result<DiagnosticsAccessReports> {
+    Ok(DiagnosticsAccessReports::new(vec![
+        DiagnosticsAccessReportEntry::new(
+            spec.root.clone(),
+            AccessIntent::Index,
+            "persistent index repair root",
+        ),
+        DiagnosticsAccessReportEntry::new(
+            write_probe_path(&spec.records_path)?.to_path_buf(),
+            AccessIntent::Write,
+            "persistent index repair records",
+        ),
+        DiagnosticsAccessReportEntry::new(
+            write_probe_path(&spec.state_path)?.to_path_buf(),
+            AccessIntent::Write,
+            "persistent index repair state",
+        ),
+        DiagnosticsAccessReportEntry::new(
+            write_probe_path(&spec.quarantine_dir)?.to_path_buf(),
+            AccessIntent::Write,
+            "persistent index repair quarantine",
+        ),
+    ]))
+}
+
+#[cfg(test)]
+fn retain_recovery_access_checked(
     spec: &PersistentIndexRecoverySpec,
     check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
-    Ok(vec![preflight_access_scope_checked(
-        &spec.root,
-        AccessIntent::Index,
-        "persistent index repair root",
-        check_control,
-    )?])
-}
-
-fn retain_recovery_access_checked(
-    spec: &PersistentIndexRecoverySpec,
-    mut check_control: impl FnMut() -> Result<()>,
-) -> Result<Vec<ScopedAccessGuard>> {
-    check_control()?;
-    let records_probe = write_probe_path(&spec.records_path)?.to_path_buf();
-    check_control()?;
-    let state_probe = write_probe_path(&spec.state_path)?.to_path_buf();
-    check_control()?;
-    let quarantine_probe = write_probe_path(&spec.quarantine_dir)?.to_path_buf();
-    check_control()?;
-    let guards = vec![
-        preflight_access_scope_checked(
-            &spec.root,
-            AccessIntent::Index,
-            "persistent index repair root",
-            &mut check_control,
-        )?,
-        preflight_access_scope_checked(
-            &records_probe,
-            AccessIntent::Write,
-            "persistent index repair records",
-            &mut check_control,
-        )?,
-        preflight_access_scope_checked(
-            &state_probe,
-            AccessIntent::Write,
-            "persistent index repair state",
-            &mut check_control,
-        )?,
-        preflight_access_scope_checked(
-            &quarantine_probe,
-            AccessIntent::Write,
-            "persistent index repair quarantine",
-            &mut check_control,
-        )?,
-    ];
-    check_control()?;
-    Ok(guards)
-}
-
-fn preflight_recovery_volumes(spec: &PersistentIndexRecoverySpec) -> Result<()> {
-    preflight_volume_access_scope(
-        &spec.root,
-        AccessIntent::Index,
-        "persistent index repair root",
-    )?;
-    preflight_volume_access_scope(
-        write_probe_path(&spec.records_path)?,
-        AccessIntent::Write,
-        "persistent index repair records",
-    )?;
-    preflight_volume_access_scope(
-        write_probe_path(&spec.state_path)?,
-        AccessIntent::Write,
-        "persistent index repair state",
-    )?;
-    preflight_volume_access_scope(
-        write_probe_path(&spec.quarantine_dir)?,
-        AccessIntent::Write,
-        "persistent index repair quarantine",
-    )?;
-    Ok(())
+    recovery_access_reports(spec)?.access_checked(check_control)
 }
 
 #[derive(Clone)]
@@ -462,6 +388,60 @@ impl DiagnosticsAccessReport {
     }
 }
 
+#[derive(Clone)]
+struct DiagnosticsAccessReportEntry {
+    worker: &'static str,
+    report: DiagnosticsAccessReport,
+}
+
+impl DiagnosticsAccessReportEntry {
+    fn new(path: PathBuf, intent: AccessIntent, worker: &'static str) -> Self {
+        Self {
+            worker,
+            report: DiagnosticsAccessReport::new(path, intent),
+        }
+    }
+}
+
+#[derive(Clone)]
+struct DiagnosticsAccessReports {
+    entries: Vec<DiagnosticsAccessReportEntry>,
+}
+
+impl DiagnosticsAccessReports {
+    fn new(entries: Vec<DiagnosticsAccessReportEntry>) -> Self {
+        Self { entries }
+    }
+
+    fn preflight_volumes(&self) -> Result<()> {
+        for entry in &self.entries {
+            entry.report.preflight_volume(entry.worker)?;
+        }
+        Ok(())
+    }
+
+    fn access_checked(
+        &self,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<ScopedAccessGuard>> {
+        let mut guards = Vec::with_capacity(self.entries.len());
+        for entry in &self.entries {
+            check_control()?;
+            guards.push(
+                entry
+                    .report
+                    .access_checked(entry.worker, &mut check_control)?,
+            );
+        }
+        check_control()?;
+        Ok(guards)
+    }
+
+    fn first_volume(&self) -> Option<VolumeId> {
+        self.entries.iter().find_map(|entry| entry.report.volume())
+    }
+}
+
 fn run_trace_export(output: PathBuf) -> Result<String> {
     const WORKER: &str = "diagnostics trace export";
     let output_probe = write_probe_path(&output)?.to_path_buf();
@@ -486,42 +466,27 @@ fn run_parity_baseline(
     baseline: PathBuf,
     macos_build: String,
 ) -> Result<String> {
-    preflight_volume_access_scope(
-        config_write_probe_path(store.path())?,
-        AccessIntent::Write,
-        "diagnostics parity config",
-    )?;
-    preflight_volume_access_scope(
-        existing_read_probe_path(&baseline)?,
-        AccessIntent::Read,
-        "diagnostics parity baseline",
-    )?;
-    let baseline_probe = existing_read_probe_path(&baseline)?.to_path_buf();
-    let volume = parent_volume(config_write_probe_path(store.path())?)
-        .or_else(|| parent_volume(&baseline_probe));
+    let access_reports = DiagnosticsAccessReports::new(vec![
+        DiagnosticsAccessReportEntry::new(
+            config_write_probe_path(store.path())?.to_path_buf(),
+            AccessIntent::Write,
+            "diagnostics parity config",
+        ),
+        DiagnosticsAccessReportEntry::new(
+            existing_read_probe_path(&baseline)?.to_path_buf(),
+            AccessIntent::Read,
+            "diagnostics parity baseline",
+        ),
+    ]);
+    access_reports.preflight_volumes()?;
+    let volume = access_reports.first_volume();
     run_volume_task_cancellable(
         volume,
         Priority::Visible,
         "diagnostics parity baseline",
         move |cancellation| {
             cancellation.check()?;
-            let config_probe = config_write_probe_path(store.path())?.to_path_buf();
-            cancellation.check()?;
-            let baseline_probe = existing_read_probe_path(&baseline)?.to_path_buf();
-            cancellation.check()?;
-            let _config_access = preflight_access_scope_checked(
-                &config_probe,
-                AccessIntent::Write,
-                "diagnostics parity config",
-                || cancellation.check(),
-            )?;
-            cancellation.check()?;
-            let _baseline_access = preflight_access_scope_checked(
-                &baseline_probe,
-                AccessIntent::Read,
-                "diagnostics parity baseline",
-                || cancellation.check(),
-            )?;
+            let _access = access_reports.access_checked(|| cancellation.check())?;
             cancellation.check()?;
             let report = select_parity_baseline_checked(&store, baseline, macos_build, || {
                 cancellation.check()
