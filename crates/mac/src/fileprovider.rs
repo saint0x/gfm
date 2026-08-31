@@ -2634,13 +2634,24 @@ fn progress_for_state(state: CloudStorageState, hints: &CloudHints) -> CloudTran
     match state {
         CloudStorageState::LocalOnly => CloudTransferProgress::idle("not-fileprovider-backed"),
         CloudStorageState::Downloaded => {
-            if hints.native.percent_downloaded_milli == Some(100_000) {
+            if hints.native.percent_downloaded_milli == Some(100_000)
+                || hints.native.is_downloaded == Some(true)
+                || matches!(
+                    hints.native.downloading_status,
+                    Some(
+                        NativeUbiquitousDownloadingStatus::Downloaded
+                            | NativeUbiquitousDownloadingStatus::Current
+                    )
+                )
+            {
                 CloudTransferProgress::from_native(
                     CloudTransferDirection::Download,
                     Some(100_000),
                     hints.native.download_requested.unwrap_or(false),
                 )
-            } else if hints.native.percent_uploaded_milli == Some(100_000) {
+            } else if hints.native.percent_uploaded_milli == Some(100_000)
+                || hints.native.is_uploaded == Some(true)
+            {
                 CloudTransferProgress::from_native(
                     CloudTransferDirection::Upload,
                     Some(100_000),
@@ -5596,6 +5607,12 @@ mod tests {
             materialization_source_for_state(state, &hints),
             CloudMaterializationSource::NativeUrlResource
         );
+        let progress = progress_for_state(state, &hints);
+        assert_eq!(progress.direction, CloudTransferDirection::Download);
+        assert_eq!(progress.percent_milli, Some(100_000));
+        assert!(progress.complete);
+        assert_eq!(progress.source, "native-url-resource");
+        assert_eq!(progress.reason.as_deref(), Some("native-download-progress"));
     }
 
     #[test]
@@ -5836,7 +5853,14 @@ mod tests {
             report.materialization_source,
             CloudMaterializationSource::NativeUrlResource
         );
-        assert_eq!(report.progress.source, "state");
+        assert_eq!(report.progress.direction, CloudTransferDirection::Download);
+        assert_eq!(report.progress.percent_milli, Some(100_000));
+        assert!(report.progress.complete);
+        assert_eq!(report.progress.source, "native-url-resource");
+        assert_eq!(
+            report.progress.reason.as_deref(),
+            Some("native-download-progress")
+        );
         assert!(!report
             .source
             .split('+')
@@ -5958,9 +5982,13 @@ mod tests {
             report.materialization_source,
             CloudMaterializationSource::NativeUrlResource
         );
-        assert_eq!(report.progress.direction, CloudTransferDirection::Download);
+        assert_eq!(report.progress.direction, CloudTransferDirection::Upload);
         assert_eq!(report.progress.percent_milli, Some(100_000));
-        assert_eq!(report.progress.reason.as_deref(), Some("materialized"));
+        assert_eq!(report.progress.source, "native-url-resource");
+        assert_eq!(
+            report.progress.reason.as_deref(),
+            Some("native-upload-progress")
+        );
     }
 
     #[test]
