@@ -528,7 +528,6 @@ fn execute_operation_inner(
     let label = operation_kind(&operation);
     let _ = refresh_permission_state(PermissionRefreshAudience::Operations, label)?;
     let volume_report = operation_volume_report(&operation);
-    let access_gate = operation_access_gate(&operation, &volume_report);
     let volume_copy_policy = operation_volume_copy_policy_from_report(&operation, &volume_report);
     let volume = operation_volume(&operation, &volume_report);
     let entry = run_volume_task_cancellable_with_runtime(
@@ -536,6 +535,9 @@ fn execute_operation_inner(
         Priority::Interactive,
         label,
         move |cancellation, runtime| {
+            cancellation.check()?;
+            let access_gate =
+                operation_access_gate_checked(&operation, &volume_report, || cancellation.check())?;
             cancellation.check()?;
             preflight_operation_target_probe(&operation)?;
             cancellation.check()?;
@@ -820,16 +822,22 @@ fn preflight_trash_metadata_write_checked(
 }
 
 fn preflight_operation_target_probe(operation: &Operation) -> Result<()> {
-    let Some(path) = operation.target_path() else {
-        return Ok(());
-    };
-    match path.try_exists() {
-        Ok(_) => Ok(()),
-        Err(err) => Err(GfmError::io(
-            path,
-            format!("operation target path existence unavailable: {err}"),
-        )),
+    for requirement in operation.access_requirements() {
+        if requirement.role != OperationAccessRole::DestinationParent {
+            continue;
+        }
+        let probe_path = operation_access_probe_path(&requirement.path, requirement.role);
+        match probe_path.try_exists() {
+            Ok(_) => {}
+            Err(err) => {
+                return Err(GfmError::io(
+                    &probe_path,
+                    format!("operation target path existence unavailable: {err}"),
+                ));
+            }
+        }
     }
+    Ok(())
 }
 
 fn write_probe_path(path: &Path) -> Result<&Path> {
@@ -847,10 +855,36 @@ fn operation_access_gate(
     operation: &Operation,
     volume_report: &VolumeDiscoveryReport,
 ) -> OperationAccessGate {
-    let mut gate = OperationAccessGate::new();
+    operation_access_gate_checked(operation, volume_report, || Ok(()))
+        .expect("infallible operation access gate control cannot cancel")
+}
+
+fn operation_access_gate_checked(
+    operation: &Operation,
+    volume_report: &VolumeDiscoveryReport,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<OperationAccessGate> {
     let bookmark_store = SecurityScopedBookmarkStore::new(default_security_bookmarks_path());
+    operation_access_gate_with_bookmark_store_checked(
+        operation,
+        volume_report,
+        &bookmark_store,
+        &mut check_control,
+    )
+}
+
+fn operation_access_gate_with_bookmark_store_checked(
+    operation: &Operation,
+    volume_report: &VolumeDiscoveryReport,
+    bookmark_store: &SecurityScopedBookmarkStore,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<OperationAccessGate> {
+    let mut gate = OperationAccessGate::new();
+    check_control()?;
     for requirement in operation.access_requirements() {
+        check_control()?;
         let probe_path = operation_access_probe_path(&requirement.path, requirement.role);
+        check_control()?;
         let admission = worker_admission_with_volume_report(
             &probe_path,
             AccessIntent::Operate,
@@ -861,6 +895,7 @@ fn operation_access_gate(
             ),
             volume_report,
         );
+        check_control()?;
         let report = &admission.access;
         eprintln!("{}", admission.as_tsv());
         if matches!(admission.worker_action, SecurityWorkerAction::Deny)
@@ -905,16 +940,19 @@ fn operation_access_gate(
             probe_path.display()
         );
         let decision = if admission.needs_bookmark_access {
-            Some(stored_bookmark_decision_with_refresh(
-                &bookmark_store,
+            check_control()?;
+            Some(stored_bookmark_decision_with_refresh_checked(
+                bookmark_store,
                 &probe_path,
                 &reason,
                 admission.refresh_on_permission_change || admission.needs_bookmark_access,
-            ))
+                &mut check_control,
+            )?)
         } else {
             None
-        }
-        .unwrap_or_else(|| match admission.worker_action {
+        };
+        check_control()?;
+        let decision = decision.unwrap_or_else(|| match admission.worker_action {
             SecurityWorkerAction::Start => OperationAccessDecision::allow(reason)
                 .with_refresh_on_permission_change(admission.refresh_on_permission_change),
             SecurityWorkerAction::Prompt => OperationAccessDecision::prompt(reason)
@@ -925,8 +963,10 @@ fn operation_access_gate(
             }
         });
         gate = gate.with_decision(requirement.path, decision);
+        check_control()?;
     }
     for requirement in operation.access_requirements() {
+        check_control()?;
         let probe_path = operation_access_probe_path(&requirement.path, requirement.role);
         let Some(volume) = unavailable_mount_volume_for_path(volume_report, &probe_path) else {
             continue;
@@ -948,8 +988,10 @@ fn operation_access_gate(
             requirement.path,
             OperationAccessDecision::deny(reason).with_refresh_on_permission_change(true),
         );
+        check_control()?;
     }
     for requirement in operation.access_requirements() {
+        check_control()?;
         let probe_path = operation_access_probe_path(&requirement.path, requirement.role);
         let Some(volume) = unreachable_volume_for_path(volume_report, &probe_path) else {
             continue;
@@ -971,8 +1013,10 @@ fn operation_access_gate(
             requirement.path,
             OperationAccessDecision::deny(reason).with_refresh_on_permission_change(true),
         );
+        check_control()?;
     }
     for requirement in operation.access_requirements() {
+        check_control()?;
         if !requirement_mutates_volume(operation, requirement.role) {
             continue;
         }
@@ -995,8 +1039,10 @@ fn operation_access_gate(
             requirement.path,
             OperationAccessDecision::deny(reason).with_refresh_on_permission_change(true),
         );
+        check_control()?;
     }
-    gate
+    check_control()?;
+    Ok(gate)
 }
 
 fn unavailable_volume_api_report(root: &Path) -> Result<VolumeDiscoveryReport> {
@@ -1147,26 +1193,31 @@ fn operation_security_accesses_from_store_checked(
     Ok(accesses)
 }
 
-fn stored_bookmark_decision_with_refresh(
+fn stored_bookmark_decision_with_refresh_checked(
     store: &SecurityScopedBookmarkStore,
     path: &Path,
     reason: &str,
     refresh_on_permission_change: bool,
-) -> OperationAccessDecision {
-    let Ok(lookup) = store.resolve_for_path(path, false, true, true) else {
-        return OperationAccessDecision::prompt(format!(
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<OperationAccessDecision> {
+    check_control()?;
+    let Ok(lookup) = store.resolve_for_path_checked(path, false, true, true, &mut check_control)
+    else {
+        return Ok(OperationAccessDecision::prompt(format!(
             "{reason}; bookmark=unavailable; status=unavailable"
         ))
-        .with_refresh_on_permission_change(refresh_on_permission_change);
+        .with_refresh_on_permission_change(refresh_on_permission_change));
     };
+    check_control()?;
     let Some(resolution) = lookup.resolution else {
-        return OperationAccessDecision::prompt(format!(
+        return Ok(OperationAccessDecision::prompt(format!(
             "{reason}; bookmark=missing; status=missing"
         ))
-        .with_refresh_on_permission_change(refresh_on_permission_change);
+        .with_refresh_on_permission_change(refresh_on_permission_change));
     };
+    check_control()?;
     if resolution.report.status == SecurityScopedBookmarkStatus::Resolved {
-        OperationAccessDecision::allow(format!(
+        Ok(OperationAccessDecision::allow(format!(
             "{reason}; bookmark=resolved; stale={}; repaired={}; resolved={}",
             resolution.report.stale,
             resolution.repaired,
@@ -1177,15 +1228,15 @@ fn stored_bookmark_decision_with_refresh(
                 .map(|path| path.display().to_string())
                 .unwrap_or_else(|| "-".to_string())
         ))
-        .with_refresh_on_permission_change(refresh_on_permission_change)
+        .with_refresh_on_permission_change(refresh_on_permission_change))
     } else {
-        OperationAccessDecision::prompt(format!(
+        Ok(OperationAccessDecision::prompt(format!(
             "{reason}; bookmark=unavailable; status={}; stale={}; repaired={}",
             resolution.report.status.as_str(),
             resolution.report.stale,
             resolution.repaired
         ))
-        .with_refresh_on_permission_change(refresh_on_permission_change)
+        .with_refresh_on_permission_change(refresh_on_permission_change))
     }
 }
 
@@ -2137,8 +2188,14 @@ mod tests {
         let bookmark = gfm_mac::SecurityScopedBookmark::create(&protected, false).unwrap();
         store.upsert(bookmark).unwrap();
 
-        let decision =
-            stored_bookmark_decision_with_refresh(&store, &protected, "needs scoped access", true);
+        let decision = stored_bookmark_decision_with_refresh_checked(
+            &store,
+            &protected,
+            "needs scoped access",
+            true,
+            || Ok(()),
+        )
+        .unwrap();
 
         assert_eq!(decision.action, gfm_ops::OperationAccessAction::Allow);
         assert!(decision.reason.contains("bookmark=resolved"));
@@ -2155,13 +2212,76 @@ mod tests {
         fs::create_dir_all(protected.parent().unwrap()).unwrap();
         fs::write(&protected, "plan").unwrap();
 
-        let decision =
-            stored_bookmark_decision_with_refresh(&store, &protected, "needs scoped access", true);
+        let decision = stored_bookmark_decision_with_refresh_checked(
+            &store,
+            &protected,
+            "needs scoped access",
+            true,
+            || Ok(()),
+        )
+        .unwrap();
 
         assert_eq!(decision.action, gfm_ops::OperationAccessAction::Prompt);
         assert!(decision.reason.contains("bookmark=missing"));
         assert!(decision.refresh_on_permission_change);
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operation_access_gate_checked_honors_pre_cancelled_control() {
+        let root = unique_temp_dir("gfm-app-op-access-gate-pre-cancel");
+        let source = root.join("source.txt");
+        let destination = root.join("destination.txt");
+        fs::write(&source, "content").unwrap();
+        let operation = Operation::Copy {
+            from: source,
+            to: destination,
+        };
+        let report = VolumeDiscoveryReport::from_paths(vec![root.clone()]);
+
+        let result =
+            operation_access_gate_checked(&operation, &report, || Err(GfmError::Cancelled));
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operation_access_gate_checked_can_cancel_before_bookmark_store_lookup() {
+        let _env = ENV_LOCK.lock().unwrap();
+        let root = unique_temp_dir("gfm-app-op-access-gate-bookmark-cancel");
+        let home = root.join("home");
+        let documents = home.join("Documents");
+        let protected = documents.join("Plan.md");
+        let destination = root.join("destination.txt");
+        let store = SecurityScopedBookmarkStore::new(root.join("bookmarks.tsv"));
+        fs::create_dir_all(&documents).unwrap();
+        fs::write(&protected, "content").unwrap();
+        let _home = EnvVarGuard::set("HOME", &home);
+        let operation = Operation::Copy {
+            from: protected,
+            to: destination,
+        };
+        let report = VolumeDiscoveryReport::from_paths(vec![root.clone()]);
+        let mut checks = 0usize;
+
+        let result =
+            operation_access_gate_with_bookmark_store_checked(&operation, &report, &store, || {
+                checks += 1;
+                if checks >= 5 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            });
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(checks >= 5);
+        assert!(
+            !store.path().exists(),
+            "cancelled operation access gate must stop before touching bookmark store"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
