@@ -723,19 +723,7 @@ pub fn submit_volume_operation(
         );
         DASessionUnscheduleFromRunLoop(session, run_loop, kCFRunLoopDefaultMode);
     }
-    let result = if let Ok(result) = rx.try_recv() {
-        unsafe {
-            drop(Box::from_raw(context));
-        }
-        result
-    } else {
-        NativeVolumeOperationResult {
-            operation,
-            status: NativeVolumeOperationStatus::Submitted,
-            dissenter_status: None,
-            reason: Some(volume_operation_submitted_reason()),
-        }
-    };
+    let result = finish_volume_operation_context(rx, context, operation);
 
     unsafe {
         CFRelease(disk as CFTypeRef);
@@ -819,19 +807,7 @@ pub fn submit_volume_mount_by_bsd_name(bsd_name: &str) -> NativeVolumeOperationR
         );
         DASessionUnscheduleFromRunLoop(session, run_loop, kCFRunLoopDefaultMode);
     }
-    let result = if let Ok(result) = rx.try_recv() {
-        unsafe {
-            drop(Box::from_raw(context));
-        }
-        result
-    } else {
-        NativeVolumeOperationResult {
-            operation,
-            status: NativeVolumeOperationStatus::Submitted,
-            dissenter_status: None,
-            reason: Some(volume_operation_submitted_reason()),
-        }
-    };
+    let result = finish_volume_operation_context(rx, context, operation);
 
     unsafe {
         CFRelease(disk as CFTypeRef);
@@ -868,6 +844,27 @@ fn valid_bsd_disk_name(name: &str) -> bool {
         index += 1;
     }
     index == bytes.len() && index > slice_start
+}
+
+fn finish_volume_operation_context(
+    rx: Receiver<NativeVolumeOperationResult>,
+    context: *mut NativeVolumeOperationContext,
+    operation: NativeVolumeOperation,
+) -> NativeVolumeOperationResult {
+    let result = rx
+        .try_recv()
+        .unwrap_or_else(|_| NativeVolumeOperationResult {
+            operation,
+            status: NativeVolumeOperationStatus::Submitted,
+            dissenter_status: None,
+            reason: Some(volume_operation_submitted_reason()),
+        });
+    if !context.is_null() {
+        unsafe {
+            drop(Box::from_raw(context));
+        }
+    }
+    result
 }
 
 unsafe extern "C" fn volume_operation_callback(
@@ -1895,6 +1892,48 @@ mod tests {
         assert_eq!(
             volume_operation_submitted_reason(),
             "submitted-to-diskarbitration-timeout-500ms"
+        );
+    }
+
+    #[test]
+    fn volume_operation_timeout_finishes_owned_context_as_submitted() {
+        let (tx, rx) = mpsc::channel();
+        let context = Box::into_raw(Box::new(NativeVolumeOperationContext {
+            operation: NativeVolumeOperation::Eject,
+            run_loop: unsafe { CFRunLoopGetCurrent() },
+            sender: tx,
+        }));
+
+        let result = finish_volume_operation_context(rx, context, NativeVolumeOperation::Eject);
+
+        assert_eq!(result.operation, NativeVolumeOperation::Eject);
+        assert_eq!(result.status, NativeVolumeOperationStatus::Submitted);
+        assert_eq!(result.reason, Some(volume_operation_submitted_reason()));
+    }
+
+    #[test]
+    fn volume_operation_callback_result_wins_before_context_finish() {
+        let (tx, rx) = mpsc::channel();
+        let context = Box::into_raw(Box::new(NativeVolumeOperationContext {
+            operation: NativeVolumeOperation::Unmount,
+            run_loop: unsafe { CFRunLoopGetCurrent() },
+            sender: tx.clone(),
+        }));
+        tx.send(NativeVolumeOperationResult {
+            operation: NativeVolumeOperation::Unmount,
+            status: NativeVolumeOperationStatus::Succeeded,
+            dissenter_status: None,
+            reason: Some("diskarbitration-operation-succeeded".to_string()),
+        })
+        .unwrap();
+
+        let result = finish_volume_operation_context(rx, context, NativeVolumeOperation::Unmount);
+
+        assert_eq!(result.operation, NativeVolumeOperation::Unmount);
+        assert_eq!(result.status, NativeVolumeOperationStatus::Succeeded);
+        assert_eq!(
+            result.reason.as_deref(),
+            Some("diskarbitration-operation-succeeded")
         );
     }
 
