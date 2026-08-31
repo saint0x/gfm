@@ -18,7 +18,7 @@ use crate::{
     detect_volume_id, optional_path_arg, parent_volume, parse_battery_state, parse_io_pressure,
     parse_optional_scheduling_pressure, parse_quarantine_failure_kind,
     parse_required_scheduling_pressure, parse_thermal_state, parse_u32, parse_u64,
-    parse_user_activity, path_volume, required_path, required_string,
+    parse_user_activity, required_path, required_string,
 };
 use gfm_content::{CachedExtractor, ExtractionFingerprint, ExtractionQuarantine, Extractor};
 use gfm_fs::record_for_path_checked;
@@ -70,9 +70,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     "content index",
                 )?;
             }
-            let volume = detect_volume_id(&root)
-                .ok()
-                .or_else(|| parent_volume(&root));
+            let volume = access_reports.first_volume();
             let (records_len, inaccessible_len, indexed) =
                 run_retriable_volume_task_cancellable_with_payload_path(
                     volume,
@@ -464,35 +462,26 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     "content-maintain-segments-adaptive requires at least one segment".to_string(),
                 ));
             }
-            let volume_manifest = manifest_path.clone();
-            let volume_output = output_archive.clone();
-            let volume_segments = segments.clone();
+            let access_reports = ContentSegmentsAccessReports::for_paths(
+                Some(&manifest_path),
+                &output_archive,
+                &segments,
+            )?;
+            let schedule_access_reports = access_reports.clone();
             let worker = BackgroundContentIndexer::default();
             let outcome = run_scheduled_volume_task_cancellable_with_volume_and_payload_path(
                 Priority::Background,
                 "content maintenance",
                 pressure,
                 move || {
-                    preflight_content_segments_volumes(
-                        Some(&volume_manifest),
-                        &volume_output,
-                        &volume_segments,
-                        "content maintenance",
-                    )?;
-                    Ok(detect_volume_id(&volume_manifest)
-                        .ok()
-                        .or_else(|| parent_volume(&volume_output)))
+                    schedule_access_reports.preflight_volumes("content maintenance")?;
+                    Ok(schedule_access_reports.first_volume())
                 },
                 output_archive.clone(),
                 move |cancellation| {
                     cancellation.check()?;
-                    let _access = retain_content_segments_access_checked(
-                        Some(&manifest_path),
-                        &output_archive,
-                        &segments,
-                        "content maintenance",
-                        || cancellation.check(),
-                    )?;
+                    let _access = access_reports
+                        .access_checked("content maintenance", || cancellation.check())?;
                     cancellation.check()?;
                     worker.maintain_segments_cancellable(
                         &manifest_path,
@@ -958,15 +947,12 @@ fn run_extraction_cache(path: PathBuf) -> Result<String> {
 
 fn run_content_compaction(output: PathBuf, segments: Vec<PathBuf>) -> Result<usize> {
     const WORKER: &str = "content compaction";
-    preflight_content_segments_volumes(None, &output, &segments, WORKER)?;
-    let output_probe = write_probe_path(&output)?.to_path_buf();
-    let volume = path_volume(&output_probe);
+    let access_reports = ContentSegmentsAccessReports::for_paths(None, &output, &segments)?;
+    access_reports.preflight_volumes(WORKER)?;
+    let volume = access_reports.first_volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access =
-            retain_content_segments_access_checked(None, &output, &segments, WORKER, || {
-                cancellation.check()
-            })?;
+        let _access = access_reports.access_checked(WORKER, || cancellation.check())?;
         cancellation.check()?;
         let terms = Indexer::default().compact_content_segments(output, &segments)?;
         cancellation.check()?;
@@ -979,15 +965,12 @@ fn run_tiered_content_compaction(
     segments: Vec<PathBuf>,
 ) -> Result<gfm_index::ContentMergeOutcome> {
     const WORKER: &str = "tiered content compaction";
-    preflight_content_segments_volumes(None, &output, &segments, WORKER)?;
-    let output_probe = write_probe_path(&output)?.to_path_buf();
-    let volume = path_volume(&output_probe);
+    let access_reports = ContentSegmentsAccessReports::for_paths(None, &output, &segments)?;
+    access_reports.preflight_volumes(WORKER)?;
+    let volume = access_reports.first_volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access =
-            retain_content_segments_access_checked(None, &output, &segments, WORKER, || {
-                cancellation.check()
-            })?;
+        let _access = access_reports.access_checked(WORKER, || cancellation.check())?;
         cancellation.check()?;
         let outcome = Indexer::default().compact_content_segments_with_policy(
             output,
@@ -1005,19 +988,14 @@ fn run_content_segment_maintenance(
     segments: Vec<PathBuf>,
 ) -> Result<ContentMaintenanceReport> {
     const WORKER: &str = "content maintenance";
-    preflight_content_segments_volumes(Some(&manifest_path), &output_archive, &segments, WORKER)?;
-    let output_probe = write_probe_path(&output_archive)?.to_path_buf();
-    let volume = path_volume(&manifest_path).or_else(|| path_volume(&output_probe));
+    let access_reports =
+        ContentSegmentsAccessReports::for_paths(Some(&manifest_path), &output_archive, &segments)?;
+    access_reports.preflight_volumes(WORKER)?;
+    let volume = access_reports.first_volume();
     let worker = BackgroundContentIndexer::default();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = retain_content_segments_access_checked(
-            Some(&manifest_path),
-            &output_archive,
-            &segments,
-            WORKER,
-            || cancellation.check(),
-        )?;
+        let _access = access_reports.access_checked(WORKER, || cancellation.check())?;
         cancellation.check()?;
         let report = worker.maintain_segments_cancellable(
             &manifest_path,
@@ -1731,6 +1709,37 @@ struct ForegroundContentIndexAccessReport {
     volume_report: VolumeDiscoveryReport,
 }
 
+impl ForegroundContentIndexAccessReport {
+    fn preflight_volume(&self, worker: &str) -> Result<()> {
+        preflight_volume_access_scope_with_report(
+            &self.path,
+            self.intent,
+            worker,
+            &self.volume_report,
+        )
+    }
+
+    fn access_checked(
+        &self,
+        worker: &str,
+        check_control: impl FnMut() -> Result<()>,
+    ) -> Result<ScopedAccessGuard> {
+        preflight_access_scope_checked_with_volume_report(
+            &self.path,
+            self.intent,
+            worker,
+            &self.volume_report,
+            check_control,
+        )
+    }
+
+    fn volume(&self) -> Option<gfm_types::VolumeId> {
+        self.volume_report
+            .volume_for_path(&self.path)
+            .map(|volume| volume.id)
+    }
+}
+
 #[derive(Clone)]
 struct ForegroundContentIndexAccessReports {
     entries: Vec<ForegroundContentIndexAccessReport>,
@@ -1760,14 +1769,72 @@ impl ForegroundContentIndexAccessReports {
 
     fn preflight_volumes(&self, worker: &str) -> Result<()> {
         for report in &self.entries {
-            preflight_volume_access_scope_with_report(
-                &report.path,
-                report.intent,
-                worker,
-                &report.volume_report,
-            )?;
+            report.preflight_volume(worker)?;
         }
         Ok(())
+    }
+
+    fn first_volume(&self) -> Option<gfm_types::VolumeId> {
+        self.entries
+            .iter()
+            .find_map(ForegroundContentIndexAccessReport::volume)
+    }
+}
+
+#[derive(Clone)]
+struct ContentSegmentsAccessReports {
+    entries: Vec<ForegroundContentIndexAccessReport>,
+}
+
+impl ContentSegmentsAccessReports {
+    fn for_paths(
+        manifest_path: Option<&Path>,
+        output_archive: &Path,
+        segments: &[PathBuf],
+    ) -> Result<Self> {
+        let mut entries =
+            Vec::with_capacity(segments.len() + 1 + usize::from(manifest_path.is_some()));
+        if let Some(manifest_path) = manifest_path {
+            entries.push(ForegroundContentIndexAccessReports::entry(
+                manifest_path.to_path_buf(),
+                AccessIntent::Read,
+            ));
+        }
+        entries.push(ForegroundContentIndexAccessReports::entry(
+            write_probe_path(output_archive)?.to_path_buf(),
+            AccessIntent::Write,
+        ));
+        entries.extend(segments.iter().map(|segment| {
+            ForegroundContentIndexAccessReports::entry(segment.clone(), AccessIntent::Read)
+        }));
+        Ok(Self { entries })
+    }
+
+    fn preflight_volumes(&self, worker: &str) -> Result<()> {
+        for report in &self.entries {
+            report.preflight_volume(worker)?;
+        }
+        Ok(())
+    }
+
+    fn access_checked(
+        &self,
+        worker: &str,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<ScopedAccessGuard>> {
+        let mut guards = Vec::with_capacity(self.entries.len());
+        for report in &self.entries {
+            check_control()?;
+            guards.push(report.access_checked(worker, &mut check_control)?);
+        }
+        check_control()?;
+        Ok(guards)
+    }
+
+    fn first_volume(&self) -> Option<gfm_types::VolumeId> {
+        self.entries
+            .iter()
+            .find_map(ForegroundContentIndexAccessReport::volume)
     }
 }
 
@@ -1796,6 +1863,7 @@ fn preflight_content_segment_index_volumes(root: &Path, output: &Path, worker: &
     preflight_volume_access_scope(write_probe_path(output)?, AccessIntent::Write, worker)
 }
 
+#[cfg(test)]
 fn retain_content_segments_access_checked(
     manifest_path: Option<&Path>,
     output_archive: &Path,
@@ -1803,56 +1871,9 @@ fn retain_content_segments_access_checked(
     worker: &str,
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
-    let mut guards = Vec::with_capacity(segments.len() + 1 + usize::from(manifest_path.is_some()));
-    if let Some(manifest_path) = manifest_path {
-        check_control()?;
-        guards.push(preflight_access_scope_checked(
-            manifest_path,
-            AccessIntent::Read,
-            worker,
-            &mut check_control,
-        )?);
-    }
-    check_control()?;
-    let output_probe = write_probe_path(output_archive)?.to_path_buf();
-    check_control()?;
-    guards.push(preflight_access_scope_checked(
-        &output_probe,
-        AccessIntent::Write,
-        worker,
-        &mut check_control,
-    )?);
-    for segment in segments {
-        check_control()?;
-        guards.push(preflight_access_scope_checked(
-            segment,
-            AccessIntent::Read,
-            worker,
-            &mut check_control,
-        )?);
-    }
-    check_control()?;
-    Ok(guards)
-}
-
-fn preflight_content_segments_volumes(
-    manifest_path: Option<&Path>,
-    output_archive: &Path,
-    segments: &[PathBuf],
-    worker: &str,
-) -> Result<()> {
-    if let Some(manifest_path) = manifest_path {
-        preflight_volume_access_scope(manifest_path, AccessIntent::Read, worker)?;
-    }
-    preflight_volume_access_scope(
-        write_probe_path(output_archive)?,
-        AccessIntent::Write,
-        worker,
-    )?;
-    for segment in segments {
-        preflight_volume_access_scope(segment, AccessIntent::Read, worker)?;
-    }
-    Ok(())
+    let access_reports =
+        ContentSegmentsAccessReports::for_paths(manifest_path, output_archive, segments)?;
+    access_reports.access_checked(worker, &mut check_control)
 }
 
 fn retain_content_job_access_checked(
