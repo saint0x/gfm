@@ -2233,9 +2233,6 @@ fn storage_state_for_path(
 fn provider_state_name_hints_allowed(hints: &CloudHints) -> bool {
     hints.native_identity.status == NativeFileProviderIdentityStatus::Available
         || native_has_ubiquitous_materialization_evidence(&hints.native)
-        || !hints.xattrs.is_empty()
-        || !hints.xattr_values.is_empty()
-        || !native_provider_state_unavailable(hints)
 }
 
 fn xattr_storage_state(hints: &CloudHints) -> Option<CloudStorageState> {
@@ -3138,6 +3135,32 @@ mod tests {
         );
         assert_eq!(report.commands.download, CloudCommandState::Disabled);
         assert_eq!(report.commands.evict, CloudCommandState::Disabled);
+    }
+
+    #[test]
+    fn path_fallback_does_not_promote_filename_state_words_without_provider_evidence() {
+        let path = PathBuf::from(
+            "/Users/test/Library/Mobile Documents/com~apple~CloudDocs/Conflict.icloud-conflict.md",
+        );
+        let hints = CloudHints {
+            native: native_values(),
+            native_identity: identity_not_queried(),
+            xattrs: Vec::new(),
+            xattr_values: Vec::new(),
+            provider_identifier: None,
+            source: "icloud-path+fixture-name".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.domain, FileProviderDomain::ICloudDrive);
+        assert_eq!(report.storage_state, CloudStorageState::Unknown);
+        assert_eq!(report.materialization, CloudMaterialization::Unknown);
+        assert!(!report.conflict);
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::PathFallback
+        );
     }
 
     #[test]
