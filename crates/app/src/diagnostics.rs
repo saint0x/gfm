@@ -308,7 +308,8 @@ fn retain_rebuild_access_checked(
 
 fn run_recovery_plan(spec: PersistentIndexRecoverySpec) -> Result<PersistentIndexPlan> {
     const WORKER: &str = "persistent index repair plan";
-    let access_report = DiagnosticsAccessReport::new(spec.root.clone(), AccessIntent::Index);
+    let access_report =
+        DiagnosticsAccessReport::new_checked(spec.root.clone(), AccessIntent::Index, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
@@ -372,11 +373,6 @@ struct DiagnosticsAccessReport {
 }
 
 impl DiagnosticsAccessReport {
-    fn new(path: PathBuf, intent: AccessIntent) -> Self {
-        Self::new_checked(path, intent, || Ok(()))
-            .expect("uncancellable diagnostics access report cannot cancel")
-    }
-
     fn new_checked(
         path: PathBuf,
         intent: AccessIntent,
@@ -430,11 +426,6 @@ struct DiagnosticsAccessReportEntry {
 }
 
 impl DiagnosticsAccessReportEntry {
-    fn new(path: PathBuf, intent: AccessIntent, worker: &'static str) -> Self {
-        Self::new_checked(path, intent, worker, || Ok(()))
-            .expect("uncancellable diagnostics access entry cannot cancel")
-    }
-
     fn new_checked(
         path: PathBuf,
         intent: AccessIntent,
@@ -490,7 +481,8 @@ impl DiagnosticsAccessReports {
 fn run_trace_export(output: PathBuf) -> Result<String> {
     const WORKER: &str = "diagnostics trace export";
     let output_probe = write_probe_path(&output)?.to_path_buf();
-    let access_report = DiagnosticsAccessReport::new(output_probe, AccessIntent::Write);
+    let access_report =
+        DiagnosticsAccessReport::new_checked(output_probe, AccessIntent::Write, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
@@ -512,16 +504,18 @@ fn run_parity_baseline(
     macos_build: String,
 ) -> Result<String> {
     let access_reports = DiagnosticsAccessReports::new(vec![
-        DiagnosticsAccessReportEntry::new(
+        DiagnosticsAccessReportEntry::new_checked(
             config_write_probe_path(store.path())?.to_path_buf(),
             AccessIntent::Write,
             "diagnostics parity config",
-        ),
-        DiagnosticsAccessReportEntry::new(
+            || Ok(()),
+        )?,
+        DiagnosticsAccessReportEntry::new_checked(
             existing_read_probe_path(&baseline)?.to_path_buf(),
             AccessIntent::Read,
             "diagnostics parity baseline",
-        ),
+            || Ok(()),
+        )?,
     ]);
     access_reports.preflight_volumes()?;
     let volume = access_reports.first_volume();
@@ -548,7 +542,8 @@ fn run_parity_baseline(
 
 fn run_storage_inspect(storage: PathBuf) -> Result<String> {
     const WORKER: &str = "diagnostics storage";
-    let access_report = DiagnosticsAccessReport::new(storage.clone(), AccessIntent::Read);
+    let access_report =
+        DiagnosticsAccessReport::new_checked(storage.clone(), AccessIntent::Read, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
