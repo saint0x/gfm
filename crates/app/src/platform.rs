@@ -6,7 +6,7 @@ use crate::access::{
 };
 use crate::volume::{resolve_volume_event_path, volume_event_invalidation_for_descriptor};
 use crate::{
-    index_volume_descriptor, parse_required_scheduling_pressure,
+    index_volume_descriptor, parse_required_scheduling_pressure, parse_usize_arg,
     run_preview_contract_adaptive_with_volume_and_payload_path,
     run_preview_contract_cancellable_with_payload_path,
     runtime::{
@@ -573,6 +573,17 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let stream = VolumeEventStream::start();
             stream.try_recv_checked(|| Err(GfmError::Cancelled))?;
             println!("volume-events-cancel-before-recv\tcancelled=false");
+        }
+        "volume-events-drain-probe" => {
+            let max_events =
+                parse_usize_arg(args.next(), "volume-events-drain-probe requires max events")?;
+            let stream = VolumeEventStream::start();
+            println!(
+                "{}",
+                stream
+                    .drain_available_checked(max_events, || Ok(()))?
+                    .as_tsv()
+            );
         }
         "volume-events-shutdown-probe" => {
             let stream = VolumeEventStream::start();
@@ -3335,7 +3346,7 @@ fn drain_fileprovider_observer_probe(
     let deadline = Instant::now() + Duration::from_secs(10);
     while Instant::now() < deadline {
         cancellation.check()?;
-        if let Some(observed) = observer.drain_available(64)? {
+        if let Some(observed) = observer.drain_available_checked(64, || cancellation.check())? {
             if !observed.paths.is_empty() {
                 return Ok(observed);
             }

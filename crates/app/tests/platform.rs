@@ -5617,6 +5617,24 @@ fn volume_event_stream_cancel_before_recv_stops_before_event_poll_from_binary() 
 }
 
 #[test]
+fn drains_volume_event_stream_with_explicit_bound_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-events-drain-probe")
+        .arg("4")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("volume-events-drain\tattached="));
+    assert!(stdout.contains("\tmax=4\t"));
+    assert!(stdout.contains("\tcount="));
+}
+
+#[test]
 fn reports_volume_event_invalidation_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-volume-event-invalidation-{}",

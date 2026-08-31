@@ -1071,6 +1071,15 @@ impl FileProviderStateInvalidationReport {
         previous: Option<&FileProviderStateSnapshot>,
         current_paths: impl IntoIterator<Item = PathBuf>,
     ) -> Result<(Self, FileProviderStateSnapshot)> {
+        Self::evaluate_checked(previous, current_paths, || Ok(()))
+    }
+
+    pub fn evaluate_checked(
+        previous: Option<&FileProviderStateSnapshot>,
+        current_paths: impl IntoIterator<Item = PathBuf>,
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<(Self, FileProviderStateSnapshot)> {
+        check()?;
         let initialized = previous.is_none();
         let previous_states = previous
             .map(FileProviderStateSnapshot::state_index)
@@ -1079,22 +1088,28 @@ impl FileProviderStateInvalidationReport {
         let mut current_entries = Vec::new();
         let mut seen_current_paths = BTreeSet::new();
         for path in current_paths {
+            check()?;
             if !seen_current_paths.insert(path.clone()) {
                 continue;
             }
+            check()?;
             let previous_state = previous_states.get(path.as_path()).copied();
             let path_exists = path
                 .try_exists()
                 .map_err(|err| GfmError::io(&path, format!("path existence unavailable: {err}")))?;
+            check()?;
             let current = if path_exists
                 || (previous_state.is_none() && is_evicted_placeholder_path(&path))
             {
-                Some(FileProviderStateReport::read_path(&path)?)
+                Some(FileProviderStateReport::read_path_checked(
+                    &path, &mut check,
+                )?)
             } else if previous_state.is_some() {
                 Some(FileProviderStateReport::removed(path.clone()))
             } else {
                 None
             };
+            check()?;
             let current = current.ok_or_else(|| GfmError::io(&path, "path does not exist"))?;
             let previous_state = previous_state.unwrap_or(CloudStorageState::LocalOnly);
             let change =
@@ -1168,17 +1183,29 @@ impl FileProviderObservedInvalidation {
         previous: Option<&FileProviderStateSnapshot>,
         events: impl IntoIterator<Item = FileEvent>,
     ) -> Result<(Self, FileProviderStateSnapshot)> {
+        Self::evaluate_checked(previous, events, || Ok(()))
+    }
+
+    pub fn evaluate_checked(
+        previous: Option<&FileProviderStateSnapshot>,
+        events: impl IntoIterator<Item = FileEvent>,
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<(Self, FileProviderStateSnapshot)> {
+        check()?;
         let mut event_count = 0;
         let mut event_kinds = BTreeSet::new();
         let mut paths = BTreeSet::new();
         let previous_lookup = FileProviderSnapshotLookup::new(previous);
         for event in events {
+            check()?;
             event_count += 1;
             event_kinds.insert(fileprovider_observed_event_kind(&event.kind));
-            for path in paths_for_fileprovider_event(&previous_lookup, &event)? {
+            for path in paths_for_fileprovider_event_checked(&previous_lookup, &event, &mut check)?
+            {
                 paths.insert(path);
             }
         }
+        check()?;
         let event_kinds = event_kinds.into_iter().collect::<Vec<_>>();
         let paths = paths.into_iter().collect::<Vec<_>>();
         let (report, snapshot) = if paths.is_empty() {
@@ -1192,11 +1219,15 @@ impl FileProviderObservedInvalidation {
                 snapshot,
             )
         } else {
-            let (report, event_snapshot) =
-                FileProviderStateInvalidationReport::evaluate(previous, paths.clone())?;
+            let (report, event_snapshot) = FileProviderStateInvalidationReport::evaluate_checked(
+                previous,
+                paths.clone(),
+                &mut check,
+            )?;
             let snapshot = merge_observed_snapshot(previous, &paths, event_snapshot)?;
             (report, snapshot)
         };
+        check()?;
         Ok((
             Self {
                 events: event_count,
@@ -1270,18 +1301,28 @@ impl FileProviderStateObserver {
         &mut self,
         max_events: usize,
     ) -> Result<Option<FileProviderObservedInvalidation>> {
+        self.drain_available_checked(max_events, || Ok(()))
+    }
+
+    pub fn drain_available_checked(
+        &mut self,
+        max_events: usize,
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<Option<FileProviderObservedInvalidation>> {
         let mut events = Vec::new();
         for _ in 0..max_events {
+            check()?;
             match self.stream.try_recv() {
                 Some(Ok(event)) => events.push(event),
                 Some(Err(err)) => return Err(err),
                 None => break,
             }
         }
+        check()?;
         if events.is_empty() {
             return Ok(None);
         }
-        self.apply_events(events).map(Some)
+        self.apply_events_checked(events, check).map(Some)
     }
 
     pub fn snapshot(&self) -> &FileProviderStateSnapshot {
@@ -1292,8 +1333,20 @@ impl FileProviderStateObserver {
         &mut self,
         events: impl IntoIterator<Item = FileEvent>,
     ) -> Result<FileProviderObservedInvalidation> {
-        let (observed, snapshot) =
-            FileProviderObservedInvalidation::evaluate(Some(&self.snapshot), events)?;
+        self.apply_events_checked(events, || Ok(()))
+    }
+
+    fn apply_events_checked(
+        &mut self,
+        events: impl IntoIterator<Item = FileEvent>,
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<FileProviderObservedInvalidation> {
+        let (observed, snapshot) = FileProviderObservedInvalidation::evaluate_checked(
+            Some(&self.snapshot),
+            events,
+            &mut check,
+        )?;
+        check()?;
         self.snapshot = snapshot;
         Ok(observed)
     }
@@ -1311,29 +1364,41 @@ fn fileprovider_observed_event_kind(kind: &FileEventKind) -> FileProviderObserve
     }
 }
 
-fn paths_for_fileprovider_event(
+fn paths_for_fileprovider_event_checked(
     previous: &FileProviderSnapshotLookup<'_>,
     event: &FileEvent,
+    mut check: impl FnMut() -> Result<()>,
 ) -> Result<Vec<PathBuf>> {
+    check()?;
     match &event.kind {
         FileEventKind::Rename { from, to } => {
             let mut paths = BTreeSet::new();
-            paths.extend(observed_fileprovider_paths_for_root(previous, from)?);
-            if fileprovider_observed_path_exists(to)? && previous.contains_path_or_descendant(from)
+            paths.extend(observed_fileprovider_paths_for_root_checked(
+                previous, from, &mut check,
+            )?);
+            if fileprovider_observed_path_exists_checked(to, &mut check)?
+                && previous.contains_path_or_descendant(from)
             {
                 paths.insert(to.clone());
             }
-            paths.extend(observed_fileprovider_paths_for_root(previous, to)?);
-            paths.extend(remapped_tracked_fileprovider_paths(previous, from, to)?);
+            check()?;
+            paths.extend(observed_fileprovider_paths_for_root_checked(
+                previous, to, &mut check,
+            )?);
+            paths.extend(remapped_tracked_fileprovider_paths_checked(
+                previous, from, to, &mut check,
+            )?);
             Ok(paths.into_iter().collect())
         }
-        FileEventKind::Remove => observed_fileprovider_paths_for_root(previous, &event.path),
+        FileEventKind::Remove => {
+            observed_fileprovider_paths_for_root_checked(previous, &event.path, &mut check)
+        }
         FileEventKind::Create
         | FileEventKind::Metadata
         | FileEventKind::Modify
         | FileEventKind::Rescan
         | FileEventKind::Other => {
-            if should_read_observed_fileprovider_path(previous, &event.path)? {
+            if should_read_observed_fileprovider_path_checked(previous, &event.path, &mut check)? {
                 Ok(vec![event.path.clone()])
             } else {
                 Ok(Vec::new())
@@ -1342,66 +1407,81 @@ fn paths_for_fileprovider_event(
     }
 }
 
-fn observed_fileprovider_paths_for_root(
+fn observed_fileprovider_paths_for_root_checked(
     previous: &FileProviderSnapshotLookup<'_>,
     root: &Path,
+    mut check: impl FnMut() -> Result<()>,
 ) -> Result<Vec<PathBuf>> {
+    check()?;
     let mut paths = BTreeSet::new();
-    if should_read_observed_fileprovider_path(previous, root)? {
+    if should_read_observed_fileprovider_path_checked(previous, root, &mut check)? {
         paths.insert(root.to_path_buf());
     }
+    check()?;
     paths.extend(previous.tracked_descendants_of(root));
     Ok(paths.into_iter().collect())
 }
 
-fn remapped_tracked_fileprovider_paths(
+fn remapped_tracked_fileprovider_paths_checked(
     previous: &FileProviderSnapshotLookup<'_>,
     from: &Path,
     to: &Path,
+    mut check: impl FnMut() -> Result<()>,
 ) -> Result<Vec<PathBuf>> {
     let mut paths = Vec::new();
     for path in previous.tracked_descendants_of(from) {
+        check()?;
         let Some(path) = path.strip_prefix(from).ok().map(|suffix| to.join(suffix)) else {
             continue;
         };
-        if should_read_observed_fileprovider_path(previous, &path)? {
+        if should_read_observed_fileprovider_path_checked(previous, &path, &mut check)? {
             paths.push(path);
         }
     }
     Ok(paths)
 }
 
-fn should_read_observed_fileprovider_path(
+fn should_read_observed_fileprovider_path_checked(
     previous: &FileProviderSnapshotLookup<'_>,
     path: &Path,
+    mut check: impl FnMut() -> Result<()>,
 ) -> Result<bool> {
+    check()?;
     if previous.contains_path(path) {
         return Ok(true);
     }
-    if !fileprovider_observed_path_exists(path)? {
+    if !fileprovider_observed_path_exists_checked(path, &mut check)? {
         return Ok(false);
     }
-    is_observable_fileprovider_path(previous, path)
+    is_observable_fileprovider_path_checked(previous, path, check)
 }
 
-fn is_observable_fileprovider_path(
+fn is_observable_fileprovider_path_checked(
     previous: &FileProviderSnapshotLookup<'_>,
     path: &Path,
+    mut check: impl FnMut() -> Result<()>,
 ) -> Result<bool> {
+    check()?;
     if previous.contains_path(path) {
         return Ok(true);
     }
-    if !fileprovider_observed_path_exists(path)? {
+    if !fileprovider_observed_path_exists_checked(path, &mut check)? {
         return Ok(false);
     }
-    let hints = CloudHints::read(path);
+    check()?;
+    let hints = CloudHints::read_checked(path, &mut check)?;
+    check()?;
     Ok(strong_provider_path_hint(path)
         && !native_proves_local_only(&hints)
         && !weak_path_hint_without_provider_evidence(&hints)
         || observable_fileprovider_path_from_hints(path, &hints))
 }
 
-fn fileprovider_observed_path_exists(path: &Path) -> Result<bool> {
+fn fileprovider_observed_path_exists_checked(
+    path: &Path,
+    mut check: impl FnMut() -> Result<()>,
+) -> Result<bool> {
+    check()?;
     path.try_exists()
         .map_err(|err| GfmError::io(path, format!("observed path existence unavailable: {err}")))
 }
@@ -3607,6 +3687,18 @@ mod tests {
     }
 
     #[test]
+    fn checked_state_invalidation_honors_pre_cancelled_control_before_path_probe() {
+        let path = PathBuf::from("/tmp/gfm-fileprovider-state-invalidation-cancelled");
+
+        let err = FileProviderStateInvalidationReport::evaluate_checked(None, [path], || {
+            Err(GfmError::Cancelled)
+        })
+        .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+    }
+
+    #[test]
     fn state_invalidation_removes_tracked_entry_when_provider_evidence_disappears() {
         let root = unique_temp_dir();
         let local = root.join("Downloaded.icloud.md");
@@ -3757,6 +3849,42 @@ mod tests {
             "fileprovider-observed-invalidation\tevents=1\tevent-kinds=metadata\tpaths=1"
         ));
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn checked_observed_invalidation_honors_pre_cancelled_control_before_event_expansion() {
+        let path = PathBuf::from("/tmp/gfm-fileprovider-observed-cancelled.icloud");
+        let events = vec![FileEvent::new(&path, FileEventKind::Metadata)];
+
+        let err = FileProviderObservedInvalidation::evaluate_checked(None, events, || {
+            Err(GfmError::Cancelled)
+        })
+        .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+    }
+
+    #[test]
+    fn checked_observed_invalidation_can_cancel_before_observed_hint_read() {
+        let root = unique_temp_dir();
+        let evicted = root.join("Remote.icloud-placeholder");
+        fs::write(&evicted, "placeholder").unwrap();
+        mark_evicted_fixture(&evicted);
+        let events = vec![FileEvent::new(&evicted, FileEventKind::Metadata)];
+        let mut checks = 0usize;
+
+        let err = FileProviderObservedInvalidation::evaluate_checked(None, events, || {
+            checks += 1;
+            if checks >= 8 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
         fs::remove_dir_all(root).unwrap();
     }
 

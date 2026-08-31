@@ -1029,6 +1029,13 @@ pub struct VolumeEventStream {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VolumeEventDrainReport {
+    pub attached: bool,
+    pub max_events: usize,
+    pub events: Vec<VolumeEventReport>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VolumeEventState {
     report: VolumeDiscoveryReport,
     stable_index: BTreeMap<String, usize>,
@@ -1601,6 +1608,28 @@ impl VolumeEventStream {
         VolumeEventReport::from_native_checked(event, check).map(Some)
     }
 
+    pub fn drain_available_checked(
+        &self,
+        max_events: usize,
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<VolumeEventDrainReport> {
+        check()?;
+        let mut events = Vec::with_capacity(max_events);
+        for _ in 0..max_events {
+            check()?;
+            let Some(event) = self.try_recv_checked(&mut check)? else {
+                break;
+            };
+            events.push(event);
+        }
+        check()?;
+        Ok(VolumeEventDrainReport {
+            attached: self.is_attached(),
+            max_events,
+            events,
+        })
+    }
+
     pub fn shutdown(self) -> VolumeEventShutdownReport {
         let shutdown = self.stream.shutdown();
         VolumeEventShutdownReport {
@@ -1608,6 +1637,19 @@ impl VolumeEventStream {
             stop_requested: shutdown.stop_requested,
             thread_joined: shutdown.thread_joined,
         }
+    }
+}
+
+impl VolumeEventDrainReport {
+    pub fn as_tsv(&self) -> String {
+        let mut lines = vec![format!(
+            "volume-events-drain\tattached={}\tmax={}\tcount={}",
+            self.attached,
+            self.max_events,
+            self.events.len()
+        )];
+        lines.extend(self.events.iter().map(VolumeEventReport::as_tsv));
+        lines.join("\n")
     }
 }
 
@@ -4429,6 +4471,30 @@ mod tests {
         let stream = VolumeEventStream::start();
 
         assert!(stream.is_attached() || stream.try_recv().is_some());
+        drop(stream);
+    }
+
+    #[test]
+    fn volume_event_stream_drain_respects_zero_bound() {
+        let stream = VolumeEventStream::start();
+
+        let report = stream.drain_available_checked(0, || Ok(())).unwrap();
+
+        assert_eq!(report.max_events, 0);
+        assert!(report.events.is_empty());
+        assert_eq!(report.attached, stream.is_attached());
+        drop(stream);
+    }
+
+    #[test]
+    fn volume_event_stream_drain_honors_pre_cancelled_control() {
+        let stream = VolumeEventStream::start();
+
+        let err = stream
+            .drain_available_checked(4, || Err(GfmError::Cancelled))
+            .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
         drop(stream);
     }
 
