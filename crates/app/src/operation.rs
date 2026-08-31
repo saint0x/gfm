@@ -1,16 +1,15 @@
 use crate::access::{
-    preflight_access_scope_checked_with_volume_report, preflight_volume_access_scope,
-    preflight_volume_access_scope_with_report, worker_admission_with_volume_report,
-    ScopedAccessGuard,
+    preflight_access_scope_checked_with_volume_report, preflight_volume_access_scope_with_report,
+    worker_admission_with_volume_report, ScopedAccessGuard,
 };
 use crate::permission_refresh::{refresh_permission_state, PermissionRefreshAudience};
+use crate::required_path;
 use crate::runtime::{
     default_journal_path, default_security_bookmarks_path, default_trash_metadata_path,
     run_volume_task_cancellable, run_volume_task_cancellable_with_runtime,
     runtime_operation_conflict_store, OperationConflictStore, RuntimeJobHandle,
     RuntimeOperationConflict,
 };
-use crate::{detect_volume_id, parent_volume, required_path};
 use gfm_jobs::{JobProgressState, Priority};
 use gfm_mac::{
     AccessIntent, MountState, SecurityDecisionAction, SecurityScopedAccessReport,
@@ -531,7 +530,7 @@ fn execute_operation_inner(
     let volume_report = operation_volume_report(&operation);
     let access_gate = operation_access_gate(&operation, &volume_report);
     let volume_copy_policy = operation_volume_copy_policy_from_report(&operation, &volume_report);
-    let volume = operation_volume(&operation);
+    let volume = operation_volume(&operation, &volume_report);
     let entry = run_volume_task_cancellable_with_runtime(
         volume,
         Priority::Interactive,
@@ -754,16 +753,13 @@ fn operation_volume_copy_policy_report(operation: &Operation) -> String {
 fn preflight_operation_volume_policy_access(operation: &Operation) -> Result<()> {
     match operation {
         Operation::Copy { from, to } | Operation::Move { from, to } => {
-            preflight_volume_access_scope(
-                from,
-                AccessIntent::Read,
-                "operation volume copy policy source",
-            )?;
-            preflight_volume_access_scope(
-                write_probe_path(to)?,
+            let source = OperationPathAccessReport::new(from.clone(), AccessIntent::Read);
+            let destination = OperationPathAccessReport::new(
+                write_probe_path(to)?.to_path_buf(),
                 AccessIntent::Write,
-                "operation volume copy policy destination",
-            )
+            );
+            source.preflight_volume("operation volume copy policy source")?;
+            destination.preflight_volume("operation volume copy policy destination")
         }
         _ => Ok(()),
     }
@@ -1316,7 +1312,7 @@ fn slow_operation_volume(volume: &gfm_mac::VolumeDescriptor) -> bool {
                 || media_type.contains("removable"))
 }
 
-fn operation_volume(operation: &Operation) -> Option<VolumeId> {
+fn operation_volume(operation: &Operation, report: &VolumeDiscoveryReport) -> Option<VolumeId> {
     let primary = match operation {
         Operation::Copy { from, .. }
         | Operation::Move { from, .. }
@@ -1327,8 +1323,12 @@ fn operation_volume(operation: &Operation) -> Option<VolumeId> {
         }
     };
     primary
-        .and_then(|path| detect_volume_id(path).ok())
-        .or_else(|| operation.target_path().and_then(parent_volume))
+        .and_then(|path| report.volume_for_path(path).map(|volume| volume.id))
+        .or_else(|| {
+            operation
+                .target_path()
+                .and_then(|path| report.volume_for_path(path).map(|volume| volume.id))
+        })
 }
 
 fn operation_status(status: gfm_ops::OperationStatus) -> &'static str {
