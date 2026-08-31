@@ -41,7 +41,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             } else {
                 None
             };
-            let root_access = SearchRootAccessReport::new(root.clone());
+            let root_access = SearchRootAccessReport::new_checked(root.clone(), || Ok(()))?;
             let retry_access = search_retry_probe_access_report(retry_probe.as_deref())?;
             root_access.preflight_volume("search")?;
             if let Some(retry_access) = retry_access.as_ref() {
@@ -101,7 +101,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             } else {
                 None
             };
-            let root_access = SearchRootAccessReport::new(root.clone());
+            let root_access = SearchRootAccessReport::new_checked(root.clone(), || Ok(()))?;
             let retry_access = search_retry_probe_access_report(retry_probe.as_deref())?;
             root_access.preflight_volume("search stream")?;
             if let Some(retry_access) = retry_access.as_ref() {
@@ -1292,10 +1292,12 @@ fn run_search_query_parse_cancellation_probe() -> Result<()> {
 fn preflight_content_archive_access_checked(
     path: &Path,
     worker: &str,
-    check_control: impl FnMut() -> Result<()>,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<ScopedAccessGuard> {
-    let volume_reports = ArchiveVolumeAccessReports::for_paths([path]);
-    single_archive_access_guard(volume_reports.preflight_access_checked(worker, check_control)?)
+    let volume_reports = ArchiveVolumeAccessReports::for_paths_checked([path], &mut check_control)?;
+    single_archive_access_guard(
+        volume_reports.preflight_access_checked(worker, &mut check_control)?,
+    )
 }
 
 #[derive(Clone)]
@@ -1310,16 +1312,24 @@ struct ArchiveVolumeAccessReports {
 }
 
 impl ArchiveVolumeAccessReports {
-    fn for_paths<'a>(paths: impl IntoIterator<Item = &'a Path>) -> Self {
+    fn for_paths_checked<'a>(
+        paths: impl IntoIterator<Item = &'a Path>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
         let owned_paths = paths.into_iter().map(Path::to_path_buf).collect::<Vec<_>>();
-        let entries = unique_search_paths(&owned_paths)
-            .into_iter()
-            .map(|path| ArchiveVolumeAccessReport {
+        let mut entries = Vec::new();
+        for path in unique_search_paths(&owned_paths) {
+            check_control()?;
+            entries.push(ArchiveVolumeAccessReport {
                 path: path.to_path_buf(),
-                volume_report: VolumeDiscoveryReport::for_containing_path(path),
+                volume_report: VolumeDiscoveryReport::for_containing_path_checked(
+                    path,
+                    &mut check_control,
+                )?,
             })
-            .collect();
-        Self { entries }
+        }
+        check_control()?;
+        Ok(Self { entries })
     }
 
     fn preflight_volumes(&self, worker: &str) -> Result<()> {
@@ -1376,12 +1386,15 @@ struct SearchRootAccessReport {
 }
 
 impl SearchRootAccessReport {
-    fn new(path: PathBuf) -> Self {
-        let volume_report = VolumeDiscoveryReport::for_containing_path(&path);
-        Self {
+    fn new_checked(path: PathBuf, mut check_control: impl FnMut() -> Result<()>) -> Result<Self> {
+        check_control()?;
+        let volume_report =
+            VolumeDiscoveryReport::for_containing_path_checked(&path, &mut check_control)?;
+        check_control()?;
+        Ok(Self {
             path,
             volume_report,
-        }
+        })
     }
 
     fn preflight_volume(&self, worker: &str) -> Result<()> {
@@ -1421,9 +1434,16 @@ struct SearchWriteAccessReport {
 }
 
 impl SearchWriteAccessReport {
-    fn for_probe(path: &Path) -> Result<Self> {
+    fn for_probe_checked(
+        path: &Path,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check_control()?;
         let path = write_probe_path(path)?.to_path_buf();
-        let volume_report = VolumeDiscoveryReport::for_containing_path(&path);
+        check_control()?;
+        let volume_report =
+            VolumeDiscoveryReport::for_containing_path_checked(&path, &mut check_control)?;
+        check_control()?;
         Ok(Self {
             path,
             volume_report,
@@ -1463,8 +1483,15 @@ impl SearchWriteAccessReport {
 fn search_retry_probe_access_report(
     retry_probe: Option<&Path>,
 ) -> Result<Option<SearchWriteAccessReport>> {
+    search_retry_probe_access_report_checked(retry_probe, || Ok(()))
+}
+
+fn search_retry_probe_access_report_checked(
+    retry_probe: Option<&Path>,
+    check_control: impl FnMut() -> Result<()>,
+) -> Result<Option<SearchWriteAccessReport>> {
     retry_probe
-        .map(SearchWriteAccessReport::for_probe)
+        .map(|path| SearchWriteAccessReport::for_probe_checked(path, check_control))
         .transpose()
 }
 
@@ -1488,7 +1515,8 @@ fn run_content_archive_read_cancellable_with_retry_probe<T>(
 where
     T: Send + 'static,
 {
-    let volume_reports = ArchiveVolumeAccessReports::for_paths([path.as_path()]);
+    let volume_reports =
+        ArchiveVolumeAccessReports::for_paths_checked([path.as_path()], || Ok(()))?;
     let retry_access = search_retry_probe_access_report(retry_probe.as_deref())?;
     volume_reports.preflight_volumes(worker)?;
     if let Some(retry_access) = retry_access.as_ref() {
@@ -1537,7 +1565,10 @@ fn run_content_archive_set_read_cancellable_with_retry_probe<T>(
 where
     T: Send + 'static,
 {
-    let volume_reports = ArchiveVolumeAccessReports::for_paths(paths.iter().map(PathBuf::as_path));
+    let volume_reports =
+        ArchiveVolumeAccessReports::for_paths_checked(paths.iter().map(PathBuf::as_path), || {
+            Ok(())
+        })?;
     let retry_access = search_retry_probe_access_report(retry_probe.as_deref())?;
     volume_reports.preflight_volumes(worker)?;
     if let Some(retry_access) = retry_access.as_ref() {
@@ -1587,7 +1618,8 @@ fn run_content_manifest_read_cancellable_with_retry_probe<T>(
 where
     T: Send + 'static,
 {
-    let volume_reports = ArchiveVolumeAccessReports::for_paths([manifest.as_path()]);
+    let volume_reports =
+        ArchiveVolumeAccessReports::for_paths_checked([manifest.as_path()], || Ok(()))?;
     let retry_access = search_retry_probe_access_report(retry_probe.as_deref())?;
     volume_reports.preflight_volumes(worker)?;
     if let Some(retry_access) = retry_access.as_ref() {
@@ -1651,7 +1683,8 @@ fn run_search_archive_read_cancellable_with_retry_probe<T>(
 where
     T: Send + 'static,
 {
-    let volume_reports = ArchiveVolumeAccessReports::for_paths([path.as_path()]);
+    let volume_reports =
+        ArchiveVolumeAccessReports::for_paths_checked([path.as_path()], || Ok(()))?;
     let retry_access = search_retry_probe_access_report(retry_probe.as_deref())?;
     volume_reports.preflight_volumes(worker)?;
     if let Some(retry_access) = retry_access.as_ref() {
@@ -1807,7 +1840,8 @@ fn run_search_index_columns(
     retry_probe: Option<PathBuf>,
 ) -> Result<SearchIndexColumnsOutput> {
     const WORKER: &str = "search index columns";
-    let volume_reports = SearchIndexColumnsVolumeAccessReports::for_paths(&records, &columns);
+    let volume_reports =
+        SearchIndexColumnsVolumeAccessReports::for_paths_checked(&records, &columns, || Ok(()))?;
     let retry_access = search_retry_probe_access_report(retry_probe.as_deref())?;
     volume_reports.preflight_volumes()?;
     if let Some(retry_access) = retry_access.as_ref() {
@@ -1893,21 +1927,33 @@ struct SearchIndexColumnsVolumeAccessReports {
 }
 
 impl SearchIndexColumnsVolumeAccessReports {
-    fn for_paths(records: &Path, columns: &Path) -> Self {
-        Self {
+    fn for_paths_checked(
+        records: &Path,
+        columns: &Path,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        Ok(Self {
             entries: [
-                Self::entry(records, "search index columns records"),
-                Self::entry(columns, "search index columns columns"),
+                Self::entry_checked(records, "search index columns records", &mut check_control)?,
+                Self::entry_checked(columns, "search index columns columns", &mut check_control)?,
             ],
-        }
+        })
     }
 
-    fn entry(path: &Path, worker: &'static str) -> SearchIndexColumnsVolumeAccessReport {
-        SearchIndexColumnsVolumeAccessReport {
+    fn entry_checked(
+        path: &Path,
+        worker: &'static str,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<SearchIndexColumnsVolumeAccessReport> {
+        check_control()?;
+        Ok(SearchIndexColumnsVolumeAccessReport {
             path: path.to_path_buf(),
             worker,
-            volume_report: VolumeDiscoveryReport::for_containing_path(path),
-        }
+            volume_report: VolumeDiscoveryReport::for_containing_path_checked(
+                path,
+                &mut check_control,
+            )?,
+        })
     }
 
     fn preflight_volumes(&self) -> Result<()> {
@@ -2168,8 +2214,11 @@ fn run_content_index_manifest_search(
     retry_probe: Option<PathBuf>,
 ) -> Result<ContentIndexSetSearchOutput> {
     const WORKER: &str = "content index manifest search";
-    let volume_reports =
-        ContentIndexManifestVolumeAccessReports::for_records_and_manifest(&records, &manifest);
+    let volume_reports = ContentIndexManifestVolumeAccessReports::for_records_and_manifest_checked(
+        &records,
+        &manifest,
+        || Ok(()),
+    )?;
     let retry_access = search_retry_probe_access_report(retry_probe.as_deref())?;
     volume_reports.preflight_volumes(WORKER)?;
     if let Some(retry_access) = retry_access.as_ref() {
@@ -2245,8 +2294,11 @@ fn run_content_index_manifest_session(
     retry_probe: Option<PathBuf>,
 ) -> Result<ContentIndexSessionOutput> {
     const WORKER: &str = "content index manifest session";
-    let volume_reports =
-        ContentIndexManifestVolumeAccessReports::for_records_and_manifest(&records, &manifest);
+    let volume_reports = ContentIndexManifestVolumeAccessReports::for_records_and_manifest_checked(
+        &records,
+        &manifest,
+        || Ok(()),
+    )?;
     let retry_access = search_retry_probe_access_report(retry_probe.as_deref())?;
     volume_reports.preflight_volumes(WORKER)?;
     if let Some(retry_access) = retry_access.as_ref() {
@@ -2328,8 +2380,11 @@ fn preflight_content_index_set_volume_access(
     content_paths: &[PathBuf],
     worker: &str,
 ) -> Result<ContentIndexVolumeAccessReports> {
-    let reports =
-        ContentIndexVolumeAccessReports::for_records_and_content_paths(records, content_paths);
+    let reports = ContentIndexVolumeAccessReports::for_records_and_content_paths_checked(
+        records,
+        content_paths,
+        || Ok(()),
+    )?;
     reports.preflight_volumes(worker)?;
     Ok(reports)
 }
@@ -2347,20 +2402,33 @@ struct ContentIndexVolumeAccessReports {
 }
 
 impl ContentIndexVolumeAccessReports {
-    fn for_records_and_content_paths(records: &Path, content_paths: &[PathBuf]) -> Self {
+    fn for_records_and_content_paths_checked(
+        records: &Path,
+        content_paths: &[PathBuf],
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check_control()?;
         let mut entries = vec![ContentIndexVolumeAccessReport {
             path: records.to_path_buf(),
             role: "records",
-            volume_report: VolumeDiscoveryReport::for_containing_path(records),
+            volume_report: VolumeDiscoveryReport::for_containing_path_checked(
+                records,
+                &mut check_control,
+            )?,
         }];
-        entries.extend(unique_search_paths(content_paths).into_iter().map(|path| {
-            ContentIndexVolumeAccessReport {
+        for path in unique_search_paths(content_paths) {
+            check_control()?;
+            entries.push(ContentIndexVolumeAccessReport {
                 path: path.to_path_buf(),
                 role: "content",
-                volume_report: VolumeDiscoveryReport::for_containing_path(path),
-            }
-        }));
-        Self { entries }
+                volume_report: VolumeDiscoveryReport::for_containing_path_checked(
+                    path,
+                    &mut check_control,
+                )?,
+            });
+        }
+        check_control()?;
+        Ok(Self { entries })
     }
 
     fn preflight_volumes(&self, worker: &str) -> Result<()> {
@@ -2398,21 +2466,33 @@ struct ContentIndexManifestVolumeAccessReports {
 }
 
 impl ContentIndexManifestVolumeAccessReports {
-    fn for_records_and_manifest(records: &Path, manifest: &Path) -> Self {
-        Self {
+    fn for_records_and_manifest_checked(
+        records: &Path,
+        manifest: &Path,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        Ok(Self {
             entries: [
-                Self::entry(records, "records"),
-                Self::entry(manifest, "manifest"),
+                Self::entry_checked(records, "records", &mut check_control)?,
+                Self::entry_checked(manifest, "manifest", &mut check_control)?,
             ],
-        }
+        })
     }
 
-    fn entry(path: &Path, role: &'static str) -> ContentIndexManifestVolumeAccessReport {
-        ContentIndexManifestVolumeAccessReport {
+    fn entry_checked(
+        path: &Path,
+        role: &'static str,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<ContentIndexManifestVolumeAccessReport> {
+        check_control()?;
+        Ok(ContentIndexManifestVolumeAccessReport {
             path: path.to_path_buf(),
             role,
-            volume_report: VolumeDiscoveryReport::for_containing_path(path),
-        }
+            volume_report: VolumeDiscoveryReport::for_containing_path_checked(
+                path,
+                &mut check_control,
+            )?,
+        })
     }
 
     fn preflight_volumes(&self, worker: &str) -> Result<()> {
@@ -2469,8 +2549,10 @@ fn preflight_content_manifest_access_checked_with_volume_report(
     let manifest = ContentArchiveManifest::read_checked(manifest_path, &mut check_control)?;
     check_control()?;
     let archive_paths = manifest.resolved_archive_paths(manifest_path);
-    let archive_volume_reports =
-        ArchiveVolumeAccessReports::for_paths(archive_paths.iter().map(PathBuf::as_path));
+    let archive_volume_reports = ArchiveVolumeAccessReports::for_paths_checked(
+        archive_paths.iter().map(PathBuf::as_path),
+        &mut check_control,
+    )?;
     guards.extend(archive_volume_reports.preflight_access_checked(worker, &mut check_control)?);
     check_control()?;
     Ok(guards)
@@ -2606,16 +2688,24 @@ struct SidecarVolumeAccessReports {
 }
 
 impl SidecarVolumeAccessReports {
-    fn for_paths(paths: SidecarIndexAccessPaths<'_>) -> Self {
-        let entries = unique_sidecar_search_paths(paths.paths_with_roles())
-            .into_iter()
-            .map(|(path, role)| SidecarVolumeAccessReport {
+    fn for_paths_checked(
+        paths: SidecarIndexAccessPaths<'_>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        let mut entries = Vec::new();
+        for (path, role) in unique_sidecar_search_paths(paths.paths_with_roles()) {
+            check_control()?;
+            entries.push(SidecarVolumeAccessReport {
                 path: path.to_path_buf(),
                 role,
-                volume_report: VolumeDiscoveryReport::for_containing_path(path),
-            })
-            .collect();
-        Self { entries }
+                volume_report: VolumeDiscoveryReport::for_containing_path_checked(
+                    path,
+                    &mut check_control,
+                )?,
+            });
+        }
+        check_control()?;
+        Ok(Self { entries })
     }
 
     fn preflight_volumes(&self, worker: &str) -> Result<()> {
@@ -2991,7 +3081,7 @@ fn preflight_sidecar_index_volume_access(
     paths: &OwnedSidecarIndexAccessPaths,
     worker: &str,
 ) -> Result<SidecarVolumeAccessReports> {
-    let reports = SidecarVolumeAccessReports::for_paths(paths.borrowed());
+    let reports = SidecarVolumeAccessReports::for_paths_checked(paths.borrowed(), || Ok(()))?;
     reports.preflight_volumes(worker)?;
     Ok(reports)
 }
@@ -3403,10 +3493,59 @@ mod tests {
             "gfm-search-archive-access-pre-cancel-{}.gfmidx",
             std::process::id()
         ));
-        let volume_reports = ArchiveVolumeAccessReports::for_paths([path.as_path()]);
+        let volume_reports =
+            ArchiveVolumeAccessReports::for_paths_checked([path.as_path()], || Ok(())).unwrap();
 
         let result = volume_reports
             .preflight_access_checked("search archive access", || Err(GfmError::Cancelled));
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn search_archive_volume_reports_checked_honor_pre_cancelled_control_before_discovery() {
+        let path = std::env::temp_dir()
+            .join(format!(
+                "gfm-search-archive-report-pre-cancel-{}",
+                std::process::id()
+            ))
+            .join("records.gfmidx");
+
+        let result = ArchiveVolumeAccessReports::for_paths_checked([path.as_path()], || {
+            Err(GfmError::Cancelled)
+        });
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn search_root_access_report_checked_honors_pre_cancelled_control_before_discovery() {
+        let root = std::env::temp_dir()
+            .join(format!(
+                "gfm-search-root-report-pre-cancel-{}",
+                std::process::id()
+            ))
+            .join("root");
+
+        let result = SearchRootAccessReport::new_checked(root.clone(), || Err(GfmError::Cancelled));
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn search_retry_probe_report_checked_honors_pre_cancelled_control_before_probe() {
+        let path = std::env::temp_dir()
+            .join(format!(
+                "gfm-search-retry-report-pre-cancel-{}",
+                std::process::id()
+            ))
+            .join("retry.state");
+
+        let result =
+            search_retry_probe_access_report_checked(Some(&path), || Err(GfmError::Cancelled));
 
         assert_eq!(result.err(), Some(GfmError::Cancelled));
         assert!(!path.exists());
@@ -3420,11 +3559,37 @@ mod tests {
         ));
         let records = root.join("records.gfmidx");
         let columns = root.join("columns.gfmcols");
-        let volume_reports = SearchIndexColumnsVolumeAccessReports::for_paths(&records, &columns);
+        let volume_reports =
+            SearchIndexColumnsVolumeAccessReports::for_paths_checked(&records, &columns, || Ok(()))
+                .unwrap();
 
         let result = preflight_search_index_columns_access_checked(&volume_reports, || {
             Err(GfmError::Cancelled)
         });
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn search_index_columns_reports_checked_can_cancel_between_inputs() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-search-index-columns-report-cancel-{}",
+            std::process::id()
+        ));
+        let records = root.join("records.gfmidx");
+        let columns = root.join("columns.gfmcols");
+        let mut checks = 0;
+
+        let result =
+            SearchIndexColumnsVolumeAccessReports::for_paths_checked(&records, &columns, || {
+                checks += 1;
+                if checks > 3 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            });
 
         assert_eq!(result.err(), Some(GfmError::Cancelled));
         assert!(!root.exists());
@@ -3439,13 +3604,45 @@ mod tests {
         let records = root.join("records.gfmidx");
         let manifest = root.join("content.gfmmanifest");
         let volume_reports =
-            ContentIndexManifestVolumeAccessReports::for_records_and_manifest(&records, &manifest);
+            ContentIndexManifestVolumeAccessReports::for_records_and_manifest_checked(
+                &records,
+                &manifest,
+                || Ok(()),
+            )
+            .unwrap();
 
         let result = preflight_content_index_manifest_search_access_checked(
             &manifest,
             &volume_reports,
             "content index manifest search",
             || Err(GfmError::Cancelled),
+        );
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn content_index_manifest_reports_checked_can_cancel_between_inputs() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-content-index-manifest-report-cancel-{}",
+            std::process::id()
+        ));
+        let records = root.join("records.gfmidx");
+        let manifest = root.join("content.gfmmanifest");
+        let mut checks = 0;
+
+        let result = ContentIndexManifestVolumeAccessReports::for_records_and_manifest_checked(
+            &records,
+            &manifest,
+            || {
+                checks += 1;
+                if checks > 3 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
         );
 
         assert_eq!(result.err(), Some(GfmError::Cancelled));
@@ -3493,15 +3690,48 @@ mod tests {
         ));
         let records = root.join("records.gfmidx");
         let content_paths = vec![root.join("content.gfmcontent")];
-        let volume_reports = ContentIndexVolumeAccessReports::for_records_and_content_paths(
-            &records,
-            &content_paths,
-        );
+        let volume_reports =
+            ContentIndexVolumeAccessReports::for_records_and_content_paths_checked(
+                &records,
+                &content_paths,
+                || Ok(()),
+            )
+            .unwrap();
 
         let result = preflight_content_index_search_access_checked(
             &volume_reports,
             "content index access",
             || Err(GfmError::Cancelled),
+        );
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn content_index_reports_checked_can_cancel_between_content_paths() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-content-index-report-cancel-{}",
+            std::process::id()
+        ));
+        let records = root.join("records.gfmidx");
+        let content_paths = vec![
+            root.join("first.gfmcontent"),
+            root.join("second.gfmcontent"),
+        ];
+        let mut checks = 0;
+
+        let result = ContentIndexVolumeAccessReports::for_records_and_content_paths_checked(
+            &records,
+            &content_paths,
+            || {
+                checks += 1;
+                if checks > 5 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
         );
 
         assert_eq!(result.err(), Some(GfmError::Cancelled));
@@ -3524,12 +3754,41 @@ mod tests {
             content: root.join("content.gfmcontent"),
         };
 
-        let volume_reports = SidecarVolumeAccessReports::for_paths(paths.borrowed());
+        let volume_reports =
+            SidecarVolumeAccessReports::for_paths_checked(paths.borrowed(), || Ok(())).unwrap();
         let result = preflight_sidecar_index_search_access_checked(
             &volume_reports,
             "sidecar index access",
             || Err(GfmError::Cancelled),
         );
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn sidecar_index_reports_checked_can_cancel_between_unique_paths() {
+        let root =
+            std::env::temp_dir().join(format!("gfm-sidecar-report-cancel-{}", std::process::id()));
+        let paths = OwnedSidecarIndexAccessPaths {
+            records: root.join("records.gfmidx"),
+            columns: root.join("records.gfmidx"),
+            metadata: root.join("metadata.gfmmeta"),
+            prefixes: root.join("records.gfmidx"),
+            substrings: root.join("metadata.gfmmeta"),
+            fuzzy: root.join("metadata.gfmmeta"),
+            content: root.join("content.gfmcontent"),
+        };
+        let mut checks = 0;
+
+        let result = SidecarVolumeAccessReports::for_paths_checked(paths.borrowed(), || {
+            checks += 1;
+            if checks > 5 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
 
         assert_eq!(result.err(), Some(GfmError::Cancelled));
         assert!(!root.exists());

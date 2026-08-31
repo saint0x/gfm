@@ -31,8 +31,18 @@ pub(crate) fn extraction_budget_profile(
     root: &Path,
     pressure: SchedulingPressure,
 ) -> ExtractionBudgetProfile {
-    ExtractionBudgetProfile {
-        volume: extraction_volume_class_for_path(root),
+    extraction_budget_profile_checked(root, pressure, || Ok(()))
+        .expect("uncancellable extraction budget profile cannot cancel")
+}
+
+pub(crate) fn extraction_budget_profile_checked(
+    root: &Path,
+    pressure: SchedulingPressure,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<ExtractionBudgetProfile> {
+    check_control()?;
+    Ok(ExtractionBudgetProfile {
+        volume: extraction_volume_class_for_path_checked(root, &mut check_control)?,
         thermal: match pressure.thermal {
             JobThermalState::Nominal => ExtractionThermalState::Nominal,
             JobThermalState::Fair => ExtractionThermalState::Fair,
@@ -48,12 +58,17 @@ pub(crate) fn extraction_budget_profile(
             JobUserActivity::Idle => ExtractionUserActivity::Idle,
             JobUserActivity::Active => ExtractionUserActivity::Active,
         },
-    }
+    })
 }
 
-fn extraction_volume_class_for_path(path: &Path) -> ExtractionVolumeClass {
-    let report = VolumeDiscoveryReport::for_containing_path(path);
-    extraction_volume_class_from_report(path, &report)
+fn extraction_volume_class_for_path_checked(
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<ExtractionVolumeClass> {
+    check_control()?;
+    let report = VolumeDiscoveryReport::for_containing_path_checked(path, &mut check_control)?;
+    check_control()?;
+    Ok(extraction_volume_class_from_report(path, &report))
 }
 
 fn extraction_volume_class_from_report(
@@ -992,6 +1007,37 @@ mod tests {
             ExtractionVolumeClass::Network
         );
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn extraction_budget_profile_checked_honors_pre_cancelled_control_before_volume_discovery() {
+        let root = std::env::temp_dir()
+            .join(format!(
+                "gfm-extract-budget-pre-cancel-{}",
+                std::process::id()
+            ))
+            .join("root-that-should-not-be-probed");
+
+        let result =
+            extraction_budget_profile_checked(&root, SchedulingPressure::default(), || {
+                Err(GfmError::Cancelled)
+            });
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn extraction_volume_class_for_path_checked_uses_discovered_descriptor() {
+        let root = unique_temp_dir("gfm-extract-volume-checked-descriptor");
+        fs::write(root.join(".gfm-volume-kind"), "network-smb\n").unwrap();
+        let input = root.join("Project.md");
+        fs::write(&input, "network").unwrap();
+
+        let class = extraction_volume_class_for_path_checked(&input, || Ok(())).unwrap();
+
+        assert_eq!(class, ExtractionVolumeClass::Network);
         fs::remove_dir_all(root).unwrap();
     }
 

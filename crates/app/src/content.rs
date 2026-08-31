@@ -5,8 +5,9 @@ use crate::access::{
     ScopedAccessGuard,
 };
 use crate::extract::{
-    extraction_budget_profile, preflight_adaptive_extraction_worker_scratch,
-    read_extraction_quarantine_cancellable, run_adaptive_extraction_worker_cancellable,
+    extraction_budget_profile, extraction_budget_profile_checked,
+    preflight_adaptive_extraction_worker_scratch, read_extraction_quarantine_cancellable,
+    run_adaptive_extraction_worker_cancellable,
     run_quarantined_adaptive_extraction_worker_cancellable, ADAPTIVE_WORKER_TIMEOUT,
 };
 use crate::runtime::{
@@ -2398,10 +2399,11 @@ pub(crate) fn run_content_job(
                     Vec::new()
                 };
                 snapshot.save_checked(&job_spec.records_path, || cancellation.check())?;
-                let extractor = Extractor::with_budget_profile(extraction_budget_profile(
+                let extractor = Extractor::with_budget_profile(extraction_budget_profile_checked(
                     &job_spec.root,
                     pressure,
-                ));
+                    || cancellation.check(),
+                )?);
                 let worker = BackgroundContentIndexer::new(extractor, job_spec.options());
                 let quarantine_store = default_extraction_quarantine_path();
                 let mut extraction_quarantine =
