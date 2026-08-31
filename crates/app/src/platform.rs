@@ -925,7 +925,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "preview-volume-check" => {
             let path = required_path(args.next(), "preview-volume-check requires a path")?;
             let kind = parse_preview_kind(args.next())?;
-            let input = preview_security_input_with_volume(&path, kind);
+            let input = preview_security_input_with_volume_checked(&path, kind, || Ok(()))?;
             let decision = decide_preview_security(&PreviewSecurityPolicy::default(), &input);
             let invalidation = decide_invalidation(PreviewInvalidationEvent {
                 content_changed: true,
@@ -1790,11 +1790,6 @@ fn volume_event_runtime_fanout_summary(
         sidebar.invalidate_section,
         platform.reason
     )
-}
-
-fn preview_security_input_with_volume(path: &Path, kind: PreviewKind) -> PreviewSecurityInput {
-    preview_security_input_with_volume_checked(path, kind, || Ok(()))
-        .expect("uncancellable preview security volume discovery cannot cancel")
 }
 
 fn preview_security_input_with_volume_checked(
