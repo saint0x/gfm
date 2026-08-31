@@ -2527,20 +2527,7 @@ fn classify_volume(
         return VolumeKind::Unknown;
     }
 
-    let label = volume_label(path).to_ascii_lowercase();
-    if path == Path::new("/") || label == "macintosh hd" {
-        VolumeKind::System
-    } else if path.starts_with("/Network")
-        || label.contains("smb")
-        || label.contains("nfs")
-        || label.contains("network")
-    {
-        VolumeKind::Network
-    } else if path.starts_with("/Volumes") {
-        VolumeKind::External
-    } else {
-        VolumeKind::Internal
-    }
+    VolumeKind::Unknown
 }
 
 fn classify_native_volume(
@@ -3347,10 +3334,10 @@ mod tests {
     }
 
     #[test]
-    fn classify_volume_keeps_path_fallback_only_when_native_evidence_is_absent() {
+    fn classify_volume_reports_unknown_when_native_evidence_is_absent() {
         let kind = classify_volume(Path::new("/Volumes/Team SMB"), None, None, None, None);
 
-        assert_eq!(kind, VolumeKind::Network);
+        assert_eq!(kind, VolumeKind::Unknown);
     }
 
     #[test]
