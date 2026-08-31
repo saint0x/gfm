@@ -1077,11 +1077,6 @@ impl From<gfm_mac_sys::NativeVolumeEventKind> for VolumeEventKind {
 }
 
 impl VolumeEventReport {
-    fn from_native(event: gfm_mac_sys::NativeVolumeEvent) -> Self {
-        Self::from_native_checked(event, || Ok(()))
-            .expect("non-cancellable native volume event conversion cannot cancel")
-    }
-
     pub fn from_native_checked(
         event: gfm_mac_sys::NativeVolumeEvent,
         mut check: impl FnMut() -> Result<()>,
@@ -1653,10 +1648,6 @@ impl VolumeEventStream {
 
     pub fn is_attached(&self) -> bool {
         self.stream.is_attached()
-    }
-
-    pub fn try_recv(&self) -> Option<VolumeEventReport> {
-        self.stream.try_recv().map(VolumeEventReport::from_native)
     }
 
     pub fn try_recv_checked(
@@ -4471,7 +4462,7 @@ mod tests {
     fn volume_event_stream_exposes_owned_diskarbitration_lifecycle() {
         let stream = VolumeEventStream::start();
 
-        assert!(stream.is_attached() || stream.try_recv().is_some());
+        assert!(stream.is_attached() || stream.try_recv_checked(|| Ok(())).unwrap().is_some());
         drop(stream);
     }
 
@@ -5060,7 +5051,7 @@ mod tests {
             description,
         };
 
-        let report = VolumeEventReport::from_native(event);
+        let report = VolumeEventReport::from_native_checked(event, || Ok(())).unwrap();
         let invalidation = VolumeEventInvalidationReport::from_event(&report);
 
         assert_eq!(report.kind, VolumeEventKind::Disappeared);
@@ -5165,7 +5156,7 @@ mod tests {
             description,
         };
 
-        let report = VolumeEventReport::from_native(event);
+        let report = VolumeEventReport::from_native_checked(event, || Ok(())).unwrap();
         let invalidation = VolumeEventInvalidationReport::from_event(&report);
 
         assert_eq!(report.kind, VolumeEventKind::Unavailable);

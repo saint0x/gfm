@@ -571,7 +571,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             println!(
                 "volume-events\tattached={}\tpending={}",
                 stream.is_attached(),
-                stream.try_recv().is_some()
+                stream.try_recv_checked(|| Ok(()))?.is_some()
             );
         }
         "volume-events-cancel-before-recv" => {
@@ -592,7 +592,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "volume-events-shutdown-probe" => {
             let stream = VolumeEventStream::start();
-            let pending = stream.try_recv().is_some();
+            let pending = stream.try_recv_checked(|| Ok(()))?.is_some();
             let shutdown = stream.shutdown();
             println!("{}\tpending-before={}", shutdown.as_tsv(), pending);
         }
