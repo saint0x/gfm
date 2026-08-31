@@ -418,14 +418,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "preview cache fileprovider observer",
             )?;
             let cache_probe = write_probe_path(&cache_root)?.to_path_buf();
-            preflight_volume_access_scope(
-                &cache_probe,
-                AccessIntent::Write,
-                "preview cache fileprovider observer cache",
-            )?;
-            let volume = detect_volume_id(&cache_probe)
-                .ok()
-                .or_else(|| parent_volume(&cache_probe));
+            let cache_access_report = PlatformAccessReport::new(cache_probe, AccessIntent::Write);
+            cache_access_report.preflight_volume("preview cache fileprovider observer cache")?;
+            let volume = cache_access_report.volume();
             println!(
                 "{}",
                 run_volume_task_cancellable(
@@ -434,12 +429,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     "preview cache fileprovider observer cache",
                     move |cancellation| {
                         cancellation.check()?;
-                        let _cache_access = preflight_access_scope_checked(
-                            &cache_probe,
-                            AccessIntent::Write,
-                            "preview cache fileprovider observer cache",
-                            || cancellation.check(),
-                        )?;
+                        let _cache_access = cache_access_report
+                            .access_checked("preview cache fileprovider observer cache", || {
+                                cancellation.check()
+                            })?;
                         cancellation.check()?;
                         observed_preview_cache_invalidation_tsv(
                             &observed,
@@ -1432,7 +1425,7 @@ fn publish_fileprovider_progress_job(
     let report = FileProviderProgressReport::read_path_checked(&path, || cancellation.check())?;
     let mut scheduler = Scheduler::new();
     let label = fileprovider_progress_label(report.state.progress.direction);
-    let volume = detect_volume_id(&path).ok();
+    let volume = PlatformAccessReport::new(path.clone(), AccessIntent::Read).volume();
     let job = if let Some(volume) = volume {
         scheduler.schedule_on_volume_in_class(Priority::Visible, JobClass::Visible, label, volume)
     } else {
@@ -2238,13 +2231,13 @@ fn run_fileprovider_read<T>(
 where
     T: Send + 'static,
 {
-    preflight_volume_access_scope(&path, AccessIntent::Read, worker)?;
-    let volume = detect_volume_id(&path).ok();
+    let access_report = PlatformAccessReport::new(path, AccessIntent::Read);
+    access_report.preflight_volume(worker)?;
+    let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
         cancellation.check()?;
-        let _access = preflight_access_scope_checked(&path, AccessIntent::Read, worker, || {
-            cancellation.check()
-        })?;
+        let path = access_report.path.clone();
+        let _access = access_report.access_checked(worker, || cancellation.check())?;
         cancellation.check()?;
         read(path)
     })
@@ -2255,14 +2248,13 @@ fn run_fileprovider_progress_job(
     cancel_after_access: bool,
 ) -> Result<FileProviderProgressReport> {
     const WORKER: &str = "fileprovider progress job";
-    preflight_volume_access_scope(&path, AccessIntent::Read, WORKER)?;
-    let volume = detect_volume_id(&path).ok();
+    let access_report = PlatformAccessReport::new(path, AccessIntent::Read);
+    access_report.preflight_volume(WORKER)?;
+    let volume = access_report.volume();
     run_fileprovider_worker_without_runtime_progress(volume, WORKER, move |cancellation| {
-        let path = path.clone();
+        let path = access_report.path.clone();
         cancellation.check()?;
-        let _access = preflight_access_scope_checked(&path, AccessIntent::Read, WORKER, || {
-            cancellation.check()
-        })?;
+        let _access = access_report.access_checked(WORKER, || cancellation.check())?;
         cancellation.check()?;
         if cancel_after_access {
             cancellation.cancel();
@@ -2276,13 +2268,13 @@ fn run_fileprovider_operation(
     operation: FileProviderOperation,
 ) -> Result<FileProviderOperationReport> {
     const WORKER: &str = "fileprovider operation";
-    preflight_volume_access_scope(&path, AccessIntent::Operate, WORKER)?;
-    let volume = detect_volume_id(&path).ok();
+    let access_report = PlatformAccessReport::new(path, AccessIntent::Operate);
+    access_report.preflight_volume(WORKER)?;
+    let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = preflight_access_scope_checked(&path, AccessIntent::Operate, WORKER, || {
-            cancellation.check()
-        })?;
+        let path = access_report.path.clone();
+        let _access = access_report.access_checked(WORKER, || cancellation.check())?;
         cancellation.check()?;
         FileProviderOperationReport::execute_checked(path, operation, || cancellation.check())
     })
@@ -2385,11 +2377,11 @@ fn run_icon_preview_retry_probe(
         WORKER,
         &volume_report,
     )?;
-    preflight_volume_access_scope(
-        write_probe_path(&attempt_state)?,
+    PlatformAccessReport::new(
+        write_probe_path(&attempt_state)?.to_path_buf(),
         AccessIntent::Write,
-        WORKER,
-    )?;
+    )
+    .preflight_volume(WORKER)?;
     let volume = preview_volume_id_from_report(&volume_path, &volume_report);
     run_preview_contract_cancellable_with_payload_path(
         volume,
@@ -2436,11 +2428,11 @@ fn run_quicklook_session_retry_probe(
         WORKER,
         &volume_report,
     )?;
-    preflight_volume_access_scope(
-        write_probe_path(&attempt_state)?,
+    PlatformAccessReport::new(
+        write_probe_path(&attempt_state)?.to_path_buf(),
         AccessIntent::Write,
-        WORKER,
-    )?;
+    )
+    .preflight_volume(WORKER)?;
     let volume = preview_volume_id_from_report(&volume_path, &volume_report);
     run_preview_contract_cancellable_with_payload_path(
         volume,
@@ -2487,11 +2479,11 @@ fn run_thumbnail_generation_retry_probe(
         WORKER,
         &volume_report,
     )?;
-    preflight_volume_access_scope(
-        write_probe_path(&attempt_state)?,
+    PlatformAccessReport::new(
+        write_probe_path(&attempt_state)?.to_path_buf(),
         AccessIntent::Write,
-        WORKER,
-    )?;
+    )
+    .preflight_volume(WORKER)?;
     let volume = preview_volume_id_from_report(&volume_path, &volume_report);
     run_preview_contract_cancellable_with_payload_path(
         volume,
@@ -2800,27 +2792,25 @@ fn fileprovider_materialization_for_preview(
 fn run_security_bookmark_create(path: PathBuf, intent: AccessIntent) -> Result<Vec<String>> {
     const STORE_WORKER: &str = "security bookmark store";
     const WORKER: &str = "security bookmark create";
-    preflight_volume_access_scope(&path, intent, WORKER)?;
+    let path_access_report = PlatformAccessReport::new(path.clone(), intent);
+    path_access_report.preflight_volume(WORKER)?;
     let report = SecurityScopedAccessReport::evaluate(&path, intent).create_bookmark();
     if report.status != SecurityScopedBookmarkStatus::Created {
         return Ok(vec![report.as_tsv()]);
     }
     let store = SecurityScopedBookmarkStore::new(crate::runtime::default_security_bookmarks_path());
-    let store_probe = write_probe_path(store.path())?.to_path_buf();
-    preflight_volume_access_scope(&store_probe, AccessIntent::Write, STORE_WORKER)?;
-    let volume = detect_volume_id(&store_probe)
-        .ok()
-        .or_else(|| parent_volume(&store_probe))
-        .or_else(|| detect_volume_id(&path).ok())
-        .or_else(|| parent_volume(&path));
+    let store_access_report = PlatformAccessReport::new(
+        write_probe_path(store.path())?.to_path_buf(),
+        AccessIntent::Write,
+    );
+    store_access_report.preflight_volume(STORE_WORKER)?;
+    let volume = store_access_report
+        .volume()
+        .or_else(|| path_access_report.volume());
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _store_access = preflight_access_scope_checked(
-            &store_probe,
-            AccessIntent::Write,
-            STORE_WORKER,
-            || cancellation.check(),
-        )?;
+        let _store_access =
+            store_access_report.access_checked(STORE_WORKER, || cancellation.check())?;
         cancellation.check()?;
         let bookmark = gfm_mac::SecurityScopedBookmark::create(&path, report.read_only).map_err(
             |failure| GfmError::Permission {
@@ -2839,16 +2829,16 @@ fn run_security_bookmark_create(path: PathBuf, intent: AccessIntent) -> Result<V
 fn run_security_bookmark_reconcile() -> Result<gfm_mac::SecurityScopedBookmarkStoreReport> {
     const WORKER: &str = "security bookmark reconcile";
     let store = SecurityScopedBookmarkStore::new(crate::runtime::default_security_bookmarks_path());
-    let store_probe = write_probe_path(store.path())?.to_path_buf();
-    preflight_volume_access_scope(&store_probe, AccessIntent::Write, WORKER)?;
-    run_volume_task_cancellable(parent_volume(&store_probe), Priority::Visible, WORKER, {
-        let store_probe = store_probe.clone();
+    let store_access_report = PlatformAccessReport::new(
+        write_probe_path(store.path())?.to_path_buf(),
+        AccessIntent::Write,
+    );
+    store_access_report.preflight_volume(WORKER)?;
+    run_volume_task_cancellable(store_access_report.volume(), Priority::Visible, WORKER, {
         move |cancellation| {
             cancellation.check()?;
             let _store_access =
-                preflight_access_scope_checked(&store_probe, AccessIntent::Write, WORKER, || {
-                    cancellation.check()
-                })?;
+                store_access_report.access_checked(WORKER, || cancellation.check())?;
             cancellation.check()?;
             store.reconcile_checked(|| cancellation.check())
         }
@@ -3627,6 +3617,53 @@ fn fileprovider_state_file_exists(path: &Path, worker: &str) -> Result<bool> {
             path,
             format!("{worker} state metadata unavailable: {err}"),
         )),
+    }
+}
+
+#[derive(Clone)]
+struct PlatformAccessReport {
+    path: PathBuf,
+    intent: AccessIntent,
+    volume_report: VolumeDiscoveryReport,
+}
+
+impl PlatformAccessReport {
+    fn new(path: PathBuf, intent: AccessIntent) -> Self {
+        let volume_report = VolumeDiscoveryReport::for_containing_path(&path);
+        Self {
+            path,
+            intent,
+            volume_report,
+        }
+    }
+
+    fn preflight_volume(&self, worker: &str) -> Result<()> {
+        preflight_volume_access_scope_with_report(
+            &self.path,
+            self.intent,
+            worker,
+            &self.volume_report,
+        )
+    }
+
+    fn access_checked(
+        &self,
+        worker: &str,
+        check_control: impl FnMut() -> Result<()>,
+    ) -> Result<ScopedAccessGuard> {
+        preflight_access_scope_checked_with_volume_report(
+            &self.path,
+            self.intent,
+            worker,
+            &self.volume_report,
+            check_control,
+        )
+    }
+
+    fn volume(&self) -> Option<VolumeId> {
+        self.volume_report
+            .volume_for_path(&self.path)
+            .map(|volume| volume.id)
     }
 }
 
