@@ -2301,7 +2301,7 @@ fn classify_volume(
     if let Some(kind) = classify_native_volume(path, native, resource, mount_table) {
         return kind;
     }
-    if native_volume_evidence_unavailable(native, resource, mount_table) {
+    if native_volume_evidence_present(native, resource, mount_table) {
         return VolumeKind::Unknown;
     }
 
@@ -2395,21 +2395,12 @@ fn classify_native_volume(
     None
 }
 
-fn native_volume_evidence_unavailable(
+fn native_volume_evidence_present(
     native: Option<&NativeVolumeDescription>,
     resource: Option<&NativeVolumeResourceValues>,
     mount_table: Option<&NativeVolumeMountTableEntry>,
 ) -> bool {
-    let statuses = [
-        native.map(|native| native.status),
-        resource.map(|resource| resource.status),
-        mount_table.map(|mount_table| mount_table.status),
-    ];
-    statuses.iter().any(Option::is_some)
-        && statuses
-            .iter()
-            .flatten()
-            .all(|status| *status != NativeVolumeStatus::Available)
+    native.is_some() || resource.is_some() || mount_table.is_some()
 }
 
 fn volume_source(native: Option<&NativeVolumeDescription>) -> String {
@@ -3025,6 +3016,30 @@ mod tests {
             Some(&native),
             Some(&resource),
             Some(&mount_table),
+        );
+
+        assert_eq!(kind, VolumeKind::Unknown);
+    }
+
+    #[test]
+    fn classify_volume_reports_unknown_when_native_evidence_is_available_but_inconclusive() {
+        let native = native_description(|description| {
+            description.status = NativeVolumeStatus::Available;
+            description.volume_network = None;
+            description.volume_kind = None;
+            description.device_protocol = None;
+            description.media_kind = None;
+            description.media_removable = None;
+            description.media_ejectable = None;
+            description.device_internal = None;
+        });
+
+        let kind = classify_volume(
+            Path::new("/Volumes/Team SMB"),
+            None,
+            Some(&native),
+            None,
+            None,
         );
 
         assert_eq!(kind, VolumeKind::Unknown);
