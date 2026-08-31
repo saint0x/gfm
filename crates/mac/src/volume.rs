@@ -1049,6 +1049,18 @@ pub struct VolumeEventStateTransition {
     pub invalidation: VolumeEventInvalidationReport,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VolumeEventStateBatchReport {
+    pub input_events: usize,
+    pub applied_events: usize,
+    pub resulting_volumes: usize,
+    pub invalidate_sidebar: bool,
+    pub invalidate_operation_policy: bool,
+    pub invalidate_index_admission: bool,
+    pub rescan_index: bool,
+    pub transitions: Vec<VolumeEventStateTransition>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VolumeEventShutdownReport {
     pub attached_before_shutdown: bool,
@@ -1441,6 +1453,29 @@ impl VolumeEventState {
         )
     }
 
+    pub fn apply_events_checked(
+        &mut self,
+        events: impl IntoIterator<Item = VolumeEventReport>,
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<VolumeEventStateBatchReport> {
+        check()?;
+        let mut input_events = 0usize;
+        let mut transitions = Vec::new();
+        for event in events {
+            check()?;
+            input_events += 1;
+            let transition = self.apply_event_transition(&event);
+            transitions.push(transition);
+            check()?;
+        }
+        check()?;
+        Ok(VolumeEventStateBatchReport::from_transitions(
+            input_events,
+            self.report.volumes.len(),
+            transitions,
+        ))
+    }
+
     pub fn apply_parts(
         &mut self,
         kind: VolumeEventKind,
@@ -1578,6 +1613,52 @@ impl VolumeEventState {
                 .insert(volume.stable_identity.clone(), index);
             self.path_index.insert(volume.path.clone(), index);
         }
+    }
+}
+
+impl VolumeEventStateBatchReport {
+    fn from_transitions(
+        input_events: usize,
+        resulting_volumes: usize,
+        transitions: Vec<VolumeEventStateTransition>,
+    ) -> Self {
+        Self {
+            input_events,
+            applied_events: transitions.len(),
+            resulting_volumes,
+            invalidate_sidebar: transitions
+                .iter()
+                .any(|transition| transition.invalidation.invalidate_sidebar),
+            invalidate_operation_policy: transitions
+                .iter()
+                .any(|transition| transition.invalidation.invalidate_operation_policy),
+            invalidate_index_admission: transitions
+                .iter()
+                .any(|transition| transition.invalidation.invalidate_index_admission),
+            rescan_index: transitions
+                .iter()
+                .any(|transition| transition.invalidation.rescan_index),
+            transitions,
+        }
+    }
+
+    pub fn as_tsv(&self) -> String {
+        let mut lines = vec![format!(
+            "volume-event-state-batch\tinput={}\tapplied={}\tresulting-volumes={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}",
+            self.input_events,
+            self.applied_events,
+            self.resulting_volumes,
+            self.invalidate_sidebar,
+            self.invalidate_operation_policy,
+            self.invalidate_index_admission,
+            self.rescan_index
+        )];
+        lines.extend(
+            self.transitions
+                .iter()
+                .map(|transition| transition.invalidation.as_tsv()),
+        );
+        lines.join("\n")
     }
 }
 
@@ -4731,6 +4812,102 @@ mod tests {
         assert_eq!(state.report().volumes, vec![descriptor]);
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_event_state_batch_applies_ordered_events_and_aggregates_invalidation() {
+        let previous_root = unique_temp_dir("gfm-volume-event-state-batch-previous");
+        let appeared_root = unique_temp_dir("gfm-volume-event-state-batch-appeared");
+        fs::write(previous_root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        fs::write(appeared_root.join(VOLUME_MARKER), "network-smb\n").unwrap();
+        let previous = VolumeDescriptor::for_path(&previous_root).unwrap();
+        let appeared = VolumeDescriptor::for_path(&appeared_root).unwrap();
+        let mut state = VolumeEventState::new(VolumeDiscoveryReport {
+            volumes: vec![previous.clone()],
+        });
+        let events = vec![
+            VolumeEventReport {
+                kind: VolumeEventKind::Appeared,
+                native_status: NativeVolumeStatus::Available,
+                path: Some(appeared_root.clone()),
+                descriptor: Some(appeared.clone()),
+                reason: None,
+            },
+            VolumeEventReport {
+                kind: VolumeEventKind::Disappeared,
+                native_status: NativeVolumeStatus::Missing,
+                path: Some(previous_root.clone()),
+                descriptor: Some(previous.clone()),
+                reason: None,
+            },
+        ];
+
+        let batch = state.apply_events_checked(events, || Ok(())).unwrap();
+
+        assert_eq!(batch.input_events, 2);
+        assert_eq!(batch.applied_events, 2);
+        assert_eq!(batch.resulting_volumes, 1);
+        assert!(batch.invalidate_sidebar);
+        assert!(batch.invalidate_operation_policy);
+        assert!(batch.invalidate_index_admission);
+        assert!(batch.rescan_index);
+        assert_eq!(batch.transitions[0].current.as_ref(), Some(&appeared));
+        assert_eq!(batch.transitions[1].previous.as_ref(), Some(&previous));
+        assert_eq!(state.report().volumes, vec![appeared]);
+        assert!(batch
+            .as_tsv()
+            .starts_with("volume-event-state-batch\tinput=2\tapplied=2\tresulting-volumes=1\t"));
+
+        fs::remove_dir_all(previous_root).unwrap();
+        fs::remove_dir_all(appeared_root).unwrap();
+    }
+
+    #[test]
+    fn volume_event_state_batch_cancellation_preserves_applied_prefix() {
+        let first_root = unique_temp_dir("gfm-volume-event-state-batch-first");
+        let second_root = unique_temp_dir("gfm-volume-event-state-batch-second");
+        fs::write(first_root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        fs::write(second_root.join(VOLUME_MARKER), "network-smb\n").unwrap();
+        let first = VolumeDescriptor::for_path(&first_root).unwrap();
+        let second = VolumeDescriptor::for_path(&second_root).unwrap();
+        let mut state = VolumeEventState::new(VolumeDiscoveryReport {
+            volumes: Vec::new(),
+        });
+        let mut checks = 0usize;
+
+        let err = state
+            .apply_events_checked(
+                [
+                    VolumeEventReport {
+                        kind: VolumeEventKind::Appeared,
+                        native_status: NativeVolumeStatus::Available,
+                        path: Some(first_root.clone()),
+                        descriptor: Some(first.clone()),
+                        reason: None,
+                    },
+                    VolumeEventReport {
+                        kind: VolumeEventKind::Appeared,
+                        native_status: NativeVolumeStatus::Available,
+                        path: Some(second_root.clone()),
+                        descriptor: Some(second),
+                        reason: None,
+                    },
+                ],
+                || {
+                    checks += 1;
+                    if checks >= 3 {
+                        Err(GfmError::Cancelled)
+                    } else {
+                        Ok(())
+                    }
+                },
+            )
+            .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert_eq!(state.report().volumes, vec![first]);
+        fs::remove_dir_all(first_root).unwrap();
+        fs::remove_dir_all(second_root).unwrap();
     }
 
     #[test]

@@ -6240,6 +6240,51 @@ fn reports_bsd_identity_volume_event_index_invalidation_from_binary() {
 }
 
 #[test]
+fn reports_volume_event_state_batch_from_binary() {
+    let previous = std::env::temp_dir().join(format!(
+        "gfm-volume-event-state-batch-previous-{}",
+        std::process::id()
+    ));
+    let appeared = std::env::temp_dir().join(format!(
+        "gfm-volume-event-state-batch-appeared-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&previous);
+    let _ = std::fs::remove_dir_all(&appeared);
+    std::fs::create_dir_all(&previous).unwrap();
+    std::fs::create_dir_all(&appeared).unwrap();
+    std::fs::write(previous.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+    std::fs::write(appeared.join(".gfm-volume-kind"), "network-smb\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-event-state-batch")
+        .arg(&previous)
+        .arg("--")
+        .arg("appeared")
+        .arg(&appeared)
+        .arg("disappeared")
+        .arg(&previous)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.starts_with("volume-event-state-batch\tinput=2\tapplied=2\tresulting-volumes=1\t")
+    );
+    assert!(stdout.contains("\tsidebar=true\toperation-policy=true\tindex-admission=true\t"));
+    assert!(stdout.contains("\nvolume-event-invalidation\tkind=appeared\t"));
+    assert!(stdout.contains("\nvolume-event-invalidation\tkind=disappeared\t"));
+    assert!(stdout.contains("\tcurrent-mount=unmounted\t"));
+
+    let _ = std::fs::remove_dir_all(previous);
+    let _ = std::fs::remove_dir_all(appeared);
+}
+
+#[test]
 fn reports_volume_event_runtime_cancellation_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-volume-event-runtime-invalidation-{}",

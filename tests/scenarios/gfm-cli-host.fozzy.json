@@ -4524,6 +4524,21 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "volume-event-state-batch",
+        "tmp/gfm-fozzy-dist",
+        "--",
+        "appeared",
+        "tmp/gfm-fozzy-internal-volume",
+        "disappeared",
+        "tmp/gfm-fozzy-dist"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "volume-event-invalidation",
         "unavailable"
       ],

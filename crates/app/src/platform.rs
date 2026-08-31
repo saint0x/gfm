@@ -35,9 +35,10 @@ use gfm_mac::{
     NativeIconInvalidationReport, SecurityScopedAccessReport, SecurityScopedBookmarkStatus,
     SecurityScopedBookmarkStore, SecurityWorkerAction, SecurityWorkerAdmissionReport,
     SpotlightMetadataReader, SpotlightReconciliationReport, VolumeDescriptor,
-    VolumeDiscoveryReport, VolumeEventInvalidationReport, VolumeEventKind, VolumeEventState,
-    VolumeEventStream, VolumeMountIdentityReport, VolumeOperation, VolumeOperationReport,
-    VolumeTopologyChangeKind, VolumeTopologyDiff, WatchRoot,
+    VolumeDiscoveryReport, VolumeEventInvalidationReport, VolumeEventKind, VolumeEventReport,
+    VolumeEventState, VolumeEventStateBatchReport, VolumeEventStream, VolumeMountIdentityReport,
+    VolumeOperation, VolumeOperationReport, VolumeTopologyChangeKind, VolumeTopologyDiff,
+    WatchRoot,
 };
 use gfm_preview::{
     decide_invalidation, decide_preview_security, preview_invalidation_for_fileprovider,
@@ -676,6 +677,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "{}",
                 volume_event_state_index_invalidation_from_args(args)?.as_tsv()
             );
+        }
+        "volume-event-state-batch" => {
+            println!("{}", volume_event_state_batch_from_args(args)?.as_tsv());
         }
         "volume-case-sensitivity-invalidation" => {
             let previous_case_sensitive = parse_platform_bool(
@@ -1630,6 +1634,45 @@ fn volume_event_state_index_invalidation_from_args(
         transition.invalidation.invalidate_index_admission,
         transition.invalidation.rescan_index,
     ))
+}
+
+fn volume_event_state_batch_from_args(
+    args: &mut impl Iterator<Item = String>,
+) -> Result<VolumeEventStateBatchReport> {
+    let mut previous_paths = Vec::new();
+    loop {
+        let arg = required_string(
+            args.next(),
+            "volume event state batch requires previous paths, `--`, and event kind/path pairs",
+        )?;
+        if arg == "--" {
+            break;
+        }
+        previous_paths.push(PathBuf::from(arg));
+    }
+
+    let mut events = Vec::new();
+    while let Some(kind) = args.next() {
+        let kind = parse_volume_event_kind(&kind)?;
+        let path = required_string(args.next(), "volume event state batch requires event path")?;
+        let path = (path != "-").then(|| PathBuf::from(path));
+        let resolution = resolve_volume_event_path(kind, path)?;
+        events.push(VolumeEventReport {
+            kind,
+            native_status: resolution.native_status,
+            path: resolution.path,
+            descriptor: resolution.descriptor,
+            reason: resolution.native_reason,
+        });
+    }
+    if events.is_empty() {
+        return Err(GfmError::Format(
+            "volume event state batch requires at least one event".to_string(),
+        ));
+    }
+
+    let mut state = VolumeEventState::new(volume_discovery_report(previous_paths, false)?);
+    state.apply_events_checked(events, || Ok(()))
 }
 
 fn volume_event_runtime_fanout_from_args(

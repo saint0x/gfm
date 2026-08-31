@@ -874,6 +874,7 @@ fn print_usage() {
   gfm volume-known-facts-lost-invalidation
   gfm volume-event-index-invalidation <appeared|description-changed|disappeared|unavailable> [path]
   gfm volume-event-state-index-invalidation <previous-paths...> -- <appeared|description-changed|disappeared|unavailable> [path]
+  gfm volume-event-state-batch <previous-paths...> -- <event-kind> <path|-> [<event-kind> <path|-> ...]
   gfm volume-case-sensitivity-invalidation <previous:true|false> <current:true|false>
   gfm volume-event-runtime-invalidation <appeared|description-changed|disappeared|unavailable> [path]
   gfm volume-event-runtime-fanout <previous-paths...> -- <appeared|description-changed|disappeared|unavailable> [path]
