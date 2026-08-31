@@ -549,7 +549,10 @@ fn execute_operation_inner(
             )?;
             cancellation.check()?;
             if access_gate.check(&operation).is_ok() {
-                let _security_scope = operation_security_accesses(&operation, &volume_report)?;
+                let _security_scope =
+                    operation_security_accesses_checked(&operation, &volume_report, || {
+                        cancellation.check()
+                    })?;
                 let conflict_report = OperationConflictReport::evaluate(&operation, conflict)?;
                 if conflict_report.blocks_operation {
                     if let Some(store) = runtime_operation_conflict_store() {
@@ -1078,14 +1081,32 @@ fn mutation_allowed_for_role(path: &Path, role: OperationAccessRole) -> bool {
     )
 }
 
-fn operation_security_accesses(
+fn operation_security_accesses_checked(
     operation: &Operation,
     volume_report: &VolumeDiscoveryReport,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<SecurityScopedBookmarkAccess>> {
     let store = SecurityScopedBookmarkStore::new(default_security_bookmarks_path());
+    operation_security_accesses_from_store_checked(
+        operation,
+        volume_report,
+        &store,
+        &mut check_control,
+    )
+}
+
+fn operation_security_accesses_from_store_checked(
+    operation: &Operation,
+    volume_report: &VolumeDiscoveryReport,
+    store: &SecurityScopedBookmarkStore,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Vec<SecurityScopedBookmarkAccess>> {
     let mut accesses = Vec::new();
+    check_control()?;
     for requirement in operation.access_requirements() {
+        check_control()?;
         let probe_path = operation_access_probe_path(&requirement.path, requirement.role);
+        check_control()?;
         let admission = worker_admission_with_volume_report(
             &probe_path,
             AccessIntent::Operate,
@@ -1096,6 +1117,7 @@ fn operation_security_accesses(
             ),
             volume_report,
         );
+        check_control()?;
         let report = &admission.access;
         if !admission.needs_bookmark_access {
             continue;
@@ -1106,7 +1128,10 @@ fn operation_security_accesses(
         {
             continue;
         }
-        let lookup = store.start_access_for_path(&probe_path, false, true)?;
+        check_control()?;
+        let lookup =
+            store.start_access_for_path_checked(&probe_path, false, true, &mut check_control)?;
+        check_control()?;
         let Some(access) = lookup.access else {
             return Err(GfmError::Permission {
                 path: probe_path,
@@ -1117,6 +1142,7 @@ fn operation_security_accesses(
             });
         };
         accesses.push(access);
+        check_control()?;
     }
     Ok(accesses)
 }
@@ -1368,10 +1394,13 @@ mod tests {
     use super::*;
     use gfm_mac::VolumeDescriptor;
     use gfm_ops::{read_journal, OperationProgress, OperationStatus};
+    use std::ffi::{OsStr, OsString};
     use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Mutex;
 
     static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn operation_progress_event_reports_metadata_degradation() {
@@ -2137,6 +2166,63 @@ mod tests {
     }
 
     #[test]
+    fn operation_security_accesses_checked_honors_pre_cancelled_control() {
+        let root = unique_temp_dir("gfm-app-op-security-access-pre-cancel");
+        let source = root.join("source.txt");
+        let destination = root.join("destination.txt");
+        fs::write(&source, "content").unwrap();
+        let operation = Operation::Copy {
+            from: source,
+            to: destination,
+        };
+        let report = VolumeDiscoveryReport::from_paths(vec![root.clone()]);
+
+        let result =
+            operation_security_accesses_checked(&operation, &report, || Err(GfmError::Cancelled));
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operation_security_accesses_checked_can_cancel_before_bookmark_store_lookup() {
+        let _env = ENV_LOCK.lock().unwrap();
+        let root = unique_temp_dir("gfm-app-op-security-access-bookmark-cancel");
+        let home = root.join("home");
+        let documents = home.join("Documents");
+        let protected = documents.join("Plan.md");
+        let destination = root.join("destination.txt");
+        let store = SecurityScopedBookmarkStore::new(root.join("bookmarks.tsv"));
+        fs::create_dir_all(&documents).unwrap();
+        fs::write(&protected, "content").unwrap();
+        let _home = EnvVarGuard::set("HOME", &home);
+        let operation = Operation::Copy {
+            from: protected,
+            to: destination,
+        };
+        let report = VolumeDiscoveryReport::from_paths(vec![root.clone()]);
+        let mut checks = 0usize;
+
+        let result =
+            operation_security_accesses_from_store_checked(&operation, &report, &store, || {
+                checks += 1;
+                if checks >= 5 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            });
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(checks >= 5);
+        assert!(
+            !store.path().exists(),
+            "cancelled operation preflight must stop before touching bookmark store"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn operation_journal_write_checked_honors_pre_cancelled_control() {
         let root = unique_temp_dir("gfm-app-op-journal-pre-cancel");
         let journal = root.join("ops.journal");
@@ -2182,5 +2268,28 @@ mod tests {
         ));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<OsStr>) -> Self {
+            let original = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(original) = &self.original {
+                std::env::set_var(self.key, original);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
     }
 }

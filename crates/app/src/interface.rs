@@ -9,12 +9,12 @@ use gfm_jobs::{
     JobProgressState, JobProgressStore, Priority,
 };
 use gfm_mac::{
-    current_permission_onboarding, AccessIntent, AccessProbeState, CloudCommandState,
+    current_permission_onboarding_checked, AccessIntent, AccessProbeState, CloudCommandState,
     CloudStorageState, FileProviderConflictReport, FileProviderInvalidationReport,
     FileProviderObservedInvalidation, FileProviderStateReport, FileProviderStateSnapshot,
-    MountState, SecurityAccessMode, SecurityDecisionAction, SecurityWorkerAction,
-    SecurityWorkerAdmissionReport, VolumeDescriptor, VolumeDiscoveryReport, VolumeEventKind,
-    VolumeEventState, VolumeKind,
+    MountState, PermissionOnboardingPlan, SecurityAccessMode, SecurityDecisionAction,
+    SecurityWorkerAction, SecurityWorkerAdmissionReport, VolumeDescriptor, VolumeDiscoveryReport,
+    VolumeEventKind, VolumeEventState, VolumeKind,
 };
 use gfm_ops::{ConflictPolicy, Operation, OperationConflictReport};
 use gfm_types::{DirectoryPage, FileEvent, FileEventKind, FileKind, GfmError, Result, VolumeId};
@@ -117,11 +117,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             println!("{}", contract.as_tsv());
         }
         "ui-permission-onboarding-contract" => {
-            let plan = current_permission_onboarding()?;
-            let refresh = crate::permission_refresh::refresh_permission_state(
-                crate::permission_refresh::PermissionRefreshAudience::Ui,
-                "permission-onboarding",
-            )?;
+            let (plan, refresh) = permission_onboarding_contract_inputs_checked(|| Ok(()))?;
             print_permission_onboarding_contract(
                 plan,
                 refresh.as_ref().map(permission_refresh_contract),
@@ -1444,10 +1440,19 @@ fn preflight_ui_fileprovider_read_checked(
 }
 
 fn app_launch_spec(path: Option<String>) -> Result<AppLaunchSpec> {
+    app_launch_spec_checked(path, || Ok(()))
+}
+
+fn app_launch_spec_checked(
+    path: Option<String>,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<AppLaunchSpec> {
+    check_control()?;
     let mut spec = path
         .map(AppLaunchSpec::new)
         .unwrap_or_default()
         .with_sidebar_volumes(native_sidebar_volumes());
+    check_control()?;
     if let Some(store) = crate::runtime::runtime_progress_store() {
         let payloads = crate::runtime::runtime_payload_catalog()
             .map(|catalog| read_optional_ui_payload_records(catalog.path()))
@@ -1477,7 +1482,9 @@ fn app_launch_spec(path: Option<String>) -> Result<AppLaunchSpec> {
     if let Some(refresh) = refresh {
         spec = spec.with_permission_refresh(permission_refresh_contract(&refresh));
     }
-    let plan = current_permission_onboarding()?;
+    check_control()?;
+    let plan = current_permission_onboarding_checked(&mut check_control)?;
+    check_control()?;
     if plan.finder_parity_default || plan.action != gfm_mac::PermissionAction::ContinueNormally {
         spec = spec.with_permission_prompt(permission_prompt_kind(&plan));
     }
@@ -1490,7 +1497,25 @@ fn app_launch_spec(path: Option<String>) -> Result<AppLaunchSpec> {
     if permission_access_requires_surface(&access) {
         spec = spec.with_permission_access(access);
     }
+    check_control()?;
     Ok(spec)
+}
+
+fn permission_onboarding_contract_inputs_checked(
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<(
+    PermissionOnboardingPlan,
+    Option<gfm_mac::PermissionStateInvalidationReport>,
+)> {
+    check_control()?;
+    let plan = current_permission_onboarding_checked(&mut check_control)?;
+    check_control()?;
+    let refresh = crate::permission_refresh::refresh_permission_state(
+        crate::permission_refresh::PermissionRefreshAudience::Ui,
+        "permission-onboarding",
+    )?;
+    check_control()?;
+    Ok((plan, refresh))
 }
 
 fn permission_refresh_contract(
@@ -2006,6 +2031,32 @@ mod tests {
         access.prompt_source = "missing-path".to_string();
 
         assert!(permission_access_requires_surface(&access));
+    }
+
+    #[test]
+    fn permission_onboarding_contract_inputs_honor_pre_cancelled_control() {
+        let err =
+            permission_onboarding_contract_inputs_checked(|| Err(GfmError::Cancelled)).unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+    }
+
+    #[test]
+    fn app_launch_spec_checked_can_cancel_during_permission_onboarding() {
+        let mut checks = 0usize;
+
+        let err = app_launch_spec_checked(None, || {
+            checks += 1;
+            if checks >= 4 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert!(checks >= 4);
     }
 
     #[test]
