@@ -1,5 +1,6 @@
 use crate::access::{
-    preflight_access_scope_checked, preflight_volume_access_scope, ScopedAccessGuard,
+    preflight_access_scope_checked, preflight_access_scope_checked_with_volume_report,
+    preflight_volume_access_scope, preflight_volume_access_scope_with_report, ScopedAccessGuard,
 };
 use crate::runtime::{
     run_scheduled_volume_task_cancellable_with_volume_and_payload_path,
@@ -17,8 +18,8 @@ use gfm_diagnostics::{
 };
 use gfm_index::{PersistentIndexPlan, PersistentIndexRecovery};
 use gfm_jobs::{Priority, SchedulingAction};
-use gfm_mac::AccessIntent;
-use gfm_types::{GfmError, Result};
+use gfm_mac::{AccessIntent, VolumeDiscoveryReport};
+use gfm_types::{GfmError, Result, VolumeId};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -414,18 +415,62 @@ fn preflight_recovery_volumes(spec: &PersistentIndexRecoverySpec) -> Result<()> 
     Ok(())
 }
 
+#[derive(Clone)]
+struct DiagnosticsAccessReport {
+    path: PathBuf,
+    intent: AccessIntent,
+    volume_report: VolumeDiscoveryReport,
+}
+
+impl DiagnosticsAccessReport {
+    fn new(path: PathBuf, intent: AccessIntent) -> Self {
+        let volume_report = VolumeDiscoveryReport::for_containing_path(&path);
+        Self {
+            path,
+            intent,
+            volume_report,
+        }
+    }
+
+    fn preflight_volume(&self, worker: &str) -> Result<()> {
+        preflight_volume_access_scope_with_report(
+            &self.path,
+            self.intent,
+            worker,
+            &self.volume_report,
+        )
+    }
+
+    fn access_checked(
+        &self,
+        worker: &str,
+        check_control: impl FnMut() -> Result<()>,
+    ) -> Result<ScopedAccessGuard> {
+        preflight_access_scope_checked_with_volume_report(
+            &self.path,
+            self.intent,
+            worker,
+            &self.volume_report,
+            check_control,
+        )
+    }
+
+    fn volume(&self) -> Option<VolumeId> {
+        self.volume_report
+            .volume_for_path(&self.path)
+            .map(|volume| volume.id)
+    }
+}
+
 fn run_trace_export(output: PathBuf) -> Result<String> {
     const WORKER: &str = "diagnostics trace export";
     let output_probe = write_probe_path(&output)?.to_path_buf();
-    preflight_volume_access_scope(&output_probe, AccessIntent::Write, WORKER)?;
-    let volume = parent_volume(&output_probe);
+    let access_report = DiagnosticsAccessReport::new(output_probe, AccessIntent::Write);
+    access_report.preflight_volume(WORKER)?;
+    let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let output_probe = write_probe_path(&output)?.to_path_buf();
-        let _access =
-            preflight_access_scope_checked(&output_probe, AccessIntent::Write, WORKER, || {
-                cancellation.check()
-            })?;
+        let _access = access_report.access_checked(WORKER, || cancellation.check())?;
         cancellation.check()?;
         let report = export_operator_trace_checked(output, || cancellation.check())?;
         Ok(format!(
@@ -493,15 +538,12 @@ fn run_parity_baseline(
 
 fn run_storage_inspect(storage: PathBuf) -> Result<String> {
     const WORKER: &str = "diagnostics storage";
-    preflight_volume_access_scope(&storage, AccessIntent::Read, WORKER)?;
-    let volume = detect_volume_id(&storage)
-        .ok()
-        .or_else(|| parent_volume(&storage));
+    let access_report = DiagnosticsAccessReport::new(storage.clone(), AccessIntent::Read);
+    access_report.preflight_volume(WORKER)?;
+    let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = preflight_access_scope_checked(&storage, AccessIntent::Read, WORKER, || {
-            cancellation.check()
-        })?;
+        let _access = access_report.access_checked(WORKER, || cancellation.check())?;
         cancellation.check()?;
         match inspect_storage_checked(storage, || cancellation.check())? {
             StorageInspection::Records(report) => Ok(format!(

@@ -1,11 +1,12 @@
 use crate::access::{
-    preflight_access_scope_checked, preflight_volume_access_scope, ScopedAccessGuard,
+    preflight_access_scope_checked, preflight_access_scope_checked_with_volume_report,
+    preflight_volume_access_scope, preflight_volume_access_scope_with_report, ScopedAccessGuard,
 };
 use crate::runtime::{
     default_job_journal_path, run_scheduled_volume_task_cancellable, run_volume_task_cancellable,
 };
 use crate::{
-    parent_volume, parse_optional_scheduling_pressure, parse_u64_arg, parse_usize_arg, path_volume,
+    parent_volume, parse_optional_scheduling_pressure, parse_u64_arg, parse_usize_arg,
     required_path,
 };
 use gfm_jobs::{
@@ -13,7 +14,7 @@ use gfm_jobs::{
     JobPayloadKind, JobPayloadRecord, JobProgressCommand, JobProgressSnapshot, JobProgressState,
     JobProgressStore, Priority, RecoveryReason, RetryPolicy, Scheduler,
 };
-use gfm_mac::AccessIntent;
+use gfm_mac::{AccessIntent, VolumeDiscoveryReport};
 use gfm_types::{GfmError, Result, VolumeId};
 use std::collections::HashMap;
 use std::fs;
@@ -161,26 +162,20 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "jobs-runtime-retry-probe requires an attempt state path",
             )?;
             let pressure = parse_optional_scheduling_pressure(args)?;
-            preflight_volume_access_scope(
-                write_probe_path(&state)?,
+            let access_report = JobPathAccessReport::new(
+                write_probe_path(&state)?.to_path_buf(),
                 AccessIntent::Write,
-                "runtime retry probe",
-            )?;
+            );
+            access_report.preflight_volume("runtime retry probe")?;
             let outcome = run_scheduled_volume_task_cancellable(
-                path_volume(write_probe_path(&state)?),
+                access_report.volume(),
                 Priority::Background,
                 "runtime retry probe",
                 pressure,
                 move |cancellation| {
                     cancellation.check()?;
-                    let state_probe = write_probe_path(&state)?.to_path_buf();
-                    cancellation.check()?;
-                    let _access = preflight_access_scope_checked(
-                        &state_probe,
-                        AccessIntent::Write,
-                        "runtime retry probe",
-                        || cancellation.check(),
-                    )?;
+                    let _access = access_report
+                        .access_checked("runtime retry probe", || cancellation.check())?;
                     cancellation.check()?;
                     runtime_retry_probe_cancellable(&state, &cancellation)
                 },
@@ -230,6 +225,53 @@ fn run_jobs_recover(journal: PathBuf) -> Result<Vec<String>> {
             .collect();
         Ok(lines)
     })
+}
+
+#[derive(Clone)]
+struct JobPathAccessReport {
+    path: PathBuf,
+    intent: AccessIntent,
+    volume_report: VolumeDiscoveryReport,
+}
+
+impl JobPathAccessReport {
+    fn new(path: PathBuf, intent: AccessIntent) -> Self {
+        let volume_report = VolumeDiscoveryReport::for_containing_path(&path);
+        Self {
+            path,
+            intent,
+            volume_report,
+        }
+    }
+
+    fn preflight_volume(&self, worker: &str) -> Result<()> {
+        preflight_volume_access_scope_with_report(
+            &self.path,
+            self.intent,
+            worker,
+            &self.volume_report,
+        )
+    }
+
+    fn access_checked(
+        &self,
+        worker: &str,
+        check_control: impl FnMut() -> Result<()>,
+    ) -> Result<ScopedAccessGuard> {
+        preflight_access_scope_checked_with_volume_report(
+            &self.path,
+            self.intent,
+            worker,
+            &self.volume_report,
+            check_control,
+        )
+    }
+
+    fn volume(&self) -> Option<VolumeId> {
+        self.volume_report
+            .volume_for_path(&self.path)
+            .map(|volume| volume.id)
+    }
 }
 
 fn run_jobs_payload_catalog(path: PathBuf) -> Result<Vec<String>> {
