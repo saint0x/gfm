@@ -128,7 +128,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             let operation = Operation::Copy { from, to };
             preflight_operation_volume_policy_access(&operation)?;
-            println!("{}", operation_volume_copy_policy_report(&operation));
+            println!("{}", operation_volume_copy_policy_report(&operation)?);
         }
         "operation-access-unavailable-volume-api" => {
             let from = required_path(
@@ -145,7 +145,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             let operation = Operation::Copy { from, to };
             let report = unavailable_volume_api_report(&root)?;
-            let gate = operation_access_gate(&operation, &report);
+            let gate = operation_access_gate_checked(&operation, &report, || Ok(()))?;
             match gate.check(&operation) {
                 Ok(()) => println!(
                     "operation-access\tcopy\taction=allow\tvolume-root={}\treason=-",
@@ -747,11 +747,10 @@ fn escape_operation_field(value: &str) -> String {
         .replace('\n', "\\n")
 }
 
-fn operation_volume_copy_policy_report(operation: &Operation) -> String {
-    let report = operation_volume_report_checked(operation, || Ok(()))
-        .expect("uncancellable operation volume report cannot cancel");
+fn operation_volume_copy_policy_report(operation: &Operation) -> Result<String> {
+    let report = operation_volume_report_checked(operation, || Ok(()))?;
     let policy = operation_volume_copy_policy_from_report(operation, &report);
-    match operation {
+    Ok(match operation {
         Operation::Copy { from, to } | Operation::Move { from, to } => format!(
             "operation-volume-copy-policy\tsource={}\tdestination={}\tsource-class={}\tdestination-class={}\tbuffer-bytes={}\tfile-cloning={}\thard-links={}\tsparse-files={}\tvolumes={}",
             from.display(),
@@ -765,7 +764,7 @@ fn operation_volume_copy_policy_report(operation: &Operation) -> String {
             report.volumes.len()
         ),
         _ => "operation-volume-copy-policy\tsource=-\tdestination=-\tsource-class=-\tdestination-class=-\tbuffer-bytes=0\tfile-cloning=false\thard-links=false\tsparse-files=false\tvolumes=0".to_string(),
-    }
+    })
 }
 
 fn preflight_operation_volume_policy_access(operation: &Operation) -> Result<()> {
@@ -871,14 +870,6 @@ fn write_probe_path(path: &Path) -> Result<&Path> {
             format!("operation write path metadata unavailable: {err}"),
         )),
     }
-}
-
-fn operation_access_gate(
-    operation: &Operation,
-    volume_report: &VolumeDiscoveryReport,
-) -> OperationAccessGate {
-    operation_access_gate_checked(operation, volume_report, || Ok(()))
-        .expect("infallible operation access gate control cannot cancel")
 }
 
 fn operation_access_gate_checked(
@@ -1573,7 +1564,7 @@ mod tests {
             to: destination.clone(),
         };
 
-        let report = operation_volume_copy_policy_report(&operation);
+        let report = operation_volume_copy_policy_report(&operation).unwrap();
 
         assert!(report.starts_with("operation-volume-copy-policy\t"));
         assert!(report.contains("\tsource-class=network\t"));
@@ -1918,7 +1909,7 @@ mod tests {
             to: destination.clone(),
         };
 
-        let gate = operation_access_gate(&operation, &report);
+        let gate = operation_access_gate_checked(&operation, &report, || Ok(())).unwrap();
         let journal = root.join("journal.tsv");
         let err = Operator::new(OperationContext::new(&journal).with_access_gate(gate))
             .execute(operation)
@@ -1961,7 +1952,7 @@ mod tests {
             to: destination.clone(),
         };
 
-        let gate = operation_access_gate(&operation, &report);
+        let gate = operation_access_gate_checked(&operation, &report, || Ok(())).unwrap();
         let journal = root.join("journal.tsv");
         let err = Operator::new(OperationContext::new(&journal).with_access_gate(gate))
             .execute(operation)
@@ -2000,7 +1991,7 @@ mod tests {
         };
         let report = unavailable_volume_api_report(&volume).unwrap();
 
-        let gate = operation_access_gate(&operation, &report);
+        let gate = operation_access_gate_checked(&operation, &report, || Ok(())).unwrap();
         let journal = root.join("journal.tsv");
         let err = Operator::new(OperationContext::new(&journal).with_access_gate(gate))
             .execute(operation)
@@ -2044,7 +2035,7 @@ mod tests {
             to: destination.clone(),
         };
 
-        let gate = operation_access_gate(&operation, &report);
+        let gate = operation_access_gate_checked(&operation, &report, || Ok(())).unwrap();
         let journal = root.join("journal.tsv");
         let err = Operator::new(OperationContext::new(&journal).with_access_gate(gate))
             .execute(operation)
@@ -2103,7 +2094,7 @@ mod tests {
             to: destination.clone(),
         };
 
-        let gate = operation_access_gate(&operation, &report);
+        let gate = operation_access_gate_checked(&operation, &report, || Ok(())).unwrap();
         let journal = root.join("journal.tsv");
         let err = Operator::new(OperationContext::new(&journal).with_access_gate(gate))
             .execute(operation)
@@ -2149,7 +2140,7 @@ mod tests {
             to: destination.clone(),
         };
 
-        let gate = operation_access_gate(&operation, &report);
+        let gate = operation_access_gate_checked(&operation, &report, || Ok(())).unwrap();
         let journal = root.join("journal.tsv");
         let err = Operator::new(OperationContext::new(&journal).with_access_gate(gate))
             .execute(operation)
@@ -2194,7 +2185,7 @@ mod tests {
             to: destination.clone(),
         };
 
-        let gate = operation_access_gate(&operation, &report);
+        let gate = operation_access_gate_checked(&operation, &report, || Ok(())).unwrap();
         let journal = root.join("journal.tsv");
         let entry = Operator::new(OperationContext::new(&journal).with_access_gate(gate))
             .execute(operation)

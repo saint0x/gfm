@@ -141,8 +141,12 @@ fn print_toolchain_report(report: &AppleToolchainReport) {
 
 fn run_release_validate(spec: ReleaseArtifactSpec) -> Result<ReleaseArtifactReport> {
     const WORKER: &str = "release validate app";
-    let access_report =
-        PackagingAccessReport::new(spec.app_path.clone(), AccessIntent::Read, WORKER);
+    let access_report = PackagingAccessReport::new_checked(
+        spec.app_path.clone(),
+        AccessIntent::Read,
+        WORKER,
+        || Ok(()),
+    )?;
     access_report.preflight_volume()?;
     let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
@@ -174,7 +178,12 @@ fn run_bundle_app(spec: AppBundleSpec) -> Result<AppBundle> {
 
 fn run_register_app(app_path: PathBuf) -> Result<()> {
     const WORKER: &str = "register app";
-    let access_report = PackagingAccessReport::new(app_path.clone(), AccessIntent::Operate, WORKER);
+    let access_report = PackagingAccessReport::new_checked(
+        app_path.clone(),
+        AccessIntent::Operate,
+        WORKER,
+        || Ok(()),
+    )?;
     access_report.preflight_volume()?;
     let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
@@ -208,11 +217,6 @@ struct PackagingAccessReport {
 }
 
 impl PackagingAccessReport {
-    fn new(path: PathBuf, intent: AccessIntent, worker: &'static str) -> Self {
-        Self::new_checked(path, intent, worker, || Ok(()))
-            .expect("uncancellable packaging access report cannot cancel")
-    }
-
     fn new_checked(
         path: PathBuf,
         intent: AccessIntent,
