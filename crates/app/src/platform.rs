@@ -2206,9 +2206,15 @@ fn volume_discovery_report(paths: Vec<PathBuf>) -> Result<VolumeDiscoveryReport>
 
 fn current_index_volume_descriptor(path: &Path) -> Result<Option<IndexVolumeDescriptor>> {
     match path.try_exists() {
-        Ok(true) => Ok(Some(index_volume_descriptor(&VolumeDescriptor::for_path(
-            path,
-        )?))),
+        Ok(true) => {
+            let report = VolumeDiscoveryReport::for_containing_path(path);
+            let descriptor = report
+                .volume_for_path(path)
+                .cloned()
+                .map(Ok)
+                .unwrap_or_else(|| VolumeDescriptor::for_path(path))?;
+            Ok(Some(index_volume_descriptor(&descriptor)))
+        }
         Ok(false) => Ok(None),
         Err(err) => Err(GfmError::io(
             path,
