@@ -76,13 +76,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             } else {
                 None
             };
-            preflight_index_volume_access(&root)?;
-            let _output_access = preflight_index_write(&output, "index records")?;
+            let access_reports = IndexBuildAccessReports::for_root_and_output(&root, &output)?;
+            access_reports.preflight_volumes()?;
+            let _output_access = access_reports.preflight_output_access_checked(|| Ok(()))?;
             if let Some(retry_probe) = retry_probe.as_ref() {
                 preflight_index_write(retry_probe, "index")?;
             }
-            let output_probe = write_probe_path(&output)?.to_path_buf();
-            let volume = path_volume(&root).or_else(|| path_volume(&output_probe));
+            let volume = access_reports.first_volume();
             let (record_count, inaccessible_count) =
                 run_retriable_volume_task_cancellable_with_payload_path(
                     volume,
@@ -101,12 +101,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                             )?;
                         }
                         let _root_access =
-                            enforce_index_access_checked(&root, || cancellation.check())?;
+                            access_reports.enforce_root_access_checked(|| cancellation.check())?;
                         cancellation.check()?;
-                        let _output_access =
-                            preflight_index_write_checked(&output, "index records", || {
-                                cancellation.check()
-                            })?;
+                        let _output_access = access_reports
+                            .preflight_output_access_checked(|| cancellation.check())?;
                         cancellation.check()?;
                         let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
                         let record_count = snapshot.records.len();
@@ -693,6 +691,87 @@ where
     })
 }
 
+#[derive(Clone)]
+struct IndexPathAccessReport {
+    path: PathBuf,
+    intent: AccessIntent,
+    worker: &'static str,
+    volume_report: VolumeDiscoveryReport,
+}
+
+#[derive(Clone)]
+struct IndexBuildAccessReports {
+    root: IndexPathAccessReport,
+    output: IndexPathAccessReport,
+}
+
+impl IndexBuildAccessReports {
+    fn for_root_and_output(root: &Path, output: &Path) -> Result<Self> {
+        let output_probe = write_probe_path(output)?.to_path_buf();
+        Ok(Self {
+            root: Self::entry(root.to_path_buf(), AccessIntent::Index, "index"),
+            output: Self::entry(output_probe, AccessIntent::Write, "index records"),
+        })
+    }
+
+    fn entry(path: PathBuf, intent: AccessIntent, worker: &'static str) -> IndexPathAccessReport {
+        let volume_report = VolumeDiscoveryReport::for_containing_path(&path);
+        IndexPathAccessReport {
+            path,
+            intent,
+            worker,
+            volume_report,
+        }
+    }
+
+    fn preflight_volumes(&self) -> Result<()> {
+        for entry in [&self.root, &self.output] {
+            preflight_volume_access_scope_with_report(
+                &entry.path,
+                entry.intent,
+                entry.worker,
+                &entry.volume_report,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn enforce_root_access_checked(
+        &self,
+        check_control: impl FnMut() -> Result<()>,
+    ) -> Result<ScopedAccessGuard> {
+        preflight_access_scope_checked_with_volume_report(
+            &self.root.path,
+            self.root.intent,
+            self.root.worker,
+            &self.root.volume_report,
+            check_control,
+        )
+    }
+
+    fn preflight_output_access_checked(
+        &self,
+        check_control: impl FnMut() -> Result<()>,
+    ) -> Result<ScopedAccessGuard> {
+        preflight_access_scope_checked_with_volume_report(
+            &self.output.path,
+            self.output.intent,
+            self.output.worker,
+            &self.output.volume_report,
+            check_control,
+        )
+    }
+
+    fn first_volume(&self) -> Option<gfm_types::VolumeId> {
+        [&self.root, &self.output].into_iter().find_map(|entry| {
+            entry
+                .volume_report
+                .volume_for_path(&entry.path)
+                .map(|volume| volume.id)
+        })
+    }
+}
+
 fn enforce_index_access(root: &Path) -> Result<ScopedAccessGuard> {
     enforce_index_access_checked(root, || Ok(()))
 }
@@ -894,6 +973,21 @@ mod tests {
             std::env::temp_dir().join(format!("gfm-index-root-pre-cancel-{}", std::process::id()));
 
         let result = enforce_index_access_checked(&root, || Err(GfmError::Cancelled));
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn index_build_access_checked_honors_pre_cancelled_control() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-index-build-access-pre-cancel-{}",
+            std::process::id()
+        ));
+        let output = root.join("records.gfmidx");
+        let reports = IndexBuildAccessReports::for_root_and_output(&root, &output).unwrap();
+
+        let result = reports.enforce_root_access_checked(|| Err(GfmError::Cancelled));
 
         assert_eq!(result.err(), Some(GfmError::Cancelled));
         assert!(!root.exists());
