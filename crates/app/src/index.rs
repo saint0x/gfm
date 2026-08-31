@@ -119,30 +119,23 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let root = required_path(args.next(), "index-state requires a root path")?;
             let records = required_path(args.next(), "index-state requires a records path")?;
             let state = required_path(args.next(), "index-state requires a state path")?;
-            preflight_index_volume_access(&root)?;
-            let _records_access = preflight_index_write(&records, "index records")?;
-            let _state_access = preflight_index_write(&state, "index state")?;
-            let records_probe = write_probe_path(&records)?.to_path_buf();
-            let state_probe = write_probe_path(&state)?.to_path_buf();
-            let volume = path_volume(&root)
-                .or_else(|| path_volume(&records_probe))
-                .or_else(|| path_volume(&state_probe));
+            let access_reports = IndexRootWriteAccessReports::for_root_and_writes(
+                &root,
+                &[(&records, "index records"), (&state, "index state")],
+            )?;
+            access_reports.preflight_volumes()?;
+            let _write_accesses = access_reports.write_accesses_checked(|| Ok(()))?;
+            let volume = access_reports.first_volume();
             let state = run_volume_task_cancellable(
                 volume,
                 Priority::Visible,
                 "index",
                 move |cancellation| {
                     let _root_access =
-                        enforce_index_access_checked(&root, || cancellation.check())?;
+                        access_reports.root_access_checked(|| cancellation.check())?;
                     cancellation.check()?;
-                    let _records_access =
-                        preflight_index_write_checked(&records, "index records", || {
-                            cancellation.check()
-                        })?;
-                    let _state_access =
-                        preflight_index_write_checked(&state, "index state", || {
-                            cancellation.check()
-                        })?;
+                    let _write_accesses =
+                        access_reports.write_accesses_checked(|| cancellation.check())?;
                     cancellation.check()?;
                     Indexer::default().build_persistent_cancellable(
                         root,
@@ -168,31 +161,26 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "scan-progress requires a progress checkpoint path",
             )?;
-            preflight_index_volume_access(&root)?;
-            let _records_access = preflight_index_write(&records, "scan progress records")?;
-            let _progress_access = preflight_index_write(&progress, "scan progress checkpoint")?;
-            let records_probe = write_probe_path(&records)?.to_path_buf();
-            let progress_probe = write_probe_path(&progress)?.to_path_buf();
-            let volume = path_volume(&root)
-                .or_else(|| path_volume(&records_probe))
-                .or_else(|| path_volume(&progress_probe));
+            let access_reports = IndexRootWriteAccessReports::for_root_and_writes(
+                &root,
+                &[
+                    (&records, "scan progress records"),
+                    (&progress, "scan progress checkpoint"),
+                ],
+            )?;
+            access_reports.preflight_volumes()?;
+            let _write_accesses = access_reports.write_accesses_checked(|| Ok(()))?;
+            let volume = access_reports.first_volume();
             let checkpoint = run_volume_task_cancellable(
                 volume,
                 Priority::Visible,
                 "index",
                 move |cancellation| {
                     let _root_access =
-                        enforce_index_access_checked(&root, || cancellation.check())?;
+                        access_reports.root_access_checked(|| cancellation.check())?;
                     cancellation.check()?;
-                    let _records_access =
-                        preflight_index_write_checked(&records, "scan progress records", || {
-                            cancellation.check()
-                        })?;
-                    let _progress_access = preflight_index_write_checked(
-                        &progress,
-                        "scan progress checkpoint",
-                        || cancellation.check(),
-                    )?;
+                    let _write_accesses =
+                        access_reports.write_accesses_checked(|| cancellation.check())?;
                     cancellation.check()?;
                     Indexer::default().build_with_progress_cancellable(
                         root,
@@ -844,6 +832,56 @@ fn first_access_report_volume<'a>(
 struct IndexBuildAccessReports {
     root: IndexPathAccessReport,
     output: IndexPathAccessReport,
+}
+
+#[derive(Clone)]
+struct IndexRootWriteAccessReports {
+    root: IndexPathAccessReport,
+    writes: Vec<IndexPathAccessReport>,
+}
+
+impl IndexRootWriteAccessReports {
+    fn for_root_and_writes(root: &Path, writes: &[(&PathBuf, &'static str)]) -> Result<Self> {
+        Ok(Self {
+            root: IndexPathAccessReport::new(root.to_path_buf(), AccessIntent::Index, "index"),
+            writes: writes
+                .iter()
+                .map(|(path, worker)| IndexPathAccessReport::write_probe(path, worker))
+                .collect::<Result<Vec<_>>>()?,
+        })
+    }
+
+    fn preflight_volumes(&self) -> Result<()> {
+        self.root.preflight_volume()?;
+        for write in &self.writes {
+            write.preflight_volume()?;
+        }
+        Ok(())
+    }
+
+    fn root_access_checked(
+        &self,
+        check_control: impl FnMut() -> Result<()>,
+    ) -> Result<ScopedAccessGuard> {
+        self.root.access_checked(check_control)
+    }
+
+    fn write_accesses_checked(
+        &self,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<ScopedAccessGuard>> {
+        let mut guards = Vec::with_capacity(self.writes.len());
+        for write in &self.writes {
+            check_control()?;
+            guards.push(write.access_checked(&mut check_control)?);
+        }
+        check_control()?;
+        Ok(guards)
+    }
+
+    fn first_volume(&self) -> Option<gfm_types::VolumeId> {
+        first_access_report_volume(std::iter::once(&self.root).chain(self.writes.iter()))
+    }
 }
 
 impl IndexBuildAccessReports {
