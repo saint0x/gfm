@@ -1,5 +1,3 @@
-#[cfg(test)]
-use crate::access::preflight_access_scope_checked;
 use crate::access::{
     preflight_access_scope_checked_with_volume_report, preflight_volume_access_scope_with_report,
     ScopedAccessGuard,
@@ -234,12 +232,24 @@ struct JobPathAccessReport {
 
 impl JobPathAccessReport {
     fn new(path: PathBuf, intent: AccessIntent) -> Self {
-        let volume_report = VolumeDiscoveryReport::for_containing_path(&path);
-        Self {
+        Self::new_checked(path, intent, || Ok(()))
+            .expect("uncancellable job path access report cannot cancel")
+    }
+
+    fn new_checked(
+        path: PathBuf,
+        intent: AccessIntent,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check_control()?;
+        let volume_report =
+            VolumeDiscoveryReport::for_containing_path_checked(&path, &mut check_control)?;
+        check_control()?;
+        Ok(Self {
             path,
             intent,
             volume_report,
-        }
+        })
     }
 
     fn preflight_volume(&self, worker: &str) -> Result<()> {
@@ -279,13 +289,29 @@ struct JobPathAccessReports {
 
 impl JobPathAccessReports {
     fn payload_restore(catalog_path: &Path, progress_path: &Path) -> Result<Self> {
+        Self::payload_restore_checked(catalog_path, progress_path, || Ok(()))
+    }
+
+    fn payload_restore_checked(
+        catalog_path: &Path,
+        progress_path: &Path,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check_control()?;
+        let progress_probe = write_probe_path(progress_path)?.to_path_buf();
+        check_control()?;
         Ok(Self {
             entries: vec![
-                JobPathAccessReport::new(catalog_path.to_path_buf(), AccessIntent::Read),
-                JobPathAccessReport::new(
-                    write_probe_path(progress_path)?.to_path_buf(),
+                JobPathAccessReport::new_checked(
+                    catalog_path.to_path_buf(),
+                    AccessIntent::Read,
+                    &mut check_control,
+                )?,
+                JobPathAccessReport::new_checked(
+                    progress_probe,
                     AccessIntent::Write,
-                ),
+                    &mut check_control,
+                )?,
             ],
         })
     }
@@ -465,22 +491,12 @@ fn retain_payload_restore_access_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
     check_control()?;
-    let progress_probe = write_probe_path(progress_path)?.to_path_buf();
-    check_control()?;
-    Ok(vec![
-        preflight_access_scope_checked(
-            catalog_path,
-            AccessIntent::Read,
-            "jobs payload restore plan",
-            &mut check_control,
-        )?,
-        preflight_access_scope_checked(
-            &progress_probe,
-            AccessIntent::Write,
-            "jobs payload restore plan",
-            &mut check_control,
-        )?,
-    ])
+    let access_reports = JobPathAccessReports::payload_restore_checked(
+        catalog_path,
+        progress_path,
+        &mut check_control,
+    )?;
+    access_reports.access_checked("jobs payload restore plan", &mut check_control)
 }
 
 fn write_probe_path(path: &Path) -> Result<&Path> {
@@ -919,6 +935,23 @@ mod tests {
                     .is_some_and(|name| name.starts_with(&temp_prefix))
             });
         assert!(!leaked_temp);
+    }
+
+    #[test]
+    fn job_path_access_report_checked_honors_pre_cancelled_control_before_volume_discovery() {
+        let path = std::env::temp_dir()
+            .join(format!(
+                "gfm-job-path-report-pre-cancel-{}",
+                std::process::id()
+            ))
+            .join("progress.tsv");
+
+        let result = JobPathAccessReport::new_checked(path.clone(), AccessIntent::Read, || {
+            Err(GfmError::Cancelled)
+        });
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!path.exists());
     }
 
     #[test]

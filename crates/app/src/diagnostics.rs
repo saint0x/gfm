@@ -264,34 +264,46 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
 }
 
 fn rebuild_access_reports(spec: &RebuildSpec) -> Result<DiagnosticsAccessReports> {
+    rebuild_access_reports_checked(spec, || Ok(()))
+}
+
+fn rebuild_access_reports_checked(
+    spec: &RebuildSpec,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<DiagnosticsAccessReports> {
     let mut entries = vec![
-        DiagnosticsAccessReportEntry::new(
+        DiagnosticsAccessReportEntry::new_checked(
             spec.root.clone(),
             AccessIntent::Index,
             "index rebuild root",
-        ),
-        DiagnosticsAccessReportEntry::new(
+            &mut check_control,
+        )?,
+        DiagnosticsAccessReportEntry::new_checked(
             write_probe_path(&spec.records_path)?.to_path_buf(),
             AccessIntent::Write,
             "index rebuild records",
-        ),
+            &mut check_control,
+        )?,
     ];
     if let Some(content_path) = &spec.content_path {
-        entries.push(DiagnosticsAccessReportEntry::new(
+        check_control()?;
+        entries.push(DiagnosticsAccessReportEntry::new_checked(
             write_probe_path(content_path)?.to_path_buf(),
             AccessIntent::Write,
             "index rebuild content",
-        ));
+            &mut check_control,
+        )?);
     }
+    check_control()?;
     Ok(DiagnosticsAccessReports::new(entries))
 }
 
 #[cfg(test)]
 fn retain_rebuild_access_checked(
     spec: &RebuildSpec,
-    check_control: impl FnMut() -> Result<()>,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
-    rebuild_access_reports(spec)?.access_checked(check_control)
+    rebuild_access_reports_checked(spec, &mut check_control)?.access_checked(&mut check_control)
 }
 
 fn run_recovery_plan(spec: PersistentIndexRecoverySpec) -> Result<PersistentIndexPlan> {
@@ -309,36 +321,47 @@ fn run_recovery_plan(spec: PersistentIndexRecoverySpec) -> Result<PersistentInde
 }
 
 fn recovery_access_reports(spec: &PersistentIndexRecoverySpec) -> Result<DiagnosticsAccessReports> {
+    recovery_access_reports_checked(spec, || Ok(()))
+}
+
+fn recovery_access_reports_checked(
+    spec: &PersistentIndexRecoverySpec,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<DiagnosticsAccessReports> {
     Ok(DiagnosticsAccessReports::new(vec![
-        DiagnosticsAccessReportEntry::new(
+        DiagnosticsAccessReportEntry::new_checked(
             spec.root.clone(),
             AccessIntent::Index,
             "persistent index repair root",
-        ),
-        DiagnosticsAccessReportEntry::new(
+            &mut check_control,
+        )?,
+        DiagnosticsAccessReportEntry::new_checked(
             write_probe_path(&spec.records_path)?.to_path_buf(),
             AccessIntent::Write,
             "persistent index repair records",
-        ),
-        DiagnosticsAccessReportEntry::new(
+            &mut check_control,
+        )?,
+        DiagnosticsAccessReportEntry::new_checked(
             write_probe_path(&spec.state_path)?.to_path_buf(),
             AccessIntent::Write,
             "persistent index repair state",
-        ),
-        DiagnosticsAccessReportEntry::new(
+            &mut check_control,
+        )?,
+        DiagnosticsAccessReportEntry::new_checked(
             write_probe_path(&spec.quarantine_dir)?.to_path_buf(),
             AccessIntent::Write,
             "persistent index repair quarantine",
-        ),
+            &mut check_control,
+        )?,
     ]))
 }
 
 #[cfg(test)]
 fn retain_recovery_access_checked(
     spec: &PersistentIndexRecoverySpec,
-    check_control: impl FnMut() -> Result<()>,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
-    recovery_access_reports(spec)?.access_checked(check_control)
+    recovery_access_reports_checked(spec, &mut check_control)?.access_checked(&mut check_control)
 }
 
 #[derive(Clone)]
@@ -350,12 +373,24 @@ struct DiagnosticsAccessReport {
 
 impl DiagnosticsAccessReport {
     fn new(path: PathBuf, intent: AccessIntent) -> Self {
-        let volume_report = VolumeDiscoveryReport::for_containing_path(&path);
-        Self {
+        Self::new_checked(path, intent, || Ok(()))
+            .expect("uncancellable diagnostics access report cannot cancel")
+    }
+
+    fn new_checked(
+        path: PathBuf,
+        intent: AccessIntent,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check_control()?;
+        let volume_report =
+            VolumeDiscoveryReport::for_containing_path_checked(&path, &mut check_control)?;
+        check_control()?;
+        Ok(Self {
             path,
             intent,
             volume_report,
-        }
+        })
     }
 
     fn preflight_volume(&self, worker: &str) -> Result<()> {
@@ -396,10 +431,20 @@ struct DiagnosticsAccessReportEntry {
 
 impl DiagnosticsAccessReportEntry {
     fn new(path: PathBuf, intent: AccessIntent, worker: &'static str) -> Self {
-        Self {
+        Self::new_checked(path, intent, worker, || Ok(()))
+            .expect("uncancellable diagnostics access entry cannot cancel")
+    }
+
+    fn new_checked(
+        path: PathBuf,
+        intent: AccessIntent,
+        worker: &'static str,
+        check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        Ok(Self {
             worker,
-            report: DiagnosticsAccessReport::new(path, intent),
-        }
+            report: DiagnosticsAccessReport::new_checked(path, intent, check_control)?,
+        })
     }
 }
 

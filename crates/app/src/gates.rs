@@ -609,13 +609,26 @@ struct GateAccessReport {
 
 impl GateAccessReport {
     fn new(path: PathBuf, intent: AccessIntent, worker: impl Into<String>) -> Self {
-        let volume_report = VolumeDiscoveryReport::for_containing_path(&path);
-        Self {
+        Self::new_checked(path, intent, worker, || Ok(()))
+            .expect("uncancellable gate access report cannot cancel")
+    }
+
+    fn new_checked(
+        path: PathBuf,
+        intent: AccessIntent,
+        worker: impl Into<String>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check_control()?;
+        let volume_report =
+            VolumeDiscoveryReport::for_containing_path_checked(&path, &mut check_control)?;
+        check_control()?;
+        Ok(Self {
             path,
             intent,
             worker: worker.into(),
             volume_report,
-        }
+        })
     }
 
     fn preflight_volume(&self) -> Result<()> {
@@ -687,43 +700,85 @@ fn pixel_diff_access_reports(
     actual: &Path,
     mask: Option<&Path>,
 ) -> GateAccessReports {
+    pixel_diff_access_reports_checked(expected, actual, mask, || Ok(()))
+        .expect("uncancellable pixel diff access reports cannot cancel")
+}
+
+fn pixel_diff_access_reports_checked(
+    expected: &Path,
+    actual: &Path,
+    mask: Option<&Path>,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<GateAccessReports> {
     let mut entries = vec![
-        GateAccessReport::new(expected.to_path_buf(), AccessIntent::Read, "pixel expected"),
-        GateAccessReport::new(actual.to_path_buf(), AccessIntent::Read, "pixel actual"),
+        GateAccessReport::new_checked(
+            expected.to_path_buf(),
+            AccessIntent::Read,
+            "pixel expected",
+            &mut check_control,
+        )?,
+        GateAccessReport::new_checked(
+            actual.to_path_buf(),
+            AccessIntent::Read,
+            "pixel actual",
+            &mut check_control,
+        )?,
     ];
     if let Some(mask) = mask {
-        entries.push(GateAccessReport::new(
+        check_control()?;
+        entries.push(GateAccessReport::new_checked(
             mask.to_path_buf(),
             AccessIntent::Read,
             "pixel mask",
-        ));
+            &mut check_control,
+        )?);
     }
-    GateAccessReports::new(entries)
+    check_control()?;
+    Ok(GateAccessReports::new(entries))
 }
 
 fn parity_review_access_reports(manifest: &Path, output_dir: &Path) -> Result<GateAccessReports> {
+    parity_review_access_reports_checked(manifest, output_dir, || Ok(()))
+}
+
+fn parity_review_access_reports_checked(
+    manifest: &Path,
+    output_dir: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<GateAccessReports> {
+    check_control()?;
+    let output_probe = write_probe_path(output_dir)?.to_path_buf();
+    check_control()?;
     Ok(GateAccessReports::new(vec![
-        GateAccessReport::new(
+        GateAccessReport::new_checked(
             manifest.to_path_buf(),
             AccessIntent::Read,
             "parity review manifest",
-        ),
-        GateAccessReport::new(
-            write_probe_path(output_dir)?.to_path_buf(),
+            &mut check_control,
+        )?,
+        GateAccessReport::new_checked(
+            output_probe,
             AccessIntent::Write,
             "parity review output",
-        ),
+            &mut check_control,
+        )?,
     ]))
 }
 
 fn workspace_write_access_report(workspace: &Path, worker: &str) -> Result<GateAccessReport> {
-    Ok(GateAccessReport::new(
-        write_probe_path(workspace)?.to_path_buf(),
-        AccessIntent::Write,
-        worker,
-    ))
+    workspace_write_access_report_checked(workspace, worker, || Ok(()))
 }
 
+fn workspace_write_access_report_checked(
+    workspace: &Path,
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<GateAccessReport> {
+    check_control()?;
+    let workspace = write_probe_path(workspace)?.to_path_buf();
+    check_control()?;
+    GateAccessReport::new_checked(workspace, AccessIntent::Write, worker, &mut check_control)
+}
 fn run_workspace_write_task<T>(
     workspace: &Path,
     worker: &'static str,
@@ -752,7 +807,8 @@ fn retain_pixel_diff_access_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
     check_control()?;
-    pixel_diff_access_reports(expected, actual, mask).access_checked(check_control)
+    pixel_diff_access_reports_checked(expected, actual, mask, &mut check_control)?
+        .access_checked(check_control)
 }
 
 #[cfg(test)]
@@ -762,7 +818,8 @@ fn retain_parity_review_access_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
     check_control()?;
-    parity_review_access_reports(manifest, output_dir)?.access_checked(check_control)
+    parity_review_access_reports_checked(manifest, output_dir, &mut check_control)?
+        .access_checked(check_control)
 }
 
 #[cfg(test)]
@@ -772,7 +829,8 @@ fn retain_workspace_write_access_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<ScopedAccessGuard> {
     check_control()?;
-    workspace_write_access_report(path, worker)?.access_checked(check_control)
+    workspace_write_access_report_checked(path, worker, &mut check_control)?
+        .access_checked(check_control)
 }
 
 fn write_probe_path(path: &Path) -> Result<&Path> {
