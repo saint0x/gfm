@@ -569,6 +569,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 stream.try_recv().is_some()
             );
         }
+        "volume-events-cancel-before-recv" => {
+            let stream = VolumeEventStream::start();
+            stream.try_recv_checked(|| Err(GfmError::Cancelled))?;
+            println!("volume-events-cancel-before-recv\tcancelled=false");
+        }
         "volume-events-shutdown-probe" => {
             let stream = VolumeEventStream::start();
             let pending = stream.try_recv().is_some();

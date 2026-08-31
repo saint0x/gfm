@@ -5605,6 +5605,18 @@ fn probes_volume_event_stream_shutdown_from_binary() {
 }
 
 #[test]
+fn volume_event_stream_cancel_before_recv_stops_before_event_poll_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-events-cancel-before-recv")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("operation was cancelled"), "{stderr}");
+}
+
+#[test]
 fn reports_volume_event_invalidation_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-volume-event-invalidation-{}",
