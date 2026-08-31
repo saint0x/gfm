@@ -879,14 +879,27 @@ pub fn security_input_for_path(
     let path = path.into();
     let trust = trust_for_path(&path);
     let is_executable = is_probably_executable(&path);
-    let is_remote = path.starts_with("/Volumes") || path.starts_with("/Network");
     PreviewSecurityInput {
         path,
         kind,
         trust,
         is_executable,
-        is_remote,
+        is_remote: false,
     }
+}
+
+pub fn security_input_for_path_on_volume(
+    path: impl Into<PathBuf>,
+    kind: PreviewKind,
+    volume: Option<&gfm_mac::VolumeDescriptor>,
+) -> PreviewSecurityInput {
+    let mut input = security_input_for_path(path, kind);
+    input.is_remote = volume.is_some_and(volume_descriptor_is_remote);
+    input
+}
+
+fn volume_descriptor_is_remote(volume: &gfm_mac::VolumeDescriptor) -> bool {
+    volume.network || volume.kind == gfm_mac::VolumeKind::Network || volume.local == Some(false)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1516,7 +1529,15 @@ mod tests {
     fn security_sandboxes_untrusted_quicklook_and_blocks_remote_untrusted() {
         let policy = PreviewSecurityPolicy::default();
         let local = security_input_for_path("/tmp/example.app", PreviewKind::QuickLook);
-        let remote = security_input_for_path("/Volumes/share/example.dmg", PreviewKind::Thumbnail);
+        let mut volume = gfm_mac::VolumeDescriptor::for_path("/tmp").unwrap();
+        volume.kind = gfm_mac::VolumeKind::Network;
+        volume.network = true;
+        volume.local = Some(false);
+        let remote = security_input_for_path_on_volume(
+            "/Volumes/share/example.dmg",
+            PreviewKind::Thumbnail,
+            Some(&volume),
+        );
 
         assert_eq!(
             decide_preview_security(&policy, &local),
@@ -1526,6 +1547,13 @@ mod tests {
             decide_preview_security(&policy, &remote),
             PreviewSecurityDecision::Deny
         );
+    }
+
+    #[test]
+    fn security_input_does_not_infer_remote_volume_from_path_label() {
+        let input = security_input_for_path("/Volumes/share/example.dmg", PreviewKind::Thumbnail);
+
+        assert!(!input.is_remote);
     }
 
     #[test]

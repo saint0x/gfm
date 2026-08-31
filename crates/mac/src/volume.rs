@@ -640,10 +640,10 @@ impl VolumeDiscoveryReport {
 
     pub fn discover_checked(mut check: impl FnMut() -> Result<()>) -> Result<Self> {
         check()?;
-        let mut paths = mounted_volume_paths();
+        let mut paths = mounted_volume_paths_checked(&mut check)?;
         check()?;
         if paths.is_empty() {
-            paths = fallback_volume_paths();
+            paths = fallback_volume_paths_checked(&mut check)?;
         }
         Self::from_paths_checked_with_control(paths, check)
     }
@@ -2707,22 +2707,6 @@ fn stable_identity(
     format!("dev:{}:{}", id.0, escape_field(&path.display().to_string()))
 }
 
-fn mounted_volume_paths() -> Vec<PathBuf> {
-    let table = gfm_mac_sys::copy_volume_mount_table();
-    if table.status != NativeVolumeStatus::Available {
-        return Vec::new();
-    }
-    let mut paths = table
-        .entries
-        .into_iter()
-        .filter_map(|entry| entry.mount_point)
-        .filter(|path| finder_visible_mount_path(path))
-        .collect::<Vec<_>>();
-    paths.sort();
-    paths.dedup();
-    paths
-}
-
 fn mounted_volume_paths_checked(mut check: impl FnMut() -> Result<()>) -> Result<Vec<PathBuf>> {
     check()?;
     let table = gfm_mac_sys::copy_volume_mount_table();
@@ -2781,19 +2765,6 @@ fn mounted_volume_paths_for_existing_path_checked(
         }
     }
     Ok(paths)
-}
-
-fn fallback_volume_paths() -> Vec<PathBuf> {
-    let mut paths = vec![PathBuf::from("/")];
-    if let Ok(entries) = fs::read_dir("/Volumes") {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if fallback_volume_path_is_directory(&path) == Some(true) {
-                paths.push(path);
-            }
-        }
-    }
-    paths
 }
 
 fn fallback_volume_paths_checked(mut check: impl FnMut() -> Result<()>) -> Result<Vec<PathBuf>> {
@@ -4050,6 +4021,14 @@ mod tests {
     }
 
     #[test]
+    fn checked_discovery_honors_pre_cancelled_work_before_mount_table_probe() {
+        let err = VolumeDiscoveryReport::discover_checked(|| Err(GfmError::Cancelled))
+            .expect_err("pre-cancelled discovery must stop before mount table probing");
+
+        assert_eq!(err, GfmError::Cancelled);
+    }
+
+    #[test]
     fn fallback_volume_path_directory_probe_preserves_unavailable_state() {
         let root = unique_temp_dir("gfm-volume-fallback-dir-probe");
         let file = root.join("plain.txt");
@@ -4490,7 +4469,7 @@ mod tests {
 
     #[test]
     fn mounted_volume_paths_include_system_root_from_mount_table() {
-        let paths = mounted_volume_paths();
+        let paths = mounted_volume_paths_checked(|| Ok(())).unwrap();
 
         assert!(paths.iter().any(|path| path == Path::new("/")));
         assert!(paths.iter().all(|path| finder_visible_mount_path(path)));
