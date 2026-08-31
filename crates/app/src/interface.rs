@@ -1385,6 +1385,20 @@ fn run_ui_fileprovider_observed_invalidation(
 }
 
 fn read_ui_fileprovider_sidebar_state(path: PathBuf) -> Result<FileProviderStateReport> {
+    read_ui_fileprovider_sidebar_state_with_cancel_after_access(path, false)
+}
+
+#[cfg(test)]
+fn read_ui_fileprovider_sidebar_state_cancel_after_access(
+    path: PathBuf,
+) -> Result<FileProviderStateReport> {
+    read_ui_fileprovider_sidebar_state_with_cancel_after_access(path, true)
+}
+
+fn read_ui_fileprovider_sidebar_state_with_cancel_after_access(
+    path: PathBuf,
+    cancel_after_access: bool,
+) -> Result<FileProviderStateReport> {
     const WORKER: &str = "ui fileprovider sidebar state";
     let access_report = InterfaceAccessReport::new(path.clone(), AccessIntent::Read);
     access_report.preflight_volume(WORKER)?;
@@ -1397,7 +1411,10 @@ fn read_ui_fileprovider_sidebar_state(path: PathBuf) -> Result<FileProviderState
             cancellation.check()?;
             let _access = access_report.access_checked(WORKER, || cancellation.check())?;
             cancellation.check()?;
-            FileProviderStateReport::read_path(&path)
+            if cancel_after_access {
+                cancellation.cancel();
+            }
+            FileProviderStateReport::read_path_checked(&path, || cancellation.check())
         },
     )
 }
@@ -1418,7 +1435,9 @@ fn read_ui_fileprovider_sidebar_invalidation(
             cancellation.check()?;
             let _access = access_report.access_checked(WORKER, || cancellation.check())?;
             cancellation.check()?;
-            FileProviderInvalidationReport::evaluate(&path, previous)
+            FileProviderInvalidationReport::evaluate_checked(&path, previous, || {
+                cancellation.check()
+            })
         },
     )
 }
@@ -1436,7 +1455,7 @@ fn read_ui_fileprovider_conflict(path: PathBuf) -> Result<FileProviderConflictRe
             cancellation.check()?;
             let _access = access_report.access_checked(WORKER, || cancellation.check())?;
             cancellation.check()?;
-            FileProviderConflictReport::read_path(&path)
+            FileProviderConflictReport::read_path_checked(&path, || cancellation.check())
         },
     )
 }
@@ -2197,6 +2216,23 @@ mod tests {
 
         assert_eq!(result.err(), Some(GfmError::Cancelled));
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn ui_fileprovider_sidebar_state_can_cancel_after_access_before_native_read() {
+        let root = env::temp_dir().join(format!(
+            "gfm-interface-fileprovider-read-cancel-after-access-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("Remote.icloud");
+        fs::write(&path, "remote").unwrap();
+
+        let result = read_ui_fileprovider_sidebar_state_cancel_after_access(path);
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

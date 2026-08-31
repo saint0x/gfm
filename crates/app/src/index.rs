@@ -76,7 +76,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             } else {
                 None
             };
-            let access_reports = IndexBuildAccessReports::for_root_and_output(&root, &output)?;
+            let access_reports =
+                IndexBuildAccessReports::for_root_and_output_checked(&root, &output, || Ok(()))?;
             access_reports.preflight_volumes()?;
             let _output_access = access_reports.preflight_output_access_checked(|| Ok(()))?;
             if let Some(retry_probe) = retry_probe.as_ref() {
@@ -119,9 +120,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let root = required_path(args.next(), "index-state requires a root path")?;
             let records = required_path(args.next(), "index-state requires a records path")?;
             let state = required_path(args.next(), "index-state requires a state path")?;
-            let access_reports = IndexRootWriteAccessReports::for_root_and_writes(
+            let access_reports = IndexRootWriteAccessReports::for_root_and_writes_checked(
                 &root,
                 &[(&records, "index records"), (&state, "index state")],
+                || Ok(()),
             )?;
             access_reports.preflight_volumes()?;
             let _write_accesses = access_reports.write_accesses_checked(|| Ok(()))?;
@@ -161,12 +163,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "scan-progress requires a progress checkpoint path",
             )?;
-            let access_reports = IndexRootWriteAccessReports::for_root_and_writes(
+            let access_reports = IndexRootWriteAccessReports::for_root_and_writes_checked(
                 &root,
                 &[
                     (&records, "scan progress records"),
                     (&progress, "scan progress checkpoint"),
                 ],
+                || Ok(()),
             )?;
             access_reports.preflight_volumes()?;
             let _write_accesses = access_reports.write_accesses_checked(|| Ok(()))?;
@@ -204,8 +207,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let visible_burst =
                 parse_usize_arg(args.next(), "fair-scan requires a visible burst size")?;
             let visible_roots = args.map(PathBuf::from).collect::<Vec<_>>();
-            let access_reports =
-                IndexRootReadAccessReports::for_root_and_reads(&root, &visible_roots);
+            let access_reports = IndexRootReadAccessReports::for_root_and_reads_checked(
+                &root,
+                &visible_roots,
+                || Ok(()),
+            )?;
             access_reports.preflight_volumes()?;
             let volume = access_reports.first_volume();
             let report = run_volume_task_cancellable(
@@ -238,12 +244,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .parent()
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("."));
-            let access_reports = IndexRootWriteAccessReports::for_root_and_writes(
+            let access_reports = IndexRootWriteAccessReports::for_root_and_writes_checked(
                 &root,
                 &[
                     (&from, "rename correlation source"),
                     (&to, "rename correlation destination"),
                 ],
+                || Ok(()),
             )?;
             access_reports.preflight_volumes()?;
             let volume = access_reports.first_volume();
@@ -274,12 +281,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .unwrap_or_else(|| PathBuf::from("."));
             let append = args.next();
             let access_reports = if append.is_some() {
-                IndexRootWriteAccessReports::for_root_and_writes(
+                IndexRootWriteAccessReports::for_root_and_writes_checked(
                     &root,
                     &[(&path, "metadata update")],
+                    || Ok(()),
                 )?
             } else {
-                IndexRootWriteAccessReports::for_root_and_writes(&root, &[])?
+                IndexRootWriteAccessReports::for_root_and_writes_checked(&root, &[], || Ok(()))?
             };
             access_reports.preflight_volumes()?;
             let volume = access_reports.first_volume();
@@ -602,8 +610,17 @@ fn run_fsevents_repair_schedule(
     )
 }
 
-fn fsevents_state_access_report(path: &Path, worker: &'static str) -> IndexPathAccessReport {
-    IndexPathAccessReport::new(path.to_path_buf(), AccessIntent::Read, worker)
+fn fsevents_state_access_report_checked(
+    path: &Path,
+    worker: &'static str,
+    check_control: impl FnMut() -> Result<()>,
+) -> Result<IndexPathAccessReport> {
+    IndexPathAccessReport::new_checked(
+        path.to_path_buf(),
+        AccessIntent::Read,
+        worker,
+        check_control,
+    )
 }
 
 #[derive(Clone)]
@@ -614,9 +631,25 @@ struct FseventsCursorCheckpointAccessReports {
 
 impl FseventsCursorCheckpointAccessReports {
     fn for_state_and_cursor(state: &Path, cursor: &Path) -> Result<Self> {
+        Self::for_state_and_cursor_checked(state, cursor, || Ok(()))
+    }
+
+    fn for_state_and_cursor_checked(
+        state: &Path,
+        cursor: &Path,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
         Ok(Self {
-            state: fsevents_state_access_report(state, "fsevents cursor checkpoint state"),
-            cursor: IndexPathAccessReport::write_probe(cursor, "fsevents cursor checkpoint")?,
+            state: fsevents_state_access_report_checked(
+                state,
+                "fsevents cursor checkpoint state",
+                &mut check_control,
+            )?,
+            cursor: IndexPathAccessReport::write_probe_checked(
+                cursor,
+                "fsevents cursor checkpoint",
+                &mut check_control,
+            )?,
         })
     }
 
@@ -638,14 +671,28 @@ struct FseventsCursorResumeAccessReports {
 
 impl FseventsCursorResumeAccessReports {
     fn for_state_and_cursor(state: &Path, cursor: &Path) -> Self {
-        Self {
-            state: fsevents_state_access_report(state, "fsevents cursor resume state"),
-            cursor: IndexPathAccessReport::new(
+        Self::for_state_and_cursor_checked(state, cursor, || Ok(()))
+            .expect("uncancelled fsevents cursor resume access report cannot be cancelled")
+    }
+
+    fn for_state_and_cursor_checked(
+        state: &Path,
+        cursor: &Path,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        Ok(Self {
+            state: fsevents_state_access_report_checked(
+                state,
+                "fsevents cursor resume state",
+                &mut check_control,
+            )?,
+            cursor: IndexPathAccessReport::new_checked(
                 cursor.to_path_buf(),
                 AccessIntent::Read,
                 "fsevents cursor resume",
-            ),
-        }
+                &mut check_control,
+            )?,
+        })
     }
 
     fn preflight_volumes(&self) -> Result<()> {
@@ -667,24 +714,40 @@ struct FseventsRepairScheduleAccessReports {
 
 impl FseventsRepairScheduleAccessReports {
     fn for_paths(state: &Path, cursor: &Path, dropped_roots: &[PathBuf]) -> Self {
-        Self {
-            state: fsevents_state_access_report(state, "fsevents repair schedule state"),
-            cursor: IndexPathAccessReport::new(
+        Self::for_paths_checked(state, cursor, dropped_roots, || Ok(()))
+            .expect("uncancelled fsevents repair access report cannot be cancelled")
+    }
+
+    fn for_paths_checked(
+        state: &Path,
+        cursor: &Path,
+        dropped_roots: &[PathBuf],
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        Ok(Self {
+            state: fsevents_state_access_report_checked(
+                state,
+                "fsevents repair schedule state",
+                &mut check_control,
+            )?,
+            cursor: IndexPathAccessReport::new_checked(
                 cursor.to_path_buf(),
                 AccessIntent::Read,
                 "fsevents repair schedule cursor",
-            ),
+                &mut check_control,
+            )?,
             dropped_roots: dropped_roots
                 .iter()
                 .map(|root| {
-                    IndexPathAccessReport::new(
+                    IndexPathAccessReport::new_checked(
                         root.clone(),
                         AccessIntent::Read,
                         "fsevents repair schedule dropped root",
+                        &mut check_control,
                     )
                 })
-                .collect(),
-        }
+                .collect::<Result<Vec<_>>>()?,
+        })
     }
 
     fn preflight_state_and_cursor_volumes(&self) -> Result<()> {
@@ -780,21 +843,41 @@ struct IndexPathAccessReport {
 
 impl IndexPathAccessReport {
     fn new(path: PathBuf, intent: AccessIntent, worker: &'static str) -> Self {
-        let volume_report = VolumeDiscoveryReport::for_containing_path(&path);
-        Self {
+        Self::new_checked(path, intent, worker, || Ok(()))
+            .expect("uncancelled index access report cannot be cancelled")
+    }
+
+    fn new_checked(
+        path: PathBuf,
+        intent: AccessIntent,
+        worker: &'static str,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check_control()?;
+        let volume_report =
+            VolumeDiscoveryReport::for_containing_path_checked(&path, &mut check_control)?;
+        check_control()?;
+        Ok(Self {
             path,
             intent,
             worker,
             volume_report,
-        }
+        })
     }
 
     fn write_probe(path: &Path, worker: &'static str) -> Result<Self> {
-        Ok(Self::new(
-            write_probe_path(path)?.to_path_buf(),
-            AccessIntent::Write,
-            worker,
-        ))
+        Self::write_probe_checked(path, worker, || Ok(()))
+    }
+
+    fn write_probe_checked(
+        path: &Path,
+        worker: &'static str,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check_control()?;
+        let probe_path = write_probe_path(path)?.to_path_buf();
+        check_control()?;
+        Self::new_checked(probe_path, AccessIntent::Write, worker, check_control)
     }
 
     fn preflight_volume(&self) -> Result<()> {
@@ -852,13 +935,34 @@ struct IndexRootReadAccessReports {
 
 impl IndexRootReadAccessReports {
     fn for_root_and_reads(root: &Path, reads: &[PathBuf]) -> Self {
-        Self {
-            root: IndexPathAccessReport::new(root.to_path_buf(), AccessIntent::Index, "index"),
+        Self::for_root_and_reads_checked(root, reads, || Ok(()))
+            .expect("uncancelled index read access reports cannot be cancelled")
+    }
+
+    fn for_root_and_reads_checked(
+        root: &Path,
+        reads: &[PathBuf],
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        Ok(Self {
+            root: IndexPathAccessReport::new_checked(
+                root.to_path_buf(),
+                AccessIntent::Index,
+                "index",
+                &mut check_control,
+            )?,
             reads: reads
                 .iter()
-                .map(|path| IndexPathAccessReport::new(path.clone(), AccessIntent::Index, "index"))
-                .collect(),
-        }
+                .map(|path| {
+                    IndexPathAccessReport::new_checked(
+                        path.clone(),
+                        AccessIntent::Index,
+                        "index",
+                        &mut check_control,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?,
+        })
     }
 
     fn preflight_volumes(&self) -> Result<()> {
@@ -896,11 +1000,26 @@ impl IndexRootReadAccessReports {
 
 impl IndexRootWriteAccessReports {
     fn for_root_and_writes(root: &Path, writes: &[(&PathBuf, &'static str)]) -> Result<Self> {
+        Self::for_root_and_writes_checked(root, writes, || Ok(()))
+    }
+
+    fn for_root_and_writes_checked(
+        root: &Path,
+        writes: &[(&PathBuf, &'static str)],
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
         Ok(Self {
-            root: IndexPathAccessReport::new(root.to_path_buf(), AccessIntent::Index, "index"),
+            root: IndexPathAccessReport::new_checked(
+                root.to_path_buf(),
+                AccessIntent::Index,
+                "index",
+                &mut check_control,
+            )?,
             writes: writes
                 .iter()
-                .map(|(path, worker)| IndexPathAccessReport::write_probe(path, worker))
+                .map(|(path, worker)| {
+                    IndexPathAccessReport::write_probe_checked(path, worker, &mut check_control)
+                })
                 .collect::<Result<Vec<_>>>()?,
         })
     }
@@ -940,15 +1059,44 @@ impl IndexRootWriteAccessReports {
 
 impl IndexBuildAccessReports {
     fn for_root_and_output(root: &Path, output: &Path) -> Result<Self> {
+        Self::for_root_and_output_checked(root, output, || Ok(()))
+    }
+
+    fn for_root_and_output_checked(
+        root: &Path,
+        output: &Path,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check_control()?;
         let output_probe = write_probe_path(output)?.to_path_buf();
+        check_control()?;
         Ok(Self {
-            root: Self::entry(root.to_path_buf(), AccessIntent::Index, "index"),
-            output: Self::entry(output_probe, AccessIntent::Write, "index records"),
+            root: Self::entry_checked(
+                root.to_path_buf(),
+                AccessIntent::Index,
+                "index",
+                &mut check_control,
+            )?,
+            output: Self::entry_checked(
+                output_probe,
+                AccessIntent::Write,
+                "index records",
+                &mut check_control,
+            )?,
         })
     }
 
     fn entry(path: PathBuf, intent: AccessIntent, worker: &'static str) -> IndexPathAccessReport {
         IndexPathAccessReport::new(path, intent, worker)
+    }
+
+    fn entry_checked(
+        path: PathBuf,
+        intent: AccessIntent,
+        worker: &'static str,
+        check_control: impl FnMut() -> Result<()>,
+    ) -> Result<IndexPathAccessReport> {
+        IndexPathAccessReport::new_checked(path, intent, worker, check_control)
     }
 
     fn preflight_volumes(&self) -> Result<()> {
