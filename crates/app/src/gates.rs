@@ -129,7 +129,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let size = PixelSize::new(width, height);
             let mask_path = args.next().map(PathBuf::from);
             let access_reports =
-                pixel_diff_access_reports(&expected, &actual, mask_path.as_deref());
+                pixel_diff_access_reports(&expected, &actual, mask_path.as_deref())?;
             access_reports.preflight_volumes()?;
             let volume = access_reports.first_volume();
             let report = run_volume_task_cancellable(
@@ -203,7 +203,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let size = PixelSize::new(width, height);
             let mask_path = args.next().map(PathBuf::from);
             let access_reports =
-                pixel_diff_access_reports(&expected, &actual, mask_path.as_deref());
+                pixel_diff_access_reports(&expected, &actual, mask_path.as_deref())?;
             access_reports.preflight_volumes()?;
             let volume = access_reports.first_volume();
             let report = run_volume_task_cancellable(
@@ -247,8 +247,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "parity-gate" => {
             let manifest = required_path(args.next(), "parity-gate requires a manifest path")?;
-            let manifest_access =
-                GateAccessReport::new(manifest.clone(), AccessIntent::Read, "parity gate");
+            let manifest_access = GateAccessReport::new_checked(
+                manifest.clone(),
+                AccessIntent::Read,
+                "parity gate",
+                || Ok(()),
+            )?;
             manifest_access.preflight_volume()?;
             let volume = manifest_access.volume();
             let manifest_for_worker = manifest.clone();
@@ -608,11 +612,6 @@ struct GateAccessReport {
 }
 
 impl GateAccessReport {
-    fn new(path: PathBuf, intent: AccessIntent, worker: impl Into<String>) -> Self {
-        Self::new_checked(path, intent, worker, || Ok(()))
-            .expect("uncancellable gate access report cannot cancel")
-    }
-
     fn new_checked(
         path: PathBuf,
         intent: AccessIntent,
@@ -699,9 +698,8 @@ fn pixel_diff_access_reports(
     expected: &Path,
     actual: &Path,
     mask: Option<&Path>,
-) -> GateAccessReports {
+) -> Result<GateAccessReports> {
     pixel_diff_access_reports_checked(expected, actual, mask, || Ok(()))
-        .expect("uncancellable pixel diff access reports cannot cancel")
 }
 
 fn pixel_diff_access_reports_checked(
