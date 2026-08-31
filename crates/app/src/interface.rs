@@ -860,12 +860,19 @@ fn runtime_operation_conflict_input(
 }
 
 fn native_sidebar_volumes() -> Vec<SidebarVolumeSpec> {
-    VolumeDiscoveryReport::discover()
+    native_sidebar_volumes_checked(|| Ok(()))
+        .expect("non-cancellable native sidebar volume discovery cannot cancel")
+}
+
+fn native_sidebar_volumes_checked(
+    check_control: impl FnMut() -> Result<()>,
+) -> Result<Vec<SidebarVolumeSpec>> {
+    Ok(VolumeDiscoveryReport::discover_checked(check_control)?
         .volumes
         .iter()
         .filter(|volume| volume.kind != VolumeKind::System)
         .map(sidebar_volume_spec)
-        .collect()
+        .collect())
 }
 
 fn sidebar_volume_spec(volume: &VolumeDescriptor) -> SidebarVolumeSpec {
@@ -1451,7 +1458,7 @@ fn app_launch_spec_checked(
     let mut spec = path
         .map(AppLaunchSpec::new)
         .unwrap_or_default()
-        .with_sidebar_volumes(native_sidebar_volumes());
+        .with_sidebar_volumes(native_sidebar_volumes_checked(&mut check_control)?);
     check_control()?;
     if let Some(store) = crate::runtime::runtime_progress_store() {
         let payloads = crate::runtime::runtime_payload_catalog()
@@ -2057,6 +2064,13 @@ mod tests {
 
         assert_eq!(err, GfmError::Cancelled);
         assert!(checks >= 4);
+    }
+
+    #[test]
+    fn native_sidebar_volumes_checked_honors_pre_cancelled_control() {
+        let err = native_sidebar_volumes_checked(|| Err(GfmError::Cancelled)).unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
     }
 
     #[test]

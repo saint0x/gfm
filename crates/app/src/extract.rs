@@ -168,7 +168,7 @@ pub(crate) fn run_adaptive_extraction_worker_cancellable(
 }
 
 pub(crate) fn preflight_adaptive_extraction_worker_scratch() -> Result<Vec<ScopedAccessGuard>> {
-    preflight_worker_scratch_volume()?;
+    preflight_worker_scratch_volume_checked(|| Ok(()))?;
     let stdout_path = worker_temp_path("stdout-probe");
     let stderr_path = worker_temp_path("stderr-probe");
     let permission_state_dir = worker_temp_dir("permission-state-probe");
@@ -179,7 +179,7 @@ pub(crate) fn preflight_adaptive_extraction_worker_scratch_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
     check_control()?;
-    preflight_worker_scratch_volume()?;
+    preflight_worker_scratch_volume_checked(&mut check_control)?;
     check_control()?;
     let stdout_path = worker_temp_path("stdout-probe");
     let stderr_path = worker_temp_path("stderr-probe");
@@ -668,9 +668,13 @@ fn worker_temp_dir(label: &str) -> PathBuf {
     ))
 }
 
-fn preflight_worker_scratch_volume() -> Result<()> {
+fn preflight_worker_scratch_volume_checked(
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    check_control()?;
     let temp_dir = env::temp_dir();
-    let report = VolumeDiscoveryReport::for_containing_path(&temp_dir);
+    let report = VolumeDiscoveryReport::for_containing_path_checked(&temp_dir, &mut check_control)?;
+    check_control()?;
     preflight_volume_access_scope_with_report(
         &temp_dir,
         AccessIntent::Write,

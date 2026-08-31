@@ -495,14 +495,13 @@ impl SidebarEnvironment {
             .filter(|path| !path.as_os_str().is_empty())
             .unwrap_or_else(|| PathBuf::from("/"));
         let icloud_drive = existing_path(home.join("Library/Mobile Documents/com~apple~CloudDocs"));
-        let volumes = discover_volumes();
 
         Self {
             home,
             icloud_drive,
             icloud_state: SidebarCloudState::None,
             icloud_progress_milli: None,
-            volumes,
+            volumes: Vec::new(),
         }
     }
 }
@@ -1047,32 +1046,7 @@ fn row(descriptor: RowDescriptor) -> SidebarItemSpec {
     }
 }
 
-fn discover_volumes() -> Vec<SidebarVolumeSpec> {
-    let mut volumes = fs::read_dir("/Volumes")
-        .ok()
-        .into_iter()
-        .flat_map(|entries| entries.filter_map(Result::ok))
-        .filter_map(|entry| {
-            let path = entry.path();
-            if volume_path_directory_state(&path) != SidebarPathState::Available {
-                return None;
-            }
-            let label = path.file_name()?.to_str()?.to_string();
-            if label.is_empty() || is_system_volume_label(&label) {
-                return None;
-            }
-            Some(SidebarVolumeSpec::from_native_seed(
-                label.clone(),
-                label,
-                path,
-                true,
-            ))
-        })
-        .collect::<Vec<_>>();
-    volumes.sort_by(|left, right| left.label.cmp(&right.label));
-    volumes
-}
-
+#[cfg(test)]
 fn is_system_volume_label(label: &str) -> bool {
     matches!(label, "Macintosh HD" | "Recovery" | "Preboot" | "VM")
 }
@@ -1095,6 +1069,7 @@ fn existing_path(path: PathBuf) -> Option<PathBuf> {
     (path_state(&path) == SidebarPathState::Available).then_some(path)
 }
 
+#[cfg(test)]
 fn volume_path_directory_state(path: &Path) -> SidebarPathState {
     match fs::metadata(path) {
         Ok(metadata) if metadata.is_dir() => SidebarPathState::Available,
