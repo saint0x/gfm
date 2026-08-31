@@ -1,16 +1,13 @@
 use crate::access::{
     preflight_access_scope_checked, preflight_access_scope_checked_with_volume_report,
-    preflight_volume_access_scope, preflight_volume_access_scope_with_report, ScopedAccessGuard,
+    preflight_volume_access_scope_with_report, ScopedAccessGuard,
 };
 use crate::runtime::{
     run_retriable_volume_task_cancellable_with_payload_path,
     run_scheduled_volume_task_cancellable_with_volume_and_payload_path,
     run_volume_task_cancellable,
 };
-use crate::{
-    detect_volume_id, optional_path_arg, parent_volume, parse_required_scheduling_pressure,
-    parse_u64_arg, required_path,
-};
+use crate::{optional_path_arg, parse_required_scheduling_pressure, parse_u64_arg, required_path};
 use gfm_index::{ContentArchiveManifestEntry, ContentMergeTier};
 use gfm_jobs::{Cancellation, Priority};
 use gfm_mac::{AccessIntent, VolumeDiscoveryReport};
@@ -276,16 +273,16 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             } else {
                 None
             };
-            let volume = detect_volume_id(&records)
-                .ok()
-                .or_else(|| parent_volume(&records));
-            preflight_derived_sidecar_rebuild_volumes(&records, &sidecar, &backup_dir)?;
+            let access_reports =
+                derived_sidecar_rebuild_access_reports(&records, &sidecar, &backup_dir)?;
+            access_reports.preflight_volumes()?;
+            let volume = access_reports.first_volume();
             if let Some(retry_probe) = retry_probe.as_ref() {
-                preflight_volume_access_scope(
-                    write_probe_path(retry_probe)?,
+                ArchiveAccessReport::new(
+                    write_probe_path(retry_probe)?.to_path_buf(),
                     AccessIntent::Write,
-                    "derived sidecar rebuild",
-                )?;
+                )
+                .preflight_volume("derived sidecar rebuild")?;
             }
             let rebuild = run_retriable_volume_task_cancellable_with_payload_path(
                 volume,
@@ -305,12 +302,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                             &cancellation,
                         )?;
                     }
-                    let _access = retain_derived_sidecar_rebuild_access_checked(
-                        &records,
-                        &sidecar,
-                        &backup_dir,
-                        || cancellation.check(),
-                    )?;
+                    let _access = access_reports.access_checked(|| cancellation.check())?;
                     cancellation.check()?;
                     rebuild_derived_sidecar_checked(records, kind, sidecar, backup_dir, || {
                         cancellation.check()
@@ -512,16 +504,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 None
             };
             let sidecars = parse_sidecar_paths(args, "sidecar-recover")?;
-            let volume = detect_volume_id(&records)
-                .ok()
-                .or_else(|| parent_volume(&records));
-            preflight_sidecar_recovery_volumes(&records, &sidecars, &quarantine)?;
+            let access_reports = sidecar_recovery_access_reports(&records, &sidecars, &quarantine)?;
+            access_reports.preflight_volumes()?;
+            let volume = access_reports.first_volume();
             if let Some(retry_probe) = retry_probe.as_ref() {
-                preflight_volume_access_scope(
-                    write_probe_path(retry_probe)?,
+                ArchiveAccessReport::new(
+                    write_probe_path(retry_probe)?.to_path_buf(),
                     AccessIntent::Write,
-                    "sidecar repair",
-                )?;
+                )
+                .preflight_volume("sidecar repair")?;
             }
             let report = run_retriable_volume_task_cancellable_with_payload_path(
                 volume,
@@ -541,12 +532,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                             &cancellation,
                         )?;
                     }
-                    let _access = retain_sidecar_recovery_access_checked(
-                        &records,
-                        &sidecars,
-                        &quarantine,
-                        || cancellation.check(),
-                    )?;
+                    let _access = access_reports.access_checked(|| cancellation.check())?;
                     recover_sidecars_checked(&records, &sidecars, &quarantine, || {
                         cancellation.check()
                     })
@@ -573,23 +559,19 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "sidecar repair",
                 pressure,
                 move || {
-                    preflight_sidecar_recovery_volumes(
+                    let access_reports = sidecar_recovery_access_reports(
                         &volume_records,
                         &volume_sidecars,
                         &volume_quarantine,
                     )?;
-                    Ok(detect_volume_id(&volume_records)
-                        .ok()
-                        .or_else(|| parent_volume(&volume_records)))
+                    access_reports.preflight_volumes()?;
+                    Ok(access_reports.first_volume())
                 },
                 records.clone(),
                 move |cancellation| {
-                    let _access = retain_sidecar_recovery_access_checked(
-                        &records,
-                        &sidecars,
-                        &quarantine,
-                        || cancellation.check(),
-                    )?;
+                    let access_reports =
+                        sidecar_recovery_access_reports(&records, &sidecars, &quarantine)?;
+                    let _access = access_reports.access_checked(|| cancellation.check())?;
                     recover_sidecars_checked(&records, &sidecars, &quarantine, || {
                         cancellation.check()
                     })
@@ -686,6 +668,53 @@ struct LabeledArchiveAccessReport {
 }
 
 #[derive(Clone)]
+struct ArchiveAccessReports {
+    entries: Vec<LabeledArchiveAccessReport>,
+}
+
+impl ArchiveAccessReports {
+    fn new(entries: Vec<(PathBuf, AccessIntent, String)>) -> Self {
+        Self {
+            entries: entries
+                .into_iter()
+                .map(|(path, intent, worker)| LabeledArchiveAccessReport {
+                    worker,
+                    report: ArchiveAccessReport::new(path, intent),
+                })
+                .collect(),
+        }
+    }
+
+    fn preflight_volumes(&self) -> Result<()> {
+        for entry in &self.entries {
+            entry.report.preflight_volume(&entry.worker)?;
+        }
+        Ok(())
+    }
+
+    fn access_checked(
+        &self,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<ScopedAccessGuard>> {
+        let mut guards = Vec::with_capacity(self.entries.len());
+        for entry in &self.entries {
+            check_control()?;
+            guards.push(
+                entry
+                    .report
+                    .access_checked(&entry.worker, &mut check_control)?,
+            );
+        }
+        check_control()?;
+        Ok(guards)
+    }
+
+    fn first_volume(&self) -> Option<VolumeId> {
+        self.entries.iter().find_map(|entry| entry.report.volume())
+    }
+}
+
+#[derive(Clone)]
 struct RecordSidecarBuildAccessReports {
     entries: [LabeledArchiveAccessReport; 2],
 }
@@ -765,13 +794,12 @@ fn retain_record_sidecar_build_access_checked(
 
 fn run_archive_rebuild_plan(inputs: ArchiveRebuildInputs) -> Result<Vec<String>> {
     const WORKER: &str = "archive rebuild plan";
-    preflight_archive_rebuild_plan_volumes(&inputs)?;
-    let volume = detect_volume_id(&inputs.records_path)
-        .ok()
-        .or_else(|| parent_volume(&inputs.records_path));
+    let access_reports = archive_rebuild_plan_access_reports(&inputs);
+    access_reports.preflight_volumes()?;
+    let volume = access_reports.first_volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = retain_archive_rebuild_plan_access_checked(&inputs, || cancellation.check())?;
+        let _access = access_reports.access_checked(|| cancellation.check())?;
         cancellation.check()?;
         Ok(plan_archive_rebuilds(&inputs).as_tsv_lines())
     })
@@ -786,16 +814,12 @@ fn run_archive_migration<T>(
 where
     T: Send + 'static,
 {
-    preflight_archive_migration_volumes(&archive, &backup_dir, worker)?;
-    let volume = detect_volume_id(&archive)
-        .ok()
-        .or_else(|| parent_volume(&archive));
+    let access_reports = archive_migration_access_reports(&archive, &backup_dir, worker)?;
+    access_reports.preflight_volumes()?;
+    let volume = access_reports.first_volume();
     run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
         cancellation.check()?;
-        let _access =
-            retain_archive_migration_access_checked(&archive, &backup_dir, worker, || {
-                cancellation.check()
-            })?;
+        let _access = access_reports.access_checked(|| cancellation.check())?;
         cancellation.check()?;
         migrate(archive, backup_dir, &cancellation)
     })
@@ -803,15 +827,12 @@ where
 
 fn run_columns_rebuild_plan(records: PathBuf, columns: PathBuf) -> Result<String> {
     const WORKER: &str = "columns rebuild plan";
-    preflight_columns_rebuild_plan_volumes(&records, &columns)?;
-    let volume = detect_volume_id(&records)
-        .ok()
-        .or_else(|| parent_volume(&records));
+    let access_reports = columns_rebuild_plan_access_reports(&records, &columns);
+    access_reports.preflight_volumes()?;
+    let volume = access_reports.first_volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = retain_columns_rebuild_plan_access_checked(&records, &columns, || {
-            cancellation.check()
-        })?;
+        let _access = access_reports.access_checked(|| cancellation.check())?;
         cancellation.check()?;
         Ok(plan_columns_archive_rebuild(records, columns).as_tsv())
     })
@@ -823,16 +844,12 @@ fn run_columns_rebuild(
     backup_dir: PathBuf,
 ) -> Result<ColumnsArchiveRebuild> {
     const WORKER: &str = "columns rebuild";
-    preflight_columns_rebuild_volumes(&records, &columns, &backup_dir)?;
-    let volume = detect_volume_id(&records)
-        .ok()
-        .or_else(|| parent_volume(&records));
+    let access_reports = columns_rebuild_access_reports(&records, &columns, &backup_dir)?;
+    access_reports.preflight_volumes()?;
+    let volume = access_reports.first_volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access =
-            retain_columns_rebuild_access_checked(&records, &columns, &backup_dir, || {
-                cancellation.check()
-            })?;
+        let _access = access_reports.access_checked(|| cancellation.check())?;
         cancellation.check()?;
         rebuild_columns_archive(records, columns, backup_dir)
     })
@@ -844,16 +861,12 @@ fn run_derived_sidecar_rebuild_plan(
     sidecar: PathBuf,
 ) -> Result<String> {
     const WORKER: &str = "derived sidecar rebuild plan";
-    preflight_derived_sidecar_rebuild_plan_volumes(&records, &sidecar)?;
-    let volume = detect_volume_id(&records)
-        .ok()
-        .or_else(|| parent_volume(&records));
+    let access_reports = derived_sidecar_rebuild_plan_access_reports(&records, &sidecar);
+    access_reports.preflight_volumes()?;
+    let volume = access_reports.first_volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access =
-            retain_derived_sidecar_rebuild_plan_access_checked(&records, &sidecar, || {
-                cancellation.check()
-            })?;
+        let _access = access_reports.access_checked(|| cancellation.check())?;
         cancellation.check()?;
         Ok(plan_derived_sidecar_rebuild(records, kind, sidecar).as_tsv())
     })
@@ -864,15 +877,12 @@ fn run_sidecar_recovery_plan(
     sidecars: SidecarPaths,
 ) -> Result<SidecarRecoveryPlan> {
     const WORKER: &str = "sidecar repair plan";
-    preflight_sidecar_recovery_plan_volumes(&records, &sidecars)?;
-    let volume = detect_volume_id(&records)
-        .ok()
-        .or_else(|| parent_volume(&records));
+    let access_reports = sidecar_recovery_plan_access_reports(&records, &sidecars);
+    access_reports.preflight_volumes()?;
+    let volume = access_reports.first_volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = retain_sidecar_recovery_plan_access_checked(&records, &sidecars, || {
-            cancellation.check()
-        })?;
+        let _access = access_reports.access_checked(|| cancellation.check())?;
         cancellation.check()?;
         plan_sidecar_recovery_checked(&records, &sidecars, || cancellation.check())
     })
@@ -902,218 +912,107 @@ where
     })
 }
 
-fn retain_archive_migration_access_checked(
+fn archive_migration_access_reports(
     archive: &Path,
     backup_dir: &Path,
     worker: &str,
-    mut check_control: impl FnMut() -> Result<()>,
-) -> Result<Vec<ScopedAccessGuard>> {
-    check_control()?;
-    let archive_write_probe = write_probe_path(archive)?.to_path_buf();
-    check_control()?;
-    let backup_write_probe = write_probe_path(backup_dir)?.to_path_buf();
-    check_control()?;
-    let archive_worker = format!("{worker} archive");
-    let backup_worker = format!("{worker} backup");
-    Ok(vec![
-        preflight_access_scope_checked(
-            archive,
+) -> Result<ArchiveAccessReports> {
+    Ok(ArchiveAccessReports::new(vec![
+        (
+            archive.to_path_buf(),
             AccessIntent::Read,
-            &archive_worker,
-            &mut check_control,
-        )?,
-        preflight_access_scope_checked(
-            &archive_write_probe,
+            format!("{worker} archive"),
+        ),
+        (
+            write_probe_path(archive)?.to_path_buf(),
             AccessIntent::Write,
-            &archive_worker,
-            &mut check_control,
-        )?,
-        preflight_access_scope_checked(
-            &backup_write_probe,
+            format!("{worker} archive"),
+        ),
+        (
+            write_probe_path(backup_dir)?.to_path_buf(),
             AccessIntent::Write,
-            &backup_worker,
-            &mut check_control,
-        )?,
+            format!("{worker} backup"),
+        ),
+    ]))
+}
+
+fn columns_rebuild_plan_access_reports(records: &Path, columns: &Path) -> ArchiveAccessReports {
+    ArchiveAccessReports::new(vec![
+        (
+            records.to_path_buf(),
+            AccessIntent::Read,
+            "columns rebuild plan records".to_string(),
+        ),
+        (
+            archive_probe_path(columns).to_path_buf(),
+            AccessIntent::Read,
+            "columns rebuild plan columns".to_string(),
+        ),
     ])
 }
 
-fn preflight_archive_migration_volumes(
-    archive: &Path,
-    backup_dir: &Path,
-    worker: &str,
-) -> Result<()> {
-    preflight_volume_access_scope(archive, AccessIntent::Read, &format!("{worker} archive"))?;
-    preflight_volume_access_scope(
-        write_probe_path(archive)?,
-        AccessIntent::Write,
-        &format!("{worker} archive"),
-    )?;
-    preflight_volume_access_scope(
-        write_probe_path(backup_dir)?,
-        AccessIntent::Write,
-        &format!("{worker} backup"),
-    )
-}
-
-fn retain_columns_rebuild_plan_access_checked(
-    records: &Path,
-    columns: &Path,
-    mut check_control: impl FnMut() -> Result<()>,
-) -> Result<Vec<ScopedAccessGuard>> {
-    check_control()?;
-    let column_probe = archive_probe_path(columns).to_path_buf();
-    check_control()?;
-    Ok(vec![
-        preflight_access_scope_checked(
-            records,
-            AccessIntent::Read,
-            "columns rebuild plan records",
-            &mut check_control,
-        )?,
-        preflight_access_scope_checked(
-            &column_probe,
-            AccessIntent::Read,
-            "columns rebuild plan columns",
-            &mut check_control,
-        )?,
-    ])
-}
-
-fn preflight_columns_rebuild_plan_volumes(records: &Path, columns: &Path) -> Result<()> {
-    preflight_volume_access_scope(records, AccessIntent::Read, "columns rebuild plan records")?;
-    preflight_volume_access_scope(
-        archive_probe_path(columns),
-        AccessIntent::Read,
-        "columns rebuild plan columns",
-    )
-}
-
-fn retain_columns_rebuild_access_checked(
+fn columns_rebuild_access_reports(
     records: &Path,
     columns: &Path,
     backup_dir: &Path,
-    mut check_control: impl FnMut() -> Result<()>,
-) -> Result<Vec<ScopedAccessGuard>> {
-    check_control()?;
-    let columns_read_probe = archive_probe_path(columns).to_path_buf();
-    check_control()?;
-    let columns_write_probe = write_probe_path(columns)?.to_path_buf();
-    check_control()?;
-    let backup_write_probe = write_probe_path(backup_dir)?.to_path_buf();
-    check_control()?;
-    Ok(vec![
-        preflight_access_scope_checked(
-            records,
+) -> Result<ArchiveAccessReports> {
+    Ok(ArchiveAccessReports::new(vec![
+        (
+            records.to_path_buf(),
             AccessIntent::Read,
-            "columns rebuild records",
-            &mut check_control,
-        )?,
-        preflight_access_scope_checked(
-            &columns_read_probe,
+            "columns rebuild records".to_string(),
+        ),
+        (
+            archive_probe_path(columns).to_path_buf(),
             AccessIntent::Read,
-            "columns rebuild columns",
-            &mut check_control,
-        )?,
-        preflight_access_scope_checked(
-            &columns_write_probe,
+            "columns rebuild columns".to_string(),
+        ),
+        (
+            write_probe_path(columns)?.to_path_buf(),
             AccessIntent::Write,
-            "columns rebuild output",
-            &mut check_control,
-        )?,
-        preflight_access_scope_checked(
-            &backup_write_probe,
+            "columns rebuild output".to_string(),
+        ),
+        (
+            write_probe_path(backup_dir)?.to_path_buf(),
             AccessIntent::Write,
-            "columns rebuild backup",
-            &mut check_control,
-        )?,
-    ])
+            "columns rebuild backup".to_string(),
+        ),
+    ]))
 }
 
-fn preflight_columns_rebuild_volumes(
-    records: &Path,
-    columns: &Path,
-    backup_dir: &Path,
-) -> Result<()> {
-    preflight_volume_access_scope(records, AccessIntent::Read, "columns rebuild records")?;
-    preflight_volume_access_scope(
-        archive_probe_path(columns),
-        AccessIntent::Read,
-        "columns rebuild columns",
-    )?;
-    preflight_volume_access_scope(
-        write_probe_path(columns)?,
-        AccessIntent::Write,
-        "columns rebuild output",
-    )?;
-    preflight_volume_access_scope(
-        write_probe_path(backup_dir)?,
-        AccessIntent::Write,
-        "columns rebuild backup",
-    )
-}
-
-fn retain_derived_sidecar_rebuild_plan_access_checked(
+fn derived_sidecar_rebuild_plan_access_reports(
     records: &Path,
     sidecar: &Path,
-    mut check_control: impl FnMut() -> Result<()>,
-) -> Result<Vec<ScopedAccessGuard>> {
-    check_control()?;
-    let sidecar_probe = archive_probe_path(sidecar).to_path_buf();
-    check_control()?;
-    Ok(vec![
-        preflight_access_scope_checked(
-            records,
+) -> ArchiveAccessReports {
+    ArchiveAccessReports::new(vec![
+        (
+            records.to_path_buf(),
             AccessIntent::Read,
-            "derived sidecar rebuild plan records",
-            &mut check_control,
-        )?,
-        preflight_access_scope_checked(
-            &sidecar_probe,
+            "derived sidecar rebuild plan records".to_string(),
+        ),
+        (
+            archive_probe_path(sidecar).to_path_buf(),
             AccessIntent::Read,
-            "derived sidecar rebuild plan sidecar",
-            &mut check_control,
-        )?,
+            "derived sidecar rebuild plan sidecar".to_string(),
+        ),
     ])
 }
 
-fn preflight_derived_sidecar_rebuild_plan_volumes(records: &Path, sidecar: &Path) -> Result<()> {
-    preflight_volume_access_scope(
-        records,
-        AccessIntent::Read,
-        "derived sidecar rebuild plan records",
-    )?;
-    preflight_volume_access_scope(
-        archive_probe_path(sidecar),
-        AccessIntent::Read,
-        "derived sidecar rebuild plan sidecar",
-    )
-}
-
+#[cfg(test)]
 fn retain_archive_rebuild_plan_access_checked(
     inputs: &ArchiveRebuildInputs,
-    mut check_control: impl FnMut() -> Result<()>,
+    check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
-    let mut guards = Vec::new();
-    for (path, worker) in archive_rebuild_plan_read_paths(inputs) {
-        check_control()?;
-        let probe = path.to_path_buf();
-        check_control()?;
-        guards.push(preflight_access_scope_checked(
-            &probe,
-            AccessIntent::Read,
-            worker,
-            &mut check_control,
-        )?);
-    }
-    check_control()?;
-    Ok(guards)
+    archive_rebuild_plan_access_reports(inputs).access_checked(check_control)
 }
 
-fn preflight_archive_rebuild_plan_volumes(inputs: &ArchiveRebuildInputs) -> Result<()> {
-    for (path, worker) in archive_rebuild_plan_read_paths(inputs) {
-        preflight_volume_access_scope(path, AccessIntent::Read, worker)?;
-    }
-    Ok(())
+fn archive_rebuild_plan_access_reports(inputs: &ArchiveRebuildInputs) -> ArchiveAccessReports {
+    ArchiveAccessReports::new(
+        archive_rebuild_plan_read_paths(inputs)
+            .into_iter()
+            .map(|(path, worker)| (path.to_path_buf(), AccessIntent::Read, worker.to_string()))
+            .collect(),
+    )
 }
 
 fn archive_rebuild_plan_read_paths(inputs: &ArchiveRebuildInputs) -> Vec<(&Path, &'static str)> {
@@ -1164,155 +1063,93 @@ fn archive_rebuild_plan_read_paths(inputs: &ArchiveRebuildInputs) -> Vec<(&Path,
     paths
 }
 
-fn retain_derived_sidecar_rebuild_access_checked(
+fn derived_sidecar_rebuild_access_reports(
     records: &Path,
     sidecar: &Path,
     backup_dir: &Path,
-    mut check_control: impl FnMut() -> Result<()>,
-) -> Result<Vec<ScopedAccessGuard>> {
-    check_control()?;
-    let sidecar_write_probe = write_probe_path(sidecar)?.to_path_buf();
-    check_control()?;
-    let backup_write_probe = write_probe_path(backup_dir)?.to_path_buf();
-    check_control()?;
-    Ok(vec![
-        preflight_access_scope_checked(
-            records,
+) -> Result<ArchiveAccessReports> {
+    Ok(ArchiveAccessReports::new(vec![
+        (
+            records.to_path_buf(),
             AccessIntent::Read,
-            "derived sidecar rebuild records",
-            &mut check_control,
-        )?,
-        preflight_access_scope_checked(
-            &sidecar_write_probe,
+            "derived sidecar rebuild records".to_string(),
+        ),
+        (
+            write_probe_path(sidecar)?.to_path_buf(),
             AccessIntent::Write,
-            "derived sidecar rebuild output",
-            &mut check_control,
-        )?,
-        preflight_access_scope_checked(
-            &backup_write_probe,
+            "derived sidecar rebuild output".to_string(),
+        ),
+        (
+            write_probe_path(backup_dir)?.to_path_buf(),
             AccessIntent::Write,
-            "derived sidecar rebuild backup",
-            &mut check_control,
-        )?,
-    ])
+            "derived sidecar rebuild backup".to_string(),
+        ),
+    ]))
 }
 
-fn preflight_derived_sidecar_rebuild_volumes(
-    records: &Path,
-    sidecar: &Path,
-    backup_dir: &Path,
-) -> Result<()> {
-    preflight_volume_access_scope(
-        records,
-        AccessIntent::Read,
-        "derived sidecar rebuild records",
-    )?;
-    preflight_volume_access_scope(
-        write_probe_path(sidecar)?,
-        AccessIntent::Write,
-        "derived sidecar rebuild output",
-    )?;
-    preflight_volume_access_scope(
-        write_probe_path(backup_dir)?,
-        AccessIntent::Write,
-        "derived sidecar rebuild backup",
-    )
-}
-
+#[cfg(test)]
 fn retain_sidecar_recovery_plan_access_checked(
     records: &Path,
     sidecars: &SidecarPaths,
-    mut check_control: impl FnMut() -> Result<()>,
+    check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
-    check_control()?;
-    let mut guards = vec![preflight_access_scope_checked(
-        records,
+    sidecar_recovery_plan_access_reports(records, sidecars).access_checked(check_control)
+}
+
+fn sidecar_recovery_plan_access_reports(
+    records: &Path,
+    sidecars: &SidecarPaths,
+) -> ArchiveAccessReports {
+    let mut entries = vec![(
+        records.to_path_buf(),
         AccessIntent::Read,
-        "sidecar repair plan records",
-        &mut check_control,
-    )?];
-    for path in sidecar_paths(sidecars) {
-        check_control()?;
-        guards.push(preflight_access_scope_checked(
-            archive_probe_path(path),
+        "sidecar repair plan records".to_string(),
+    )];
+    entries.extend(sidecar_paths(sidecars).map(|path| {
+        (
+            archive_probe_path(path).to_path_buf(),
             AccessIntent::Read,
-            "sidecar repair plan sidecar",
-            &mut check_control,
-        )?);
-    }
-    check_control()?;
-    Ok(guards)
+            "sidecar repair plan sidecar".to_string(),
+        )
+    }));
+    ArchiveAccessReports::new(entries)
 }
 
-fn preflight_sidecar_recovery_plan_volumes(records: &Path, sidecars: &SidecarPaths) -> Result<()> {
-    preflight_volume_access_scope(records, AccessIntent::Read, "sidecar repair plan records")?;
-    for path in sidecar_paths(sidecars) {
-        preflight_volume_access_scope(
-            archive_probe_path(path),
-            AccessIntent::Read,
-            "sidecar repair plan sidecar",
-        )?;
-    }
-    Ok(())
-}
-
+#[cfg(test)]
 fn retain_sidecar_recovery_access_checked(
     records: &Path,
     sidecars: &SidecarPaths,
     quarantine: &Path,
-    mut check_control: impl FnMut() -> Result<()>,
+    check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
-    check_control()?;
-    let quarantine_probe = write_probe_path(quarantine)?.to_path_buf();
-    check_control()?;
-    let mut guards = vec![
-        preflight_access_scope_checked(
-            records,
-            AccessIntent::Read,
-            "sidecar repair records",
-            &mut check_control,
-        )?,
-        preflight_access_scope_checked(
-            &quarantine_probe,
-            AccessIntent::Write,
-            "sidecar repair quarantine",
-            &mut check_control,
-        )?,
-    ];
-    for path in sidecar_paths(sidecars) {
-        check_control()?;
-        let output_probe = write_probe_path(path)?.to_path_buf();
-        check_control()?;
-        guards.push(preflight_access_scope_checked(
-            &output_probe,
-            AccessIntent::Write,
-            "sidecar repair output",
-            &mut check_control,
-        )?);
-    }
-    check_control()?;
-    Ok(guards)
+    sidecar_recovery_access_reports(records, sidecars, quarantine)?.access_checked(check_control)
 }
 
-fn preflight_sidecar_recovery_volumes(
+fn sidecar_recovery_access_reports(
     records: &Path,
     sidecars: &SidecarPaths,
     quarantine: &Path,
-) -> Result<()> {
-    preflight_volume_access_scope(records, AccessIntent::Read, "sidecar repair records")?;
-    preflight_volume_access_scope(
-        write_probe_path(quarantine)?,
-        AccessIntent::Write,
-        "sidecar repair quarantine",
-    )?;
-    for path in sidecar_paths(sidecars) {
-        preflight_volume_access_scope(
-            write_probe_path(path)?,
+) -> Result<ArchiveAccessReports> {
+    let mut entries = vec![
+        (
+            records.to_path_buf(),
+            AccessIntent::Read,
+            "sidecar repair records".to_string(),
+        ),
+        (
+            write_probe_path(quarantine)?.to_path_buf(),
             AccessIntent::Write,
-            "sidecar repair output",
-        )?;
+            "sidecar repair quarantine".to_string(),
+        ),
+    ];
+    for path in sidecar_paths(sidecars) {
+        entries.push((
+            write_probe_path(path)?.to_path_buf(),
+            AccessIntent::Write,
+            "sidecar repair output".to_string(),
+        ));
     }
-    Ok(())
+    Ok(ArchiveAccessReports::new(entries))
 }
 
 fn sidecar_paths(sidecars: &SidecarPaths) -> impl Iterator<Item = &Path> {
