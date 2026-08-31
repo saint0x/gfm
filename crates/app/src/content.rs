@@ -5,9 +5,8 @@ use crate::access::{
     ScopedAccessGuard,
 };
 use crate::extract::{
-    extraction_budget_profile, extraction_budget_profile_checked,
-    preflight_adaptive_extraction_worker_scratch, read_extraction_quarantine_cancellable,
-    run_adaptive_extraction_worker_cancellable,
+    extraction_budget_profile_checked, preflight_adaptive_extraction_worker_scratch,
+    read_extraction_quarantine_cancellable, run_adaptive_extraction_worker_cancellable,
     run_quarantined_adaptive_extraction_worker_cancellable, ADAPTIVE_WORKER_TIMEOUT,
 };
 use crate::runtime::{
@@ -151,8 +150,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .parent()
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|| PathBuf::from("."));
-            let extractor =
-                Extractor::with_budget_profile(extraction_budget_profile(&root, pressure));
+            let extractor = Extractor::with_budget_profile(extraction_budget_profile_checked(
+                &root,
+                pressure,
+                || Ok(()),
+            )?);
             print!(
                 "{}",
                 run_extraction_report(path, "adaptive content extraction", extractor, None,)?

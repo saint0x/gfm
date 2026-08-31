@@ -27,14 +27,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub(crate) const ADAPTIVE_WORKER_TIMEOUT: Duration = Duration::from_secs(10);
 
-pub(crate) fn extraction_budget_profile(
-    root: &Path,
-    pressure: SchedulingPressure,
-) -> ExtractionBudgetProfile {
-    extraction_budget_profile_checked(root, pressure, || Ok(()))
-        .expect("uncancellable extraction budget profile cannot cancel")
-}
-
 pub(crate) fn extraction_budget_profile_checked(
     root: &Path,
     pressure: SchedulingPressure,

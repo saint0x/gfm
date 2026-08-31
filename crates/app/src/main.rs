@@ -124,16 +124,18 @@ fn run() -> Result<()> {
                 args.next(),
                 "permission-invalidation-compare requires a current state path",
             )?;
-            let previous_access = ControlPathAccessReport::new(
+            let previous_access = ControlPathAccessReport::new_checked(
                 previous_path.clone(),
                 AccessIntent::Read,
                 "permission invalidation previous state",
-            );
-            let current_access = ControlPathAccessReport::new(
+                || Ok(()),
+            )?;
+            let current_access = ControlPathAccessReport::new_checked(
                 current_path.clone(),
                 AccessIntent::Read,
                 "permission invalidation current state",
-            );
+                || Ok(()),
+            )?;
             previous_access.preflight_volume()?;
             current_access.preflight_volume()?;
             let _previous_guard = previous_access.access_checked(|| Ok(()))?;
@@ -484,11 +486,6 @@ struct ControlPathAccessReport {
 }
 
 impl ControlPathAccessReport {
-    fn new(path: PathBuf, intent: AccessIntent, worker: &'static str) -> Self {
-        Self::new_checked(path, intent, worker, || Ok(()))
-            .expect("uncancellable control path access report cannot cancel")
-    }
-
     fn new_checked(
         path: PathBuf,
         intent: AccessIntent,
@@ -558,7 +555,7 @@ fn run_config_init(store: &ConfigStore) -> Result<GfmConfig> {
 
 fn run_config_check(store: &ConfigStore) -> Result<GfmConfig> {
     const WORKER: &str = "config check";
-    let access_report = config_read_access_report(store, WORKER);
+    let access_report = config_read_access_report(store, WORKER)?;
     access_report.preflight_volume()?;
     let volume = access_report.volume();
     let store = store.clone();
@@ -574,7 +571,7 @@ fn run_config_check(store: &ConfigStore) -> Result<GfmConfig> {
 
 fn run_config_dump(store: &ConfigStore) -> Result<GfmConfig> {
     const WORKER: &str = "config dump";
-    let access_report = config_read_access_report(store, WORKER);
+    let access_report = config_read_access_report(store, WORKER)?;
     access_report.preflight_volume()?;
     let volume = access_report.volume();
     let store = store.clone();
@@ -588,23 +585,33 @@ fn run_config_dump(store: &ConfigStore) -> Result<GfmConfig> {
 
 fn config_init_access_report(store: &ConfigStore) -> Result<ControlPathAccessReport> {
     let probe = if config_path_exists(store.path())? {
-        ControlPathAccessReport::new(
+        ControlPathAccessReport::new_checked(
             store.path().to_path_buf(),
             AccessIntent::Read,
             "config init",
-        )
+            || Ok(()),
+        )?
     } else {
-        ControlPathAccessReport::new(
+        ControlPathAccessReport::new_checked(
             config_write_probe_path(store.path())?.to_path_buf(),
             AccessIntent::Write,
             "config init",
-        )
+            || Ok(()),
+        )?
     };
     Ok(probe)
 }
 
-fn config_read_access_report(store: &ConfigStore, worker: &'static str) -> ControlPathAccessReport {
-    ControlPathAccessReport::new(store.path().to_path_buf(), AccessIntent::Read, worker)
+fn config_read_access_report(
+    store: &ConfigStore,
+    worker: &'static str,
+) -> Result<ControlPathAccessReport> {
+    ControlPathAccessReport::new_checked(
+        store.path().to_path_buf(),
+        AccessIntent::Read,
+        worker,
+        || Ok(()),
+    )
 }
 
 fn config_path_exists(path: &Path) -> Result<bool> {

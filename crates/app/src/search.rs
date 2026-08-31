@@ -3,7 +3,7 @@ use crate::access::{
     ScopedAccessGuard,
 };
 use crate::content::run_content_search;
-use crate::extract::extraction_budget_profile;
+use crate::extract::extraction_budget_profile_checked;
 use crate::runtime::run_retriable_volume_task_cancellable_with_payload_path;
 use crate::{parse_required_scheduling_pressure, parse_usize_arg, required_path, required_string};
 use gfm_content::Extractor;
@@ -165,8 +165,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "search-content-adaptive requires a query string",
             )?;
             let pressure = parse_required_scheduling_pressure(args, "content search")?;
-            let extractor =
-                Extractor::with_budget_profile(extraction_budget_profile(&root, pressure));
+            let extractor = Extractor::with_budget_profile(extraction_budget_profile_checked(
+                &root,
+                pressure,
+                || Ok(()),
+            )?);
             let (indexed, hits) = run_content_search(root, query, extractor)?;
             eprintln!("content-indexed {indexed} files");
             for hit in hits {
@@ -219,8 +222,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .parent()
                 .map(Path::to_path_buf)
                 .unwrap_or_else(|| PathBuf::from("."));
-            let extractor =
-                Extractor::with_budget_profile(extraction_budget_profile(&root, pressure));
+            let extractor = Extractor::with_budget_profile(extraction_budget_profile_checked(
+                &root,
+                pressure,
+                || Ok(()),
+            )?);
             let output = run_content_index_search(
                 records,
                 content,
