@@ -634,10 +634,6 @@ pub struct VolumeDiscoveryReport {
 }
 
 impl VolumeDiscoveryReport {
-    pub fn discover() -> Self {
-        Self::discover_checked(|| Ok(())).expect("non-cancellable volume discovery cannot cancel")
-    }
-
     pub fn discover_checked(mut check: impl FnMut() -> Result<()>) -> Result<Self> {
         check()?;
         let mut paths = mounted_volume_paths_checked(&mut check)?;
@@ -1416,10 +1412,6 @@ impl VolumeEventState {
         };
         state.rebuild_indexes();
         state
-    }
-
-    pub fn discover() -> Self {
-        Self::new(VolumeDiscoveryReport::discover())
     }
 
     pub fn report(&self) -> &VolumeDiscoveryReport {
