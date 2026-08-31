@@ -1,11 +1,12 @@
 use crate::{
     cloud_materialization_for_state, decide_cloud_preview_for_materialization, decide_invalidation,
     decide_preview_security, preview_invalidation_for_fileprovider, security_input_for_path,
-    CloudPreviewDecision, PreviewInvalidationDecision, PreviewInvalidationEvent, PreviewKind,
-    PreviewRequestKey, PreviewScheduler, PreviewSchedulingPolicy, PreviewSecurityDecision,
-    PreviewSecurityPolicy, PreviewTask, PreviewTaskDecision, Rect, Viewport,
+    volume_descriptor_is_remote_for_preview, CloudPreviewDecision, PreviewInvalidationDecision,
+    PreviewInvalidationEvent, PreviewKind, PreviewRequestKey, PreviewScheduler,
+    PreviewSchedulingPolicy, PreviewSecurityDecision, PreviewSecurityPolicy, PreviewTask,
+    PreviewTaskDecision, Rect, Viewport,
 };
-use gfm_mac::{CloudMaterialization, CloudStorageState};
+use gfm_mac::{CloudMaterialization, CloudStorageState, VolumeDescriptor};
 use gfm_types::Result;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,8 +78,8 @@ impl QuickLookSessionInput {
         self
     }
 
-    pub fn with_remote_volume(mut self, is_remote: bool) -> Self {
-        self.is_remote = is_remote;
+    pub fn with_volume_descriptor(mut self, volume: Option<&VolumeDescriptor>) -> Self {
+        self.is_remote = volume.is_some_and(volume_descriptor_is_remote_for_preview);
         self
     }
 
@@ -276,9 +277,10 @@ mod tests {
 
     #[test]
     fn descriptor_remote_untrusted_items_are_denied() {
+        let volume = remote_volume();
         let contract = QuickLookSessionContract::from_input(
             &PreviewSecurityPolicy::default(),
-            input("Installer.dmg", Rect::new(0, 0, 400, 300)).with_remote_volume(true),
+            input("Installer.dmg", Rect::new(0, 0, 400, 300)).with_volume_descriptor(Some(&volume)),
         )
         .unwrap();
 
@@ -490,6 +492,14 @@ mod tests {
             rect,
             Viewport::new(Rect::new(0, 0, 1_000, 800), 256),
         )
+    }
+
+    fn remote_volume() -> VolumeDescriptor {
+        let mut volume = VolumeDescriptor::for_path("/tmp").unwrap();
+        volume.kind = gfm_mac::VolumeKind::Network;
+        volume.network = true;
+        volume.local = Some(false);
+        volume
     }
 
     fn fileprovider_report(
