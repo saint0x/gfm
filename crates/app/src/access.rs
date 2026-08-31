@@ -137,14 +137,6 @@ pub(crate) fn preflight_access_scope_checked_with_volume_report(
     }
 }
 
-pub(crate) fn preflight_volume_access_scope(
-    path: &Path,
-    intent: AccessIntent,
-    worker: &str,
-) -> Result<()> {
-    preflight_volume_access(path, intent, worker)
-}
-
 pub(crate) fn preflight_volume_access_scope_with_report(
     path: &Path,
     intent: AccessIntent,

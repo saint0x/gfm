@@ -1,5 +1,8 @@
 use crate::{
-    access::{preflight_access_scope_checked, preflight_volume_access_scope, ScopedAccessGuard},
+    access::{
+        preflight_access_scope_checked, preflight_volume_access_scope_with_report,
+        ScopedAccessGuard,
+    },
     permission_refresh::refresh_permission_state_at_path_checked,
 };
 use gfm_content::{
@@ -165,7 +168,7 @@ pub(crate) fn run_adaptive_extraction_worker_cancellable(
 }
 
 pub(crate) fn preflight_adaptive_extraction_worker_scratch() -> Result<Vec<ScopedAccessGuard>> {
-    preflight_volume_access_scope(&env::temp_dir(), AccessIntent::Write, "adaptive extraction")?;
+    preflight_worker_scratch_volume()?;
     let stdout_path = worker_temp_path("stdout-probe");
     let stderr_path = worker_temp_path("stderr-probe");
     let permission_state_dir = worker_temp_dir("permission-state-probe");
@@ -176,7 +179,7 @@ pub(crate) fn preflight_adaptive_extraction_worker_scratch_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
     check_control()?;
-    preflight_volume_access_scope(&env::temp_dir(), AccessIntent::Write, "adaptive extraction")?;
+    preflight_worker_scratch_volume()?;
     check_control()?;
     let stdout_path = worker_temp_path("stdout-probe");
     let stderr_path = worker_temp_path("stderr-probe");
@@ -663,6 +666,17 @@ fn worker_temp_dir(label: &str) -> PathBuf {
         std::process::id(),
         monotonic_nanos()
     ))
+}
+
+fn preflight_worker_scratch_volume() -> Result<()> {
+    let temp_dir = env::temp_dir();
+    let report = VolumeDiscoveryReport::for_containing_path(&temp_dir);
+    preflight_volume_access_scope_with_report(
+        &temp_dir,
+        AccessIntent::Write,
+        "adaptive extraction",
+        &report,
+    )
 }
 
 fn retain_worker_scratch_access(
