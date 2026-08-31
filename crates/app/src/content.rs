@@ -339,7 +339,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             } else {
                 None
             };
-            preflight_content_segment_index_volumes(&root, &output, "content segment index")?;
+            let access_reports = ContentSegmentIndexAccessReports::for_paths(&root, &output)?;
+            access_reports.preflight_volumes("content segment index")?;
             if let Some(retry_probe) = retry_probe.as_ref() {
                 preflight_volume_access_scope(
                     write_probe_path(retry_probe)?,
@@ -347,9 +348,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     "content segment index",
                 )?;
             }
-            let volume = detect_volume_id(&root)
-                .ok()
-                .or_else(|| parent_volume(&root));
+            let volume = access_reports.first_volume();
             let (inaccessible_len, indexed) =
                 run_retriable_volume_task_cancellable_with_payload_path(
                     volume,
@@ -368,12 +367,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                                 &cancellation,
                             )?;
                         }
-                        let _access = retain_content_segment_index_access_checked(
-                            &root,
-                            &output,
-                            "content segment index",
-                            || cancellation.check(),
-                        )?;
+                        let _access = access_reports
+                            .access_checked("content segment index", || cancellation.check())?;
                         cancellation.check()?;
                         let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
                         let inaccessible_len = snapshot.inaccessible.len();
@@ -1786,6 +1781,52 @@ struct ContentSegmentsAccessReports {
     entries: Vec<ForegroundContentIndexAccessReport>,
 }
 
+#[derive(Clone)]
+struct ContentSegmentIndexAccessReports {
+    entries: [ForegroundContentIndexAccessReport; 2],
+}
+
+impl ContentSegmentIndexAccessReports {
+    fn for_paths(root: &Path, output: &Path) -> Result<Self> {
+        Ok(Self {
+            entries: [
+                ForegroundContentIndexAccessReports::entry(root.to_path_buf(), AccessIntent::Index),
+                ForegroundContentIndexAccessReports::entry(
+                    write_probe_path(output)?.to_path_buf(),
+                    AccessIntent::Write,
+                ),
+            ],
+        })
+    }
+
+    fn preflight_volumes(&self, worker: &str) -> Result<()> {
+        for report in &self.entries {
+            report.preflight_volume(worker)?;
+        }
+        Ok(())
+    }
+
+    fn access_checked(
+        &self,
+        worker: &str,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<ScopedAccessGuard>> {
+        let mut guards = Vec::with_capacity(self.entries.len());
+        for report in &self.entries {
+            check_control()?;
+            guards.push(report.access_checked(worker, &mut check_control)?);
+        }
+        check_control()?;
+        Ok(guards)
+    }
+
+    fn first_volume(&self) -> Option<gfm_types::VolumeId> {
+        self.entries
+            .iter()
+            .find_map(ForegroundContentIndexAccessReport::volume)
+    }
+}
+
 impl ContentSegmentsAccessReports {
     fn for_paths(
         manifest_path: Option<&Path>,
@@ -1836,31 +1877,6 @@ impl ContentSegmentsAccessReports {
             .iter()
             .find_map(ForegroundContentIndexAccessReport::volume)
     }
-}
-
-fn retain_content_segment_index_access_checked(
-    root: &Path,
-    output: &Path,
-    worker: &str,
-    mut check_control: impl FnMut() -> Result<()>,
-) -> Result<Vec<ScopedAccessGuard>> {
-    check_control()?;
-    let output_probe = write_probe_path(output)?.to_path_buf();
-    check_control()?;
-    Ok(vec![
-        preflight_access_scope_checked(root, AccessIntent::Index, worker, &mut check_control)?,
-        preflight_access_scope_checked(
-            &output_probe,
-            AccessIntent::Write,
-            worker,
-            &mut check_control,
-        )?,
-    ])
-}
-
-fn preflight_content_segment_index_volumes(root: &Path, output: &Path, worker: &str) -> Result<()> {
-    preflight_volume_access_scope(root, AccessIntent::Index, worker)?;
-    preflight_volume_access_scope(write_probe_path(output)?, AccessIntent::Write, worker)
 }
 
 #[cfg(test)]
