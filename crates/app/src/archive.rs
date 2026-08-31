@@ -623,12 +623,24 @@ struct ArchiveAccessReport {
 
 impl ArchiveAccessReport {
     fn new(path: PathBuf, intent: AccessIntent) -> Self {
-        let volume_report = VolumeDiscoveryReport::for_containing_path(&path);
-        Self {
+        Self::new_checked(path, intent, || Ok(()))
+            .expect("uncancellable archive access report cannot cancel")
+    }
+
+    fn new_checked(
+        path: PathBuf,
+        intent: AccessIntent,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check_control()?;
+        let volume_report =
+            VolumeDiscoveryReport::for_containing_path_checked(&path, &mut check_control)?;
+        check_control()?;
+        Ok(Self {
             path,
             intent,
             volume_report,
-        }
+        })
     }
 
     fn preflight_volume(&self, worker: &str) -> Result<()> {
@@ -674,15 +686,23 @@ struct ArchiveAccessReports {
 
 impl ArchiveAccessReports {
     fn new(entries: Vec<(PathBuf, AccessIntent, String)>) -> Self {
-        Self {
-            entries: entries
-                .into_iter()
-                .map(|(path, intent, worker)| LabeledArchiveAccessReport {
-                    worker,
-                    report: ArchiveAccessReport::new(path, intent),
-                })
-                .collect(),
+        Self::new_checked(entries, || Ok(())).expect("uncancellable archive reports cannot cancel")
+    }
+
+    fn new_checked(
+        entries: Vec<(PathBuf, AccessIntent, String)>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        let mut reports = Vec::with_capacity(entries.len());
+        for (path, intent, worker) in entries {
+            check_control()?;
+            reports.push(LabeledArchiveAccessReport {
+                worker,
+                report: ArchiveAccessReport::new_checked(path, intent, &mut check_control)?,
+            });
         }
+        check_control()?;
+        Ok(Self { entries: reports })
     }
 
     fn preflight_volumes(&self) -> Result<()> {
@@ -721,18 +741,34 @@ struct RecordSidecarBuildAccessReports {
 
 impl RecordSidecarBuildAccessReports {
     fn for_paths(records: &Path, output: &Path) -> Result<Self> {
+        Self::for_paths_checked(records, output, || Ok(()))
+    }
+
+    fn for_paths_checked(
+        records: &Path,
+        output: &Path,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check_control()?;
+        let output_probe = write_probe_path(output)?.to_path_buf();
+        check_control()?;
         Ok(Self {
             entries: [
                 LabeledArchiveAccessReport {
                     worker: "records".to_string(),
-                    report: ArchiveAccessReport::new(records.to_path_buf(), AccessIntent::Read),
+                    report: ArchiveAccessReport::new_checked(
+                        records.to_path_buf(),
+                        AccessIntent::Read,
+                        &mut check_control,
+                    )?,
                 },
                 LabeledArchiveAccessReport {
                     worker: "output".to_string(),
-                    report: ArchiveAccessReport::new(
-                        write_probe_path(output)?.to_path_buf(),
+                    report: ArchiveAccessReport::new_checked(
+                        output_probe,
                         AccessIntent::Write,
-                    ),
+                        &mut check_control,
+                    )?,
                 },
             ],
         })
@@ -774,10 +810,14 @@ impl RecordSidecarBuildAccessReports {
 fn retain_archive_read_access_checked(
     path: &Path,
     worker: &str,
-    check_control: impl FnMut() -> Result<()>,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<ScopedAccessGuard> {
-    ArchiveAccessReport::new(path.to_path_buf(), AccessIntent::Read)
-        .access_checked(worker, check_control)
+    let report = ArchiveAccessReport::new_checked(
+        path.to_path_buf(),
+        AccessIntent::Read,
+        &mut check_control,
+    )?;
+    report.access_checked(worker, &mut check_control)
 }
 
 #[cfg(test)]
@@ -788,7 +828,8 @@ fn retain_record_sidecar_build_access_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
     check_control()?;
-    let access_reports = RecordSidecarBuildAccessReports::for_paths(records, output)?;
+    let access_reports =
+        RecordSidecarBuildAccessReports::for_paths_checked(records, output, &mut check_control)?;
     access_reports.access_checked(worker, &mut check_control)
 }
 

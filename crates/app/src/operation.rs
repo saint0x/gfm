@@ -281,13 +281,20 @@ struct OperationPathAccessReport {
 }
 
 impl OperationPathAccessReport {
-    fn new(path: PathBuf, intent: AccessIntent) -> Self {
-        let volume_report = VolumeDiscoveryReport::for_containing_path(&path);
-        Self {
+    fn new_checked(
+        path: PathBuf,
+        intent: AccessIntent,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check_control()?;
+        let volume_report =
+            VolumeDiscoveryReport::for_containing_path_checked(&path, &mut check_control)?;
+        check_control()?;
+        Ok(Self {
             path,
             intent,
             volume_report,
-        }
+        })
     }
 
     fn preflight_volume(&self, worker: &str) -> Result<()> {
@@ -326,7 +333,8 @@ fn recover_operations_from_journal(
 ) -> Result<gfm_ops::OperationRecoveryReport> {
     const WORKER: &str = "operation journal";
     let journal_probe = write_probe_path(&journal)?.to_path_buf();
-    let access_report = OperationPathAccessReport::new(journal_probe, AccessIntent::Write);
+    let access_report =
+        OperationPathAccessReport::new_checked(journal_probe, AccessIntent::Write, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
@@ -354,8 +362,11 @@ fn read_operation_conflicts(
     store: &OperationConflictStore,
 ) -> Result<Vec<RuntimeOperationConflict>> {
     const WORKER: &str = "operation conflict store";
-    let access_report =
-        OperationPathAccessReport::new(store.path().to_path_buf(), AccessIntent::Read);
+    let access_report = OperationPathAccessReport::new_checked(
+        store.path().to_path_buf(),
+        AccessIntent::Read,
+        || Ok(()),
+    )?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
     let path = store.path().to_path_buf();
@@ -388,7 +399,8 @@ fn resolve_operation_conflicts(
 ) -> Result<Vec<RuntimeOperationConflict>> {
     const WORKER: &str = "operation conflict store";
     let store_probe = write_probe_path(store.path())?.to_path_buf();
-    let access_report = OperationPathAccessReport::new(store_probe, AccessIntent::Write);
+    let access_report =
+        OperationPathAccessReport::new_checked(store_probe, AccessIntent::Write, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
     let path = store.path().to_path_buf();
@@ -527,7 +539,7 @@ fn execute_operation_inner(
     let trash_metadata = default_trash_metadata_path();
     let label = operation_kind(&operation);
     let _ = refresh_permission_state(PermissionRefreshAudience::Operations, label)?;
-    let volume_report = operation_volume_report(&operation);
+    let volume_report = operation_volume_report_checked(&operation, || Ok(()))?;
     let volume_copy_policy = operation_volume_copy_policy_from_report(&operation, &volume_report);
     let volume = operation_volume(&operation, &volume_report);
     let entry = run_volume_task_cancellable_with_runtime(
@@ -736,7 +748,8 @@ fn escape_operation_field(value: &str) -> String {
 }
 
 fn operation_volume_copy_policy_report(operation: &Operation) -> String {
-    let report = operation_volume_report(operation);
+    let report = operation_volume_report_checked(operation, || Ok(()))
+        .expect("uncancellable operation volume report cannot cancel");
     let policy = operation_volume_copy_policy_from_report(operation, &report);
     match operation {
         Operation::Copy { from, to } | Operation::Move { from, to } => format!(
@@ -758,11 +771,16 @@ fn operation_volume_copy_policy_report(operation: &Operation) -> String {
 fn preflight_operation_volume_policy_access(operation: &Operation) -> Result<()> {
     match operation {
         Operation::Copy { from, to } | Operation::Move { from, to } => {
-            let source = OperationPathAccessReport::new(from.clone(), AccessIntent::Read);
-            let destination = OperationPathAccessReport::new(
+            let source = OperationPathAccessReport::new_checked(
+                from.clone(),
+                AccessIntent::Read,
+                || Ok(()),
+            )?;
+            let destination = OperationPathAccessReport::new_checked(
                 write_probe_path(to)?.to_path_buf(),
                 AccessIntent::Write,
-            );
+                || Ok(()),
+            )?;
             source.preflight_volume("operation volume copy policy source")?;
             destination.preflight_volume("operation volume copy policy destination")
         }
@@ -798,16 +816,20 @@ fn preflight_operation_journal_write_checked(
     check_control()?;
     let probe = write_probe_path(path)?.to_path_buf();
     check_control()?;
-    OperationPathAccessReport::new(probe, AccessIntent::Write)
+    OperationPathAccessReport::new_checked(probe, AccessIntent::Write, &mut check_control)?
         .access_checked("operation journal", check_control)
 }
 
 fn preflight_trash_metadata_read_checked(
     path: &Path,
-    check_control: impl FnMut() -> Result<()>,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<ScopedAccessGuard> {
-    OperationPathAccessReport::new(path.to_path_buf(), AccessIntent::Read)
-        .access_checked("trash metadata", check_control)
+    OperationPathAccessReport::new_checked(
+        path.to_path_buf(),
+        AccessIntent::Read,
+        &mut check_control,
+    )?
+    .access_checked("trash metadata", check_control)
 }
 
 fn preflight_trash_metadata_write_checked(
@@ -817,7 +839,7 @@ fn preflight_trash_metadata_write_checked(
     check_control()?;
     let probe = write_probe_path(path)?.to_path_buf();
     check_control()?;
-    OperationPathAccessReport::new(probe, AccessIntent::Write)
+    OperationPathAccessReport::new_checked(probe, AccessIntent::Write, &mut check_control)?
         .access_checked("trash metadata", check_control)
 }
 
@@ -1289,15 +1311,21 @@ fn operation_volume_copy_policy_from_report(
     policy
 }
 
-fn operation_volume_report(operation: &Operation) -> VolumeDiscoveryReport {
+fn operation_volume_report_checked(
+    operation: &Operation,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<VolumeDiscoveryReport> {
     let mut report = VolumeDiscoveryReport {
         volumes: Vec::new(),
     };
     for path in operation_paths(operation) {
-        let containing = VolumeDiscoveryReport::for_containing_path(path);
+        check_control()?;
+        let containing =
+            VolumeDiscoveryReport::for_containing_path_checked(path, &mut check_control)?;
         if let Some(volume) = containing.volume_for_path(path) {
             report.volumes.push(volume.clone());
         }
+        check_control()?;
     }
     report.volumes.sort_by(|left, right| {
         left.path
@@ -1308,7 +1336,8 @@ fn operation_volume_report(operation: &Operation) -> VolumeDiscoveryReport {
     report
         .volumes
         .dedup_by(|left, right| left.id == right.id && left.path == right.path);
-    report
+    check_control()?;
+    Ok(report)
 }
 
 fn operation_touches_volume(operation: &Operation, root: &Path) -> bool {
@@ -2352,6 +2381,50 @@ mod tests {
 
         assert_eq!(result.err(), Some(GfmError::Cancelled));
         assert!(!journal.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operation_path_access_report_checked_honors_pre_cancelled_control_before_volume_discovery() {
+        let path = std::env::temp_dir()
+            .join(format!(
+                "gfm-app-op-path-report-pre-cancel-{}",
+                std::process::id()
+            ))
+            .join("source.txt");
+
+        let result =
+            OperationPathAccessReport::new_checked(path.clone(), AccessIntent::Read, || {
+                Err(GfmError::Cancelled)
+            });
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn operation_volume_report_checked_can_cancel_between_paths() {
+        let root = unique_temp_dir("gfm-app-op-volume-report-cancel");
+        let source = root.join("source.txt");
+        let destination = root.join("destination.txt");
+        fs::write(&source, "content").unwrap();
+        let operation = Operation::Copy {
+            from: source,
+            to: destination,
+        };
+        let mut checks = 0usize;
+
+        let result = operation_volume_report_checked(&operation, || {
+            checks += 1;
+            if checks > 3 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(checks > 3);
         fs::remove_dir_all(root).unwrap();
     }
 
