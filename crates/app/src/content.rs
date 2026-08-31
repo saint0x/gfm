@@ -15,10 +15,9 @@ use crate::runtime::{
     runtime_progress_store, RuntimeJobHandle,
 };
 use crate::{
-    optional_path_arg, parent_volume, parse_battery_state, parse_io_pressure,
-    parse_optional_scheduling_pressure, parse_quarantine_failure_kind,
-    parse_required_scheduling_pressure, parse_thermal_state, parse_u32, parse_u64,
-    parse_user_activity, required_path, required_string,
+    optional_path_arg, parse_battery_state, parse_io_pressure, parse_optional_scheduling_pressure,
+    parse_quarantine_failure_kind, parse_required_scheduling_pressure, parse_thermal_state,
+    parse_u32, parse_u64, parse_user_activity, required_path, required_string,
 };
 use gfm_content::{CachedExtractor, ExtractionFingerprint, ExtractionQuarantine, Extractor};
 use gfm_fs::record_for_path_checked;
@@ -34,7 +33,7 @@ use gfm_jobs::{
 };
 use gfm_mac::{AccessIntent, VolumeDiscoveryReport};
 use gfm_store::{atomic_write_checked, read_records_checked, ContentArchiveManifest};
-use gfm_types::{GfmError, Result, SearchHit};
+use gfm_types::{GfmError, Result, SearchHit, VolumeId};
 use std::collections::{BTreeSet, HashSet};
 use std::fs;
 use std::io::{self, Read};
@@ -985,10 +984,9 @@ fn load_resumable_content_job_spec(
     journal: &JobJournal,
 ) -> Result<Option<(RecoverableContentJobs, ContentIndexJobSpec)>> {
     const WORKER: &str = "resume background content recovery";
-    preflight_background_content_recovery_volumes(journal)?;
-    let volume = parent_volume(journal.path())
-        .or_else(|| runtime_progress_store().and_then(|store| parent_volume(store.path())))
-        .or_else(|| parent_volume(&spec_path));
+    let access_reports = BackgroundContentRecoveryAccessReports::for_paths(&spec_path, journal);
+    access_reports.preflight_recovery_stores()?;
+    let volume = access_reports.first_volume();
     let journal = JobJournal::new(journal.path().to_path_buf());
     run_volume_task_cancellable_without_progress(
         volume,
@@ -997,22 +995,19 @@ fn load_resumable_content_job_spec(
         move |cancellation| {
             cancellation.check()?;
             let recoverable =
-                recoverable_background_content_jobs_checked(&journal, || cancellation.check())?;
+                recoverable_background_content_jobs_checked(&journal, &access_reports, || {
+                    cancellation.check()
+                })?;
             if recoverable.total == 0 {
                 return Ok(None);
             }
-            preflight_volume_access_scope(
-                &spec_path,
-                AccessIntent::Read,
-                "resume background content index",
-            )?;
+            access_reports
+                .spec
+                .preflight_volume("resume background content index")?;
             cancellation.check()?;
-            let _access = preflight_access_scope_checked(
-                &spec_path,
-                AccessIntent::Read,
-                "resume background content index",
-                || cancellation.check(),
-            )?;
+            let _access = access_reports
+                .spec
+                .access_checked("resume background content index", || cancellation.check())?;
             let spec = ContentIndexJobSpec::read_checked(&spec_path, || cancellation.check())?;
             cancellation.check()?;
             Ok(Some((recoverable, spec)))
@@ -1575,6 +1570,21 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn optional_recovery_store_access_checked_honors_pre_cancelled_control() {
+        let root = unique_temp_dir("gfm-optional-recovery-access-pre-cancel");
+        let store = root.join("journal.tsv");
+        let reports = OptionalRecoveryStoreAccessReports::for_path(&store);
+
+        let result = reports.access_checked("background content recovery journal", || {
+            Err(GfmError::Cancelled)
+        });
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!store.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
     fn unique_temp_dir(prefix: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
             "{}-{}-{}",
@@ -1589,13 +1599,12 @@ mod tests {
 
 fn recoverable_background_content_jobs_checked(
     journal: &JobJournal,
+    access_reports: &BackgroundContentRecoveryAccessReports,
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<RecoverableContentJobs> {
-    let _journal_access = retain_optional_recovery_store_access_checked(
-        journal.path(),
-        "background content recovery journal",
-        &mut check_control,
-    )?;
+    let _journal_access = access_reports
+        .journal
+        .access_checked("background content recovery journal", &mut check_control)?;
     check_control()?;
     let mut ids = HashSet::new();
     let mut recoverable = RecoverableContentJobs::default();
@@ -1605,13 +1614,12 @@ fn recoverable_background_content_jobs_checked(
             recoverable.add_journal_job(job.reason, job.failure_class, job.next_delay_ms);
         }
     }
-    if let Some(store) = runtime_progress_store() {
+    if let Some((store, progress_access_reports)) =
+        runtime_progress_store().zip(access_reports.progress.as_ref())
+    {
         check_control()?;
-        let _progress_access = retain_optional_recovery_store_access_checked(
-            store.path(),
-            "background content recovery progress",
-            &mut check_control,
-        )?;
+        let _progress_access = progress_access_reports
+            .access_checked("background content recovery progress", &mut check_control)?;
         for snapshot in store.restorable()? {
             check_control()?;
             if snapshot.label == "background content index" && ids.insert(snapshot.id) {
@@ -1623,55 +1631,95 @@ fn recoverable_background_content_jobs_checked(
     Ok(recoverable)
 }
 
-fn preflight_background_content_recovery_volumes(journal: &JobJournal) -> Result<()> {
-    preflight_optional_recovery_store_volumes(
-        journal.path(),
-        "background content recovery journal",
-    )?;
-    if let Some(store) = runtime_progress_store() {
-        preflight_optional_recovery_store_volumes(
-            store.path(),
-            "background content recovery progress",
-        )?;
-    }
-    Ok(())
+#[derive(Clone)]
+struct BackgroundContentRecoveryAccessReports {
+    journal: OptionalRecoveryStoreAccessReports,
+    progress: Option<OptionalRecoveryStoreAccessReports>,
+    spec: ForegroundContentIndexAccessReport,
 }
 
-fn preflight_optional_recovery_store_volumes(path: &Path, worker: &str) -> Result<()> {
-    let parent = crate::parent_or_cwd(path);
-    preflight_volume_access_scope(parent, AccessIntent::Read, worker)?;
-    if optional_recovery_store_exists(path, worker)? {
-        preflight_volume_access_scope(path, AccessIntent::Read, worker)?;
+impl BackgroundContentRecoveryAccessReports {
+    fn for_paths(spec_path: &Path, journal: &JobJournal) -> Self {
+        Self {
+            journal: OptionalRecoveryStoreAccessReports::for_path(journal.path()),
+            progress: runtime_progress_store()
+                .map(|store| OptionalRecoveryStoreAccessReports::for_path(store.path())),
+            spec: ForegroundContentIndexAccessReports::entry(
+                spec_path.to_path_buf(),
+                AccessIntent::Read,
+            ),
+        }
     }
-    Ok(())
+
+    fn preflight_recovery_stores(&self) -> Result<()> {
+        self.journal
+            .preflight_volumes("background content recovery journal")?;
+        if let Some(progress) = &self.progress {
+            progress.preflight_volumes("background content recovery progress")?;
+        }
+        Ok(())
+    }
+
+    fn first_volume(&self) -> Option<VolumeId> {
+        self.journal
+            .first_volume()
+            .or_else(|| {
+                self.progress
+                    .as_ref()
+                    .and_then(OptionalRecoveryStoreAccessReports::first_volume)
+            })
+            .or_else(|| self.spec.volume())
+    }
 }
 
-fn retain_optional_recovery_store_access_checked(
-    path: &Path,
-    worker: &str,
-    mut check_control: impl FnMut() -> Result<()>,
-) -> Result<Vec<ScopedAccessGuard>> {
-    let mut guards = Vec::with_capacity(2);
-    check_control()?;
-    let parent = crate::parent_or_cwd(path);
-    guards.push(preflight_access_scope_checked(
-        parent,
-        AccessIntent::Read,
-        worker,
-        &mut check_control,
-    )?);
-    check_control()?;
-    if optional_recovery_store_exists_checked(path, worker, &mut check_control)? {
+#[derive(Clone)]
+struct OptionalRecoveryStoreAccessReports {
+    parent: ForegroundContentIndexAccessReport,
+    store: ForegroundContentIndexAccessReport,
+}
+
+impl OptionalRecoveryStoreAccessReports {
+    fn for_path(path: &Path) -> Self {
+        Self {
+            parent: ForegroundContentIndexAccessReports::entry(
+                crate::parent_or_cwd(path).to_path_buf(),
+                AccessIntent::Read,
+            ),
+            store: ForegroundContentIndexAccessReports::entry(
+                path.to_path_buf(),
+                AccessIntent::Read,
+            ),
+        }
+    }
+
+    fn preflight_volumes(&self, worker: &str) -> Result<()> {
+        self.parent.preflight_volume(worker)?;
+        if optional_recovery_store_exists(&self.store.path, worker)? {
+            self.store.preflight_volume(worker)?;
+        }
+        Ok(())
+    }
+
+    fn access_checked(
+        &self,
+        worker: &str,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<ScopedAccessGuard>> {
+        let mut guards = Vec::with_capacity(2);
         check_control()?;
-        guards.push(preflight_access_scope_checked(
-            path,
-            AccessIntent::Read,
-            worker,
-            &mut check_control,
-        )?);
+        guards.push(self.parent.access_checked(worker, &mut check_control)?);
+        check_control()?;
+        if optional_recovery_store_exists_checked(&self.store.path, worker, &mut check_control)? {
+            check_control()?;
+            guards.push(self.store.access_checked(worker, &mut check_control)?);
+        }
+        check_control()?;
+        Ok(guards)
     }
-    check_control()?;
-    Ok(guards)
+
+    fn first_volume(&self) -> Option<VolumeId> {
+        self.parent.volume().or_else(|| self.store.volume())
+    }
 }
 
 fn optional_recovery_store_exists(path: &Path, worker: &str) -> Result<bool> {
