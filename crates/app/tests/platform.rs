@@ -5118,6 +5118,35 @@ fn volume_discovery_surfaces_unavailable_explicit_path_from_binary() {
 }
 
 #[test]
+fn volume_discovery_cancel_after_first_stops_before_second_descriptor_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-volume-discovery-cancel-after-first-{}",
+        std::process::id()
+    ));
+    let external = root.join("Work Drive");
+    let invalid = root.join("volume-discovery-cancelled-before-second".repeat(16));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&external).unwrap();
+    std::fs::write(external.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-discovery-cancel-after-first")
+        .arg(&external)
+        .arg(&invalid)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("volumes\t"), "{stdout}");
+    assert!(stderr.contains("operation was cancelled"), "{stderr}");
+    assert!(!stderr.contains("File name too long"), "{stderr}");
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_volume_index_policy_from_binary() {
     let root = std::env::temp_dir().join(format!("gfm-volume-policy-{}", std::process::id()));
     let external = root.join("Work Drive");

@@ -621,11 +621,17 @@ pub struct VolumeDiscoveryReport {
 
 impl VolumeDiscoveryReport {
     pub fn discover() -> Self {
+        Self::discover_checked(|| Ok(())).expect("non-cancellable volume discovery cannot cancel")
+    }
+
+    pub fn discover_checked(mut check: impl FnMut() -> Result<()>) -> Result<Self> {
+        check()?;
         let mut paths = mounted_volume_paths();
+        check()?;
         if paths.is_empty() {
             paths = fallback_volume_paths();
         }
-        Self::from_paths(paths)
+        Self::from_paths_checked_with_control(paths, check)
     }
 
     pub fn from_paths(paths: Vec<PathBuf>) -> Self {
@@ -638,12 +644,24 @@ impl VolumeDiscoveryReport {
     }
 
     pub fn from_paths_checked(paths: Vec<PathBuf>) -> Result<Self> {
+        Self::from_paths_checked_with_control(paths, || Ok(()))
+    }
+
+    pub fn from_paths_checked_with_control(
+        paths: Vec<PathBuf>,
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check()?;
         let paths = unique_volume_paths(paths);
+        check()?;
         let mut volumes = Vec::with_capacity(paths.len());
         for path in paths {
+            check()?;
             volumes.push(VolumeDescriptor::for_path(path)?);
+            check()?;
         }
         normalize_discovered_volumes(&mut volumes);
+        check()?;
         Ok(Self { volumes })
     }
 
@@ -655,6 +673,31 @@ impl VolumeDiscoveryReport {
             paths = fallback_volume_paths();
         }
         Self::from_paths(paths)
+    }
+
+    pub fn for_containing_path_checked(
+        path: impl AsRef<Path>,
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        let path = path.as_ref();
+        check()?;
+        let mut paths = containing_mounted_volume_paths_checked(path, &mut check)?;
+        check()?;
+        paths.extend(marker_ancestor_volume_paths_checked(path, &mut check)?);
+        check()?;
+        if paths.is_empty() {
+            paths = fallback_volume_paths_checked(&mut check)?;
+        }
+        check()?;
+        let paths = unique_volume_paths(paths);
+        let mut volumes = Vec::with_capacity(paths.len());
+        for path in paths {
+            check()?;
+            volumes.push(VolumeDescriptor::for_path(path)?);
+        }
+        check()?;
+        normalize_discovered_volumes(&mut volumes);
+        Ok(Self { volumes })
     }
 
     pub fn volume_for_path(&self, path: &Path) -> Option<&VolumeDescriptor> {
@@ -1634,7 +1677,7 @@ impl VolumeOperationReport {
         }
         check()?;
 
-        let volume = operation_volume_for_path(&path)?;
+        let volume = operation_volume_for_path_checked(&path, &mut check)?;
         check()?;
         if operation == VolumeOperation::Mount {
             return Ok(Self::with_volume(
@@ -1820,12 +1863,17 @@ impl VolumeOperationReport {
     }
 }
 
-fn operation_volume_for_path(path: &Path) -> Result<VolumeDescriptor> {
-    VolumeDiscoveryReport::for_containing_path(path)
-        .volume_for_path(path)
-        .cloned()
-        .map(Ok)
-        .unwrap_or_else(|| VolumeDescriptor::for_path(path))
+fn operation_volume_for_path_checked(
+    path: &Path,
+    mut check: impl FnMut() -> Result<()>,
+) -> Result<VolumeDescriptor> {
+    let report = VolumeDiscoveryReport::for_containing_path_checked(path, &mut check)?;
+    check()?;
+    if let Some(volume) = report.volume_for_path(path).cloned() {
+        return Ok(volume);
+    }
+    check()?;
+    VolumeDescriptor::for_path(path)
 }
 
 fn operation_targets_volume_root(path: &Path, volume_path: &Path) -> bool {
@@ -2528,6 +2576,28 @@ fn mounted_volume_paths() -> Vec<PathBuf> {
     paths
 }
 
+fn mounted_volume_paths_checked(mut check: impl FnMut() -> Result<()>) -> Result<Vec<PathBuf>> {
+    check()?;
+    let table = gfm_mac_sys::copy_volume_mount_table();
+    check()?;
+    if table.status != NativeVolumeStatus::Available {
+        return Ok(Vec::new());
+    }
+    let mut paths = Vec::new();
+    for entry in table.entries {
+        check()?;
+        if let Some(path) = entry
+            .mount_point
+            .filter(|path| finder_visible_mount_path(path))
+        {
+            paths.push(path);
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
 fn containing_mounted_volume_paths(path: &Path) -> Vec<PathBuf> {
     let mut paths = mounted_volume_paths()
         .into_iter()
@@ -2543,11 +2613,49 @@ fn containing_mounted_volume_paths(path: &Path) -> Vec<PathBuf> {
     paths
 }
 
+fn containing_mounted_volume_paths_checked(
+    path: &Path,
+    mut check: impl FnMut() -> Result<()>,
+) -> Result<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+    for root in mounted_volume_paths_checked(&mut check)? {
+        check()?;
+        if path.starts_with(&root) {
+            paths.push(root);
+        }
+    }
+    check()?;
+    if paths.is_empty() && path.try_exists().ok() == Some(false) {
+        for ancestor in path.ancestors() {
+            check()?;
+            if ancestor.try_exists().ok() == Some(true) {
+                paths = mounted_volume_paths_for_existing_path_checked(ancestor, &mut check)?;
+                break;
+            }
+        }
+    }
+    Ok(paths)
+}
+
 fn mounted_volume_paths_for_existing_path(path: &Path) -> Vec<PathBuf> {
     mounted_volume_paths()
         .into_iter()
         .filter(|root| path.starts_with(root))
         .collect()
+}
+
+fn mounted_volume_paths_for_existing_path_checked(
+    path: &Path,
+    mut check: impl FnMut() -> Result<()>,
+) -> Result<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+    for root in mounted_volume_paths_checked(&mut check)? {
+        check()?;
+        if path.starts_with(&root) {
+            paths.push(root);
+        }
+    }
+    Ok(paths)
 }
 
 fn fallback_volume_paths() -> Vec<PathBuf> {
@@ -2561,6 +2669,24 @@ fn fallback_volume_paths() -> Vec<PathBuf> {
         }
     }
     paths
+}
+
+fn fallback_volume_paths_checked(mut check: impl FnMut() -> Result<()>) -> Result<Vec<PathBuf>> {
+    check()?;
+    let mut paths = vec![PathBuf::from("/")];
+    if let Ok(entries) = fs::read_dir("/Volumes") {
+        for entry in entries {
+            check()?;
+            let Ok(entry) = entry else {
+                continue;
+            };
+            let path = entry.path();
+            if fallback_volume_path_is_directory(&path) == Some(true) {
+                paths.push(path);
+            }
+        }
+    }
+    Ok(paths)
 }
 
 fn fallback_volume_path_is_directory(path: &Path) -> Option<bool> {
@@ -2580,6 +2706,20 @@ fn marker_ancestor_volume_paths(path: &Path) -> Vec<PathBuf> {
         .filter(|ancestor| marker_kind(ancestor).is_some())
         .map(PathBuf::from)
         .collect()
+}
+
+fn marker_ancestor_volume_paths_checked(
+    path: &Path,
+    mut check: impl FnMut() -> Result<()>,
+) -> Result<Vec<PathBuf>> {
+    let mut paths = Vec::new();
+    for ancestor in path.ancestors() {
+        check()?;
+        if marker_kind(ancestor).is_some() {
+            paths.push(PathBuf::from(ancestor));
+        }
+    }
+    Ok(paths)
 }
 
 fn command_policy(
@@ -3282,6 +3422,43 @@ mod tests {
     }
 
     #[test]
+    fn checked_containing_volume_discovery_honors_pre_cancelled_work_before_mount_table() {
+        let root = unique_temp_dir("gfm-volume-containing-cancelled");
+
+        let err =
+            VolumeDiscoveryReport::for_containing_path_checked(&root, || Err(GfmError::Cancelled))
+                .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checked_volume_discovery_can_cancel_between_descriptor_probes() {
+        let root = unique_temp_dir("gfm-volume-discovery-cancel-between");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let invalid = invalid_path("gfm-volume-discovery-cancelled-before-second");
+        let mut checks = 0usize;
+
+        let err = VolumeDiscoveryReport::from_paths_checked_with_control(
+            vec![root.clone(), invalid],
+            || {
+                checks += 1;
+                if checks >= 5 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn volume_discovery_deduplicates_stable_identities_before_topology_maps() {
         let first = unique_temp_dir("gfm-volume-discovery-stable-first");
         let second = unique_temp_dir("gfm-volume-discovery-stable-second");
@@ -3510,6 +3687,26 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(err, GfmError::Cancelled);
+    }
+
+    #[test]
+    fn checked_volume_operation_can_cancel_during_containing_volume_lookup() {
+        let root = unique_temp_dir("gfm-volume-operation-lookup-cancelled");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let mut checks = 0;
+
+        let err = VolumeOperationReport::execute_checked(&root, VolumeOperation::Eject, || {
+            checks += 1;
+            if checks >= 4 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

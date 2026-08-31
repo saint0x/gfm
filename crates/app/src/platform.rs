@@ -555,9 +555,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             println!("{}", observed_metadata_invalidation_tsv(&observed));
         }
-        "volume-discovery" => {
+        "volume-discovery" | "volume-discovery-cancel-after-first" => {
+            let cancel_after_first = command == "volume-discovery-cancel-after-first";
             let paths: Vec<PathBuf> = args.map(PathBuf::from).collect();
-            let report = volume_discovery_report(paths)?;
+            let report = volume_discovery_report(paths, cancel_after_first)?;
             println!("{}", report.as_tsv());
         }
         "volume-events-probe" => {
@@ -786,7 +787,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     paths.push(PathBuf::from(arg));
                 }
             }
-            let volumes = volume_discovery_report(paths)?
+            let volumes = volume_discovery_report(paths, false)?
                 .volumes
                 .iter()
                 .map(index_volume_descriptor)
@@ -1592,7 +1593,7 @@ fn volume_event_state_index_invalidation_from_args(
         "volume event state index invalidation requires an event kind after `--`",
     )?)?;
     let resolution = resolve_volume_event_path(kind, args.next().map(PathBuf::from))?;
-    let mut state = VolumeEventState::new(volume_discovery_report(previous_paths)?);
+    let mut state = VolumeEventState::new(volume_discovery_report(previous_paths, false)?);
     let current = (kind != VolumeEventKind::Disappeared)
         .then_some(resolution.descriptor)
         .flatten();
@@ -1635,7 +1636,7 @@ fn volume_event_runtime_fanout_from_args(
         "volume event runtime fanout requires an event kind after `--`",
     )?)?;
     let resolution = resolve_volume_event_path(kind, args.next().map(PathBuf::from))?;
-    let mut state = VolumeEventState::new(volume_discovery_report(previous_paths)?);
+    let mut state = VolumeEventState::new(volume_discovery_report(previous_paths, false)?);
     let current = (kind != VolumeEventKind::Disappeared)
         .then_some(resolution.descriptor)
         .flatten();
@@ -2210,12 +2211,30 @@ fn fileprovider_progress_detail(report: &FileProviderProgressReport) -> String {
     )
 }
 
-fn volume_discovery_report(paths: Vec<PathBuf>) -> Result<VolumeDiscoveryReport> {
-    if paths.is_empty() {
-        Ok(VolumeDiscoveryReport::discover())
-    } else {
-        VolumeDiscoveryReport::from_paths_checked(paths)
-    }
+fn volume_discovery_report(
+    paths: Vec<PathBuf>,
+    cancel_after_first: bool,
+) -> Result<VolumeDiscoveryReport> {
+    run_volume_task_cancellable(
+        None,
+        Priority::Visible,
+        "volume discovery",
+        move |cancellation| {
+            let mut checks = 0usize;
+            let mut check = || {
+                checks += 1;
+                if cancel_after_first && checks >= 5 {
+                    cancellation.cancel();
+                }
+                cancellation.check()
+            };
+            if paths.is_empty() {
+                VolumeDiscoveryReport::discover_checked(&mut check)
+            } else {
+                VolumeDiscoveryReport::from_paths_checked_with_control(paths, &mut check)
+            }
+        },
+    )
 }
 
 fn current_index_volume_descriptor(path: &Path) -> Result<Option<IndexVolumeDescriptor>> {

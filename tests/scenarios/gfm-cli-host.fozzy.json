@@ -4406,6 +4406,17 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "volume-discovery-cancel-after-first",
+        "tmp/gfm-fozzy-dist",
+        "tmp/volume-discovery-cancelled-before-secondvolume-discovery-cancelled-before-secondvolume-discovery-cancelled-before-secondvolume-discovery-cancelled-before-secondvolume-discovery-cancelled-before-secondvolume-discovery-cancelled-before-secondvolume-discovery-cancelled-before-secondvolume-discovery-cancelled-before-second"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "volume-events-probe"
       ],
       "exit_code": 0,

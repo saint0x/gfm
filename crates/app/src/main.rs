@@ -857,6 +857,7 @@ fn print_usage() {
   gfm fileprovider-observer-probe <state.tsv> <root> <target>
   gfm fileprovider-observer-metadata-probe <state.tsv> <root> <target>
   gfm volume-discovery [paths...]
+  gfm volume-discovery-cancel-after-first <paths...>
   gfm volume-events-probe
   gfm volume-events-shutdown-probe
   gfm volume-event-invalidation <appeared|description-changed|disappeared|unavailable> [path]
