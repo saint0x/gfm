@@ -1495,11 +1495,12 @@ fn app_launch_spec_checked(
     if plan.finder_parity_default || plan.action != gfm_mac::PermissionAction::ContinueNormally {
         spec = spec.with_permission_prompt(permission_prompt_kind(&plan));
     }
-    let admission = crate::access::worker_admission_with_volume_gate(
+    let admission = crate::access::worker_admission_with_volume_gate_checked(
         &spec.initial_path,
         AccessIntent::Read,
         "window initial path",
-    );
+        &mut check_control,
+    )?;
     let access = permission_access_contract(&admission);
     if permission_access_requires_surface(&access) {
         spec = spec.with_permission_access(access);

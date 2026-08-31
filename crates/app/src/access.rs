@@ -25,9 +25,27 @@ pub(crate) fn worker_admission_with_volume_gate(
     intent: AccessIntent,
     worker: impl Into<String>,
 ) -> SecurityWorkerAdmissionReport {
+    worker_admission_with_volume_gate_checked(path, intent, worker, || Ok(()))
+        .expect("infallible worker admission volume gate control cannot cancel")
+}
+
+pub(crate) fn worker_admission_with_volume_gate_checked(
+    path: &Path,
+    intent: AccessIntent,
+    worker: impl Into<String>,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<SecurityWorkerAdmissionReport> {
+    check_control()?;
     let volume_path = absolute_volume_probe_path(path);
-    let volume_report = VolumeDiscoveryReport::for_containing_path(&volume_path);
-    worker_admission_with_volume_report(path, intent, worker, &volume_report)
+    let volume_report =
+        VolumeDiscoveryReport::for_containing_path_checked(&volume_path, &mut check_control)?;
+    check_control()?;
+    Ok(worker_admission_with_volume_report(
+        path,
+        intent,
+        worker,
+        &volume_report,
+    ))
 }
 
 pub(crate) fn worker_admission_with_volume_report(
@@ -514,6 +532,23 @@ mod tests {
             .as_tsv()
             .contains("\tcan-touch-filesystem=false\t"));
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn worker_admission_gate_checked_honors_pre_cancelled_control() {
+        let root = unique_temp_dir("gfm-access-admission-pre-cancel");
+        let path = root.join("Preview.pdf");
+        fs::write(&path, "%PDF-1.7\n").unwrap();
+
+        let result = worker_admission_with_volume_gate_checked(
+            &path,
+            AccessIntent::Preview,
+            "preview worker",
+            || Err(GfmError::Cancelled),
+        );
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
         fs::remove_dir_all(root).unwrap();
     }
 
