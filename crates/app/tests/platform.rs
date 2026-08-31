@@ -2498,7 +2498,7 @@ fn publishes_fileprovider_progress_to_runtime_job_store_from_binary() {
         "{progress_text}"
     );
     assert!(
-        progress_text.contains("\trunning\t0\t1\tfileprovider:icloud-drive:downloading:download:provider-progress-unavailable\t"),
+        progress_text.contains("\trunning\t0\t1\tfileprovider:icloud-drive:downloading:download:state:-:provider-progress-unavailable\t"),
         "{progress_text}"
     );
     let catalog_text = std::fs::read_to_string(&catalog).unwrap();

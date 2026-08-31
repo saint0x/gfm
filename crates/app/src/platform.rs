@@ -2263,10 +2263,17 @@ fn fileprovider_progress_job_state(report: &FileProviderProgressReport) -> JobPr
 
 fn fileprovider_progress_detail(report: &FileProviderProgressReport) -> String {
     format!(
-        "fileprovider:{}:{}:{}:{}",
+        "fileprovider:{}:{}:{}:{}:{}:{}",
         report.state.domain.as_str(),
         report.state.storage_state.as_str(),
         report.state.progress.direction.as_str(),
+        report.state.progress.source,
+        report
+            .state
+            .progress
+            .percent_milli
+            .map(|percent| percent.to_string())
+            .unwrap_or_else(|| "-".to_string()),
         report
             .state
             .progress
@@ -4126,6 +4133,48 @@ mod tests {
             .expect_err("pre-cancelled preview materialization should not read FileProvider state");
 
         assert_eq!(err, GfmError::Cancelled);
+    }
+
+    #[test]
+    fn fileprovider_progress_detail_preserves_native_source_and_percent() {
+        let path = PathBuf::from("/tmp/NativeUpload.icloud");
+        let report = FileProviderProgressReport {
+            path: path.clone(),
+            state: FileProviderStateReport {
+                path,
+                domain: gfm_mac::FileProviderDomain::ICloudDrive,
+                storage_state: CloudStorageState::Downloaded,
+                materialization: gfm_mac::CloudMaterialization::Materialized,
+                materialization_source: gfm_mac::CloudMaterializationSource::NativeUrlResource,
+                materialization_confidence: gfm_mac::CloudMaterializationConfidence::Native,
+                materialization_reason: Some("native-url-resource-materialized".to_string()),
+                progress: gfm_mac::CloudTransferProgress {
+                    direction: CloudTransferDirection::Upload,
+                    percent_milli: Some(100_000),
+                    requested: false,
+                    complete: true,
+                    indeterminate: false,
+                    source: "native-url-resource",
+                    reason: Some("native-upload-progress".to_string()),
+                },
+                badges: Vec::new(),
+                commands: gfm_mac::CloudCommandPolicy {
+                    download: gfm_mac::CloudCommandState::Disabled,
+                    evict: gfm_mac::CloudCommandState::Enabled,
+                    reveal_conflict: gfm_mac::CloudCommandState::Hidden,
+                    reason: None,
+                },
+                offline: false,
+                conflict: false,
+                provider_identifier: Some("com.apple.CloudDocs".to_string()),
+                source: "native-url-resource".to_string(),
+            },
+        };
+
+        assert_eq!(
+            fileprovider_progress_detail(&report),
+            "fileprovider:icloud-drive:downloaded:upload:native-url-resource:100000:native-upload-progress"
+        );
     }
 
     #[test]

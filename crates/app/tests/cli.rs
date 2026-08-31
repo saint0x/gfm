@@ -9860,7 +9860,7 @@ fn fileprovider_progress_job_persists_runtime_payload_and_progress_from_binary()
     );
     assert!(
         catalog_text.contains(
-            "fileprovider:icloud-drive:downloading:download:provider-progress-unavailable"
+            "fileprovider:icloud-drive:downloading:download:state:-:provider-progress-unavailable"
         ),
         "{catalog_text}"
     );
@@ -9872,7 +9872,7 @@ fn fileprovider_progress_job_persists_runtime_payload_and_progress_from_binary()
     );
     assert!(
         progress_text.contains(
-            "\trunning\t0\t1\tfileprovider:icloud-drive:downloading:download:provider-progress-unavailable\t"
+            "\trunning\t0\t1\tfileprovider:icloud-drive:downloading:download:state:-:provider-progress-unavailable\t"
         ),
         "{progress_text}"
     );
