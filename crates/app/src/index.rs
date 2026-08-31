@@ -204,26 +204,19 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let visible_burst =
                 parse_usize_arg(args.next(), "fair-scan requires a visible burst size")?;
             let visible_roots = args.map(PathBuf::from).collect::<Vec<_>>();
-            preflight_index_volume_access(&root)?;
-            visible_roots
-                .iter()
-                .map(|visible_root| preflight_index_volume_access(visible_root))
-                .collect::<Result<Vec<_>>>()?;
-            let volume = path_volume(&root)
-                .or_else(|| visible_roots.iter().find_map(|root| path_volume(root)));
+            let access_reports =
+                IndexRootReadAccessReports::for_root_and_reads(&root, &visible_roots);
+            access_reports.preflight_volumes()?;
+            let volume = access_reports.first_volume();
             let report = run_volume_task_cancellable(
                 volume,
                 Priority::Visible,
                 "index",
                 move |cancellation| {
                     let _root_access =
-                        enforce_index_access_checked(&root, || cancellation.check())?;
-                    let _visible_accesses = visible_roots
-                        .iter()
-                        .map(|visible_root| {
-                            enforce_index_access_checked(visible_root, || cancellation.check())
-                        })
-                        .collect::<Result<Vec<_>>>()?;
+                        access_reports.root_access_checked(|| cancellation.check())?;
+                    let _visible_accesses =
+                        access_reports.read_accesses_checked(|| cancellation.check())?;
                     cancellation.check()?;
                     Indexer::default().build_fair_cancellable(
                         root,
@@ -245,30 +238,24 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .parent()
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("."));
-            preflight_index_volume_access(&root)?;
-            preflight_index_write_volume(&from, "rename correlation source")?;
-            preflight_index_write_volume(&to, "rename correlation destination")?;
-            let from_probe = write_probe_path(&from)?.to_path_buf();
-            let to_probe = write_probe_path(&to)?.to_path_buf();
-            let volume = path_volume(&root)
-                .or_else(|| path_volume(&from_probe))
-                .or_else(|| path_volume(&to_probe));
+            let access_reports = IndexRootWriteAccessReports::for_root_and_writes(
+                &root,
+                &[
+                    (&from, "rename correlation source"),
+                    (&to, "rename correlation destination"),
+                ],
+            )?;
+            access_reports.preflight_volumes()?;
+            let volume = access_reports.first_volume();
             let report = run_volume_task_cancellable(
                 volume,
                 Priority::Visible,
                 "index",
                 move |cancellation| {
                     let _root_access =
-                        enforce_index_access_checked(&root, || cancellation.check())?;
-                    let _from_access =
-                        preflight_index_write_checked(&from, "rename correlation source", || {
-                            cancellation.check()
-                        })?;
-                    let _to_access = preflight_index_write_checked(
-                        &to,
-                        "rename correlation destination",
-                        || cancellation.check(),
-                    )?;
+                        access_reports.root_access_checked(|| cancellation.check())?;
+                    let _write_accesses =
+                        access_reports.write_accesses_checked(|| cancellation.check())?;
                     cancellation.check()?;
                     let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
                     cancellation.check()?;
@@ -286,24 +273,25 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .map(PathBuf::from)
                 .unwrap_or_else(|| PathBuf::from("."));
             let append = args.next();
-            preflight_index_volume_access(&root)?;
-            if append.is_some() {
-                preflight_index_write_volume(&path, "metadata update")?;
-            }
-            let volume = path_volume(&root).or_else(|| path_volume(&path));
+            let access_reports = if append.is_some() {
+                IndexRootWriteAccessReports::for_root_and_writes(
+                    &root,
+                    &[(&path, "metadata update")],
+                )?
+            } else {
+                IndexRootWriteAccessReports::for_root_and_writes(&root, &[])?
+            };
+            access_reports.preflight_volumes()?;
+            let volume = access_reports.first_volume();
             let report = run_volume_task_cancellable(
                 volume,
                 Priority::Visible,
                 "index",
                 move |cancellation| {
                     let _root_access =
-                        enforce_index_access_checked(&root, || cancellation.check())?;
+                        access_reports.root_access_checked(|| cancellation.check())?;
                     let _path_access = if append.is_some() {
-                        Some(preflight_index_write_checked(
-                            &path,
-                            "metadata update",
-                            || cancellation.check(),
-                        )?)
+                        Some(access_reports.write_accesses_checked(|| cancellation.check())?)
                     } else {
                         None
                     };
@@ -838,6 +826,56 @@ struct IndexBuildAccessReports {
 struct IndexRootWriteAccessReports {
     root: IndexPathAccessReport,
     writes: Vec<IndexPathAccessReport>,
+}
+
+#[derive(Clone)]
+struct IndexRootReadAccessReports {
+    root: IndexPathAccessReport,
+    reads: Vec<IndexPathAccessReport>,
+}
+
+impl IndexRootReadAccessReports {
+    fn for_root_and_reads(root: &Path, reads: &[PathBuf]) -> Self {
+        Self {
+            root: IndexPathAccessReport::new(root.to_path_buf(), AccessIntent::Index, "index"),
+            reads: reads
+                .iter()
+                .map(|path| IndexPathAccessReport::new(path.clone(), AccessIntent::Index, "index"))
+                .collect(),
+        }
+    }
+
+    fn preflight_volumes(&self) -> Result<()> {
+        self.root.preflight_volume()?;
+        for read in &self.reads {
+            read.preflight_volume()?;
+        }
+        Ok(())
+    }
+
+    fn root_access_checked(
+        &self,
+        check_control: impl FnMut() -> Result<()>,
+    ) -> Result<ScopedAccessGuard> {
+        self.root.access_checked(check_control)
+    }
+
+    fn read_accesses_checked(
+        &self,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<ScopedAccessGuard>> {
+        let mut guards = Vec::with_capacity(self.reads.len());
+        for read in &self.reads {
+            check_control()?;
+            guards.push(read.access_checked(&mut check_control)?);
+        }
+        check_control()?;
+        Ok(guards)
+    }
+
+    fn first_volume(&self) -> Option<gfm_types::VolumeId> {
+        first_access_report_volume(std::iter::once(&self.root).chain(self.reads.iter()))
+    }
 }
 
 impl IndexRootWriteAccessReports {
