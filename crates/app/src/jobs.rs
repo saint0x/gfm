@@ -159,10 +159,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "jobs-runtime-retry-probe requires an attempt state path",
             )?;
             let pressure = parse_optional_scheduling_pressure(args)?;
-            let access_report = JobPathAccessReport::new(
+            let access_report = JobPathAccessReport::new_checked(
                 write_probe_path(&state)?.to_path_buf(),
                 AccessIntent::Write,
-            );
+                || Ok(()),
+            )?;
             access_report.preflight_volume("runtime retry probe")?;
             let outcome = run_scheduled_volume_task_cancellable(
                 access_report.volume(),
@@ -197,7 +198,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
 
 fn run_jobs_recover(journal: PathBuf) -> Result<Vec<String>> {
     const WORKER: &str = "jobs recover";
-    let access_report = JobPathAccessReport::new(journal.clone(), AccessIntent::Read);
+    let access_report =
+        JobPathAccessReport::new_checked(journal.clone(), AccessIntent::Read, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
@@ -231,11 +233,6 @@ struct JobPathAccessReport {
 }
 
 impl JobPathAccessReport {
-    fn new(path: PathBuf, intent: AccessIntent) -> Self {
-        Self::new_checked(path, intent, || Ok(()))
-            .expect("uncancellable job path access report cannot cancel")
-    }
-
     fn new_checked(
         path: PathBuf,
         intent: AccessIntent,
@@ -344,8 +341,11 @@ impl JobPathAccessReports {
 
 fn run_jobs_payload_catalog(path: PathBuf) -> Result<Vec<String>> {
     const WORKER: &str = "jobs payload catalog";
-    let access_report =
-        JobPathAccessReport::new(write_probe_path(&path)?.to_path_buf(), AccessIntent::Write);
+    let access_report = JobPathAccessReport::new_checked(
+        write_probe_path(&path)?.to_path_buf(),
+        AccessIntent::Write,
+        || Ok(()),
+    )?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
@@ -367,8 +367,11 @@ fn run_jobs_payload_catalog(path: PathBuf) -> Result<Vec<String>> {
 
 fn run_jobs_progress_snapshot(path: PathBuf) -> Result<Vec<String>> {
     const WORKER: &str = "jobs progress snapshot";
-    let access_report =
-        JobPathAccessReport::new(write_probe_path(&path)?.to_path_buf(), AccessIntent::Write);
+    let access_report = JobPathAccessReport::new_checked(
+        write_probe_path(&path)?.to_path_buf(),
+        AccessIntent::Write,
+        || Ok(()),
+    )?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
@@ -391,8 +394,11 @@ fn run_jobs_progress_snapshot(path: PathBuf) -> Result<Vec<String>> {
 
 fn run_jobs_progress_restore(path: PathBuf, updated_ms: u64) -> Result<Vec<String>> {
     const WORKER: &str = "jobs progress restore";
-    let access_report =
-        JobPathAccessReport::new(write_probe_path(&path)?.to_path_buf(), AccessIntent::Write);
+    let access_report = JobPathAccessReport::new_checked(
+        write_probe_path(&path)?.to_path_buf(),
+        AccessIntent::Write,
+        || Ok(()),
+    )?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
@@ -415,8 +421,11 @@ fn run_jobs_progress_control(
     updated_ms: u64,
 ) -> Result<Vec<String>> {
     const WORKER: &str = "jobs progress control";
-    let access_report =
-        JobPathAccessReport::new(write_probe_path(&path)?.to_path_buf(), AccessIntent::Write);
+    let access_report = JobPathAccessReport::new_checked(
+        write_probe_path(&path)?.to_path_buf(),
+        AccessIntent::Write,
+        || Ok(()),
+    )?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {

@@ -437,7 +437,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "preview cache fileprovider observer",
             )?;
             let cache_probe = write_probe_path(&cache_root)?.to_path_buf();
-            let cache_access_report = PlatformAccessReport::new(cache_probe, AccessIntent::Write);
+            let cache_access_report =
+                PlatformAccessReport::new_checked(cache_probe, AccessIntent::Write, || Ok(()))?;
             cache_access_report.preflight_volume("preview cache fileprovider observer cache")?;
             let volume = cache_access_report.volume();
             println!(
@@ -2424,7 +2425,7 @@ fn run_fileprovider_read<T>(
 where
     T: Send + 'static,
 {
-    let access_report = PlatformAccessReport::new(path, AccessIntent::Read);
+    let access_report = PlatformAccessReport::new_checked(path, AccessIntent::Read, || Ok(()))?;
     access_report.preflight_volume(worker)?;
     let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
@@ -2457,7 +2458,7 @@ fn run_fileprovider_progress_job(
     cancel_after_access: bool,
 ) -> Result<FileProviderProgressReport> {
     const WORKER: &str = "fileprovider progress job";
-    let access_report = PlatformAccessReport::new(path, AccessIntent::Read);
+    let access_report = PlatformAccessReport::new_checked(path, AccessIntent::Read, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
     run_fileprovider_worker_without_runtime_progress(volume, WORKER, move |cancellation| {
@@ -2477,7 +2478,7 @@ fn run_fileprovider_operation(
     operation: FileProviderOperation,
 ) -> Result<FileProviderOperationReport> {
     const WORKER: &str = "fileprovider operation";
-    let access_report = PlatformAccessReport::new(path, AccessIntent::Operate);
+    let access_report = PlatformAccessReport::new_checked(path, AccessIntent::Operate, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
@@ -2499,7 +2500,7 @@ fn run_volume_operation(
         Ok(true) => {}
         Ok(false) | Err(_) => return VolumeOperationReport::execute(path, operation),
     }
-    let access_report = PlatformAccessReport::new(path, AccessIntent::Operate);
+    let access_report = PlatformAccessReport::new_checked(path, AccessIntent::Operate, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
@@ -2570,10 +2571,11 @@ fn run_icon_preview_retry_probe(
     const WORKER: &str = "icon preview";
     let access_report = PreviewAccessReport::new_checked(path, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
-    PlatformAccessReport::new(
+    PlatformAccessReport::new_checked(
         write_probe_path(&attempt_state)?.to_path_buf(),
         AccessIntent::Write,
-    )
+        || Ok(()),
+    )?
     .preflight_volume(WORKER)?;
     let volume = access_report.volume();
     let payload_path = access_report.path.clone();
@@ -2609,10 +2611,11 @@ fn run_quicklook_session_retry_probe(
     const WORKER: &str = "quicklook preview";
     let access_report = PreviewAccessReport::new_checked(path, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
-    PlatformAccessReport::new(
+    PlatformAccessReport::new_checked(
         write_probe_path(&attempt_state)?.to_path_buf(),
         AccessIntent::Write,
-    )
+        || Ok(()),
+    )?
     .preflight_volume(WORKER)?;
     let volume = access_report.volume();
     let payload_path = access_report.path.clone();
@@ -2650,10 +2653,11 @@ fn run_thumbnail_generation_retry_probe(
     const WORKER: &str = "thumbnail generation";
     let access_report = PreviewAccessReport::new_checked(path, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
-    PlatformAccessReport::new(
+    PlatformAccessReport::new_checked(
         write_probe_path(&attempt_state)?.to_path_buf(),
         AccessIntent::Write,
-    )
+        || Ok(()),
+    )?
     .preflight_volume(WORKER)?;
     let volume = access_report.volume();
     let payload_path = access_report.path.clone();
@@ -2917,17 +2921,18 @@ fn fileprovider_materialization_for_preview(
 fn run_security_bookmark_create(path: PathBuf, intent: AccessIntent) -> Result<Vec<String>> {
     const STORE_WORKER: &str = "security bookmark store";
     const WORKER: &str = "security bookmark create";
-    let path_access_report = PlatformAccessReport::new(path.clone(), intent);
+    let path_access_report = PlatformAccessReport::new_checked(path.clone(), intent, || Ok(()))?;
     path_access_report.preflight_volume(WORKER)?;
     let report = SecurityScopedAccessReport::evaluate(&path, intent).create_bookmark();
     if report.status != SecurityScopedBookmarkStatus::Created {
         return Ok(vec![report.as_tsv()]);
     }
     let store = SecurityScopedBookmarkStore::new(crate::runtime::default_security_bookmarks_path());
-    let store_access_report = PlatformAccessReport::new(
+    let store_access_report = PlatformAccessReport::new_checked(
         write_probe_path(store.path())?.to_path_buf(),
         AccessIntent::Write,
-    );
+        || Ok(()),
+    )?;
     store_access_report.preflight_volume(STORE_WORKER)?;
     let volume = store_access_report
         .volume()
@@ -2954,10 +2959,11 @@ fn run_security_bookmark_create(path: PathBuf, intent: AccessIntent) -> Result<V
 fn run_security_bookmark_reconcile() -> Result<gfm_mac::SecurityScopedBookmarkStoreReport> {
     const WORKER: &str = "security bookmark reconcile";
     let store = SecurityScopedBookmarkStore::new(crate::runtime::default_security_bookmarks_path());
-    let store_access_report = PlatformAccessReport::new(
+    let store_access_report = PlatformAccessReport::new_checked(
         write_probe_path(store.path())?.to_path_buf(),
         AccessIntent::Write,
-    );
+        || Ok(()),
+    )?;
     store_access_report.preflight_volume(WORKER)?;
     run_volume_task_cancellable(store_access_report.volume(), Priority::Visible, WORKER, {
         move |cancellation| {
@@ -2976,10 +2982,14 @@ fn run_spotlight_reconcile(
 ) -> Result<SpotlightReconciliationReport> {
     const WORKER: &str = "spotlight reconcile";
     const FIXTURE_WORKER: &str = "spotlight fixture";
-    let path_access_report = PlatformAccessReport::new(path.clone(), AccessIntent::Index);
+    let path_access_report =
+        PlatformAccessReport::new_checked(path.clone(), AccessIntent::Index, || Ok(()))?;
     let fixture_access_report = fixture_path
         .as_ref()
-        .map(|fixture_path| PlatformAccessReport::new(fixture_path.clone(), AccessIntent::Read));
+        .map(|fixture_path| {
+            PlatformAccessReport::new_checked(fixture_path.clone(), AccessIntent::Read, || Ok(()))
+        })
+        .transpose()?;
     path_access_report.preflight_volume(WORKER)?;
     if let Some(fixture_access_report) = fixture_access_report.as_ref() {
         fixture_access_report.preflight_volume(FIXTURE_WORKER)?;
@@ -3049,8 +3059,10 @@ fn run_preview_cache_fileprovider_invalidation(
     const CACHE_WORKER: &str = "preview cache root";
     const WORKER: &str = "preview cache";
     let cache_probe = write_probe_path(&cache_root)?.to_path_buf();
-    let cache_access_report = PlatformAccessReport::new(cache_probe, AccessIntent::Write);
-    let path_access_report = PlatformAccessReport::new(path.clone(), AccessIntent::Preview);
+    let cache_access_report =
+        PlatformAccessReport::new_checked(cache_probe, AccessIntent::Write, || Ok(()))?;
+    let path_access_report =
+        PlatformAccessReport::new_checked(path.clone(), AccessIntent::Preview, || Ok(()))?;
     cache_access_report.preflight_volume(CACHE_WORKER)?;
     path_access_report.preflight_volume(WORKER)?;
     let volume = cache_access_report
@@ -3095,7 +3107,8 @@ fn run_preview_cache_fileprovider_observed_invalidation(
 ) -> Result<String> {
     const WORKER: &str = "preview cache fileprovider observed invalidation";
     let cache_probe = write_probe_path(&cache_root)?.to_path_buf();
-    let cache_access_report = PlatformAccessReport::new(cache_probe, AccessIntent::Write);
+    let cache_access_report =
+        PlatformAccessReport::new_checked(cache_probe, AccessIntent::Write, || Ok(()))?;
     let event_access_reports =
         fileprovider_observed_event_access_reports(&state_path, &event, WORKER)?;
     cache_access_report.preflight_volume("preview cache root")?;
@@ -3191,8 +3204,12 @@ fn evaluate_fileprovider_observed_invalidation_checked(
     check_control()?;
     let state_probe = write_probe_existing_ancestor(state_path, worker)?;
     check_control()?;
-    let mut access = vec![PlatformAccessReport::new(state_probe, AccessIntent::Write)
-        .access_checked(worker, &mut check_control)?];
+    let mut access = vec![PlatformAccessReport::new_checked(
+        state_probe,
+        AccessIntent::Write,
+        &mut check_control,
+    )?
+    .access_checked(worker, &mut check_control)?];
     check_control()?;
     let previous = if fileprovider_state_file_exists(state_path, worker)? {
         Some(FileProviderStateSnapshot::read_checked(
@@ -3226,12 +3243,17 @@ fn fileprovider_snapshot_access_reports(
     worker: &str,
 ) -> Result<PlatformAccessReports> {
     let state_probe = write_probe_existing_ancestor(state_path, worker)?;
-    let mut reports = vec![PlatformAccessReport::new(state_probe, AccessIntent::Write)];
+    let mut reports = vec![PlatformAccessReport::new_checked(
+        state_probe,
+        AccessIntent::Write,
+        || Ok(()),
+    )?];
     for path in unique_fileprovider_paths(paths.iter().map(PathBuf::as_path)) {
-        reports.push(PlatformAccessReport::new(
+        reports.push(PlatformAccessReport::new_checked(
             path.to_path_buf(),
             AccessIntent::Read,
-        ));
+            || Ok(()),
+        )?);
     }
     Ok(PlatformAccessReports::new(reports))
 }
@@ -3242,13 +3264,18 @@ fn fileprovider_observed_event_access_reports(
     worker: &str,
 ) -> Result<PlatformAccessReports> {
     let state_probe = write_probe_existing_ancestor(state_path, worker)?;
-    let mut reports = vec![PlatformAccessReport::new(state_probe, AccessIntent::Write)];
+    let mut reports = vec![PlatformAccessReport::new_checked(
+        state_probe,
+        AccessIntent::Write,
+        || Ok(()),
+    )?];
     let paths = fileprovider_raw_event_paths(event);
     for path in unique_fileprovider_paths(paths.iter().map(PathBuf::as_path)) {
-        reports.push(PlatformAccessReport::new(
+        reports.push(PlatformAccessReport::new_checked(
             path.to_path_buf(),
             AccessIntent::Read,
-        ));
+            || Ok(()),
+        )?);
     }
     Ok(PlatformAccessReports::new(reports))
 }
@@ -3324,8 +3351,10 @@ pub(crate) fn run_fileprovider_observer_probe(
     let target_worker = format!("{worker} target");
     let state_worker = format!("{worker} state");
     let target_probe = write_probe_existing_ancestor(target, &target_worker)?;
-    let root_access_report = PlatformAccessReport::new(root.to_path_buf(), AccessIntent::Index);
-    let target_access_report = PlatformAccessReport::new(target_probe, AccessIntent::Write);
+    let root_access_report =
+        PlatformAccessReport::new_checked(root.to_path_buf(), AccessIntent::Index, || Ok(()))?;
+    let target_access_report =
+        PlatformAccessReport::new_checked(target_probe, AccessIntent::Write, || Ok(()))?;
     let state_access_reports =
         fileprovider_snapshot_access_reports(state_path, &[target.to_path_buf()], &state_worker)?;
     root_access_report.preflight_volume(&root_worker)?;
@@ -3575,8 +3604,10 @@ fn retain_fileprovider_event_access_checked(
     let reports = PlatformAccessReports::new(
         unique_fileprovider_paths(paths.iter().map(PathBuf::as_path))
             .into_iter()
-            .map(|path| PlatformAccessReport::new(path.to_path_buf(), AccessIntent::Read))
-            .collect(),
+            .map(|path| {
+                PlatformAccessReport::new_checked(path.to_path_buf(), AccessIntent::Read, || Ok(()))
+            })
+            .collect::<Result<Vec<_>>>()?,
     );
     reports.access_checked(worker, check_control)
 }
@@ -3726,11 +3757,6 @@ struct PlatformAccessReport {
 }
 
 impl PlatformAccessReport {
-    fn new(path: PathBuf, intent: AccessIntent) -> Self {
-        Self::new_checked(path, intent, || Ok(()))
-            .expect("uncancellable platform access report cannot cancel")
-    }
-
     fn new_checked(
         path: PathBuf,
         intent: AccessIntent,
