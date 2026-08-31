@@ -833,7 +833,7 @@ pub(crate) fn run_content_search(
     query: String,
     extractor: Extractor,
 ) -> Result<(usize, Vec<SearchHit>)> {
-    let volume_report = VolumeDiscoveryReport::for_containing_path(&root);
+    let volume_report = VolumeDiscoveryReport::for_containing_path_checked(&root, || Ok(()))?;
     preflight_volume_access_scope_with_report(
         &root,
         AccessIntent::Index,
@@ -1045,7 +1045,7 @@ fn run_index_footprint_inspect(
     spec: IndexFootprintSpec,
     worker: &'static str,
 ) -> Result<gfm_index::IndexFootprintReport> {
-    let access_reports = IndexFootprintAccessReports::for_spec(&spec, worker);
+    let access_reports = IndexFootprintAccessReports::for_spec_checked(&spec, worker, || Ok(()))?;
     access_reports.preflight_volumes()?;
     let volume = access_reports.first_volume();
     run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
@@ -1053,7 +1053,9 @@ fn run_index_footprint_inspect(
         let _access = access_reports.access_checked(|| cancellation.check())?;
         let archive_paths = index_footprint_content_archive_paths(&spec, &cancellation)?;
         let archive_access_reports =
-            IndexFootprintAccessReports::for_archive_paths(&archive_paths, worker);
+            IndexFootprintAccessReports::for_archive_paths_checked(&archive_paths, worker, || {
+                cancellation.check()
+            })?;
         archive_access_reports.preflight_volumes_checked(|| cancellation.check())?;
         cancellation.check()?;
         let _archive_access = archive_access_reports.access_checked(|| cancellation.check())?;
@@ -1081,13 +1083,20 @@ struct IndexFootprintAccessReport {
 }
 
 impl IndexFootprintAccessReport {
-    fn new(path: PathBuf, worker: String) -> Self {
-        let volume_report = VolumeDiscoveryReport::for_containing_path(&path);
-        Self {
+    fn new_checked(
+        path: PathBuf,
+        worker: String,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check_control()?;
+        let volume_report =
+            VolumeDiscoveryReport::for_containing_path_checked(&path, &mut check_control)?;
+        check_control()?;
+        Ok(Self {
             path,
             worker,
             volume_report,
-        }
+        })
     }
 
     fn preflight_volume(&self) -> Result<()> {
@@ -1125,29 +1134,40 @@ struct IndexFootprintAccessReports {
 }
 
 impl IndexFootprintAccessReports {
-    fn for_spec(spec: &IndexFootprintSpec, worker: &str) -> Self {
-        Self {
-            entries: unique_index_footprint_paths(spec)
-                .into_iter()
-                .map(|(path, role)| {
-                    IndexFootprintAccessReport::new(path.to_path_buf(), format!("{worker} {role}"))
-                })
-                .collect(),
+    fn for_spec_checked(
+        spec: &IndexFootprintSpec,
+        worker: &str,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        let mut entries = Vec::new();
+        for (path, role) in unique_index_footprint_paths(spec) {
+            check_control()?;
+            entries.push(IndexFootprintAccessReport::new_checked(
+                path.to_path_buf(),
+                format!("{worker} {role}"),
+                &mut check_control,
+            )?);
         }
+        check_control()?;
+        Ok(Self { entries })
     }
 
-    fn for_archive_paths(paths: &[PathBuf], worker: &str) -> Self {
-        Self {
-            entries: unique_path_refs(paths.iter().map(PathBuf::as_path))
-                .into_iter()
-                .map(|path| {
-                    IndexFootprintAccessReport::new(
-                        path.to_path_buf(),
-                        format!("{worker} content archive"),
-                    )
-                })
-                .collect(),
+    fn for_archive_paths_checked(
+        paths: &[PathBuf],
+        worker: &str,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        let mut entries = Vec::new();
+        for path in unique_path_refs(paths.iter().map(PathBuf::as_path)) {
+            check_control()?;
+            entries.push(IndexFootprintAccessReport::new_checked(
+                path.to_path_buf(),
+                format!("{worker} content archive"),
+                &mut check_control,
+            )?);
         }
+        check_control()?;
+        Ok(Self { entries })
     }
 
     fn preflight_volumes(&self) -> Result<()> {
@@ -1235,7 +1255,7 @@ fn preflight_index_footprint_archive_volumes_checked(
     worker: &str,
     check_control: impl FnMut() -> Result<()>,
 ) -> Result<()> {
-    IndexFootprintAccessReports::for_archive_paths(paths, worker)
+    IndexFootprintAccessReports::for_archive_paths_checked(paths, worker, || Ok(()))?
         .preflight_volumes_checked(check_control)
 }
 
@@ -1518,6 +1538,68 @@ mod tests {
     }
 
     #[test]
+    fn foreground_content_index_reports_checked_honor_pre_cancelled_control_before_probe() {
+        let root = std::env::temp_dir()
+            .join(format!(
+                "gfm-content-index-report-pre-cancel-{}",
+                std::process::id()
+            ))
+            .join("root");
+        let records = root.join("records.gfmidx");
+        let content = root.join("content.gfmcontent");
+
+        let result = ForegroundContentIndexAccessReports::for_paths_checked(
+            root.clone(),
+            records,
+            content,
+            || Err(GfmError::Cancelled),
+        );
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn foreground_content_index_reports_checked_can_cancel_between_outputs() {
+        let root = unique_temp_dir("gfm-content-index-report-cancel");
+        let records = root.join("records.gfmidx");
+        let content = root.join("content.gfmcontent");
+        let mut checks = 0;
+
+        let result = ForegroundContentIndexAccessReports::for_paths_checked(
+            root.clone(),
+            records,
+            content,
+            || {
+                checks += 1;
+                if checks > 4 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        );
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn retry_probe_report_checked_honors_pre_cancelled_control_before_probe() {
+        let path = std::env::temp_dir()
+            .join(format!(
+                "gfm-content-retry-report-pre-cancel-{}",
+                std::process::id()
+            ))
+            .join("attempt.state");
+
+        let result = retry_probe_access_report_checked(Some(&path), || Err(GfmError::Cancelled));
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!path.exists());
+    }
+
+    #[test]
     fn content_segments_access_checked_can_cancel_before_output_probe() {
         let root = unique_temp_dir("gfm-content-segments-access-pre-cancel");
         let output = root.join("output.gfmcontent");
@@ -1566,6 +1648,48 @@ mod tests {
     }
 
     #[test]
+    fn content_segment_index_reports_checked_honor_pre_cancelled_control_before_probe() {
+        let root = std::env::temp_dir()
+            .join(format!(
+                "gfm-content-segment-report-pre-cancel-{}",
+                std::process::id()
+            ))
+            .join("root");
+        let output = root.join("segment.gfmcontent");
+
+        let result = ContentSegmentIndexAccessReports::for_paths_checked(&root, &output, || {
+            Err(GfmError::Cancelled)
+        });
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn content_segments_reports_checked_can_cancel_between_segments() {
+        let root = unique_temp_dir("gfm-content-segments-report-cancel");
+        let output = root.join("output.gfmcontent");
+        let segments = vec![
+            root.join("first.gfmcontent"),
+            root.join("second.gfmcontent"),
+        ];
+        let mut checks = 0;
+
+        let result =
+            ContentSegmentsAccessReports::for_paths_checked(None, &output, &segments, || {
+                checks += 1;
+                if checks > 5 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            });
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn content_job_access_checked_honors_pre_cancelled_control_before_preflight() {
         let root = unique_temp_dir("gfm-content-job-access-pre-cancel");
         let spec = ContentIndexJobSpec::new(
@@ -1585,6 +1709,37 @@ mod tests {
 
         assert_eq!(result.err(), Some(GfmError::Cancelled));
         assert!(!spec_path.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn content_job_reports_checked_can_cancel_between_outputs() {
+        let root = unique_temp_dir("gfm-content-job-report-cancel");
+        let spec = ContentIndexJobSpec::new(
+            root.join("input"),
+            root.join("segments"),
+            root.join("records.gfmidx"),
+            root.join("content.gfmcontent"),
+        );
+        let spec_path = root.join("job.tsv");
+        let journal_path = root.join("journal.tsv");
+        let mut checks = 0;
+
+        let result = ContentJobAccessReports::for_spec_checked(
+            &spec,
+            &spec_path,
+            Some(&journal_path),
+            || {
+                checks += 1;
+                if checks > 6 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        );
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1903,24 +2058,48 @@ struct ForegroundContentIndexAccessReports {
 
 impl ForegroundContentIndexAccessReports {
     fn for_paths(root: PathBuf, records: PathBuf, content: PathBuf) -> Result<Self> {
+        Self::for_paths_checked(root, records, content, || Ok(()))
+    }
+
+    fn for_paths_checked(
+        root: PathBuf,
+        records: PathBuf,
+        content: PathBuf,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check_control()?;
         let records_probe = write_probe_path(&records)?.to_path_buf();
+        check_control()?;
         let content_probe = write_probe_path(&content)?.to_path_buf();
+        check_control()?;
         Ok(Self {
             entries: vec![
-                Self::entry(root, AccessIntent::Index),
-                Self::entry(records_probe, AccessIntent::Write),
-                Self::entry(content_probe, AccessIntent::Write),
+                Self::entry_checked(root, AccessIntent::Index, &mut check_control)?,
+                Self::entry_checked(records_probe, AccessIntent::Write, &mut check_control)?,
+                Self::entry_checked(content_probe, AccessIntent::Write, &mut check_control)?,
             ],
         })
     }
 
     fn entry(path: PathBuf, intent: AccessIntent) -> ForegroundContentIndexAccessReport {
-        let volume_report = VolumeDiscoveryReport::for_containing_path(&path);
-        ForegroundContentIndexAccessReport {
+        Self::entry_checked(path, intent, || Ok(()))
+            .expect("uncancellable foreground content access report cannot cancel")
+    }
+
+    fn entry_checked(
+        path: PathBuf,
+        intent: AccessIntent,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<ForegroundContentIndexAccessReport> {
+        check_control()?;
+        let volume_report =
+            VolumeDiscoveryReport::for_containing_path_checked(&path, &mut check_control)?;
+        check_control()?;
+        Ok(ForegroundContentIndexAccessReport {
             path,
             intent,
             volume_report,
-        }
+        })
     }
 
     fn preflight_volumes(&self, worker: &str) -> Result<()> {
@@ -1940,12 +2119,23 @@ impl ForegroundContentIndexAccessReports {
 fn retry_probe_access_report(
     retry_probe: Option<&Path>,
 ) -> Result<Option<ForegroundContentIndexAccessReport>> {
+    retry_probe_access_report_checked(retry_probe, || Ok(()))
+}
+
+fn retry_probe_access_report_checked(
+    retry_probe: Option<&Path>,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Option<ForegroundContentIndexAccessReport>> {
     retry_probe
         .map(|retry_probe| {
-            Ok(ForegroundContentIndexAccessReports::entry(
-                write_probe_path(retry_probe)?.to_path_buf(),
+            check_control()?;
+            let retry_probe = write_probe_path(retry_probe)?.to_path_buf();
+            check_control()?;
+            ForegroundContentIndexAccessReports::entry_checked(
+                retry_probe,
                 AccessIntent::Write,
-            ))
+                &mut check_control,
+            )
         })
         .transpose()
 }
@@ -1967,13 +2157,29 @@ struct ContentSegmentIndexAccessReports {
 
 impl ContentSegmentIndexAccessReports {
     fn for_paths(root: &Path, output: &Path) -> Result<Self> {
+        Self::for_paths_checked(root, output, || Ok(()))
+    }
+
+    fn for_paths_checked(
+        root: &Path,
+        output: &Path,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check_control()?;
+        let output_probe = write_probe_path(output)?.to_path_buf();
+        check_control()?;
         Ok(Self {
             entries: [
-                ForegroundContentIndexAccessReports::entry(root.to_path_buf(), AccessIntent::Index),
-                ForegroundContentIndexAccessReports::entry(
-                    write_probe_path(output)?.to_path_buf(),
+                ForegroundContentIndexAccessReports::entry_checked(
+                    root.to_path_buf(),
+                    AccessIntent::Index,
+                    &mut check_control,
+                )?,
+                ForegroundContentIndexAccessReports::entry_checked(
+                    output_probe,
                     AccessIntent::Write,
-                ),
+                    &mut check_control,
+                )?,
             ],
         })
     }
@@ -2012,21 +2218,41 @@ impl ContentSegmentsAccessReports {
         output_archive: &Path,
         segments: &[PathBuf],
     ) -> Result<Self> {
+        Self::for_paths_checked(manifest_path, output_archive, segments, || Ok(()))
+    }
+
+    fn for_paths_checked(
+        manifest_path: Option<&Path>,
+        output_archive: &Path,
+        segments: &[PathBuf],
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
         let mut entries =
             Vec::with_capacity(segments.len() + 1 + usize::from(manifest_path.is_some()));
         if let Some(manifest_path) = manifest_path {
-            entries.push(ForegroundContentIndexAccessReports::entry(
+            check_control()?;
+            entries.push(ForegroundContentIndexAccessReports::entry_checked(
                 manifest_path.to_path_buf(),
                 AccessIntent::Read,
-            ));
+                &mut check_control,
+            )?);
         }
-        entries.push(ForegroundContentIndexAccessReports::entry(
-            write_probe_path(output_archive)?.to_path_buf(),
+        check_control()?;
+        let output_archive = write_probe_path(output_archive)?.to_path_buf();
+        check_control()?;
+        entries.push(ForegroundContentIndexAccessReports::entry_checked(
+            output_archive,
             AccessIntent::Write,
-        ));
-        entries.extend(segments.iter().map(|segment| {
-            ForegroundContentIndexAccessReports::entry(segment.clone(), AccessIntent::Read)
-        }));
+            &mut check_control,
+        )?);
+        for segment in segments {
+            check_control()?;
+            entries.push(ForegroundContentIndexAccessReports::entry_checked(
+                segment.clone(),
+                AccessIntent::Read,
+                &mut check_control,
+            )?);
+        }
         Ok(Self { entries })
     }
 
@@ -2064,46 +2290,68 @@ impl ContentJobAccessReports {
         spec_path: &Path,
         journal_path: Option<&Path>,
     ) -> Result<Self> {
+        Self::for_spec_checked(spec, spec_path, journal_path, || Ok(()))
+    }
+
+    fn for_spec_checked(
+        spec: &ContentIndexJobSpec,
+        spec_path: &Path,
+        journal_path: Option<&Path>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
         let quarantine_path = default_extraction_quarantine_path();
         let mut entries = Vec::with_capacity(6 + usize::from(journal_path.is_some()));
-        entries.push(ForegroundContentIndexAccessReports::entry(
+        check_control()?;
+        entries.push(ForegroundContentIndexAccessReports::entry_checked(
             spec.root.clone(),
             AccessIntent::Index,
-        ));
-        entries.push(ForegroundContentIndexAccessReports::entry(
-            write_probe_path(&spec.segment_dir)?.to_path_buf(),
-            AccessIntent::Write,
-        ));
-        entries.push(ForegroundContentIndexAccessReports::entry(
-            write_probe_path(&spec.records_path)?.to_path_buf(),
-            AccessIntent::Write,
-        ));
-        entries.push(ForegroundContentIndexAccessReports::entry(
-            write_probe_path(&spec.content_path)?.to_path_buf(),
-            AccessIntent::Write,
-        ));
-        entries.push(ForegroundContentIndexAccessReports::entry(
-            write_probe_path(spec_path)?.to_path_buf(),
-            AccessIntent::Write,
-        ));
-        entries.push(ForegroundContentIndexAccessReports::entry(
-            write_probe_path(&quarantine_path)?.to_path_buf(),
-            AccessIntent::Write,
-        ));
-        if let Some(journal_path) = journal_path {
-            entries.push(ForegroundContentIndexAccessReports::entry(
-                write_probe_path(journal_path)?.to_path_buf(),
+            &mut check_control,
+        )?);
+        for path in [
+            spec.segment_dir.as_path(),
+            spec.records_path.as_path(),
+            spec.content_path.as_path(),
+            spec_path,
+            quarantine_path.as_path(),
+        ] {
+            check_control()?;
+            let path = write_probe_path(path)?.to_path_buf();
+            check_control()?;
+            entries.push(ForegroundContentIndexAccessReports::entry_checked(
+                path,
                 AccessIntent::Write,
-            ));
+                &mut check_control,
+            )?);
+        }
+        if let Some(journal_path) = journal_path {
+            check_control()?;
+            let journal_path = write_probe_path(journal_path)?.to_path_buf();
+            check_control()?;
+            entries.push(ForegroundContentIndexAccessReports::entry_checked(
+                journal_path,
+                AccessIntent::Write,
+                &mut check_control,
+            )?);
         }
         Ok(Self { entries })
     }
 
     fn for_spec_path_write(spec_path: &Path) -> Result<ForegroundContentIndexAccessReport> {
-        Ok(ForegroundContentIndexAccessReports::entry(
-            write_probe_path(spec_path)?.to_path_buf(),
+        Self::for_spec_path_write_checked(spec_path, || Ok(()))
+    }
+
+    fn for_spec_path_write_checked(
+        spec_path: &Path,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<ForegroundContentIndexAccessReport> {
+        check_control()?;
+        let spec_path = write_probe_path(spec_path)?.to_path_buf();
+        check_control()?;
+        ForegroundContentIndexAccessReports::entry_checked(
+            spec_path,
             AccessIntent::Write,
-        ))
+            &mut check_control,
+        )
     }
 
     fn preflight_volumes(&self, worker: &str) -> Result<()> {
@@ -2142,8 +2390,12 @@ fn retain_content_segments_access_checked(
     worker: &str,
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
-    let access_reports =
-        ContentSegmentsAccessReports::for_paths(manifest_path, output_archive, segments)?;
+    let access_reports = ContentSegmentsAccessReports::for_paths_checked(
+        manifest_path,
+        output_archive,
+        segments,
+        &mut check_control,
+    )?;
     access_reports.access_checked(worker, &mut check_control)
 }
 
@@ -2155,7 +2407,7 @@ fn retain_content_job_access_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
     check_control()?;
-    ContentJobAccessReports::for_spec(spec, spec_path, None)?
+    ContentJobAccessReports::for_spec_checked(spec, spec_path, None, &mut check_control)?
         .access_checked(worker, &mut check_control)
 }
 
