@@ -1881,12 +1881,6 @@ impl PreviewAccessReport {
         preview_volume_descriptor_from_report(&self.volume_path, &self.volume_report)
     }
 
-    fn remote(&self) -> bool {
-        self.volume_report
-            .volume_for_path(&self.volume_path)
-            .is_some_and(volume_descriptor_is_remote_for_preview)
-    }
-
     fn scheduling_policy(
         &self,
         base: PreviewSchedulingPolicy,
@@ -2726,7 +2720,7 @@ fn build_quicklook_session_contract(
         Viewport::new(Rect::new(0, 0, 1024, 768), 256),
     )
     .with_cloud_materialization(cloud)
-    .with_remote_volume(access_report.remote())
+    .with_volume_descriptor(access_report.descriptor().as_ref())
     .with_scheduling_policy(access_report.scheduling_policy(
         preview_base_scheduling_policy(PreviewKind::QuickLook),
         SchedulingPressure::default(),
@@ -2760,7 +2754,7 @@ fn build_thumbnail_generation_contract(
         Viewport::new(Rect::new(0, 0, 1024, 768), 256),
     )
     .with_cloud_materialization(cloud)
-    .with_remote_volume(access_report.remote())
+    .with_volume_descriptor(access_report.descriptor().as_ref())
     .with_scheduling_policy(access_report.scheduling_policy(
         preview_base_scheduling_policy(PreviewKind::Thumbnail),
         SchedulingPressure::default(),
@@ -2841,7 +2835,7 @@ fn run_adaptive_quicklook_session(
                 Viewport::new(Rect::new(0, 0, 1024, 768), 256),
             )
             .with_cloud_materialization(cloud)
-            .with_remote_volume(access_report.remote())
+            .with_volume_descriptor(access_report.descriptor().as_ref())
             .with_scheduling_policy(access_report.scheduling_policy(
                 preview_base_scheduling_policy(PreviewKind::QuickLook),
                 pressure,
@@ -2901,7 +2895,7 @@ fn run_adaptive_thumbnail_generation(
                 Viewport::new(Rect::new(0, 0, 1024, 768), 256),
             )
             .with_cloud_materialization(cloud)
-            .with_remote_volume(access_report.remote())
+            .with_volume_descriptor(access_report.descriptor().as_ref())
             .with_scheduling_policy(access_report.scheduling_policy(
                 preview_base_scheduling_policy(PreviewKind::Thumbnail),
                 pressure,
