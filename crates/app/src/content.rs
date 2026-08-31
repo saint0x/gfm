@@ -856,18 +856,25 @@ pub(crate) fn run_content_search(
     query: String,
     extractor: Extractor,
 ) -> Result<(usize, Vec<SearchHit>)> {
-    preflight_volume_access_scope(&root, AccessIntent::Index, "content search")?;
-    let volume = detect_volume_id(&root).ok();
+    let volume_report = VolumeDiscoveryReport::for_containing_path(&root);
+    preflight_volume_access_scope_with_report(
+        &root,
+        AccessIntent::Index,
+        "content search",
+        &volume_report,
+    )?;
+    let volume = volume_report.volume_for_path(&root).map(|volume| volume.id);
     run_volume_task_cancellable(
         volume,
         Priority::Visible,
         "content extraction search",
         move |cancellation| {
             cancellation.check()?;
-            let _access = preflight_access_scope_checked(
+            let _access = preflight_access_scope_checked_with_volume_report(
                 &root,
                 AccessIntent::Index,
                 "content search",
+                &volume_report,
                 || cancellation.check(),
             )?;
             cancellation.check()?;

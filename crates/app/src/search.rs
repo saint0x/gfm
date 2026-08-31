@@ -1965,12 +1965,13 @@ fn run_content_index_manifest_search(
     retry_probe: Option<PathBuf>,
 ) -> Result<ContentIndexSetSearchOutput> {
     const WORKER: &str = "content index manifest search";
-    preflight_volume_access_scope(&records, AccessIntent::Read, &format!("{WORKER} records"))?;
-    preflight_volume_access_scope(&manifest, AccessIntent::Read, &format!("{WORKER} manifest"))?;
+    let volume_reports =
+        ContentIndexManifestVolumeAccessReports::for_records_and_manifest(&records, &manifest);
+    volume_reports.preflight_volumes(WORKER)?;
     if let Some(retry_probe) = retry_probe.as_ref() {
         preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, WORKER)?;
     }
-    let volume = path_volume(&records).or_else(|| path_volume(&manifest));
+    let volume = volume_reports.first_volume();
     run_retriable_volume_task_cancellable_with_payload_path(
         volume,
         Priority::Visible,
@@ -1986,8 +1987,8 @@ fn run_content_index_manifest_search(
                 fail_first_search_retry_probe_attempt(retry_probe, WORKER, &cancellation)?;
             }
             let _access = preflight_content_index_manifest_search_access_checked(
-                &records,
                 &manifest,
+                &volume_reports,
                 WORKER,
                 || cancellation.check(),
             )?;
@@ -2028,12 +2029,13 @@ fn run_content_index_manifest_session(
     retry_probe: Option<PathBuf>,
 ) -> Result<ContentIndexSessionOutput> {
     const WORKER: &str = "content index manifest session";
-    preflight_volume_access_scope(&records, AccessIntent::Read, &format!("{WORKER} records"))?;
-    preflight_volume_access_scope(&manifest, AccessIntent::Read, &format!("{WORKER} manifest"))?;
+    let volume_reports =
+        ContentIndexManifestVolumeAccessReports::for_records_and_manifest(&records, &manifest);
+    volume_reports.preflight_volumes(WORKER)?;
     if let Some(retry_probe) = retry_probe.as_ref() {
         preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, WORKER)?;
     }
-    let volume = path_volume(&records).or_else(|| path_volume(&manifest));
+    let volume = volume_reports.first_volume();
     run_retriable_volume_task_cancellable_with_payload_path(
         volume,
         Priority::Visible,
@@ -2049,8 +2051,8 @@ fn run_content_index_manifest_session(
                 fail_first_search_retry_probe_attempt(retry_probe, WORKER, &cancellation)?;
             }
             let _access = preflight_content_index_manifest_search_access_checked(
-                &records,
                 &manifest,
+                &volume_reports,
                 WORKER,
                 || cancellation.check(),
             )?;
@@ -2154,6 +2156,77 @@ impl ContentIndexVolumeAccessReports {
     }
 }
 
+#[derive(Clone)]
+struct ContentIndexManifestVolumeAccessReport {
+    path: PathBuf,
+    role: &'static str,
+    volume_report: VolumeDiscoveryReport,
+}
+
+#[derive(Clone)]
+struct ContentIndexManifestVolumeAccessReports {
+    entries: [ContentIndexManifestVolumeAccessReport; 2],
+}
+
+impl ContentIndexManifestVolumeAccessReports {
+    fn for_records_and_manifest(records: &Path, manifest: &Path) -> Self {
+        Self {
+            entries: [
+                Self::entry(records, "records"),
+                Self::entry(manifest, "manifest"),
+            ],
+        }
+    }
+
+    fn entry(path: &Path, role: &'static str) -> ContentIndexManifestVolumeAccessReport {
+        ContentIndexManifestVolumeAccessReport {
+            path: path.to_path_buf(),
+            role,
+            volume_report: VolumeDiscoveryReport::for_containing_path(path),
+        }
+    }
+
+    fn preflight_volumes(&self, worker: &str) -> Result<()> {
+        for entry in &self.entries {
+            preflight_volume_access_scope_with_report(
+                &entry.path,
+                AccessIntent::Read,
+                &format!("{worker} {}", entry.role),
+                &entry.volume_report,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn preflight_access_checked(
+        &self,
+        worker: &str,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<ScopedAccessGuard>> {
+        self.entries
+            .iter()
+            .map(|entry| {
+                preflight_access_scope_checked_with_volume_report(
+                    &entry.path,
+                    AccessIntent::Read,
+                    &format!("{worker} {}", entry.role),
+                    &entry.volume_report,
+                    &mut check_control,
+                )
+            })
+            .collect()
+    }
+
+    fn first_volume(&self) -> Option<VolumeId> {
+        self.entries.iter().find_map(|entry| {
+            entry
+                .volume_report
+                .volume_for_path(&entry.path)
+                .map(|volume| volume.id)
+        })
+    }
+}
+
 fn preflight_content_manifest_access_checked_with_volume_report(
     manifest_path: &Path,
     worker: &str,
@@ -2214,26 +2287,13 @@ fn preflight_content_index_search_access_checked(
 }
 
 fn preflight_content_index_manifest_search_access_checked(
-    records: &Path,
     manifest_path: &Path,
+    volume_reports: &ContentIndexManifestVolumeAccessReports,
     worker: &str,
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
     check_control()?;
-    let mut guards = vec![
-        preflight_access_scope_checked(
-            records,
-            AccessIntent::Read,
-            &format!("{worker} records"),
-            &mut check_control,
-        )?,
-        preflight_access_scope_checked(
-            manifest_path,
-            AccessIntent::Read,
-            &format!("{worker} manifest"),
-            &mut check_control,
-        )?,
-    ];
+    let mut guards = volume_reports.preflight_access_checked(worker, &mut check_control)?;
     check_control()?;
     let manifest = ContentArchiveManifest::read_checked(manifest_path, &mut check_control)?;
     check_control()?;
@@ -3084,6 +3144,28 @@ mod tests {
         let result = preflight_search_index_columns_access_checked(&volume_reports, || {
             Err(GfmError::Cancelled)
         });
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn content_index_manifest_access_checked_honors_pre_cancelled_control() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-content-index-manifest-access-pre-cancel-{}",
+            std::process::id()
+        ));
+        let records = root.join("records.gfmidx");
+        let manifest = root.join("content.gfmmanifest");
+        let volume_reports =
+            ContentIndexManifestVolumeAccessReports::for_records_and_manifest(&records, &manifest);
+
+        let result = preflight_content_index_manifest_search_access_checked(
+            &manifest,
+            &volume_reports,
+            "content index manifest search",
+            || Err(GfmError::Cancelled),
+        );
 
         assert_eq!(result.err(), Some(GfmError::Cancelled));
         assert!(!root.exists());
