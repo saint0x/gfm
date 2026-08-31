@@ -73,7 +73,8 @@ pub(crate) fn refresh_permission_state_at_path_checked(
     check_control()?;
     let probe_path = write_probe_existing_ancestor_checked(path, &mut check_control)?;
     check_control()?;
-    let report = VolumeDiscoveryReport::for_containing_path(&probe_path);
+    let report =
+        VolumeDiscoveryReport::for_containing_path_checked(&probe_path, &mut check_control)?;
     check_control()?;
     refresh_permission_state_at_path_with_report_checked(path, &probe_path, &report, check_control)
 }
@@ -447,6 +448,28 @@ mod tests {
         assert_eq!(err, GfmError::Cancelled);
         assert!(!state.exists());
         assert!(!state.parent().unwrap().exists());
+    }
+
+    #[test]
+    fn refresh_state_honors_cancellation_before_volume_discovery_finishes() {
+        let root = unique_temp_dir("gfm-permission-refresh-volume-discovery-cancel");
+        let state = root.join("permission-state.tsv");
+        let mut checks = 0usize;
+
+        let err = refresh_permission_state_at_path_checked(&state, || {
+            checks += 1;
+            if checks >= 5 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert!(checks >= 5);
+        assert!(!state.exists());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
