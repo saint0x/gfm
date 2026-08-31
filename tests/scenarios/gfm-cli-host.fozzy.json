@@ -4772,6 +4772,16 @@
       "times": 1
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "volume-mount-bsd-cancel-before-native",
+        "disk999999s999"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
       "type": "fs_write",
       "path": "tmp/gfm-fozzy-index-disk-image/.gfm-volume-kind",
       "data": "disk-image\n"

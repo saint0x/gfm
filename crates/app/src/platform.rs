@@ -726,12 +726,20 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 run_volume_operation(path, operation, cancel_after_access)?.as_tsv()
             );
         }
-        "volume-mount-bsd" => {
+        "volume-mount-bsd" | "volume-mount-bsd-cancel-before-native" => {
+            let cancel_before_native = command == "volume-mount-bsd-cancel-before-native";
             let bsd_name = required_string(
                 args.next(),
                 "volume-mount-bsd requires a BSD disk name such as disk4s1",
             )?;
-            println!("{}", VolumeMountIdentityReport::execute(bsd_name).as_tsv());
+            let report = VolumeMountIdentityReport::execute_checked(bsd_name, || {
+                if cancel_before_native {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            })?;
+            println!("{}", report.as_tsv());
         }
         "permission-invalidation-unavailable-volume-api" => {
             let state = required_path(

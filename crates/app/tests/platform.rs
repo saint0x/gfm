@@ -6627,6 +6627,23 @@ fn reports_volume_mount_bsd_refusal_from_binary() {
     assert!(native_refusal_stdout.contains("\tdisposition=refused\tnative-status=bad-argument\t"));
     assert!(native_refusal_stdout.contains("\tdissenter-status=0xf8da0003\t"));
     assert!(native_refusal_stdout.contains("\treason=diskarbitration-bad-argument:0xf8da0003"));
+
+    let cancelled = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-mount-bsd-cancel-before-native")
+        .arg("disk999999s999")
+        .output()
+        .unwrap();
+    assert!(!cancelled.status.success());
+    let cancelled_stdout = String::from_utf8_lossy(&cancelled.stdout);
+    let cancelled_stderr = String::from_utf8_lossy(&cancelled.stderr);
+    assert!(
+        !cancelled_stdout.contains("volume-mount-bsd\t"),
+        "{cancelled_stdout}"
+    );
+    assert!(
+        cancelled_stderr.contains("operation was cancelled"),
+        "{cancelled_stderr}"
+    );
 }
 
 fn mark_evicted_fixture(path: impl AsRef<std::path::Path>) {

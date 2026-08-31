@@ -864,6 +864,7 @@ fn print_usage() {
   gfm volume-event-transition-case-sensitivity <previous:true|false> <current:true|false>
   gfm volume-event-transition-api-status
   gfm volume-operation <eject|unmount|mount> <path>
+  gfm volume-mount-bsd-cancel-before-native <bsd-name>
   gfm volume-mount-bsd <bsd-name>
   gfm volume-index-policy <external:disabled|opt-in|enabled> <network:disabled|opt-in|enabled> [opt-in:path...] [paths...]
   gfm volume-invalidation <previous-class> <previous-mount> <path> [previous-read-only previous-writable previous-ejectable previous-mountable previous-case-sensitive previous-stable-id previous-filesystem-signature]

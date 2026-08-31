@@ -1853,6 +1853,20 @@ pub struct VolumeMountIdentityReport {
 impl VolumeMountIdentityReport {
     pub fn execute(bsd_name: impl Into<String>) -> Self {
         let bsd_name = bsd_name.into();
+        Self::from_native(bsd_name)
+    }
+
+    pub fn execute_checked(
+        bsd_name: impl Into<String>,
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check()?;
+        let bsd_name = bsd_name.into();
+        check()?;
+        Ok(Self::from_native(bsd_name))
+    }
+
+    fn from_native(bsd_name: String) -> Self {
         let native = gfm_mac_sys::submit_volume_mount_by_bsd_name(&bsd_name);
         let disposition = disposition_for_native_operation(native.status);
         Self {
@@ -3608,6 +3622,16 @@ mod tests {
         assert!(report
             .as_tsv()
             .starts_with("volume-mount-bsd\tbsd-name=not/a/disk\t"));
+    }
+
+    #[test]
+    fn checked_volume_mount_identity_honors_pre_cancelled_work_before_native_call() {
+        let err = VolumeMountIdentityReport::execute_checked("disk999999s999", || {
+            Err(GfmError::Cancelled)
+        })
+        .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
     }
 
     #[test]
