@@ -766,7 +766,20 @@ pub fn submit_volume_mount_by_bsd_name(bsd_name: &str) -> NativeVolumeOperationR
         };
     }
 
-    let bsd_name = CString::new(bsd_name).expect("BSD name was checked for interior NUL");
+    let bsd_name = match CString::new(bsd_name) {
+        Ok(name) => name,
+        Err(_) => {
+            unsafe {
+                CFRelease(session as CFTypeRef);
+            }
+            return NativeVolumeOperationResult {
+                operation,
+                status: NativeVolumeOperationStatus::Unsupported,
+                dissenter_status: None,
+                reason: Some("diskarbitration-mount-requires-bsd-name".to_string()),
+            };
+        }
+    };
     let disk = unsafe { DADiskCreateFromBSDName(kCFAllocatorDefault, session, bsd_name.as_ptr()) };
     if disk.is_null() {
         unsafe {
@@ -1850,7 +1863,14 @@ mod tests {
 
     #[test]
     fn malformed_bsd_mount_identity_does_not_submit_to_diskarbitration() {
-        for name in ["notadisk", "disk", "diskXs1", "disk4s", "disk4s1/evil"] {
+        for name in [
+            "notadisk",
+            "disk",
+            "diskXs1",
+            "disk4s",
+            "disk4s1/evil",
+            "disk4\0s1",
+        ] {
             let result = submit_volume_mount_by_bsd_name(name);
 
             assert_eq!(result.operation, NativeVolumeOperation::Mount);

@@ -1900,10 +1900,19 @@ impl VolumeOperationReport {
             ));
         }
         check()?;
-        let native_operation = match operation {
-            VolumeOperation::Eject => NativeVolumeOperation::Eject,
-            VolumeOperation::Unmount => NativeVolumeOperation::Unmount,
-            VolumeOperation::Mount => unreachable!("mount is handled before native submission"),
+        let native_operation = if operation == VolumeOperation::Eject {
+            NativeVolumeOperation::Eject
+        } else if operation == VolumeOperation::Unmount {
+            NativeVolumeOperation::Unmount
+        } else {
+            return Ok(Self::with_volume(
+                operation,
+                VolumeOperationDisposition::Unsupported,
+                None,
+                None,
+                volume,
+                "native-mount-requires-unmounted-disk-identity",
+            ));
         };
         check()?;
         let native = gfm_mac_sys::submit_volume_operation(&path, native_operation);
