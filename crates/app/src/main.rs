@@ -842,6 +842,7 @@ fn print_usage() {
   gfm fileprovider-state-with-identity <path>
   gfm fileprovider-domain <path>
   gfm fileprovider-domains
+  gfm fileprovider-domains-cancel-before-native
   gfm fileprovider-progress <path>
   gfm fileprovider-conflict <path>
   gfm fileprovider-progress-job <path>

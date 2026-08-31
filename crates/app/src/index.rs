@@ -28,7 +28,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .next()
                 .map(PathBuf::from)
                 .unwrap_or(std::env::current_dir().unwrap());
-            let volume_report = VolumeDiscoveryReport::for_containing_path(&path);
+            let volume_report =
+                VolumeDiscoveryReport::for_containing_path_checked(&path, || Ok(()))?;
             preflight_volume_access_scope_with_report(
                 &path,
                 AccessIntent::Read,
@@ -739,8 +740,24 @@ fn run_index_read_task<T>(
 where
     T: Send + 'static,
 {
-    let volume_report = VolumeDiscoveryReport::for_containing_path(&path);
+    run_index_read_task_checked(path, worker, read, || Ok(()))
+}
+
+fn run_index_read_task_checked<T>(
+    path: PathBuf,
+    worker: &'static str,
+    read: impl FnOnce(PathBuf, &Cancellation) -> Result<T> + Send + 'static,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<T>
+where
+    T: Send + 'static,
+{
+    check_control()?;
+    let volume_report =
+        VolumeDiscoveryReport::for_containing_path_checked(&path, &mut check_control)?;
+    check_control()?;
     preflight_volume_access_scope_with_report(&path, AccessIntent::Read, worker, &volume_report)?;
+    check_control()?;
     let volume = volume_report.volume_for_path(&path).map(|volume| volume.id);
     run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
         cancellation.check()?;
@@ -1137,6 +1154,24 @@ mod tests {
 
         assert_eq!(result.err(), Some(GfmError::Cancelled));
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn index_read_task_checked_honors_pre_cancelled_control_before_volume_discovery() {
+        let path = std::env::temp_dir().join(format!(
+            "gfm-index-read-volume-pre-cancel-{}.gfmstate",
+            std::process::id()
+        ));
+
+        let result = run_index_read_task_checked(
+            path.clone(),
+            "index read cancellation token",
+            |_path, _cancellation| Ok(()),
+            || Err(GfmError::Cancelled),
+        );
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!path.exists());
     }
 
     #[test]

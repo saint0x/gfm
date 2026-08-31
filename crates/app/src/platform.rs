@@ -1,6 +1,6 @@
 use crate::access::{
     preflight_access_scope_checked, preflight_access_scope_checked_with_volume_report,
-    preflight_volume_access_scope_with_report, worker_admission_with_volume_gate,
+    preflight_volume_access_scope_with_report, worker_admission_with_volume_gate_checked,
     worker_admissions_with_shared_volume_report_checked, worker_admissions_with_volume_report,
     ScopedAccessGuard, WorkerAdmissionRequest,
 };
@@ -86,7 +86,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .unwrap_or(AccessIntent::Read);
             println!(
                 "{}",
-                worker_admission_with_volume_gate(&path, intent, worker).as_tsv()
+                worker_admission_with_volume_gate_checked(&path, intent, worker, || Ok(()))?
+                    .as_tsv()
             );
         }
         "security-worker-admission-fanout" => {
@@ -260,10 +261,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 });
             println!("{}", report?.as_tsv());
         }
-        "fileprovider-domains" => {
+        "fileprovider-domains" | "fileprovider-domains-cancel-before-native" => {
+            let cancel_before_native = command == "fileprovider-domains-cancel-before-native";
             println!(
                 "{}",
-                FileProviderDomainEnumerationReport::discover().as_tsv()
+                fileprovider_domain_enumeration_report(cancel_before_native)?.as_tsv()
             );
         }
         "fileprovider-progress" => {
@@ -2417,6 +2419,22 @@ where
         cancellation.check()?;
         read(path, &cancellation)
     })
+}
+
+fn fileprovider_domain_enumeration_report(
+    cancel_before_native: bool,
+) -> Result<FileProviderDomainEnumerationReport> {
+    run_volume_task_cancellable(
+        None,
+        Priority::Visible,
+        "fileprovider domain discovery",
+        move |cancellation| {
+            if cancel_before_native {
+                cancellation.cancel();
+            }
+            FileProviderDomainEnumerationReport::discover_checked(|| cancellation.check())
+        },
+    )
 }
 
 fn run_fileprovider_progress_job(

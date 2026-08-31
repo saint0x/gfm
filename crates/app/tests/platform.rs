@@ -2219,6 +2219,22 @@ fn reports_fileprovider_state_from_binary() {
     assert!(domains_stdout.contains("\tcount="));
     assert!(domains_stdout.contains("\treason="));
 
+    let cancelled_domains = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-domains-cancel-before-native")
+        .output()
+        .unwrap();
+    assert!(!cancelled_domains.status.success());
+    let cancelled_stdout = String::from_utf8_lossy(&cancelled_domains.stdout);
+    let cancelled_stderr = String::from_utf8_lossy(&cancelled_domains.stderr);
+    assert!(
+        !cancelled_stdout.contains("fileprovider-domains\t"),
+        "{cancelled_stdout}"
+    );
+    assert!(
+        cancelled_stderr.contains("operation was cancelled"),
+        "{cancelled_stderr}"
+    );
+
     let evicted_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("fileprovider-state")
         .arg(&evicted)

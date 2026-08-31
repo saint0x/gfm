@@ -20,15 +20,6 @@ pub(crate) struct WorkerAdmissionRequest {
     pub(crate) intent: AccessIntent,
 }
 
-pub(crate) fn worker_admission_with_volume_gate(
-    path: &Path,
-    intent: AccessIntent,
-    worker: impl Into<String>,
-) -> SecurityWorkerAdmissionReport {
-    worker_admission_with_volume_gate_checked(path, intent, worker, || Ok(()))
-        .expect("infallible worker admission volume gate control cannot cancel")
-}
-
 pub(crate) fn worker_admission_with_volume_gate_checked(
     path: &Path,
     intent: AccessIntent,
@@ -522,8 +513,13 @@ mod tests {
         let path = root.join("Preview.pdf");
         fs::write(&path, "%PDF-1.7\n").unwrap();
 
-        let admission =
-            worker_admission_with_volume_gate(&path, AccessIntent::Preview, "preview worker");
+        let admission = worker_admission_with_volume_gate_checked(
+            &path,
+            AccessIntent::Preview,
+            "preview worker",
+            || Ok(()),
+        )
+        .unwrap();
 
         assert_eq!(admission.worker_action, SecurityWorkerAction::Deny);
         assert!(!admission.can_touch_filesystem);
@@ -566,8 +562,13 @@ mod tests {
         fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
         let path = root.join("Missing.pdf");
 
-        let admission =
-            worker_admission_with_volume_gate(&path, AccessIntent::Preview, "preview worker");
+        let admission = worker_admission_with_volume_gate_checked(
+            &path,
+            AccessIntent::Preview,
+            "preview worker",
+            || Ok(()),
+        )
+        .unwrap();
 
         assert_eq!(admission.worker_action, SecurityWorkerAction::Deny);
         assert!(!admission.can_touch_filesystem);
