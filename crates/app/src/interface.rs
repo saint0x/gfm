@@ -17,7 +17,7 @@ use gfm_mac::{
     VolumeEventState, VolumeKind,
 };
 use gfm_ops::{ConflictPolicy, Operation, OperationConflictReport};
-use gfm_types::{DirectoryPage, FileEvent, FileEventKind, FileKind, GfmError, Result};
+use gfm_types::{DirectoryPage, FileEvent, FileEventKind, FileKind, GfmError, Result, VolumeId};
 use gfm_ui::{
     AppLaunchSpec, ColumnSource, ColumnViewContract, ColumnViewOptions, ContextMenuContract,
     ContextMenuInput, ContextSurface, DialogContract, DialogSurface, GalleryViewContract,
@@ -155,16 +155,16 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "ui-permission-refresh-compare-contract requires a current state path",
             )?;
-            crate::access::preflight_volume_access_scope(
-                &previous_path,
-                AccessIntent::Read,
-                "ui permission refresh previous state",
-            )?;
-            crate::access::preflight_volume_access_scope(
-                &current_path,
-                AccessIntent::Read,
-                "ui permission refresh current state",
-            )?;
+            let previous_access_report =
+                InterfaceAccessReport::new(previous_path.clone(), AccessIntent::Read);
+            let current_access_report =
+                InterfaceAccessReport::new(current_path.clone(), AccessIntent::Read);
+            previous_access_report.preflight_volume("ui permission refresh previous state")?;
+            current_access_report.preflight_volume("ui permission refresh current state")?;
+            let _previous_access = previous_access_report
+                .access_checked("ui permission refresh previous state", || Ok(()))?;
+            let _current_access = current_access_report
+                .access_checked("ui permission refresh current state", || Ok(()))?;
             let previous = gfm_mac::PermissionStateSnapshot::read(&previous_path)?;
             let current = gfm_mac::PermissionStateSnapshot::read(&current_path)?;
             let refresh =
@@ -564,10 +564,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             let viewport_rows = optional_u16(args.next(), "viewport-rows", 24)?;
             let scroll_row = optional_u32(args.next(), "scroll-row", 0)?;
-            crate::access::preflight_volume_access_scope(&root, AccessIntent::Index, "ui search")?;
-            let volume = crate::detect_volume_id(&root)
-                .ok()
-                .or_else(|| crate::parent_volume(&root));
+            let access_report = InterfaceAccessReport::new(root.clone(), AccessIntent::Index);
+            access_report.preflight_volume("ui search")?;
+            let volume = access_report.volume();
             let query_for_worker = query.clone();
             let batches = crate::runtime::run_volume_task_cancellable(
                 volume,
@@ -575,12 +574,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "ui search",
                 move |cancellation| {
                     cancellation.check()?;
-                    let _access = crate::access::preflight_access_scope_checked(
-                        &root,
-                        AccessIntent::Index,
-                        "ui search",
-                        || cancellation.check(),
-                    )?;
+                    let _access =
+                        access_report.access_checked("ui search", || cancellation.check())?;
                     cancellation.check()?;
                     let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
                     let session = snapshot.query_session();
@@ -631,14 +626,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let root = required_path(args.next(), "package-traversal requires a root path")?;
             let mode = parse_package_traversal_mode(args.next().as_deref())?;
             let options = ScanOptions::default().with_package_traversal(mode);
-            crate::access::preflight_volume_access_scope(
-                &root,
-                AccessIntent::Read,
-                "package traversal",
-            )?;
-            let volume = crate::detect_volume_id(&root)
-                .ok()
-                .or_else(|| crate::parent_volume(&root));
+            let access_report = InterfaceAccessReport::new(root.clone(), AccessIntent::Read);
+            access_report.preflight_volume("package traversal")?;
+            let volume = access_report.volume();
             let options_for_worker = options.clone();
             let page = crate::runtime::run_volume_task_cancellable(
                 volume,
@@ -646,12 +636,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "package traversal",
                 move |cancellation| {
                     cancellation.check()?;
-                    let _access = crate::access::preflight_access_scope_checked(
-                        &root,
-                        AccessIntent::Read,
-                        "package traversal",
-                        || cancellation.check(),
-                    )?;
+                    let _access = access_report
+                        .access_checked("package traversal", || cancellation.check())?;
                     cancellation.check()?;
                     scan_tree_checked(&root, options_for_worker, || cancellation.check())
                 },
@@ -988,6 +974,7 @@ fn observed_sidebar_invalidation_tsv(observed: &FileProviderObservedInvalidation
     lines.join("\n")
 }
 
+#[cfg(test)]
 fn retain_fileprovider_event_access_checked(
     event: &FileEvent,
     previous: Option<&FileProviderStateSnapshot>,
@@ -999,12 +986,10 @@ fn retain_fileprovider_event_access_checked(
     let paths = fileprovider_event_access_paths(event, previous)?;
     for path in unique_fileprovider_paths(paths.iter().map(PathBuf::as_path)) {
         check_control()?;
-        guards.push(crate::access::preflight_access_scope_checked(
-            path,
-            AccessIntent::Read,
-            worker,
-            &mut check_control,
-        )?);
+        guards.push(
+            InterfaceAccessReport::new(path.to_path_buf(), AccessIntent::Read)
+                .access_checked(worker, &mut check_control)?,
+        );
     }
     check_control()?;
     Ok(guards)
@@ -1106,6 +1091,94 @@ fn write_probe_existing_ancestor(path: &Path) -> Result<PathBuf> {
     Ok(candidate)
 }
 
+#[derive(Clone)]
+struct InterfaceAccessReport {
+    path: PathBuf,
+    intent: AccessIntent,
+    volume_report: VolumeDiscoveryReport,
+}
+
+impl InterfaceAccessReport {
+    fn new(path: PathBuf, intent: AccessIntent) -> Self {
+        let volume_report = VolumeDiscoveryReport::for_containing_path(&path);
+        Self {
+            path,
+            intent,
+            volume_report,
+        }
+    }
+
+    fn preflight_volume(&self, worker: &str) -> Result<()> {
+        crate::access::preflight_volume_access_scope_with_report(
+            &self.path,
+            self.intent,
+            worker,
+            &self.volume_report,
+        )
+    }
+
+    fn access_checked(
+        &self,
+        worker: &str,
+        check_control: impl FnMut() -> Result<()>,
+    ) -> Result<crate::access::ScopedAccessGuard> {
+        crate::access::preflight_access_scope_checked_with_volume_report(
+            &self.path,
+            self.intent,
+            worker,
+            &self.volume_report,
+            check_control,
+        )
+    }
+
+    fn volume(&self) -> Option<VolumeId> {
+        self.volume_report
+            .volume_for_path(&self.path)
+            .map(|volume| volume.id)
+    }
+}
+
+#[derive(Clone)]
+struct InterfaceAccessReports {
+    entries: Vec<InterfaceAccessReport>,
+}
+
+impl InterfaceAccessReports {
+    fn read_paths<'a>(paths: impl IntoIterator<Item = &'a Path>) -> Self {
+        Self {
+            entries: paths
+                .into_iter()
+                .map(|path| InterfaceAccessReport::new(path.to_path_buf(), AccessIntent::Read))
+                .collect(),
+        }
+    }
+
+    fn preflight_volumes(&self, worker: &str) -> Result<()> {
+        for entry in &self.entries {
+            entry.preflight_volume(worker)?;
+        }
+        Ok(())
+    }
+
+    fn access_checked(
+        &self,
+        worker: &str,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<crate::access::ScopedAccessGuard>> {
+        let mut guards = Vec::with_capacity(self.entries.len());
+        for entry in &self.entries {
+            check_control()?;
+            guards.push(entry.access_checked(worker, &mut check_control)?);
+        }
+        check_control()?;
+        Ok(guards)
+    }
+
+    fn first_volume(&self) -> Option<VolumeId> {
+        self.entries.iter().find_map(InterfaceAccessReport::volume)
+    }
+}
+
 fn ui_fileprovider_state_file_exists(path: &Path, worker: &str) -> Result<bool> {
     match fs::metadata(path) {
         Ok(metadata) => Ok(metadata.is_file()),
@@ -1118,23 +1191,17 @@ fn ui_fileprovider_state_file_exists(path: &Path, worker: &str) -> Result<bool> 
 }
 
 fn read_directory_with_access(path: &Path, worker: &'static str) -> Result<DirectoryPage> {
-    crate::access::preflight_volume_access_scope(path, AccessIntent::Read, worker)?;
-    let volume = crate::detect_volume_id(path)
-        .ok()
-        .or_else(|| crate::parent_volume(path));
-    let path = path.to_path_buf();
+    let access_report = InterfaceAccessReport::new(path.to_path_buf(), AccessIntent::Read);
+    access_report.preflight_volume(worker)?;
+    let volume = access_report.volume();
+    let path = access_report.path.clone();
     crate::runtime::run_volume_task_cancellable(
         volume,
         Priority::Visible,
         worker,
         move |cancellation| {
             cancellation.check()?;
-            let _access = crate::access::preflight_access_scope_checked(
-                &path,
-                AccessIntent::Read,
-                worker,
-                || cancellation.check(),
-            )?;
+            let _access = access_report.access_checked(worker, || cancellation.check())?;
             cancellation.check()?;
             read_directory_checked(&path, || cancellation.check())
         },
@@ -1151,23 +1218,17 @@ fn read_ui_restorable_progress_snapshots(path: &Path) -> Result<Vec<JobProgressS
 
 fn read_ui_payload_records(path: &Path) -> Result<HashMap<JobId, JobPayloadRecord>> {
     const WORKER: &str = "ui payload catalog";
-    crate::access::preflight_volume_access_scope(path, AccessIntent::Read, WORKER)?;
-    let volume = crate::detect_volume_id(path)
-        .ok()
-        .or_else(|| crate::parent_volume(path));
-    let path = path.to_path_buf();
+    let access_report = InterfaceAccessReport::new(path.to_path_buf(), AccessIntent::Read);
+    access_report.preflight_volume(WORKER)?;
+    let volume = access_report.volume();
+    let path = access_report.path.clone();
     crate::runtime::run_volume_task_cancellable_without_progress(
         volume,
         Priority::Visible,
         WORKER,
         move |cancellation| {
             cancellation.check()?;
-            let _access = crate::access::preflight_access_scope_checked(
-                &path,
-                AccessIntent::Read,
-                WORKER,
-                || cancellation.check(),
-            )?;
+            let _access = access_report.access_checked(WORKER, || cancellation.check())?;
             cancellation.check()?;
             JobPayloadCatalog::new(&path)
                 .read_checked(|| cancellation.check())
@@ -1199,23 +1260,17 @@ fn read_ui_progress_snapshots_with(
     read: fn(&JobProgressStore) -> Result<Vec<JobProgressSnapshot>>,
 ) -> Result<Vec<JobProgressSnapshot>> {
     const WORKER: &str = "ui progress store";
-    crate::access::preflight_volume_access_scope(path, AccessIntent::Read, WORKER)?;
-    let volume = crate::detect_volume_id(path)
-        .ok()
-        .or_else(|| crate::parent_volume(path));
-    let path = path.to_path_buf();
+    let access_report = InterfaceAccessReport::new(path.to_path_buf(), AccessIntent::Read);
+    access_report.preflight_volume(WORKER)?;
+    let volume = access_report.volume();
+    let path = access_report.path.clone();
     crate::runtime::run_volume_task_cancellable_without_progress(
         volume,
         Priority::Visible,
         WORKER,
         move |cancellation| {
             cancellation.check()?;
-            let _access = crate::access::preflight_access_scope_checked(
-                &path,
-                AccessIntent::Read,
-                WORKER,
-                || cancellation.check(),
-            )?;
+            let _access = access_report.access_checked(WORKER, || cancellation.check())?;
             cancellation.check()?;
             let store = JobProgressStore::new(&path);
             read(&store)
@@ -1227,11 +1282,10 @@ fn read_ui_operation_conflicts(
     store: &crate::runtime::OperationConflictStore,
 ) -> Result<Vec<crate::runtime::RuntimeOperationConflict>> {
     const WORKER: &str = "ui operation conflict store";
-    crate::access::preflight_volume_access_scope(store.path(), AccessIntent::Read, WORKER)?;
-    let volume = crate::detect_volume_id(store.path())
-        .ok()
-        .or_else(|| crate::parent_volume(store.path()));
-    let path = store.path().to_path_buf();
+    let access_report = InterfaceAccessReport::new(store.path().to_path_buf(), AccessIntent::Read);
+    access_report.preflight_volume(WORKER)?;
+    let volume = access_report.volume();
+    let path = access_report.path.clone();
     let store = crate::runtime::OperationConflictStore::new(path.clone());
     crate::runtime::run_volume_task_cancellable(
         volume,
@@ -1239,12 +1293,7 @@ fn read_ui_operation_conflicts(
         WORKER,
         move |cancellation| {
             cancellation.check()?;
-            let _access = crate::access::preflight_access_scope_checked(
-                &path,
-                AccessIntent::Read,
-                WORKER,
-                || cancellation.check(),
-            )?;
+            let _access = access_report.access_checked(WORKER, || cancellation.check())?;
             cancellation.check()?;
             store.read_checked(|| cancellation.check())
         },
@@ -1257,29 +1306,19 @@ fn resolve_ui_operation_conflict(
     policy: ConflictPolicy,
 ) -> Result<(crate::runtime::RuntimeOperationConflict, PathBuf)> {
     const WORKER: &str = "ui operation conflict resolve";
-    crate::access::preflight_volume_access_scope(
-        write_probe_path(&store_path)?,
+    let access_report = InterfaceAccessReport::new(
+        write_probe_path(&store_path)?.to_path_buf(),
         AccessIntent::Write,
-        WORKER,
-    )?;
-    let store_probe = write_probe_path(&store_path)?.to_path_buf();
-    let volume = crate::detect_volume_id(&store_probe)
-        .ok()
-        .or_else(|| crate::parent_volume(&store_probe));
+    );
+    access_report.preflight_volume(WORKER)?;
+    let volume = access_report.volume();
     crate::runtime::run_volume_task_cancellable(
         volume,
         Priority::Visible,
         WORKER,
         move |cancellation| {
             cancellation.check()?;
-            let store_probe = write_probe_path(&store_path)?.to_path_buf();
-            cancellation.check()?;
-            let _access = crate::access::preflight_access_scope_checked(
-                &store_probe,
-                AccessIntent::Write,
-                WORKER,
-                || cancellation.check(),
-            )?;
+            let _access = access_report.access_checked(WORKER, || cancellation.check())?;
             cancellation.check()?;
             let store = crate::runtime::OperationConflictStore::new(store_path.clone());
             let resolved =
@@ -1296,28 +1335,24 @@ fn run_ui_fileprovider_observed_invalidation(
 ) -> Result<FileProviderObservedInvalidation> {
     const WORKER: &str = "ui fileprovider sidebar observed invalidation";
     let state_probe = write_probe_existing_ancestor(&state_path)?;
-    crate::access::preflight_volume_access_scope(&state_probe, AccessIntent::Write, WORKER)?;
+    let state_access_report = InterfaceAccessReport::new(state_probe, AccessIntent::Write);
+    state_access_report.preflight_volume(WORKER)?;
     let raw_paths = fileprovider_raw_event_paths(&event);
-    for path in unique_fileprovider_paths(raw_paths.iter().map(PathBuf::as_path)) {
-        crate::access::preflight_volume_access_scope(path, AccessIntent::Read, WORKER)?;
-    }
-    let volume = crate::detect_volume_id(&state_probe)
-        .ok()
-        .or_else(|| crate::parent_volume(&state_probe));
+    let raw_event_access_reports = InterfaceAccessReports::read_paths(unique_fileprovider_paths(
+        raw_paths.iter().map(PathBuf::as_path),
+    ));
+    raw_event_access_reports.preflight_volumes(WORKER)?;
+    let volume = state_access_report
+        .volume()
+        .or_else(|| raw_event_access_reports.first_volume());
     crate::runtime::run_volume_task_cancellable(
         volume,
         Priority::Visible,
         WORKER,
         move |cancellation| {
             cancellation.check()?;
-            let state_probe = write_probe_existing_ancestor(&state_path)?;
-            cancellation.check()?;
-            let mut access = vec![crate::access::preflight_access_scope_checked(
-                &state_probe,
-                AccessIntent::Write,
-                WORKER,
-                || cancellation.check(),
-            )?];
+            let mut access =
+                vec![state_access_report.access_checked(WORKER, || cancellation.check())?];
             cancellation.check()?;
             let previous = if ui_fileprovider_state_file_exists(&state_path, WORKER)? {
                 Some(FileProviderStateSnapshot::read_checked(
@@ -1327,12 +1362,11 @@ fn run_ui_fileprovider_observed_invalidation(
             } else {
                 None
             };
-            access.extend(retain_fileprovider_event_access_checked(
-                &event,
-                previous.as_ref(),
-                WORKER,
-                || cancellation.check(),
-            )?);
+            let event_access_paths = fileprovider_event_access_paths(&event, previous.as_ref())?;
+            let event_access_reports = InterfaceAccessReports::read_paths(
+                unique_fileprovider_paths(event_access_paths.iter().map(PathBuf::as_path)),
+            );
+            access.extend(event_access_reports.access_checked(WORKER, || cancellation.check())?);
             cancellation.check()?;
             let (observed, snapshot) =
                 FileProviderObservedInvalidation::evaluate(previous.as_ref(), [event])?;
@@ -1344,18 +1378,16 @@ fn run_ui_fileprovider_observed_invalidation(
 
 fn read_ui_fileprovider_sidebar_state(path: PathBuf) -> Result<FileProviderStateReport> {
     const WORKER: &str = "ui fileprovider sidebar state";
-    crate::access::preflight_volume_access_scope(&path, AccessIntent::Read, WORKER)?;
-    let volume = crate::detect_volume_id(&path)
-        .ok()
-        .or_else(|| crate::parent_volume(&path));
+    let access_report = InterfaceAccessReport::new(path.clone(), AccessIntent::Read);
+    access_report.preflight_volume(WORKER)?;
+    let volume = access_report.volume();
     crate::runtime::run_volume_task_cancellable(
         volume,
         Priority::Visible,
         WORKER,
         move |cancellation| {
             cancellation.check()?;
-            let _access =
-                preflight_ui_fileprovider_read_checked(&path, WORKER, || cancellation.check())?;
+            let _access = access_report.access_checked(WORKER, || cancellation.check())?;
             cancellation.check()?;
             FileProviderStateReport::read_path(&path)
         },
@@ -1367,18 +1399,16 @@ fn read_ui_fileprovider_sidebar_invalidation(
     previous: CloudStorageState,
 ) -> Result<FileProviderInvalidationReport> {
     const WORKER: &str = "ui fileprovider sidebar invalidation";
-    crate::access::preflight_volume_access_scope(&path, AccessIntent::Read, WORKER)?;
-    let volume = crate::detect_volume_id(&path)
-        .ok()
-        .or_else(|| crate::parent_volume(&path));
+    let access_report = InterfaceAccessReport::new(path.clone(), AccessIntent::Read);
+    access_report.preflight_volume(WORKER)?;
+    let volume = access_report.volume();
     crate::runtime::run_volume_task_cancellable(
         volume,
         Priority::Visible,
         WORKER,
         move |cancellation| {
             cancellation.check()?;
-            let _access =
-                preflight_ui_fileprovider_read_checked(&path, WORKER, || cancellation.check())?;
+            let _access = access_report.access_checked(WORKER, || cancellation.check())?;
             cancellation.check()?;
             FileProviderInvalidationReport::evaluate(&path, previous)
         },
@@ -1387,30 +1417,30 @@ fn read_ui_fileprovider_sidebar_invalidation(
 
 fn read_ui_fileprovider_conflict(path: PathBuf) -> Result<FileProviderConflictReport> {
     const WORKER: &str = "ui fileprovider conflict";
-    crate::access::preflight_volume_access_scope(&path, AccessIntent::Read, WORKER)?;
-    let volume = crate::detect_volume_id(&path)
-        .ok()
-        .or_else(|| crate::parent_volume(&path));
+    let access_report = InterfaceAccessReport::new(path.clone(), AccessIntent::Read);
+    access_report.preflight_volume(WORKER)?;
+    let volume = access_report.volume();
     crate::runtime::run_volume_task_cancellable(
         volume,
         Priority::Visible,
         WORKER,
         move |cancellation| {
             cancellation.check()?;
-            let _access =
-                preflight_ui_fileprovider_read_checked(&path, WORKER, || cancellation.check())?;
+            let _access = access_report.access_checked(WORKER, || cancellation.check())?;
             cancellation.check()?;
             FileProviderConflictReport::read_path(&path)
         },
     )
 }
 
+#[cfg(test)]
 fn preflight_ui_fileprovider_read_checked(
     path: &Path,
     worker: &'static str,
     check_control: impl FnMut() -> Result<()>,
 ) -> Result<crate::access::ScopedAccessGuard> {
-    crate::access::preflight_access_scope_checked(path, AccessIntent::Read, worker, check_control)
+    InterfaceAccessReport::new(path.to_path_buf(), AccessIntent::Read)
+        .access_checked(worker, check_control)
 }
 
 fn app_launch_spec(path: Option<String>) -> Result<AppLaunchSpec> {
@@ -1752,23 +1782,17 @@ fn parse_package_traversal_mode(value: Option<&str>) -> Result<PackageTraversalM
 
 fn read_trash_restore_metadata(path: &Path) -> Result<BTreeMap<String, TrashEntryMetadata>> {
     const WORKER: &str = "ui trash metadata";
-    crate::access::preflight_volume_access_scope(path, AccessIntent::Read, WORKER)?;
-    let volume = crate::detect_volume_id(path)
-        .ok()
-        .or_else(|| crate::parent_volume(path));
-    let path = path.to_path_buf();
+    let access_report = InterfaceAccessReport::new(path.to_path_buf(), AccessIntent::Read);
+    access_report.preflight_volume(WORKER)?;
+    let volume = access_report.volume();
+    let path = access_report.path.clone();
     crate::runtime::run_volume_task_cancellable(
         volume,
         Priority::Visible,
         WORKER,
         move |cancellation| {
             cancellation.check()?;
-            let _access = crate::access::preflight_access_scope_checked(
-                &path,
-                AccessIntent::Read,
-                WORKER,
-                || cancellation.check(),
-            )?;
+            let _access = access_report.access_checked(WORKER, || cancellation.check())?;
             cancellation.check()?;
             parse_trash_restore_metadata_checked(&path, || cancellation.check())
         },
@@ -1777,22 +1801,16 @@ fn read_trash_restore_metadata(path: &Path) -> Result<BTreeMap<String, TrashEntr
 
 fn read_finder_metadata(path: PathBuf) -> Result<FinderMetadataReport> {
     const WORKER: &str = "finder metadata";
-    crate::access::preflight_volume_access_scope(&path, AccessIntent::Read, WORKER)?;
-    let volume = crate::detect_volume_id(&path)
-        .ok()
-        .or_else(|| crate::parent_volume(&path));
+    let access_report = InterfaceAccessReport::new(path.clone(), AccessIntent::Read);
+    access_report.preflight_volume(WORKER)?;
+    let volume = access_report.volume();
     crate::runtime::run_volume_task_cancellable(
         volume,
         Priority::Visible,
         WORKER,
         move |cancellation| {
             cancellation.check()?;
-            let _access = crate::access::preflight_access_scope_checked(
-                &path,
-                AccessIntent::Read,
-                WORKER,
-                || cancellation.check(),
-            )?;
+            let _access = access_report.access_checked(WORKER, || cancellation.check())?;
             cancellation.check()?;
             FinderMetadataReport::read_path(path)
         },
