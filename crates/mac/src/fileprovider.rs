@@ -363,14 +363,23 @@ impl FileProviderDomainEnumerationReport {
 
 impl FileProviderDomainReport {
     pub fn read_path(path: impl AsRef<Path>) -> Result<Self> {
+        Self::read_path_checked(path, || Ok(()))
+    }
+
+    pub fn read_path_checked(
+        path: impl AsRef<Path>,
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check()?;
         let path = path.as_ref().to_path_buf();
+        check()?;
         ensure_fileprovider_read_path(&path)?;
-        let hints = CloudHints::read_with_identity(&path);
-        Ok(Self::from_hints_and_domains(
-            path,
-            hints,
-            enumerate_fileprovider_domains(),
-        ))
+        check()?;
+        let hints = CloudHints::read_with_identity_checked(&path, &mut check)?;
+        check()?;
+        let domains = enumerate_fileprovider_domains();
+        check()?;
+        Ok(Self::from_hints_and_domains(path, hints, domains))
     }
 
     fn from_hints_and_domains(
@@ -597,14 +606,25 @@ pub struct FileProviderConflictReport {
 
 impl FileProviderConflictReport {
     pub fn read_path(path: impl AsRef<Path>) -> Result<Self> {
+        Self::read_path_checked(path, || Ok(()))
+    }
+
+    pub fn read_path_checked(
+        path: impl AsRef<Path>,
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check()?;
         let path = path.as_ref().to_path_buf();
-        let state = FileProviderStateReport::read_path(&path)?;
+        check()?;
+        let state = FileProviderStateReport::read_path_checked(&path, &mut check)?;
+        check()?;
         let has_unresolved_conflict = state.storage_state == CloudStorageState::Conflict;
         let affected_paths = if has_unresolved_conflict {
             vec![path.clone()]
         } else {
             Vec::new()
         };
+        check()?;
         let reason = if has_unresolved_conflict {
             "conflict-requires-user-resolution"
         } else if state.domain == FileProviderDomain::Local {
@@ -816,8 +836,19 @@ impl FileProviderInvalidationReport {
         path: impl AsRef<Path>,
         previous: CloudStorageState,
     ) -> Result<FileProviderInvalidationReport> {
+        Self::evaluate_checked(path, previous, || Ok(()))
+    }
+
+    pub fn evaluate_checked(
+        path: impl AsRef<Path>,
+        previous: CloudStorageState,
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<FileProviderInvalidationReport> {
+        check()?;
         let path = path.as_ref().to_path_buf();
-        let current = FileProviderStateReport::read_path(&path)?;
+        check()?;
+        let current = FileProviderStateReport::read_path_checked(&path, &mut check)?;
+        check()?;
         Ok(Self::from_current(path, previous, current))
     }
 
@@ -4452,6 +4483,49 @@ mod tests {
 
         let err = FileProviderStateReport::read_path_checked(&path, || Err(GfmError::Cancelled))
             .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checked_domain_report_honors_pre_cancelled_work_before_path_probe() {
+        let path = PathBuf::from(OsString::from_vec(
+            b"/tmp/gfm-fileprovider-domain-cancelled\0path".to_vec(),
+        ));
+
+        let err = FileProviderDomainReport::read_path_checked(&path, || Err(GfmError::Cancelled))
+            .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checked_conflict_report_honors_pre_cancelled_work_before_path_probe() {
+        let path = PathBuf::from(OsString::from_vec(
+            b"/tmp/gfm-fileprovider-conflict-cancelled\0path".to_vec(),
+        ));
+
+        let err = FileProviderConflictReport::read_path_checked(&path, || Err(GfmError::Cancelled))
+            .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checked_invalidation_report_honors_pre_cancelled_work_before_path_probe() {
+        let path = PathBuf::from(OsString::from_vec(
+            b"/tmp/gfm-fileprovider-invalidation-cancelled\0path".to_vec(),
+        ));
+
+        let err = FileProviderInvalidationReport::evaluate_checked(
+            &path,
+            CloudStorageState::Downloaded,
+            || Err(GfmError::Cancelled),
+        )
+        .unwrap_err();
 
         assert_eq!(err, GfmError::Cancelled);
     }

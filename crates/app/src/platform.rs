@@ -194,9 +194,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "native-icon-fileprovider-invalidation requires a path",
             )?;
-            let report = run_fileprovider_read(path, "native icon fileprovider", move |path| {
-                FileProviderInvalidationReport::evaluate(path, previous)
-            })?;
+            let report = run_fileprovider_read(
+                path,
+                "native icon fileprovider",
+                move |path, cancellation| {
+                    FileProviderInvalidationReport::evaluate_checked(path, previous, || {
+                        cancellation.check()
+                    })
+                },
+            )?;
             println!(
                 "{}",
                 NativeIconInvalidationReport::from_fileprovider(&report).as_tsv()
@@ -225,11 +231,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "fileprovider-state" => {
             let path = required_path(args.next(), "fileprovider-state requires a path")?;
-            let report = run_fileprovider_read(
-                path,
-                "fileprovider state",
-                FileProviderStateReport::read_path,
-            )?;
+            let report =
+                run_fileprovider_read(path, "fileprovider state", |path, cancellation| {
+                    FileProviderStateReport::read_path_checked(path, || cancellation.check())
+                })?;
             println!("{}", report.as_tsv());
         }
         "fileprovider-state-with-identity" => {
@@ -237,21 +242,21 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "fileprovider-state-with-identity requires a path",
             )?;
-            let report = run_fileprovider_read(path, "fileprovider identity state", |path| {
-                Ok(FileProviderStateReport::from_path_with_native_identity(
-                    path,
-                ))
-            });
+            let report =
+                run_fileprovider_read(path, "fileprovider identity state", |path, cancellation| {
+                    FileProviderStateReport::from_path_with_native_identity_checked(path, || {
+                        cancellation.check()
+                    })
+                });
             println!("{}", report?.as_tsv());
         }
         "fileprovider-domain" => {
             let path = required_path(args.next(), "fileprovider-domain requires a path")?;
-            let report = run_fileprovider_read(
-                path,
-                "fileprovider domain",
-                FileProviderDomainReport::read_path,
-            )?;
-            println!("{}", report.as_tsv());
+            let report =
+                run_fileprovider_read(path, "fileprovider domain", |path, cancellation| {
+                    FileProviderDomainReport::read_path_checked(path, || cancellation.check())
+                });
+            println!("{}", report?.as_tsv());
         }
         "fileprovider-domains" => {
             println!(
@@ -261,20 +266,18 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "fileprovider-progress" => {
             let path = required_path(args.next(), "fileprovider-progress requires a path")?;
-            let report = run_fileprovider_read(
-                path,
-                "fileprovider progress",
-                FileProviderProgressReport::read_path,
-            )?;
+            let report =
+                run_fileprovider_read(path, "fileprovider progress", |path, cancellation| {
+                    FileProviderProgressReport::read_path_checked(path, || cancellation.check())
+                })?;
             println!("{}", report.as_tsv());
         }
         "fileprovider-conflict" => {
             let path = required_path(args.next(), "fileprovider-conflict requires a path")?;
-            let report = run_fileprovider_read(
-                path,
-                "fileprovider conflict",
-                FileProviderConflictReport::read_path,
-            )?;
+            let report =
+                run_fileprovider_read(path, "fileprovider conflict", |path, cancellation| {
+                    FileProviderConflictReport::read_path_checked(path, || cancellation.check())
+                })?;
             println!("{}", report.as_tsv());
         }
         "fileprovider-progress-job" | "fileprovider-progress-job-cancel-after-access" => {
@@ -316,9 +319,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "fileprovider-invalidation requires a previous state",
             )?)?;
             let path = required_path(args.next(), "fileprovider-invalidation requires a path")?;
-            let report = run_fileprovider_read(path, "fileprovider invalidation", move |path| {
-                FileProviderInvalidationReport::evaluate(path, previous)
-            });
+            let report = run_fileprovider_read(
+                path,
+                "fileprovider invalidation",
+                move |path, cancellation| {
+                    FileProviderInvalidationReport::evaluate_checked(path, previous, || {
+                        cancellation.check()
+                    })
+                },
+            );
             println!("{}", report?.as_tsv());
         }
         "fileprovider-metadata-invalidation" => {
@@ -330,10 +339,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "fileprovider-metadata-invalidation requires a path",
             )?;
-            let report =
-                run_fileprovider_read(path, "fileprovider metadata invalidation", move |path| {
-                    FileProviderInvalidationReport::evaluate(path, previous)
-                })?;
+            let report = run_fileprovider_read(
+                path,
+                "fileprovider metadata invalidation",
+                move |path, cancellation| {
+                    FileProviderInvalidationReport::evaluate_checked(path, previous, || {
+                        cancellation.check()
+                    })
+                },
+            )?;
             println!(
                 "{}",
                 ProviderMetadataInvalidationReport::from_provider_transition(
@@ -2309,7 +2323,7 @@ fn observed_native_icon_invalidation_tsv(observed: &FileProviderObservedInvalida
 fn run_fileprovider_read<T>(
     path: PathBuf,
     worker: &'static str,
-    read: impl FnOnce(PathBuf) -> Result<T> + Send + 'static,
+    read: impl FnOnce(PathBuf, &Cancellation) -> Result<T> + Send + 'static,
 ) -> Result<T>
 where
     T: Send + 'static,
@@ -2322,7 +2336,7 @@ where
         let path = access_report.path.clone();
         let _access = access_report.access_checked(worker, || cancellation.check())?;
         cancellation.check()?;
-        read(path)
+        read(path, &cancellation)
     })
 }
 
