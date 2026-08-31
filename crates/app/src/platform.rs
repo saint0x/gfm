@@ -946,7 +946,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let kind = parse_preview_kind(args.next())?;
             let pressure = parse_required_scheduling_pressure(args, "preview volume scheduling")?;
             let base = preview_base_scheduling_policy(kind);
-            let report = VolumeDiscoveryReport::for_containing_path(absolute_preview_path(&path));
+            let report = VolumeDiscoveryReport::for_containing_path_checked(
+                absolute_preview_path(&path),
+                || Ok(()),
+            )?;
             let policy =
                 preview_scheduling_policy_from_volume_report(&path, base, pressure, &report);
             let (volume_kind, remote, slow) = preview_volume_scheduling_facts(&path, &report);
@@ -1789,11 +1792,23 @@ fn volume_event_runtime_fanout_summary(
 }
 
 fn preview_security_input_with_volume(path: &Path, kind: PreviewKind) -> PreviewSecurityInput {
+    preview_security_input_with_volume_checked(path, kind, || Ok(()))
+        .expect("uncancellable preview security volume discovery cannot cancel")
+}
+
+fn preview_security_input_with_volume_checked(
+    path: &Path,
+    kind: PreviewKind,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<PreviewSecurityInput> {
     let mut input = security_input_for_path(path, kind);
     let volume_path = absolute_preview_path(path);
-    let report = VolumeDiscoveryReport::for_containing_path(&volume_path);
+    check_control()?;
+    let report =
+        VolumeDiscoveryReport::for_containing_path_checked(&volume_path, &mut check_control)?;
+    check_control()?;
     input.is_remote = preview_remote_volume_from_report(&volume_path, &report);
-    input
+    Ok(input)
 }
 
 #[derive(Clone)]
@@ -1805,13 +1820,21 @@ struct PreviewAccessReport {
 
 impl PreviewAccessReport {
     fn new(path: PathBuf) -> Self {
+        Self::new_checked(path, || Ok(()))
+            .expect("uncancellable preview access report cannot cancel")
+    }
+
+    fn new_checked(path: PathBuf, mut check_control: impl FnMut() -> Result<()>) -> Result<Self> {
         let volume_path = absolute_preview_path(&path);
-        let volume_report = VolumeDiscoveryReport::for_containing_path(&volume_path);
-        Self {
+        check_control()?;
+        let volume_report =
+            VolumeDiscoveryReport::for_containing_path_checked(&volume_path, &mut check_control)?;
+        check_control()?;
+        Ok(Self {
             path,
             volume_path,
             volume_report,
-        }
+        })
     }
 
     fn preflight_volume(&self, worker: &str) -> Result<()> {
@@ -2300,9 +2323,19 @@ fn volume_discovery_report(
 }
 
 fn current_index_volume_descriptor(path: &Path) -> Result<Option<IndexVolumeDescriptor>> {
+    current_index_volume_descriptor_checked(path, || Ok(()))
+}
+
+fn current_index_volume_descriptor_checked(
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Option<IndexVolumeDescriptor>> {
+    check_control()?;
     match path.try_exists() {
         Ok(true) => {
-            let report = VolumeDiscoveryReport::for_containing_path(path);
+            let report =
+                VolumeDiscoveryReport::for_containing_path_checked(path, &mut check_control)?;
+            check_control()?;
             let descriptor = report
                 .volume_for_path(path)
                 .cloned()
@@ -2310,7 +2343,10 @@ fn current_index_volume_descriptor(path: &Path) -> Result<Option<IndexVolumeDesc
                 .unwrap_or_else(|| VolumeDescriptor::for_path(path))?;
             Ok(Some(index_volume_descriptor(&descriptor)))
         }
-        Ok(false) => Ok(None),
+        Ok(false) => {
+            check_control()?;
+            Ok(None)
+        }
         Err(err) => Err(GfmError::io(
             path,
             format!("volume invalidation current path existence unavailable: {err}"),
@@ -3712,12 +3748,24 @@ struct PlatformAccessReport {
 
 impl PlatformAccessReport {
     fn new(path: PathBuf, intent: AccessIntent) -> Self {
-        let volume_report = VolumeDiscoveryReport::for_containing_path(&path);
-        Self {
+        Self::new_checked(path, intent, || Ok(()))
+            .expect("uncancellable platform access report cannot cancel")
+    }
+
+    fn new_checked(
+        path: PathBuf,
+        intent: AccessIntent,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check_control()?;
+        let volume_report =
+            VolumeDiscoveryReport::for_containing_path_checked(&path, &mut check_control)?;
+        check_control()?;
+        Ok(Self {
             path,
             intent,
             volume_report,
-        }
+        })
     }
 
     fn preflight_volume(&self, worker: &str) -> Result<()> {
@@ -3870,6 +3918,72 @@ fn optional_platform_string(value: Option<String>) -> Option<String> {
 mod tests {
     use super::*;
     use gfm_mac::FileProviderStateSnapshotEntry;
+
+    #[test]
+    fn preview_security_input_with_volume_checked_honors_pre_cancelled_control() {
+        let path = std::env::temp_dir()
+            .join(format!(
+                "gfm-preview-security-volume-pre-cancel-{}",
+                std::process::id()
+            ))
+            .join("Preview.pdf");
+
+        let result =
+            preview_security_input_with_volume_checked(&path, PreviewKind::QuickLook, || {
+                Err(GfmError::Cancelled)
+            });
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn preview_access_report_checked_honors_pre_cancelled_control_before_volume_discovery() {
+        let path = std::env::temp_dir()
+            .join(format!(
+                "gfm-preview-access-report-pre-cancel-{}",
+                std::process::id()
+            ))
+            .join("Preview.pdf");
+
+        let result = PreviewAccessReport::new_checked(path.clone(), || Err(GfmError::Cancelled));
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn platform_access_report_checked_honors_pre_cancelled_control_before_volume_discovery() {
+        let path = std::env::temp_dir()
+            .join(format!(
+                "gfm-platform-access-report-pre-cancel-{}",
+                std::process::id()
+            ))
+            .join("state.tsv");
+
+        let result = PlatformAccessReport::new_checked(path.clone(), AccessIntent::Read, || {
+            Err(GfmError::Cancelled)
+        });
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn current_index_volume_descriptor_checked_honors_pre_cancelled_control_before_volume_discovery(
+    ) {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-current-index-volume-descriptor-pre-cancel-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+
+        let result = current_index_volume_descriptor_checked(&root, || Err(GfmError::Cancelled));
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn fileprovider_observer_poll_pause_returns_promptly_after_cancellation() {
