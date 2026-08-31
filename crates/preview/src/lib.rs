@@ -894,11 +894,11 @@ pub fn security_input_for_path_on_volume(
     volume: Option<&gfm_mac::VolumeDescriptor>,
 ) -> PreviewSecurityInput {
     let mut input = security_input_for_path(path, kind);
-    input.is_remote = volume.is_some_and(volume_descriptor_is_remote);
+    input.is_remote = volume.is_some_and(volume_descriptor_is_remote_for_preview);
     input
 }
 
-fn volume_descriptor_is_remote(volume: &gfm_mac::VolumeDescriptor) -> bool {
+pub fn volume_descriptor_is_remote_for_preview(volume: &gfm_mac::VolumeDescriptor) -> bool {
     volume.network || volume.kind == gfm_mac::VolumeKind::Network || volume.local == Some(false)
 }
 

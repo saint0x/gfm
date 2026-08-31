@@ -42,7 +42,8 @@ use gfm_mac::{
 };
 use gfm_preview::{
     decide_invalidation, decide_preview_security, preview_invalidation_for_fileprovider,
-    security_input_for_path, IconPreviewContract, IconPreviewInput, PreviewCache,
+    security_input_for_path, security_input_for_path_on_volume,
+    volume_descriptor_is_remote_for_preview, IconPreviewContract, IconPreviewInput, PreviewCache,
     PreviewCacheConfig, PreviewInvalidationEvent, PreviewKind, PreviewRequestKey, PreviewScheduler,
     PreviewSchedulingPolicy, PreviewSecurityInput, PreviewSecurityPolicy, PreviewTask,
     QuickLookSessionContract, QuickLookSessionInput, Rect, ThumbnailGenerationContract,
@@ -1801,14 +1802,16 @@ fn preview_security_input_with_volume_checked(
     kind: PreviewKind,
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<PreviewSecurityInput> {
-    let mut input = security_input_for_path(path, kind);
     let volume_path = absolute_preview_path(path);
     check_control()?;
     let report =
         VolumeDiscoveryReport::for_containing_path_checked(&volume_path, &mut check_control)?;
     check_control()?;
-    input.is_remote = preview_remote_volume_from_report(&volume_path, &report);
-    Ok(input)
+    Ok(security_input_for_path_on_volume(
+        path,
+        kind,
+        report.volume_for_path(&volume_path),
+    ))
 }
 
 #[derive(Clone)]
@@ -1879,7 +1882,9 @@ impl PreviewAccessReport {
     }
 
     fn remote(&self) -> bool {
-        preview_remote_volume_from_report(&self.volume_path, &self.volume_report)
+        self.volume_report
+            .volume_for_path(&self.volume_path)
+            .is_some_and(volume_descriptor_is_remote_for_preview)
     }
 
     fn scheduling_policy(
@@ -1894,12 +1899,6 @@ impl PreviewAccessReport {
             &self.volume_report,
         )
     }
-}
-
-fn preview_remote_volume_from_report(path: &Path, report: &VolumeDiscoveryReport) -> bool {
-    report
-        .volume_for_path(path)
-        .is_some_and(volume_reports_remote_for_preview)
 }
 
 fn preview_volume_id_from_report(path: &Path, report: &VolumeDiscoveryReport) -> Option<VolumeId> {
@@ -1921,10 +1920,6 @@ fn absolute_preview_path(path: &Path) -> PathBuf {
             .map(|cwd| cwd.join(path))
             .unwrap_or_else(|_| path.to_path_buf())
     }
-}
-
-fn volume_reports_remote_for_preview(volume: &VolumeDescriptor) -> bool {
-    volume.network || volume.local == Some(false) || volume.kind == gfm_mac::VolumeKind::Network
 }
 
 fn preview_base_scheduling_policy(kind: PreviewKind) -> PreviewSchedulingPolicy {
@@ -1952,7 +1947,7 @@ fn preview_scheduling_policy_from_volume_report(
         return preview_conservative_volume_policy(policy);
     };
     if volume.platform_state_unavailable()
-        || volume_reports_remote_for_preview(volume)
+        || volume_descriptor_is_remote_for_preview(volume)
         || volume_reports_slow_for_preview(volume)
     {
         preview_conservative_volume_policy(policy)
@@ -1971,7 +1966,7 @@ fn preview_conservative_volume_policy(
 }
 
 fn volume_reports_slow_for_preview(volume: &VolumeDescriptor) -> bool {
-    if volume_reports_remote_for_preview(volume) {
+    if volume_descriptor_is_remote_for_preview(volume) {
         return false;
     }
     matches!(
@@ -1995,7 +1990,7 @@ fn preview_volume_scheduling_facts(
     };
     (
         volume.kind.as_str(),
-        volume_reports_remote_for_preview(volume),
+        volume_descriptor_is_remote_for_preview(volume),
         volume_reports_slow_for_preview(volume),
     )
 }
