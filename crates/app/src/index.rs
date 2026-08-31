@@ -842,11 +842,6 @@ struct IndexPathAccessReport {
 }
 
 impl IndexPathAccessReport {
-    fn new(path: PathBuf, intent: AccessIntent, worker: &'static str) -> Self {
-        Self::new_checked(path, intent, worker, || Ok(()))
-            .expect("uncancelled index access report cannot be cancelled")
-    }
-
     fn new_checked(
         path: PathBuf,
         intent: AccessIntent,
@@ -863,10 +858,6 @@ impl IndexPathAccessReport {
             worker,
             volume_report,
         })
-    }
-
-    fn write_probe(path: &Path, worker: &'static str) -> Result<Self> {
-        Self::write_probe_checked(path, worker, || Ok(()))
     }
 
     fn write_probe_checked(
@@ -934,11 +925,6 @@ struct IndexRootReadAccessReports {
 }
 
 impl IndexRootReadAccessReports {
-    fn for_root_and_reads(root: &Path, reads: &[PathBuf]) -> Self {
-        Self::for_root_and_reads_checked(root, reads, || Ok(()))
-            .expect("uncancelled index read access reports cannot be cancelled")
-    }
-
     fn for_root_and_reads_checked(
         root: &Path,
         reads: &[PathBuf],
@@ -999,10 +985,6 @@ impl IndexRootReadAccessReports {
 }
 
 impl IndexRootWriteAccessReports {
-    fn for_root_and_writes(root: &Path, writes: &[(&PathBuf, &'static str)]) -> Result<Self> {
-        Self::for_root_and_writes_checked(root, writes, || Ok(()))
-    }
-
     fn for_root_and_writes_checked(
         root: &Path,
         writes: &[(&PathBuf, &'static str)],
@@ -1058,10 +1040,6 @@ impl IndexRootWriteAccessReports {
 }
 
 impl IndexBuildAccessReports {
-    fn for_root_and_output(root: &Path, output: &Path) -> Result<Self> {
-        Self::for_root_and_output_checked(root, output, || Ok(()))
-    }
-
     fn for_root_and_output_checked(
         root: &Path,
         output: &Path,
@@ -1084,10 +1062,6 @@ impl IndexBuildAccessReports {
                 &mut check_control,
             )?,
         })
-    }
-
-    fn entry(path: PathBuf, intent: AccessIntent, worker: &'static str) -> IndexPathAccessReport {
-        IndexPathAccessReport::new(path, intent, worker)
     }
 
     fn entry_checked(
@@ -1340,9 +1314,115 @@ mod tests {
             std::process::id()
         ));
         let output = root.join("records.gfmidx");
-        let reports = IndexBuildAccessReports::for_root_and_output(&root, &output).unwrap();
+        let reports =
+            IndexBuildAccessReports::for_root_and_output_checked(&root, &output, || Ok(()))
+                .unwrap();
 
         let result = reports.enforce_root_access_checked(|| Err(GfmError::Cancelled));
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn index_path_access_report_checked_honors_pre_cancelled_control_before_volume_discovery() {
+        let path = std::env::temp_dir()
+            .join(format!(
+                "gfm-index-path-access-pre-cancel-{}",
+                std::process::id()
+            ))
+            .join("root-that-should-not-be-probed");
+
+        let result = IndexPathAccessReport::new_checked(
+            path.clone(),
+            AccessIntent::Read,
+            "index path access",
+            || Err(GfmError::Cancelled),
+        );
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn index_path_write_probe_checked_honors_pre_cancelled_control_before_probe() {
+        let path = std::env::temp_dir()
+            .join(format!(
+                "gfm-index-path-write-pre-cancel-{}",
+                std::process::id()
+            ))
+            .join("records.gfmidx");
+
+        let result = IndexPathAccessReport::write_probe_checked(&path, "index write probe", || {
+            Err(GfmError::Cancelled)
+        });
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn index_root_read_access_reports_checked_can_cancel_between_visible_roots() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-index-root-read-report-cancel-{}",
+            std::process::id()
+        ));
+        let first = root.join("first");
+        let second = root.join("second");
+        let visible_roots = vec![first, second];
+        let mut checks = 0;
+
+        let result =
+            IndexRootReadAccessReports::for_root_and_reads_checked(&root, &visible_roots, || {
+                checks += 1;
+                if checks > 5 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            });
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn index_root_write_access_reports_checked_can_cancel_before_write_probe() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-index-root-write-report-cancel-{}",
+            std::process::id()
+        ));
+        let output = root.join("records.gfmidx");
+        let mut checks = 0;
+
+        let result = IndexRootWriteAccessReports::for_root_and_writes_checked(
+            &root,
+            &[(&output, "index records")],
+            || {
+                checks += 1;
+                if checks > 3 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        );
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn index_build_access_reports_checked_can_cancel_before_output_probe() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-index-build-report-cancel-{}",
+            std::process::id()
+        ));
+        let output = root.join("records.gfmidx");
+
+        let result = IndexBuildAccessReports::for_root_and_output_checked(&root, &output, || {
+            Err(GfmError::Cancelled)
+        });
 
         assert_eq!(result.err(), Some(GfmError::Cancelled));
         assert!(!root.exists());
@@ -1367,11 +1447,13 @@ mod tests {
         let path = std::env::temp_dir()
             .join(format!("gfm-repair-root-cancel-{}", std::process::id()))
             .join("root-that-should-not-be-probed");
-        let report = IndexPathAccessReport::new(
+        let report = IndexPathAccessReport::new_checked(
             path,
             AccessIntent::Read,
             "fsevents repair schedule dropped root",
-        );
+            || Ok(()),
+        )
+        .unwrap();
 
         let result = existing_dropped_root_reports_checked(&[report], || Err(GfmError::Cancelled));
 
@@ -1391,13 +1473,15 @@ mod tests {
         let reports = [first, second]
             .into_iter()
             .map(|path| {
-                IndexPathAccessReport::new(
+                IndexPathAccessReport::new_checked(
                     path,
                     AccessIntent::Read,
                     "fsevents repair schedule dropped root",
+                    || Ok(()),
                 )
             })
-            .collect::<Vec<_>>();
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
         let mut checks = 0;
 
         let result = existing_dropped_root_reports_checked(&reports, || {

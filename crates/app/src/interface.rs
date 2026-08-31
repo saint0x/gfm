@@ -1108,12 +1108,24 @@ struct InterfaceAccessReport {
 
 impl InterfaceAccessReport {
     fn new(path: PathBuf, intent: AccessIntent) -> Self {
-        let volume_report = VolumeDiscoveryReport::for_containing_path(&path);
-        Self {
+        Self::new_checked(path, intent, || Ok(()))
+            .expect("uncancellable interface access report cannot cancel")
+    }
+
+    fn new_checked(
+        path: PathBuf,
+        intent: AccessIntent,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check_control()?;
+        let volume_report =
+            VolumeDiscoveryReport::for_containing_path_checked(&path, &mut check_control)?;
+        check_control()?;
+        Ok(Self {
             path,
             intent,
             volume_report,
-        }
+        })
     }
 
     fn preflight_volume(&self, worker: &str) -> Result<()> {
@@ -1400,14 +1412,17 @@ fn read_ui_fileprovider_sidebar_state_with_cancel_after_access(
     cancel_after_access: bool,
 ) -> Result<FileProviderStateReport> {
     const WORKER: &str = "ui fileprovider sidebar state";
-    let access_report = InterfaceAccessReport::new(path.clone(), AccessIntent::Read);
-    access_report.preflight_volume(WORKER)?;
-    let volume = access_report.volume();
     crate::runtime::run_volume_task_cancellable(
-        volume,
+        None,
         Priority::Visible,
         WORKER,
         move |cancellation| {
+            cancellation.check()?;
+            let access_report =
+                InterfaceAccessReport::new_checked(path.clone(), AccessIntent::Read, || {
+                    cancellation.check()
+                })?;
+            access_report.preflight_volume(WORKER)?;
             cancellation.check()?;
             let _access = access_report.access_checked(WORKER, || cancellation.check())?;
             cancellation.check()?;
@@ -1424,14 +1439,17 @@ fn read_ui_fileprovider_sidebar_invalidation(
     previous: CloudStorageState,
 ) -> Result<FileProviderInvalidationReport> {
     const WORKER: &str = "ui fileprovider sidebar invalidation";
-    let access_report = InterfaceAccessReport::new(path.clone(), AccessIntent::Read);
-    access_report.preflight_volume(WORKER)?;
-    let volume = access_report.volume();
     crate::runtime::run_volume_task_cancellable(
-        volume,
+        None,
         Priority::Visible,
         WORKER,
         move |cancellation| {
+            cancellation.check()?;
+            let access_report =
+                InterfaceAccessReport::new_checked(path.clone(), AccessIntent::Read, || {
+                    cancellation.check()
+                })?;
+            access_report.preflight_volume(WORKER)?;
             cancellation.check()?;
             let _access = access_report.access_checked(WORKER, || cancellation.check())?;
             cancellation.check()?;
@@ -1444,14 +1462,17 @@ fn read_ui_fileprovider_sidebar_invalidation(
 
 fn read_ui_fileprovider_conflict(path: PathBuf) -> Result<FileProviderConflictReport> {
     const WORKER: &str = "ui fileprovider conflict";
-    let access_report = InterfaceAccessReport::new(path.clone(), AccessIntent::Read);
-    access_report.preflight_volume(WORKER)?;
-    let volume = access_report.volume();
     crate::runtime::run_volume_task_cancellable(
-        volume,
+        None,
         Priority::Visible,
         WORKER,
         move |cancellation| {
+            cancellation.check()?;
+            let access_report =
+                InterfaceAccessReport::new_checked(path.clone(), AccessIntent::Read, || {
+                    cancellation.check()
+                })?;
+            access_report.preflight_volume(WORKER)?;
             cancellation.check()?;
             let _access = access_report.access_checked(WORKER, || cancellation.check())?;
             cancellation.check()?;
@@ -1464,10 +1485,14 @@ fn read_ui_fileprovider_conflict(path: PathBuf) -> Result<FileProviderConflictRe
 fn preflight_ui_fileprovider_read_checked(
     path: &Path,
     worker: &'static str,
-    check_control: impl FnMut() -> Result<()>,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<crate::access::ScopedAccessGuard> {
-    InterfaceAccessReport::new(path.to_path_buf(), AccessIntent::Read)
-        .access_checked(worker, check_control)
+    let access_report = InterfaceAccessReport::new_checked(
+        path.to_path_buf(),
+        AccessIntent::Read,
+        &mut check_control,
+    )?;
+    access_report.access_checked(worker, check_control)
 }
 
 fn app_launch_spec(path: Option<String>) -> Result<AppLaunchSpec> {
