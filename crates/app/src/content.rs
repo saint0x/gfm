@@ -522,21 +522,19 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let mut spec = ContentIndexJobSpec::new(&root, segment_dir, records, content);
             let spec_path = default_content_job_path();
             if pressure.decide(Priority::Background, 1, 1).action == SchedulingAction::Defer {
-                let spec_probe = write_probe_path(&spec_path)?.to_path_buf();
-                let _access = preflight_access_scope_checked(
-                    &spec_probe,
-                    AccessIntent::Write,
-                    "background content index",
-                    || Ok(()),
-                )?;
+                let _access = ContentJobAccessReports::for_spec_path_write(&spec_path)?
+                    .access_checked("background content index", || Ok(()))?;
             } else {
-                preflight_content_job_volumes(
-                    &spec,
-                    &spec_path,
-                    Some(journal.path()),
-                    "background content index",
-                )?;
-                spec = spec.with_volume(detect_volume_id(&root)?);
+                let access_reports =
+                    ContentJobAccessReports::for_spec(&spec, &spec_path, Some(journal.path()))?;
+                access_reports.preflight_volumes("background content index")?;
+                let volume = access_reports.first_volume().ok_or_else(|| {
+                    GfmError::Format(format!(
+                        "could not determine content index volume for {}",
+                        spec.root.display()
+                    ))
+                })?;
+                spec = spec.with_volume(volume);
             }
             spec.write(&spec_path)?;
             let outcome = run_content_job(&spec, &journal, pressure, &spec_path)?;
@@ -878,16 +876,16 @@ fn run_extraction_report(
     extractor: Extractor,
     retry_probe: Option<PathBuf>,
 ) -> Result<String> {
-    preflight_volume_access_scope(&path, AccessIntent::Read, worker)?;
+    let access_report =
+        ForegroundContentIndexAccessReports::entry(path.clone(), AccessIntent::Read);
+    access_report.preflight_volume(worker)?;
     if matches!(fs::metadata(&path), Err(err) if err.kind() == io::ErrorKind::NotFound) {
-        let _access = preflight_access_scope_checked(&path, AccessIntent::Read, worker, || Ok(()))?;
+        let _access = access_report.access_checked(worker, || Ok(()))?;
     }
     if let Some(retry_probe) = retry_probe.as_ref() {
         preflight_volume_access_scope(write_probe_path(retry_probe)?, AccessIntent::Write, worker)?;
     }
-    let volume = detect_volume_id(&path)
-        .ok()
-        .or_else(|| parent_volume(&path));
+    let volume = access_report.volume();
     run_retriable_volume_task_cancellable_with_payload_path(
         volume,
         Priority::Visible,
@@ -901,10 +899,7 @@ fn run_extraction_report(
             if let Some(retry_probe) = retry_probe.as_ref() {
                 fail_first_content_retry_probe_attempt(retry_probe, worker, &cancellation)?;
             }
-            let _access =
-                preflight_access_scope_checked(&path, AccessIntent::Read, worker, || {
-                    cancellation.check()
-                })?;
+            let _access = access_report.access_checked(worker, || cancellation.check())?;
             cancellation.check()?;
             let report = extractor.extract_path_report_checked(&path, || cancellation.check())?;
             let mut quarantine = ExtractionQuarantine::default();
@@ -916,15 +911,13 @@ fn run_extraction_report(
 
 fn run_extraction_cache(path: PathBuf) -> Result<String> {
     const WORKER: &str = "content extraction cache";
-    preflight_volume_access_scope(&path, AccessIntent::Read, WORKER)?;
-    let volume = detect_volume_id(&path)
-        .ok()
-        .or_else(|| parent_volume(&path));
+    let access_report =
+        ForegroundContentIndexAccessReports::entry(path.clone(), AccessIntent::Read);
+    access_report.preflight_volume(WORKER)?;
+    let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
-        let _access = preflight_access_scope_checked(&path, AccessIntent::Read, WORKER, || {
-            cancellation.check()
-        })?;
+        let _access = access_report.access_checked(WORKER, || cancellation.check())?;
         cancellation.check()?;
         let record = record_for_path_checked(&path, None, false, || cancellation.check())?;
         cancellation.check()?;
@@ -1782,6 +1775,11 @@ struct ContentSegmentsAccessReports {
 }
 
 #[derive(Clone)]
+struct ContentJobAccessReports {
+    entries: Vec<ForegroundContentIndexAccessReport>,
+}
+
+#[derive(Clone)]
 struct ContentSegmentIndexAccessReports {
     entries: [ForegroundContentIndexAccessReport; 2],
 }
@@ -1879,6 +1877,82 @@ impl ContentSegmentsAccessReports {
     }
 }
 
+impl ContentJobAccessReports {
+    fn for_spec(
+        spec: &ContentIndexJobSpec,
+        spec_path: &Path,
+        journal_path: Option<&Path>,
+    ) -> Result<Self> {
+        let quarantine_path = default_extraction_quarantine_path();
+        let mut entries = Vec::with_capacity(6 + usize::from(journal_path.is_some()));
+        entries.push(ForegroundContentIndexAccessReports::entry(
+            spec.root.clone(),
+            AccessIntent::Index,
+        ));
+        entries.push(ForegroundContentIndexAccessReports::entry(
+            write_probe_path(&spec.segment_dir)?.to_path_buf(),
+            AccessIntent::Write,
+        ));
+        entries.push(ForegroundContentIndexAccessReports::entry(
+            write_probe_path(&spec.records_path)?.to_path_buf(),
+            AccessIntent::Write,
+        ));
+        entries.push(ForegroundContentIndexAccessReports::entry(
+            write_probe_path(&spec.content_path)?.to_path_buf(),
+            AccessIntent::Write,
+        ));
+        entries.push(ForegroundContentIndexAccessReports::entry(
+            write_probe_path(spec_path)?.to_path_buf(),
+            AccessIntent::Write,
+        ));
+        entries.push(ForegroundContentIndexAccessReports::entry(
+            write_probe_path(&quarantine_path)?.to_path_buf(),
+            AccessIntent::Write,
+        ));
+        if let Some(journal_path) = journal_path {
+            entries.push(ForegroundContentIndexAccessReports::entry(
+                write_probe_path(journal_path)?.to_path_buf(),
+                AccessIntent::Write,
+            ));
+        }
+        Ok(Self { entries })
+    }
+
+    fn for_spec_path_write(spec_path: &Path) -> Result<ForegroundContentIndexAccessReport> {
+        Ok(ForegroundContentIndexAccessReports::entry(
+            write_probe_path(spec_path)?.to_path_buf(),
+            AccessIntent::Write,
+        ))
+    }
+
+    fn preflight_volumes(&self, worker: &str) -> Result<()> {
+        for report in &self.entries {
+            report.preflight_volume(worker)?;
+        }
+        Ok(())
+    }
+
+    fn access_checked(
+        &self,
+        worker: &str,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<ScopedAccessGuard>> {
+        let mut guards = Vec::with_capacity(self.entries.len());
+        for report in &self.entries {
+            check_control()?;
+            guards.push(report.access_checked(worker, &mut check_control)?);
+        }
+        check_control()?;
+        Ok(guards)
+    }
+
+    fn first_volume(&self) -> Option<gfm_types::VolumeId> {
+        self.entries
+            .iter()
+            .find_map(ForegroundContentIndexAccessReport::volume)
+    }
+}
+
 #[cfg(test)]
 fn retain_content_segments_access_checked(
     manifest_path: Option<&Path>,
@@ -1892,6 +1966,7 @@ fn retain_content_segments_access_checked(
     access_reports.access_checked(worker, &mut check_control)
 }
 
+#[cfg(test)]
 fn retain_content_job_access_checked(
     spec: &ContentIndexJobSpec,
     spec_path: &Path,
@@ -1899,95 +1974,8 @@ fn retain_content_job_access_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
     check_control()?;
-    preflight_content_job_volumes(spec, spec_path, None, worker)?;
-    check_control()?;
-    let segment_probe = write_probe_path(&spec.segment_dir)?.to_path_buf();
-    check_control()?;
-    let records_probe = write_probe_path(&spec.records_path)?.to_path_buf();
-    check_control()?;
-    let content_probe = write_probe_path(&spec.content_path)?.to_path_buf();
-    check_control()?;
-    let spec_probe = write_probe_path(spec_path)?.to_path_buf();
-    check_control()?;
-    let quarantine_path = default_extraction_quarantine_path();
-    let quarantine_probe = write_probe_path(&quarantine_path)?.to_path_buf();
-    check_control()?;
-    Ok(vec![
-        preflight_access_scope_checked(
-            &spec.root,
-            AccessIntent::Index,
-            worker,
-            &mut check_control,
-        )?,
-        preflight_access_scope_checked(
-            &segment_probe,
-            AccessIntent::Write,
-            worker,
-            &mut check_control,
-        )?,
-        preflight_access_scope_checked(
-            &records_probe,
-            AccessIntent::Write,
-            worker,
-            &mut check_control,
-        )?,
-        preflight_access_scope_checked(
-            &content_probe,
-            AccessIntent::Write,
-            worker,
-            &mut check_control,
-        )?,
-        preflight_access_scope_checked(
-            &spec_probe,
-            AccessIntent::Write,
-            worker,
-            &mut check_control,
-        )?,
-        preflight_access_scope_checked(
-            &quarantine_probe,
-            AccessIntent::Write,
-            worker,
-            &mut check_control,
-        )?,
-    ])
-}
-
-fn preflight_content_job_volumes(
-    spec: &ContentIndexJobSpec,
-    spec_path: &Path,
-    journal_path: Option<&Path>,
-    worker: &str,
-) -> Result<()> {
-    preflight_volume_access_scope(&spec.root, AccessIntent::Index, worker)?;
-    preflight_volume_access_scope(
-        write_probe_path(&spec.segment_dir)?,
-        AccessIntent::Write,
-        worker,
-    )?;
-    preflight_volume_access_scope(
-        write_probe_path(&spec.records_path)?,
-        AccessIntent::Write,
-        worker,
-    )?;
-    preflight_volume_access_scope(
-        write_probe_path(&spec.content_path)?,
-        AccessIntent::Write,
-        worker,
-    )?;
-    preflight_volume_access_scope(write_probe_path(spec_path)?, AccessIntent::Write, worker)?;
-    preflight_volume_access_scope(
-        write_probe_path(&default_extraction_quarantine_path())?,
-        AccessIntent::Write,
-        worker,
-    )?;
-    if let Some(journal_path) = journal_path {
-        preflight_volume_access_scope(
-            write_probe_path(journal_path)?,
-            AccessIntent::Write,
-            worker,
-        )?;
-    }
-    Ok(())
+    ContentJobAccessReports::for_spec(spec, spec_path, None)?
+        .access_checked(worker, &mut check_control)
 }
 
 fn write_probe_path(path: &Path) -> Result<&Path> {
@@ -2167,11 +2155,11 @@ pub(crate) fn run_content_job(
             deferred: true,
         });
     }
-    preflight_content_job_volumes(spec, spec_path, Some(journal.path()), label)?;
+    let access_reports = ContentJobAccessReports::for_spec(spec, spec_path, Some(journal.path()))?;
+    access_reports.preflight_volumes(label)?;
     let volume = spec
         .volume
-        .or_else(|| detect_volume_id(&spec.root).ok())
-        .or_else(|| parent_volume(&spec.records_path))
+        .or_else(|| access_reports.first_volume())
         .ok_or_else(|| {
             GfmError::Format(format!(
                 "could not determine content index volume for {}",
@@ -2179,7 +2167,6 @@ pub(crate) fn run_content_job(
             ))
         })?;
     let job_spec = spec.clone();
-    let job_spec_path = spec_path.to_path_buf();
     let (job_result_tx, job_result_rx) = mpsc::sync_channel(1);
     let mut scheduler = Scheduler::new();
     let job = scheduler.schedule_on_volume(Priority::Background, label, volume);
@@ -2203,18 +2190,13 @@ pub(crate) fn run_content_job(
         .into_iter()
         .map(|scheduled| {
             let job_spec = job_spec.clone();
-            let job_spec_path = job_spec_path.clone();
+            let access_reports = access_reports.clone();
             let job_result_tx = job_result_tx.clone();
             let runtime = runtime.clone();
             RetriableTask::new(scheduled, move |cancellation| {
                 runtime.running_checked(|| cancellation.check())?;
                 cancellation.check()?;
-                let _access = retain_content_job_access_checked(
-                    &job_spec,
-                    &job_spec_path,
-                    "background content index",
-                    || cancellation.check(),
-                )?;
+                let _access = access_reports.access_checked(label, || cancellation.check())?;
                 cancellation.check()?;
                 let snapshot =
                     Indexer::default().build_cancellable(&job_spec.root, &cancellation)?;
