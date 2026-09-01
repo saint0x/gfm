@@ -3937,8 +3937,14 @@ fn worker_admission_fanout_summary(admissions: &[SecurityWorkerAdmissionReport])
     let refresh_required = admissions
         .iter()
         .any(|admission| admission.refresh_on_permission_change);
+    let first_blocked = admissions
+        .iter()
+        .find(|admission| !admission.can_touch_filesystem);
+    let first_refresh = admissions
+        .iter()
+        .find(|admission| admission.refresh_on_permission_change);
     format!(
-        "security-worker-admission-fanout\tworkers={}\tstart={}\tprompt={}\tmetadata-only={}\tdeny={}\tcan-touch-filesystem={}\tbookmark-access={}\trefresh-on-permission-change={}\tany-blocked={}\tall-blocked={}\trefresh-required={}",
+        "security-worker-admission-fanout\tworkers={}\tstart={}\tprompt={}\tmetadata-only={}\tdeny={}\tcan-touch-filesystem={}\tbookmark-access={}\trefresh-on-permission-change={}\tany-blocked={}\tall-blocked={}\trefresh-required={}\tfirst-blocked-worker={}\tfirst-blocked-action={}\tfirst-blocked-scope={}\tfirst-blocked-probe={}\tfirst-blocked-reason={}\tfirst-refresh-worker={}\tfirst-refresh-scope={}",
         admissions.len(),
         starts,
         prompts,
@@ -3949,8 +3955,36 @@ fn worker_admission_fanout_summary(admissions: &[SecurityWorkerAdmissionReport])
         refresh_on_permission_change,
         any_blocked,
         all_blocked,
-        refresh_required
+        refresh_required,
+        first_blocked
+            .map(|admission| escape_field(&admission.worker))
+            .unwrap_or_else(|| "-".to_string()),
+        first_blocked
+            .map(|admission| admission.worker_action.as_str())
+            .unwrap_or("-"),
+        first_blocked
+            .map(|admission| admission.access.scope.as_str())
+            .unwrap_or("-"),
+        first_blocked
+            .map(|admission| admission.access.probe.as_str())
+            .unwrap_or("-"),
+        first_blocked
+            .map(|admission| escape_field(&admission.reason))
+            .unwrap_or_else(|| "-".to_string()),
+        first_refresh
+            .map(|admission| escape_field(&admission.worker))
+            .unwrap_or_else(|| "-".to_string()),
+        first_refresh
+            .map(|admission| admission.access.scope.as_str())
+            .unwrap_or("-")
     )
+}
+
+fn escape_field(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
 }
 
 fn index_volume_event_kind(kind: VolumeEventKind) -> IndexVolumeEventKind {
@@ -4364,7 +4398,52 @@ fn optional_platform_string(value: Option<String>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gfm_mac::FileProviderStateSnapshotEntry;
+    use gfm_mac::{FileProviderStateSnapshotEntry, SecurityDecisionAction};
+
+    #[test]
+    fn worker_admission_fanout_summary_escapes_first_blocked_fields() {
+        let path = std::path::PathBuf::from("/Users/me/Documents/report.pdf");
+        let access = SecurityScopedAccessReport {
+            path,
+            intent: AccessIntent::Preview,
+            scope: gfm_mac::ProtectedScope::Documents,
+            probe: gfm_mac::AccessProbeState::Denied,
+            mode: gfm_mac::SecurityAccessMode::DegradedMetadataOnly,
+            action: SecurityDecisionAction::Degrade,
+            bookmark_required: false,
+            can_read: false,
+            can_write: false,
+            least_privilege: true,
+            reason: "access denied".to_string(),
+        };
+        let admission = SecurityWorkerAdmissionReport {
+            worker: "preview\tworker".to_string(),
+            access,
+            worker_action: SecurityWorkerAction::MetadataOnly,
+            can_touch_filesystem: false,
+            needs_bookmark_access: false,
+            refresh_on_permission_change: true,
+            reason: "preview worker must avoid\nfile IO".to_string(),
+        };
+
+        let summary = worker_admission_fanout_summary(&[admission]);
+
+        assert!(summary.contains("\tany-blocked=true\t"), "{summary}");
+        assert!(summary.contains("\tall-blocked=true\t"), "{summary}");
+        assert!(summary.contains("\trefresh-required=true\t"), "{summary}");
+        assert!(
+            summary.contains("\tfirst-blocked-worker=preview\\tworker\t"),
+            "{summary}"
+        );
+        assert!(
+            summary.contains("\tfirst-blocked-reason=preview worker must avoid\\nfile IO\t"),
+            "{summary}"
+        );
+        assert!(
+            summary.contains("\tfirst-refresh-worker=preview\\tworker\t"),
+            "{summary}"
+        );
+    }
 
     #[test]
     fn preview_security_input_with_volume_checked_honors_pre_cancelled_control() {

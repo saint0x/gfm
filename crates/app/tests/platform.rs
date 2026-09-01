@@ -883,7 +883,14 @@ fn reports_security_worker_admission_fanout_from_binary() {
     assert!(stdout.contains("\trefresh-on-permission-change=4\t"));
     assert!(stdout.contains("\tany-blocked=true\t"));
     assert!(stdout.contains("\tall-blocked=true\t"));
-    assert!(stdout.contains("\trefresh-required=true\n"));
+    assert!(stdout.contains("\trefresh-required=true\t"));
+    assert!(stdout.contains("\tfirst-blocked-worker=index worker\t"));
+    assert!(stdout.contains("\tfirst-blocked-action=deny\t"));
+    assert!(stdout.contains("\tfirst-blocked-scope=none\t"));
+    assert!(stdout.contains("\tfirst-blocked-probe=unknown\t"));
+    assert!(stdout.contains("\tfirst-blocked-reason="));
+    assert!(stdout.contains("\tfirst-refresh-worker=index worker\t"));
+    assert!(stdout.contains("\tfirst-refresh-scope=none\n"));
     for (worker, intent) in [
         ("index worker", "index"),
         ("preview worker", "preview"),
@@ -912,7 +919,7 @@ fn reports_security_worker_admission_fanout_from_binary() {
     );
     assert_eq!(
         stdout.matches("unreachable volume network").count(),
-        4,
+        5,
         "{stdout}"
     );
     assert!(!stdout.contains("\tprobe=missing\t"), "{stdout}");
@@ -956,7 +963,14 @@ fn security_worker_admission_fanout_refuses_unavailable_volume_api_from_binary()
     assert!(stdout.contains("\trefresh-on-permission-change=3\t"));
     assert!(stdout.contains("\tany-blocked=true\t"));
     assert!(stdout.contains("\tall-blocked=true\t"));
-    assert!(stdout.contains("\trefresh-required=true\n"));
+    assert!(stdout.contains("\trefresh-required=true\t"));
+    assert!(stdout.contains("\tfirst-blocked-worker=index worker\t"));
+    assert!(stdout.contains("\tfirst-blocked-action=deny\t"));
+    assert!(stdout.contains("\tfirst-blocked-scope=none\t"));
+    assert!(stdout.contains("\tfirst-blocked-probe=unavailable\t"));
+    assert!(stdout.contains("\tfirst-blocked-reason="));
+    assert!(stdout.contains("\tfirst-refresh-worker=index worker\t"));
+    assert!(stdout.contains("\tfirst-refresh-scope=none\n"));
     assert_eq!(
         stdout.matches("\tprobe=unavailable\t").count(),
         3,
@@ -969,22 +983,22 @@ fn security_worker_admission_fanout_refuses_unavailable_volume_api_from_binary()
     );
     assert_eq!(
         stdout.matches("unavailable volume network").count(),
-        3,
+        4,
         "{stdout}"
     );
     assert_eq!(
         stdout.matches("native-status=unavailable").count(),
-        3,
+        4,
         "{stdout}"
     );
     assert_eq!(
         stdout.matches("resource-status=unavailable").count(),
-        3,
+        4,
         "{stdout}"
     );
     assert_eq!(
         stdout.matches("mount-status=unavailable").count(),
-        3,
+        4,
         "{stdout}"
     );
     assert!(!stdout.contains("\tprobe=unknown\t"), "{stdout}");
