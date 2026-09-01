@@ -2614,6 +2614,61 @@ fn fileprovider_progress_job_retries_transient_provider_publish_from_binary() {
 }
 
 #[test]
+fn fileprovider_progress_job_refuses_unreachable_retry_probe_before_provider_read_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-fileprovider-progress-retry-probe-blocked-{}",
+        std::process::id()
+    ));
+    let offline = std::env::temp_dir().join(format!(
+        "gfm-fileprovider-progress-retry-probe-offline-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&offline);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&offline).unwrap();
+    std::fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let downloading = root.join("Downloading.icloud-downloading.md");
+    let progress = root.join("progress.gfmprogress");
+    let catalog = root.join("payloads.gfmjobs");
+    let journal = root.join("jobs.gfmjournal");
+    let retry_probe = offline.join("progress-retry.state");
+    std::fs::write(&downloading, "downloading").unwrap();
+    xattr::set(&downloading, "com.apple.fileprovider.state", b"downloading").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_JOURNAL", &journal)
+        .env("GFM_FILEPROVIDER_PROGRESS_RETRY_PROBE", &retry_probe)
+        .arg("fileprovider-progress-job")
+        .arg(&downloading)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("fileprovider-progress\t"), "{stdout}");
+    assert!(
+        stderr.contains(
+            "fileprovider progress job volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("platform write path metadata unavailable"),
+        "{stderr}"
+    );
+    assert!(!retry_probe.exists());
+    assert!(!progress.exists());
+    assert!(!catalog.exists());
+
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(offline);
+}
+
+#[test]
 fn fileprovider_progress_job_cancel_after_access_stops_before_runtime_publish_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-fileprovider-progress-job-cancel-{}",

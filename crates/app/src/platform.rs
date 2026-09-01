@@ -1520,9 +1520,10 @@ fn volume_event_description_api_status() -> Result<VolumeEventInvalidationReport
 fn publish_fileprovider_progress_job(
     path: PathBuf,
     volume: Option<VolumeId>,
+    retry_probe: Option<&FileProviderProgressRetryProbe>,
     cancellation: &Cancellation,
 ) -> Result<FileProviderProgressReport> {
-    maybe_fail_fileprovider_progress_retry_probe(cancellation)?;
+    maybe_fail_fileprovider_progress_retry_probe(retry_probe, cancellation)?;
     let report = FileProviderProgressReport::read_path_checked(&path, || cancellation.check())?;
     let mut scheduler = Scheduler::new();
     let label = fileprovider_progress_label(report.state.progress.direction);
@@ -1549,15 +1550,55 @@ fn publish_fileprovider_progress_job(
     Ok(report)
 }
 
-fn maybe_fail_fileprovider_progress_retry_probe(cancellation: &Cancellation) -> Result<()> {
-    let Some(path) = std::env::var_os("GFM_FILEPROVIDER_PROGRESS_RETRY_PROBE").map(PathBuf::from)
-    else {
+#[derive(Clone)]
+struct FileProviderProgressRetryProbe {
+    attempt_state: PathBuf,
+    access_report: PlatformAccessReport,
+    worker: &'static str,
+}
+
+impl FileProviderProgressRetryProbe {
+    fn from_env_checked(
+        worker: &'static str,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Option<Self>> {
+        let Some(attempt_state) =
+            std::env::var_os("GFM_FILEPROVIDER_PROGRESS_RETRY_PROBE").map(PathBuf::from)
+        else {
+            return Ok(None);
+        };
+        check_control()?;
+        let probe = checked_write_probe_path(&attempt_state, worker)?;
+        check_control()?;
+        let access_report =
+            PlatformAccessReport::new_checked(probe, AccessIntent::Write, &mut check_control)?;
+        check_control()?;
+        Ok(Some(Self {
+            attempt_state,
+            access_report,
+            worker,
+        }))
+    }
+}
+
+fn maybe_fail_fileprovider_progress_retry_probe(
+    retry_probe: Option<&FileProviderProgressRetryProbe>,
+    cancellation: &Cancellation,
+) -> Result<()> {
+    let Some(retry_probe) = retry_probe else {
         return Ok(());
     };
     cancellation.check()?;
-    let attempt = read_retry_probe_attempt_checked(&path, || cancellation.check())? + 1;
+    let _access = retry_probe
+        .access_report
+        .access_checked(retry_probe.worker, || cancellation.check())?;
     cancellation.check()?;
-    write_retry_probe_attempt_checked(&path, attempt, || cancellation.check())?;
+    let attempt =
+        read_retry_probe_attempt_checked(&retry_probe.attempt_state, || cancellation.check())? + 1;
+    cancellation.check()?;
+    write_retry_probe_attempt_checked(&retry_probe.attempt_state, attempt, || {
+        cancellation.check()
+    })?;
     cancellation.check()?;
     if attempt == 1 {
         Err(GfmError::Format(
@@ -2611,6 +2652,12 @@ fn run_fileprovider_progress_job(
     const WORKER: &str = "fileprovider progress job";
     let access_report = PlatformAccessReport::new_checked(path, AccessIntent::Read, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
+    let retry_probe = FileProviderProgressRetryProbe::from_env_checked(WORKER, || Ok(()))?;
+    if let Some(retry_probe) = &retry_probe {
+        retry_probe
+            .access_report
+            .preflight_volume(retry_probe.worker)?;
+    }
     let volume = access_report.volume();
     run_fileprovider_worker_without_runtime_progress(volume, WORKER, move |cancellation| {
         let path = access_report.path.clone();
@@ -2620,7 +2667,7 @@ fn run_fileprovider_progress_job(
         if cancel_after_access {
             cancellation.cancel();
         }
-        publish_fileprovider_progress_job(path, volume, &cancellation)
+        publish_fileprovider_progress_job(path, volume, retry_probe.as_ref(), &cancellation)
     })
 }
 
