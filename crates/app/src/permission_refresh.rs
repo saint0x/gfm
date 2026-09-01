@@ -236,6 +236,8 @@ fn write_probe_existing_ancestor_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<std::path::PathBuf> {
     check_control()?;
+    preflight_permission_state_write_target_volume_checked(path, &mut check_control)?;
+    check_control()?;
     let mut candidate = write_probe_path(path)?.to_path_buf();
     while !candidate.try_exists().map_err(|err| {
         GfmError::io(
@@ -255,6 +257,18 @@ fn write_probe_existing_ancestor_checked(
     }
     check_control()?;
     Ok(candidate)
+}
+
+fn preflight_permission_state_write_target_volume_checked(
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    check_control()?;
+    let volume_path = crate::parent_or_cwd(path);
+    let report =
+        VolumeDiscoveryReport::for_containing_path_checked(volume_path, &mut check_control)?;
+    check_control()?;
+    preflight_permission_state_volume_with_report(path, volume_path, &report)
 }
 
 fn escape_field(value: &str) -> String {
@@ -306,6 +320,28 @@ mod tests {
             .contains("permission state volume access blocked"));
         assert!(!state.exists());
         assert!(!state.parent().unwrap().exists());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn refresh_state_refuses_unreachable_long_state_before_write_probe() {
+        let root = unique_temp_dir("gfm-permission-refresh-long-offline");
+        fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let state = root.join("permission-state-unavailable".repeat(16));
+
+        let err = refresh_permission_state_at_path(&state).unwrap_err();
+
+        assert!(matches!(err, GfmError::Permission { .. }));
+        assert!(err
+            .to_string()
+            .contains("permission state volume access blocked: unreachable volume network"));
+        assert!(
+            !err.to_string()
+                .contains("permission state write probe unavailable"),
+            "{err}"
+        );
+        assert!(!state.exists());
 
         fs::remove_dir_all(root).unwrap();
     }

@@ -400,7 +400,7 @@ fn permission_invalidation_refuses_unreachable_state_before_persisting_from_bina
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
-    let state = root.join("permission-state.tsv");
+    let state = root.join("permission-state-unavailable".repeat(16));
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("permission-invalidation")
@@ -414,6 +414,10 @@ fn permission_invalidation_refuses_unreachable_state_before_persisting_from_bina
     assert!(!stdout.contains("permission-invalidation\t"), "{stdout}");
     assert!(
         stderr.contains("permission state volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("permission state write probe unavailable"),
         "{stderr}"
     );
     assert!(!state.exists());
