@@ -541,7 +541,25 @@ fn validate_permission_prompt_orchestration(access: &PermissionAccessContract) -
             access.path
         )));
     }
+    if has_prompt_action
+        && !permission_prompt_action_matches_kind(access.prompt_kind, &access.prompt_action)
+    {
+        return Err(GfmError::Format(format!(
+            "native app permission access for `{}` pairs a prompt action with the wrong prompt kind",
+            access.path
+        )));
+    }
     Ok(())
+}
+
+fn permission_prompt_action_matches_kind(kind: PermissionPromptKind, action: &str) -> bool {
+    match kind {
+        PermissionPromptKind::General => action == "none",
+        PermissionPromptKind::FullDiskAccess => action == "open-settings",
+        PermissionPromptKind::BookmarkAcquisition => action == "choose-location",
+        PermissionPromptKind::DegradedSearch => action == "continue-metadata-only",
+        PermissionPromptKind::Blocked => action.starts_with("blocked-"),
+    }
 }
 
 fn concrete_permission_value(value: &str) -> bool {
@@ -1202,6 +1220,34 @@ mod tests {
         assert!(err
             .to_string()
             .contains("blocks access with an interactive prompt action"));
+    }
+
+    #[test]
+    fn rejects_permission_access_with_mismatched_prompt_kind_and_action() {
+        let access = PermissionAccessContract {
+            path: "/Users/me/Library/Mail".to_string(),
+            intent: "index".to_string(),
+            scope: "full-disk-access".to_string(),
+            probe: "denied".to_string(),
+            mode: "full-disk-access".to_string(),
+            access_action: "prompt".to_string(),
+            worker_action: "prompt".to_string(),
+            can_touch_filesystem: false,
+            bookmark_required: false,
+            bookmark_access: false,
+            refresh_on_permission_change: true,
+            prompt_kind: PermissionPromptKind::FullDiskAccess,
+            prompt_action: "choose-location".to_string(),
+            promptable: true,
+            prompt_source: "full-disk-access".to_string(),
+            reason: "protected root requires Full Disk Access guidance".to_string(),
+        };
+        let spec = AppLaunchSpec::new("/Users/me/Library/Mail").with_permission_access(access);
+
+        let err = WindowLifecycleContract::from_spec(&spec).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("pairs a prompt action with the wrong prompt kind"));
     }
 
     #[test]
