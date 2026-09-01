@@ -1017,14 +1017,20 @@ pub struct VolumeEventInvalidationReport {
     pub previous_mount_state: Option<MountState>,
     pub previous_case_sensitive: Option<bool>,
     pub previous_native_status: Option<NativeVolumeStatus>,
+    pub previous_native_reason: Option<String>,
     pub previous_resource_status: Option<NativeVolumeStatus>,
+    pub previous_resource_reason: Option<String>,
     pub previous_mount_table_status: Option<NativeVolumeStatus>,
+    pub previous_mount_table_reason: Option<String>,
     pub current_kind: Option<VolumeKind>,
     pub current_mount_state: Option<MountState>,
     pub current_case_sensitive: Option<bool>,
     pub current_native_status: Option<NativeVolumeStatus>,
+    pub current_native_reason: Option<String>,
     pub current_resource_status: Option<NativeVolumeStatus>,
+    pub current_resource_reason: Option<String>,
     pub current_mount_table_status: Option<NativeVolumeStatus>,
+    pub current_mount_table_reason: Option<String>,
     pub invalidate_sidebar: bool,
     pub invalidate_operation_policy: bool,
     pub invalidate_index_admission: bool,
@@ -1211,19 +1217,37 @@ impl VolumeEventInvalidationReport {
                         .and_then(|descriptor| descriptor.case_sensitive),
                     previous_native_status: previous
                         .and_then(|descriptor| descriptor.native_status),
+                    previous_native_reason: previous.and_then(|descriptor| {
+                        normalized_event_reason_option(descriptor.native_reason.as_deref())
+                    }),
                     previous_resource_status: previous
                         .and_then(|descriptor| descriptor.resource_status),
+                    previous_resource_reason: previous.and_then(|descriptor| {
+                        normalized_event_reason_option(descriptor.resource_reason.as_deref())
+                    }),
                     previous_mount_table_status: previous
                         .and_then(|descriptor| descriptor.mount_table_status),
+                    previous_mount_table_reason: previous.and_then(|descriptor| {
+                        normalized_event_reason_option(descriptor.mount_table_reason.as_deref())
+                    }),
                     current_kind: current.map(|descriptor| descriptor.kind),
                     current_mount_state: current.map(|descriptor| descriptor.mount_state),
                     current_case_sensitive: current
                         .and_then(|descriptor| descriptor.case_sensitive),
                     current_native_status: current.and_then(|descriptor| descriptor.native_status),
+                    current_native_reason: current.and_then(|descriptor| {
+                        normalized_event_reason_option(descriptor.native_reason.as_deref())
+                    }),
                     current_resource_status: current
                         .and_then(|descriptor| descriptor.resource_status),
+                    current_resource_reason: current.and_then(|descriptor| {
+                        normalized_event_reason_option(descriptor.resource_reason.as_deref())
+                    }),
                     current_mount_table_status: current
                         .and_then(|descriptor| descriptor.mount_table_status),
+                    current_mount_table_reason: current.and_then(|descriptor| {
+                        normalized_event_reason_option(descriptor.mount_table_reason.as_deref())
+                    }),
                     invalidate_sidebar: event_visible,
                     invalidate_operation_policy: event_visible,
                     invalidate_index_admission: event_visible,
@@ -1268,19 +1292,37 @@ impl VolumeEventInvalidationReport {
                         .and_then(|descriptor| descriptor.case_sensitive),
                     previous_native_status: previous
                         .and_then(|descriptor| descriptor.native_status),
+                    previous_native_reason: previous.and_then(|descriptor| {
+                        normalized_event_reason_option(descriptor.native_reason.as_deref())
+                    }),
                     previous_resource_status: previous
                         .and_then(|descriptor| descriptor.resource_status),
+                    previous_resource_reason: previous.and_then(|descriptor| {
+                        normalized_event_reason_option(descriptor.resource_reason.as_deref())
+                    }),
                     previous_mount_table_status: previous
                         .and_then(|descriptor| descriptor.mount_table_status),
+                    previous_mount_table_reason: previous.and_then(|descriptor| {
+                        normalized_event_reason_option(descriptor.mount_table_reason.as_deref())
+                    }),
                     current_kind,
                     current_mount_state,
                     current_case_sensitive: current
                         .and_then(|descriptor| descriptor.case_sensitive),
                     current_native_status: current.and_then(|descriptor| descriptor.native_status),
+                    current_native_reason: current.and_then(|descriptor| {
+                        normalized_event_reason_option(descriptor.native_reason.as_deref())
+                    }),
                     current_resource_status: current
                         .and_then(|descriptor| descriptor.resource_status),
+                    current_resource_reason: current.and_then(|descriptor| {
+                        normalized_event_reason_option(descriptor.resource_reason.as_deref())
+                    }),
                     current_mount_table_status: current
                         .and_then(|descriptor| descriptor.mount_table_status),
+                    current_mount_table_reason: current.and_then(|descriptor| {
+                        normalized_event_reason_option(descriptor.mount_table_reason.as_deref())
+                    }),
                     invalidate_sidebar: visible,
                     invalidate_operation_policy: visible && heavy,
                     invalidate_index_admission: visible && heavy,
@@ -1336,11 +1378,32 @@ impl VolumeEventInvalidationReport {
             previous_native_status: (kind == VolumeEventKind::Disappeared)
                 .then(|| descriptor.and_then(|descriptor| descriptor.native_status))
                 .flatten(),
+            previous_native_reason: (kind == VolumeEventKind::Disappeared)
+                .then(|| {
+                    descriptor.and_then(|descriptor| {
+                        normalized_event_reason_option(descriptor.native_reason.as_deref())
+                    })
+                })
+                .flatten(),
             previous_resource_status: (kind == VolumeEventKind::Disappeared)
                 .then(|| descriptor.and_then(|descriptor| descriptor.resource_status))
                 .flatten(),
+            previous_resource_reason: (kind == VolumeEventKind::Disappeared)
+                .then(|| {
+                    descriptor.and_then(|descriptor| {
+                        normalized_event_reason_option(descriptor.resource_reason.as_deref())
+                    })
+                })
+                .flatten(),
             previous_mount_table_status: (kind == VolumeEventKind::Disappeared)
                 .then(|| descriptor.and_then(|descriptor| descriptor.mount_table_status))
+                .flatten(),
+            previous_mount_table_reason: (kind == VolumeEventKind::Disappeared)
+                .then(|| {
+                    descriptor.and_then(|descriptor| {
+                        normalized_event_reason_option(descriptor.mount_table_reason.as_deref())
+                    })
+                })
                 .flatten(),
             current_kind: (kind != VolumeEventKind::Disappeared)
                 .then(|| descriptor.map(|descriptor| descriptor.kind))
@@ -1356,11 +1419,32 @@ impl VolumeEventInvalidationReport {
             current_native_status: (kind != VolumeEventKind::Disappeared)
                 .then(|| descriptor.and_then(|descriptor| descriptor.native_status))
                 .flatten(),
+            current_native_reason: (kind != VolumeEventKind::Disappeared)
+                .then(|| {
+                    descriptor.and_then(|descriptor| {
+                        normalized_event_reason_option(descriptor.native_reason.as_deref())
+                    })
+                })
+                .flatten(),
             current_resource_status: (kind != VolumeEventKind::Disappeared)
                 .then(|| descriptor.and_then(|descriptor| descriptor.resource_status))
                 .flatten(),
+            current_resource_reason: (kind != VolumeEventKind::Disappeared)
+                .then(|| {
+                    descriptor.and_then(|descriptor| {
+                        normalized_event_reason_option(descriptor.resource_reason.as_deref())
+                    })
+                })
+                .flatten(),
             current_mount_table_status: (kind != VolumeEventKind::Disappeared)
                 .then(|| descriptor.and_then(|descriptor| descriptor.mount_table_status))
+                .flatten(),
+            current_mount_table_reason: (kind != VolumeEventKind::Disappeared)
+                .then(|| {
+                    descriptor.and_then(|descriptor| {
+                        normalized_event_reason_option(descriptor.mount_table_reason.as_deref())
+                    })
+                })
                 .flatten(),
             invalidate_sidebar: invalidates,
             invalidate_operation_policy: invalidates,
@@ -1372,7 +1456,7 @@ impl VolumeEventInvalidationReport {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume-event-invalidation\tkind={}\tnative-status={}\tpath={}\tprevious-kind={}\tprevious-mount={}\tprevious-case-sensitive={}\tprevious-native-status={}\tprevious-resource-status={}\tprevious-mount-status={}\tcurrent-kind={}\tcurrent-mount={}\tcurrent-case-sensitive={}\tcurrent-native-status={}\tcurrent-resource-status={}\tcurrent-mount-status={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\treason={}",
+            "volume-event-invalidation\tkind={}\tnative-status={}\tpath={}\tprevious-kind={}\tprevious-mount={}\tprevious-case-sensitive={}\tprevious-native-status={}\tprevious-native-reason={}\tprevious-resource-status={}\tprevious-resource-reason={}\tprevious-mount-status={}\tprevious-mount-reason={}\tcurrent-kind={}\tcurrent-mount={}\tcurrent-case-sensitive={}\tcurrent-native-status={}\tcurrent-native-reason={}\tcurrent-resource-status={}\tcurrent-resource-reason={}\tcurrent-mount-status={}\tcurrent-mount-reason={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\treason={}",
             self.kind.as_str(),
             self.native_status.as_str(),
             self.path
@@ -1387,12 +1471,15 @@ impl VolumeEventInvalidationReport {
             self.previous_native_status
                 .map(NativeVolumeStatus::as_str)
                 .unwrap_or("-"),
+            format_optional_event_reason(self.previous_native_reason.as_deref()),
             self.previous_resource_status
                 .map(NativeVolumeStatus::as_str)
                 .unwrap_or("-"),
+            format_optional_event_reason(self.previous_resource_reason.as_deref()),
             self.previous_mount_table_status
                 .map(NativeVolumeStatus::as_str)
                 .unwrap_or("-"),
+            format_optional_event_reason(self.previous_mount_table_reason.as_deref()),
             self.current_kind.map(VolumeKind::as_str).unwrap_or("-"),
             self.current_mount_state.map(MountState::as_str).unwrap_or("-"),
             self.current_case_sensitive
@@ -1401,12 +1488,15 @@ impl VolumeEventInvalidationReport {
             self.current_native_status
                 .map(NativeVolumeStatus::as_str)
                 .unwrap_or("-"),
+            format_optional_event_reason(self.current_native_reason.as_deref()),
             self.current_resource_status
                 .map(NativeVolumeStatus::as_str)
                 .unwrap_or("-"),
+            format_optional_event_reason(self.current_resource_reason.as_deref()),
             self.current_mount_table_status
                 .map(NativeVolumeStatus::as_str)
                 .unwrap_or("-"),
+            format_optional_event_reason(self.current_mount_table_reason.as_deref()),
             self.invalidate_sidebar,
             self.invalidate_operation_policy,
             self.invalidate_index_admission,
@@ -1424,6 +1514,13 @@ fn normalized_event_reason_option(reason: Option<&str>) -> Option<String> {
     reason
         .filter(|reason| !reason.trim().is_empty())
         .map(str::to_string)
+}
+
+fn format_optional_event_reason(reason: Option<&str>) -> String {
+    normalized_event_reason_option(reason)
+        .as_deref()
+        .map(escape_field)
+        .unwrap_or_else(|| "-".to_string())
 }
 
 fn description_change_invalidates_policy(reason: &str) -> bool {
@@ -4686,6 +4783,46 @@ mod tests {
     }
 
     #[test]
+    fn volume_event_invalidation_surfaces_api_status_reasons() {
+        let mut descriptor = VolumeDescriptor::for_path("/").unwrap();
+        descriptor.stable_identity = "diskarbitration:uuid:API-REASON".to_string();
+        descriptor.label = "API Reason".to_string();
+        descriptor.path = PathBuf::from("/Volumes/API Reason");
+        descriptor.kind = VolumeKind::External;
+        descriptor.native_status = Some(NativeVolumeStatus::Unavailable);
+        descriptor.native_reason = Some("DiskArbitration unavailable\tuntil refresh".to_string());
+        descriptor.resource_status = Some(NativeVolumeStatus::Unavailable);
+        descriptor.resource_reason = Some("".to_string());
+        descriptor.mount_table_status = Some(NativeVolumeStatus::Available);
+        descriptor.mount_table_reason = Some("\n".to_string());
+
+        let report = VolumeEventInvalidationReport::from_parts(
+            VolumeEventKind::DescriptionChanged,
+            NativeVolumeStatus::Unavailable,
+            Some(descriptor.path.clone()),
+            Some(&descriptor),
+            descriptor.native_reason.clone(),
+        );
+        let tsv = report.as_tsv();
+
+        assert_eq!(
+            report.current_native_reason.as_deref(),
+            Some("DiskArbitration unavailable\tuntil refresh")
+        );
+        assert_eq!(report.current_resource_reason, None);
+        assert_eq!(report.current_mount_table_reason, None);
+        assert!(tsv.contains("\tcurrent-native-status=unavailable\t"));
+        assert!(
+            tsv.contains("\tcurrent-native-reason=DiskArbitration unavailable\\tuntil refresh\t")
+        );
+        assert!(tsv.contains("\tcurrent-resource-status=unavailable\t"));
+        assert!(tsv.contains("\tcurrent-resource-reason=-\t"));
+        assert!(tsv.contains("\tcurrent-mount-status=available\t"));
+        assert!(tsv.contains("\tcurrent-mount-reason=-\t"));
+        assert!(tsv.ends_with("reason=DiskArbitration unavailable\\tuntil refresh"));
+    }
+
+    #[test]
     fn volume_event_transition_keeps_label_only_change_sidebar_scoped() {
         let root = unique_temp_dir("gfm-volume-event-label-change");
         fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
@@ -4830,8 +4967,11 @@ mod tests {
         previous.mount_table_status = Some(NativeVolumeStatus::Unavailable);
         let mut current = previous.clone();
         current.native_status = Some(NativeVolumeStatus::Available);
+        current.native_reason = None;
         current.resource_status = Some(NativeVolumeStatus::Available);
+        current.resource_reason = None;
         current.mount_table_status = Some(NativeVolumeStatus::Available);
+        current.mount_table_reason = None;
 
         let report = VolumeEventInvalidationReport::from_transition(
             VolumeEventKind::DescriptionChanged,
@@ -4850,15 +4990,27 @@ mod tests {
             report.current_native_status,
             Some(NativeVolumeStatus::Available)
         );
+        assert_eq!(report.current_native_reason, None);
+        assert_eq!(report.current_resource_reason, None);
+        assert_eq!(report.current_mount_table_reason, None);
         assert!(report.invalidate_operation_policy);
         assert!(report.invalidate_index_admission);
         assert!(report
             .as_tsv()
             .contains("\tprevious-native-status=unavailable\t"));
         assert!(report.as_tsv().contains("\tcurrent-kind=external\t"));
-        assert!(report.as_tsv().contains(
-            "\tcurrent-native-status=available\tcurrent-resource-status=available\tcurrent-mount-status=available\t"
-        ));
+        assert!(report
+            .as_tsv()
+            .contains("\tcurrent-native-status=available\t"));
+        assert!(report.as_tsv().contains("\tcurrent-native-reason=-\t"));
+        assert!(report
+            .as_tsv()
+            .contains("\tcurrent-resource-status=available\t"));
+        assert!(report.as_tsv().contains("\tcurrent-resource-reason=-\t"));
+        assert!(report
+            .as_tsv()
+            .contains("\tcurrent-mount-status=available\t"));
+        assert!(report.as_tsv().contains("\tcurrent-mount-reason=-\t"));
 
         fs::remove_dir_all(root).unwrap();
     }

@@ -1447,12 +1447,19 @@ fn volume_event_transition_api_status() -> Result<VolumeEventInvalidationReport>
     previous.path = PathBuf::from("/Volumes/API Event");
     previous.kind = gfm_mac::VolumeKind::External;
     previous.native_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+    previous.native_reason = Some("DiskArbitration unavailable during event refresh".to_string());
     previous.resource_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+    previous.resource_reason =
+        Some("URL resource values unavailable during event refresh".to_string());
     previous.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+    previous.mount_table_reason = Some("mount table unavailable during event refresh".to_string());
     let mut current = previous.clone();
     current.native_status = Some(gfm_mac::NativeVolumeStatus::Available);
+    current.native_reason = None;
     current.resource_status = Some(gfm_mac::NativeVolumeStatus::Available);
+    current.resource_reason = None;
     current.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Available);
+    current.mount_table_reason = None;
     Ok(VolumeEventInvalidationReport::from_transition(
         VolumeEventKind::DescriptionChanged,
         gfm_mac::NativeVolumeStatus::Available,
@@ -1469,8 +1476,11 @@ fn volume_event_description_api_status() -> Result<VolumeEventInvalidationReport
     descriptor.path = PathBuf::from("/Volumes/API Description");
     descriptor.kind = gfm_mac::VolumeKind::External;
     descriptor.native_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+    descriptor.native_reason = Some("DiskArbitration unavailable during refresh".to_string());
     descriptor.resource_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+    descriptor.resource_reason = Some("URL resource values unavailable during refresh".to_string());
     descriptor.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+    descriptor.mount_table_reason = Some("mount table unavailable during refresh".to_string());
     Ok(volume_event_invalidation_for_descriptor(
         VolumeEventKind::DescriptionChanged,
         descriptor.path.clone(),

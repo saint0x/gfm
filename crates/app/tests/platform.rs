@@ -5864,11 +5864,22 @@ fn reports_volume_event_transition_api_status_from_binary() {
     ));
     assert!(stdout.contains("\tpath=/Volumes/API Event\t"));
     assert!(stdout.contains("\tprevious-native-status=unavailable\t"));
+    assert!(stdout
+        .contains("\tprevious-native-reason=DiskArbitration unavailable during event refresh\t"));
     assert!(stdout.contains("\tcurrent-native-status=available\t"));
+    assert!(stdout.contains("\tcurrent-native-reason=-\t"));
     assert!(stdout.contains("\tprevious-resource-status=unavailable\t"));
+    assert!(stdout.contains(
+        "\tprevious-resource-reason=URL resource values unavailable during event refresh\t"
+    ));
     assert!(stdout.contains("\tcurrent-resource-status=available\t"));
+    assert!(stdout.contains("\tcurrent-resource-reason=-\t"));
     assert!(stdout.contains("\tprevious-mount-status=unavailable\t"));
+    assert!(
+        stdout.contains("\tprevious-mount-reason=mount table unavailable during event refresh\t")
+    );
     assert!(stdout.contains("\tcurrent-mount-status=available\t"));
+    assert!(stdout.contains("\tcurrent-mount-reason=-\t"));
     assert!(stdout.contains("\tsidebar=true\toperation-policy=true\tindex-admission=true\t"));
     assert!(stdout.ends_with("reason=volume-api-status-changed\n"));
 }
@@ -5892,11 +5903,15 @@ fn reports_volume_description_event_api_status_reason_from_binary() {
     assert!(stdout.contains("\tpath=/Volumes/API Description\t"));
     assert!(stdout.contains("\tcurrent-kind=external\tcurrent-mount=mounted\t"));
     assert!(stdout.contains("\tcurrent-native-status=unavailable\t"));
+    assert!(stdout.contains("\tcurrent-native-reason=DiskArbitration unavailable during refresh\t"));
     assert!(stdout.contains("\tcurrent-resource-status=unavailable\t"));
+    assert!(stdout
+        .contains("\tcurrent-resource-reason=URL resource values unavailable during refresh\t"));
     assert!(stdout.contains("\tcurrent-mount-status=unavailable\t"));
+    assert!(stdout.contains("\tcurrent-mount-reason=mount table unavailable during refresh\t"));
     assert!(stdout.contains("\tsidebar=true\toperation-policy=true\t"));
     assert!(stdout.contains("\tindex-admission=true\trescan-index=true\t"));
-    assert!(stdout.ends_with("reason=diskarbitration-volume-unavailable\n"));
+    assert!(stdout.ends_with("reason=DiskArbitration unavailable during refresh\n"));
 }
 
 #[test]
