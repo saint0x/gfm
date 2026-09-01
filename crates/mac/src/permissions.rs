@@ -160,7 +160,9 @@ pub struct PermissionStateSnapshot {
 pub enum PermissionScopeChangeKind {
     Initialized,
     Granted,
+    Denied,
     Revoked,
+    Unavailable,
     StateChanged,
     PathChanged,
     ReasonChanged,
@@ -172,7 +174,9 @@ impl PermissionScopeChangeKind {
         match self {
             Self::Initialized => "initialized",
             Self::Granted => "granted",
+            Self::Denied => "denied",
             Self::Revoked => "revoked",
+            Self::Unavailable => "unavailable",
             Self::StateChanged => "state-changed",
             Self::PathChanged => "path-changed",
             Self::ReasonChanged => "reason-changed",
@@ -438,9 +442,11 @@ fn permission_change_kind(
     if previous.state != current.state {
         return match (previous.state, current.state) {
             (_, PermissionState::Granted) => PermissionScopeChangeKind::Granted,
-            (PermissionState::Granted, PermissionState::Denied | PermissionState::Unavailable) => {
+            (PermissionState::Granted, PermissionState::Denied) => {
                 PermissionScopeChangeKind::Revoked
             }
+            (_, PermissionState::Denied) => PermissionScopeChangeKind::Denied,
+            (_, PermissionState::Unavailable) => PermissionScopeChangeKind::Unavailable,
             _ => PermissionScopeChangeKind::StateChanged,
         };
     }
@@ -1096,6 +1102,40 @@ mod tests {
     }
 
     #[test]
+    fn permission_invalidation_marks_new_denial_without_revocation() {
+        let root = temp_root("permissions-denied");
+        let path = root.join("Documents");
+        let previous = PermissionStateSnapshot {
+            readiness: vec![PermissionReadiness {
+                scope: PermissionScope::Documents,
+                path: path.clone(),
+                state: PermissionState::Missing,
+                reason: "path is not present on this host".to_string(),
+            }],
+        };
+        let current = PermissionStateSnapshot {
+            readiness: vec![PermissionReadiness {
+                scope: PermissionScope::Documents,
+                path,
+                state: PermissionState::Denied,
+                reason: "macOS denied read access".to_string(),
+            }],
+        };
+
+        let report = PermissionStateInvalidationReport::evaluate(Some(&previous), &current);
+
+        assert_eq!(report.changed.len(), 1);
+        assert_eq!(report.changed[0].kind, PermissionScopeChangeKind::Denied);
+        assert!(report.refresh_ui);
+        assert!(report.refresh_workers);
+        assert!(report.refresh_operations);
+        assert!(report
+            .as_tsv()
+            .contains("kind=denied\tprevious=missing\tcurrent=denied"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn permission_invalidation_marks_same_state_path_changes() {
         let root = temp_root("permissions-path-change");
         let previous = PermissionStateSnapshot {
@@ -1174,7 +1214,7 @@ mod tests {
     }
 
     #[test]
-    fn permission_invalidation_marks_non_grant_state_changes() {
+    fn permission_invalidation_marks_unavailable_state_changes() {
         let root = temp_root("permissions-state-change");
         let path = root.join("Documents");
         let previous = PermissionStateSnapshot {
@@ -1201,11 +1241,11 @@ mod tests {
         assert_eq!(report.changed[0].current, PermissionState::Unavailable);
         assert_eq!(
             report.changed[0].kind,
-            PermissionScopeChangeKind::StateChanged
+            PermissionScopeChangeKind::Unavailable
         );
         assert!(report
             .as_tsv()
-            .contains("kind=state-changed\tprevious=denied\tcurrent=unavailable"));
+            .contains("kind=unavailable\tprevious=denied\tcurrent=unavailable"));
 
         fs::remove_dir_all(root).unwrap();
     }

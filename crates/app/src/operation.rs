@@ -24,6 +24,7 @@ use gfm_ops::{
     OperationThroughputClass, OperationVolumeClass, OperationVolumeCopyPolicy, Operator,
 };
 use gfm_types::{GfmError, Result, VolumeId};
+use std::collections::BTreeSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -1277,6 +1278,7 @@ fn operation_security_accesses_from_store_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<SecurityScopedBookmarkAccess>> {
     let mut accesses = Vec::new();
+    let mut retained = BTreeSet::new();
     check_control()?;
     let probes = operation_access_probes_checked(operation, volume_report, &mut check_control)?;
     for probe in probes {
@@ -1295,12 +1297,36 @@ fn operation_security_accesses_from_store_checked(
             continue;
         }
         check_control()?;
-        let lookup = store.start_access_for_path_checked(
+        let lookup = store.resolve_for_path_checked(
             &probe.probe_path,
+            false,
             false,
             true,
             &mut check_control,
         )?;
+        check_control()?;
+        let Some(resolution) = lookup.resolution else {
+            return Err(GfmError::Permission {
+                path: probe.probe_path,
+                message: format!(
+                    "{} requires stored security-scoped access before mutation",
+                    probe.requirement.role.as_str()
+                ),
+            });
+        };
+        let retained_key = (
+            resolution.record.path.clone(),
+            resolution.record.read_only,
+            resolution
+                .report
+                .resolved_path
+                .clone()
+                .unwrap_or_else(|| resolution.record.path.clone()),
+        );
+        if !retained.insert(retained_key) {
+            continue;
+        }
+        let lookup = resolution.start_access_checked(&probe.probe_path, &mut check_control)?;
         check_control()?;
         let Some(access) = lookup.access else {
             return Err(GfmError::Permission {
@@ -2755,6 +2781,38 @@ mod tests {
         assert!(
             !store.path().exists(),
             "cancelled operation preflight must stop before touching bookmark store"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operation_security_accesses_deduplicate_same_resolved_bookmark_scope() {
+        let _env = ENV_LOCK.lock().unwrap();
+        let root = unique_temp_dir("gfm-app-op-security-access-dedupe");
+        let home = root.join("home");
+        let documents = home.join("Documents");
+        let source = documents.join("Plan.md");
+        let destination = documents.join("Plan 2.md");
+        let store = SecurityScopedBookmarkStore::new(root.join("bookmarks.tsv"));
+        fs::create_dir_all(&documents).unwrap();
+        fs::write(&source, "content").unwrap();
+        let _home = EnvVarGuard::set("HOME", &home);
+        let bookmark = gfm_mac::SecurityScopedBookmark::create(&documents, false).unwrap();
+        store.upsert(bookmark).unwrap();
+        let operation = Operation::Move {
+            from: source,
+            to: destination,
+        };
+        let report = VolumeDiscoveryReport::from_paths(vec![root.clone()]);
+
+        let accesses =
+            operation_security_accesses_from_store_checked(&operation, &report, &store, || Ok(()))
+                .unwrap();
+
+        assert_eq!(
+            accesses.len(),
+            1,
+            "source and destination parent should share the same retained bookmark access"
         );
         fs::remove_dir_all(root).unwrap();
     }

@@ -246,6 +246,33 @@ impl SecurityScopedBookmarkRecord {
     }
 }
 
+impl SecurityScopedBookmarkResolution {
+    pub fn start_access_checked(
+        &self,
+        requested_path: impl AsRef<Path>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<SecurityScopedBookmarkAccessLookup> {
+        check_control()?;
+        let requested_path = requested_path.as_ref().to_path_buf();
+        check_control()?;
+        let access =
+            self.record
+                .bookmark()
+                .start_access()
+                .map_err(|report| GfmError::Permission {
+                    path: requested_path.clone(),
+                    message: report
+                        .reason
+                        .unwrap_or_else(|| "security-scoped access did not start".to_string()),
+                })?;
+        check_control()?;
+        Ok(SecurityScopedBookmarkAccessLookup {
+            requested_path,
+            access: Some(access),
+        })
+    }
+}
+
 impl SecurityScopedBookmarkStore {
     pub fn new(path: impl AsRef<Path>) -> Self {
         Self {
@@ -514,21 +541,7 @@ impl SecurityScopedBookmarkStore {
             });
         };
         check_control()?;
-        let access = resolution
-            .record
-            .bookmark()
-            .start_access()
-            .map_err(|report| GfmError::Permission {
-                path: requested_path.clone(),
-                message: report
-                    .reason
-                    .unwrap_or_else(|| "security-scoped access did not start".to_string()),
-            })?;
-        check_control()?;
-        Ok(SecurityScopedBookmarkAccessLookup {
-            requested_path,
-            access: Some(access),
-        })
+        resolution.start_access_checked(requested_path, &mut check_control)
     }
 
     pub fn reconcile(&self) -> Result<SecurityScopedBookmarkStoreReport> {

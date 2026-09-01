@@ -584,6 +584,64 @@ fn permission_invalidation_compare_reports_removed_scope_as_unavailable_from_bin
 }
 
 #[test]
+fn permission_invalidation_compare_reports_denied_and_unavailable_kinds_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-permission-invalidation-kinds-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let previous = root.join("previous-permission-state.tsv");
+    let current = root.join("current-permission-state.tsv");
+    let documents = root.join("Documents");
+    let mail = root.join("Library/Mail");
+    std::fs::create_dir_all(mail.parent().unwrap()).unwrap();
+    std::fs::write(
+        &previous,
+        format!(
+            "gfm-permission-state-v1\ndocuments\tmissing\t{}\tpath is not present on this host\nfull-disk-access\tdenied\t{}\tmacOS denied read access\n",
+            documents.display(),
+            mail.display()
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        &current,
+        format!(
+            "gfm-permission-state-v1\ndocuments\tdenied\t{}\tmacOS denied read access\nfull-disk-access\tunavailable\t{}\tTCC service unavailable\n",
+            documents.display(),
+            mail.display()
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("permission-invalidation-compare")
+        .arg(&previous)
+        .arg(&current)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with(
+        "permission-invalidation\tinitialized=false\tchanged=2\trefresh-ui=true\trefresh-workers=true\trefresh-operations=true\n"
+    ));
+    assert!(stdout.contains(
+        "\npermission-change\tdocuments\tkind=denied\tprevious=missing\tcurrent=denied\t"
+    ));
+    assert!(stdout.contains(
+        "\npermission-change\tfull-disk-access\tkind=unavailable\tprevious=denied\tcurrent=unavailable\t"
+    ));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn permission_invalidation_compare_refuses_duplicate_scope_state_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-permission-invalidation-duplicate-scope-{}",
