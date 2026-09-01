@@ -4,11 +4,11 @@ use gfm_mac_sys::{
     NativeVolumeStatus,
 };
 use gfm_types::{GfmError, Result, VolumeId};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
@@ -1100,6 +1100,7 @@ pub struct VolumeEventInvalidationReport {
 
 pub struct VolumeEventStream {
     stream: gfm_mac_sys::NativeVolumeEventStream,
+    pending: Mutex<VecDeque<gfm_mac_sys::NativeVolumeEvent>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1846,6 +1847,7 @@ impl VolumeEventStream {
     pub fn start() -> Self {
         Self {
             stream: gfm_mac_sys::NativeVolumeEventStream::start(),
+            pending: Mutex::new(VecDeque::new()),
         }
     }
 
@@ -1858,11 +1860,20 @@ impl VolumeEventStream {
         mut check: impl FnMut() -> Result<()>,
     ) -> Result<Option<VolumeEventReport>> {
         check()?;
-        let Some(event) = self.stream.try_recv() else {
+        let Some(event) = self.next_native_event()? else {
             return Ok(None);
         };
-        check()?;
-        VolumeEventReport::from_native_checked(event, check).map(Some)
+        if let Err(err) = check() {
+            self.restore_native_event(event);
+            return Err(err);
+        }
+        match VolumeEventReport::from_native_checked(event.clone(), check) {
+            Ok(report) => Ok(Some(report)),
+            Err(err) => {
+                self.restore_native_event(event);
+                Err(err)
+            }
+        }
     }
 
     pub fn drain_available_checked(
@@ -1917,6 +1928,23 @@ impl VolumeEventStream {
             attached_before_shutdown: shutdown.attached_before_shutdown,
             stop_requested: shutdown.stop_requested,
             thread_joined: shutdown.thread_joined,
+        }
+    }
+
+    fn next_native_event(&self) -> Result<Option<gfm_mac_sys::NativeVolumeEvent>> {
+        let mut pending = self.pending.lock().map_err(|_| {
+            GfmError::Format("volume event pending queue lock was poisoned".to_string())
+        })?;
+        if let Some(event) = pending.pop_front() {
+            return Ok(Some(event));
+        }
+        drop(pending);
+        Ok(self.stream.try_recv())
+    }
+
+    fn restore_native_event(&self, event: gfm_mac_sys::NativeVolumeEvent) {
+        if let Ok(mut pending) = self.pending.lock() {
+            pending.push_front(event);
         }
     }
 }
@@ -5210,6 +5238,84 @@ mod tests {
 
         assert_eq!(err, GfmError::Cancelled);
         drop(stream);
+    }
+
+    #[test]
+    fn volume_event_stream_restores_event_when_cancelled_after_poll() {
+        let root = unique_temp_dir("gfm-volume-event-cancel-after-poll");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let event = gfm_mac_sys::NativeVolumeEvent {
+            kind: gfm_mac_sys::NativeVolumeEventKind::Appeared,
+            description: native_description(|description| {
+                description.volume_path = Some(root.clone());
+            }),
+        };
+        let stream = VolumeEventStream {
+            stream: gfm_mac_sys::NativeVolumeEventStream::start(),
+            pending: Mutex::new(std::collections::VecDeque::from([event])),
+        };
+        let mut checks = 0usize;
+
+        let err = stream
+            .try_recv_checked(|| {
+                checks += 1;
+                if checks == 2 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap_err();
+        let report = stream
+            .try_recv_checked(|| Ok(()))
+            .unwrap()
+            .expect("cancelled event remains pending");
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert_eq!(report.kind, VolumeEventKind::Appeared);
+        assert_eq!(report.path.as_deref(), Some(root.as_path()));
+        assert!(report.descriptor.is_some());
+        drop(stream);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_event_stream_restores_event_when_descriptor_probe_is_cancelled() {
+        let root = unique_temp_dir("gfm-volume-event-cancel-during-descriptor");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let event = gfm_mac_sys::NativeVolumeEvent {
+            kind: gfm_mac_sys::NativeVolumeEventKind::DescriptionChanged,
+            description: native_description(|description| {
+                description.volume_path = Some(root.clone());
+            }),
+        };
+        let stream = VolumeEventStream {
+            stream: gfm_mac_sys::NativeVolumeEventStream::start(),
+            pending: Mutex::new(std::collections::VecDeque::from([event])),
+        };
+        let mut checks = 0usize;
+
+        let err = stream
+            .try_recv_checked(|| {
+                checks += 1;
+                if checks >= 4 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap_err();
+        let report = stream
+            .try_recv_checked(|| Ok(()))
+            .unwrap()
+            .expect("descriptor-cancelled event remains pending");
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert_eq!(report.kind, VolumeEventKind::DescriptionChanged);
+        assert_eq!(report.path.as_deref(), Some(root.as_path()));
+        assert!(report.descriptor.is_some());
+        drop(stream);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
