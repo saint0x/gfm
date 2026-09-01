@@ -1003,7 +1003,7 @@ fn retain_fileprovider_event_access_checked(
 ) -> Result<Vec<crate::access::ScopedAccessGuard>> {
     check_control()?;
     let mut guards = Vec::new();
-    let paths = fileprovider_event_access_paths(event, previous)?;
+    let paths = fileprovider_event_access_paths(event, previous, worker)?;
     for path in unique_fileprovider_paths(paths.iter().map(PathBuf::as_path)) {
         check_control()?;
         guards.push(
@@ -1030,13 +1030,18 @@ fn unique_fileprovider_paths<'a>(paths: impl IntoIterator<Item = &'a Path>) -> V
 fn fileprovider_event_access_paths(
     event: &FileEvent,
     previous: Option<&FileProviderStateSnapshot>,
+    worker: &str,
 ) -> Result<Vec<PathBuf>> {
     match &event.kind {
         FileEventKind::Rename { from, to } => [from, to]
             .into_iter()
-            .map(|path| fileprovider_event_access_path(path, previous))
+            .map(|path| fileprovider_event_access_path(path, previous, worker))
             .collect(),
-        FileEventKind::Remove => Ok(vec![fileprovider_event_access_path(&event.path, previous)?]),
+        FileEventKind::Remove => Ok(vec![fileprovider_event_access_path(
+            &event.path,
+            previous,
+            worker,
+        )?]),
         FileEventKind::Create
         | FileEventKind::Metadata
         | FileEventKind::Modify
@@ -1060,9 +1065,10 @@ fn fileprovider_raw_event_paths(event: &FileEvent) -> Vec<PathBuf> {
 fn fileprovider_event_access_path(
     path: &Path,
     previous: Option<&FileProviderStateSnapshot>,
+    worker: &str,
 ) -> Result<PathBuf> {
     if snapshot_tracks_path_or_descendant(previous, path) {
-        return write_probe_existing_ancestor(path);
+        return write_probe_existing_ancestor(path, worker);
     }
     Ok(path.to_path_buf())
 }
@@ -1091,7 +1097,8 @@ fn write_probe_path(path: &Path) -> Result<&Path> {
     }
 }
 
-fn write_probe_existing_ancestor(path: &Path) -> Result<PathBuf> {
+fn write_probe_existing_ancestor(path: &Path, worker: &str) -> Result<PathBuf> {
+    preflight_write_target_volume(path, worker)?;
     let mut candidate = write_probe_path(path)?.to_path_buf();
     loop {
         match fs::metadata(&candidate) {
@@ -1113,6 +1120,17 @@ fn write_probe_existing_ancestor(path: &Path) -> Result<PathBuf> {
         candidate = parent.to_path_buf();
     }
     Ok(candidate)
+}
+
+fn preflight_write_target_volume(path: &Path, worker: &str) -> Result<()> {
+    let volume_path = crate::parent_or_cwd(path);
+    let volume_report = VolumeDiscoveryReport::for_containing_path_checked(volume_path, || Ok(()))?;
+    crate::access::preflight_volume_access_scope_with_report(
+        volume_path,
+        AccessIntent::Write,
+        worker,
+        &volume_report,
+    )
 }
 
 #[derive(Clone)]
@@ -1377,7 +1395,7 @@ fn run_ui_fileprovider_observed_invalidation(
     event: FileEvent,
 ) -> Result<FileProviderObservedInvalidation> {
     const WORKER: &str = "ui fileprovider sidebar observed invalidation";
-    let state_probe = write_probe_existing_ancestor(&state_path)?;
+    let state_probe = write_probe_existing_ancestor(&state_path, WORKER)?;
     let state_access_report =
         InterfaceAccessReport::new_checked(state_probe, AccessIntent::Write, || Ok(()))?;
     state_access_report.preflight_volume(WORKER)?;
@@ -1406,7 +1424,8 @@ fn run_ui_fileprovider_observed_invalidation(
             } else {
                 None
             };
-            let event_access_paths = fileprovider_event_access_paths(&event, previous.as_ref())?;
+            let event_access_paths =
+                fileprovider_event_access_paths(&event, previous.as_ref(), WORKER)?;
             let event_access_reports = InterfaceAccessReports::read_paths(
                 unique_fileprovider_paths(event_access_paths.iter().map(PathBuf::as_path)),
             )?;
@@ -2298,7 +2317,8 @@ mod tests {
         };
         std::fs::remove_dir_all(tracked.parent().unwrap()).unwrap();
 
-        let access_path = fileprovider_event_access_path(&tracked, Some(&previous)).unwrap();
+        let access_path =
+            fileprovider_event_access_path(&tracked, Some(&previous), "ui test").unwrap();
 
         assert_eq!(access_path, root);
         assert!(!tracked.exists());
@@ -2377,6 +2397,35 @@ mod tests {
             .to_string()
             .contains("ui test state metadata unavailable"));
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn interface_state_write_refuses_unreachable_volume_before_metadata_probe() {
+        let root = env::temp_dir().join(format!(
+            "gfm-interface-state-write-unreachable-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let state = root.join("interface-state-unavailable".repeat(16));
+
+        let err = write_probe_existing_ancestor(&state, "interface state write")
+            .expect_err("unreachable interface state write was admitted");
+
+        assert!(
+            err.to_string().contains(
+                "interface state write volume access blocked: unreachable volume network"
+            ),
+            "{err}"
+        );
+        assert!(
+            !err.to_string()
+                .contains("interface write path metadata unavailable"),
+            "{err}"
+        );
+        assert!(!state.exists());
         fs::remove_dir_all(root).unwrap();
     }
 }

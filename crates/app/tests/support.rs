@@ -2037,7 +2037,10 @@ fn ui_fileprovider_contracts_refuse_unreachable_volume_before_native_read_from_b
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
     let provider = root.join("Conflict.icloud-conflict.md");
-    let state = root.join("fileprovider-state.tsv");
+    let state = root.join(format!(
+        "{}.tsv",
+        "fileprovider-state-unavailable".repeat(12)
+    ));
     std::fs::write(&provider, "conflict").unwrap();
 
     for (args, expected, forbidden) in [
@@ -2084,6 +2087,10 @@ fn ui_fileprovider_contracts_refuse_unreachable_volume_before_native_read_from_b
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(!stdout.contains(forbidden), "{stdout}");
         assert!(stderr.contains(expected), "{stderr}");
+        assert!(
+            !stderr.contains("interface write path metadata unavailable"),
+            "{stderr}"
+        );
     }
 
     let _ = std::fs::remove_dir_all(root);
