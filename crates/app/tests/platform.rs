@@ -5578,11 +5578,22 @@ fn reports_volume_topology_api_status_diff_from_binary() {
     assert!(stdout.contains("volume-topology\tchanged\t"));
     assert!(stdout.contains("\tstable-id=diskarbitration:uuid:API-STATUS\t"));
     assert!(stdout.contains("\tprevious-native-status=unavailable\t"));
+    assert!(stdout.contains(
+        "\tprevious-native-reason=DiskArbitration unavailable during topology refresh\t"
+    ));
     assert!(stdout.contains("\tcurrent-native-status=available\t"));
+    assert!(stdout.contains("\tcurrent-native-reason=-\t"));
     assert!(stdout.contains("\tprevious-resource-status=unavailable\t"));
+    assert!(stdout.contains(
+        "\tprevious-resource-reason=URL resource values unavailable during topology refresh\t"
+    ));
     assert!(stdout.contains("\tcurrent-resource-status=available\t"));
+    assert!(stdout.contains("\tcurrent-resource-reason=-\t"));
     assert!(stdout.contains("\tprevious-mount-status=unavailable\t"));
+    assert!(stdout
+        .contains("\tprevious-mount-reason=mount table unavailable during topology refresh\t"));
     assert!(stdout.contains("\tcurrent-mount-status=available\t"));
+    assert!(stdout.contains("\tcurrent-mount-reason=-\t"));
     assert!(stdout.contains("\tsidebar=true\toperation-policy=true\tindex-admission=true\t"));
     assert!(stdout.ends_with("reason=volume-api-status-changed\n"));
 }

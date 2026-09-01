@@ -1304,12 +1304,21 @@ fn topology_api_status_diff() -> Result<VolumeTopologyDiff> {
     previous.path = PathBuf::from("/Volumes/API Status");
     previous.kind = gfm_mac::VolumeKind::External;
     previous.native_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+    previous.native_reason =
+        Some("DiskArbitration unavailable during topology refresh".to_string());
     previous.resource_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+    previous.resource_reason =
+        Some("URL resource values unavailable during topology refresh".to_string());
     previous.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+    previous.mount_table_reason =
+        Some("mount table unavailable during topology refresh".to_string());
     let mut current = previous.clone();
     current.native_status = Some(gfm_mac::NativeVolumeStatus::Available);
+    current.native_reason = None;
     current.resource_status = Some(gfm_mac::NativeVolumeStatus::Available);
+    current.resource_reason = None;
     current.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Available);
+    current.mount_table_reason = None;
     Ok(VolumeTopologyDiff::evaluate(
         &VolumeDiscoveryReport {
             volumes: vec![previous],
