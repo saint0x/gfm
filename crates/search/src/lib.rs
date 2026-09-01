@@ -307,10 +307,6 @@ impl SearchIndex {
             });
         }
 
-        let mut scores: HashMap<FileId, RankAccumulator> = HashMap::new();
-        let mut telemetry = SearchLookupTelemetry::default();
-        let text = query.terms.join(" ");
-        let intent = QueryIntent::from_query(query);
         if let Some(report) =
             self.query_simple_single_term_pass(query, limit, pass, lookup, budget, cancellation)?
         {
@@ -321,6 +317,11 @@ impl SearchIndex {
         {
             return Ok(report);
         }
+
+        let mut scores: HashMap<FileId, RankAccumulator> = HashMap::new();
+        let mut telemetry = SearchLookupTelemetry::default();
+        let text = query.terms.join(" ");
+        let intent = QueryIntent::from_query(query);
         let expression_candidates = query
             .expression
             .as_ref()
