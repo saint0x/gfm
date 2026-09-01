@@ -28,10 +28,10 @@ use gfm_ui::{
     PermissionRefreshChangeContract, PermissionRefreshContract, ProviderConflictContract,
     ProviderConflictInput, SearchResultsBatch, SearchResultsContract, SearchResultsOptions,
     SearchResultsStage, SidebarCloudInvalidation, SidebarCloudState, SidebarContract,
-    SidebarVolumeEventKind, SidebarVolumeInvalidation, SidebarVolumeKind, SidebarVolumeMountState,
-    SidebarVolumeSpec, TitlebarContract, ToolbarContract, TrashEntryMetadata, TrashViewContract,
-    TrashViewOptions, VirtualSurface, VirtualizationContract, WindowLifecycleContract,
-    WindowSessionContract, WindowSessionStore,
+    SidebarPathSnapshot, SidebarPathState, SidebarVolumeEventKind, SidebarVolumeInvalidation,
+    SidebarVolumeKind, SidebarVolumeMountState, SidebarVolumeSpec, TitlebarContract,
+    ToolbarContract, TrashEntryMetadata, TrashViewContract, TrashViewOptions, VirtualSurface,
+    VirtualizationContract, WindowLifecycleContract, WindowSessionContract, WindowSessionStore,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
@@ -272,8 +272,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let path = default_current_path(args.next());
             println!(
                 "{}",
-                SidebarContract::discover_with_volumes(
+                SidebarContract::from_path_snapshot(
                     path,
+                    SidebarPathSnapshot::discover(),
                     native_sidebar_volumes_checked(|| Ok(()))?
                 )
                 .as_tsv()
@@ -288,11 +289,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let report = read_ui_fileprovider_sidebar_state(provider_path.clone())?;
             println!(
                 "{}",
-                SidebarContract::discover_with_icloud_state(
+                SidebarContract::from_path_snapshot_with_icloud_state(
                     current_path,
-                    provider_path,
+                    SidebarPathSnapshot::discover()
+                        .with_icloud_drive(provider_path, SidebarPathState::Available),
                     sidebar_cloud_state(report.storage_state),
                     report.progress.percent_milli,
+                    Vec::new(),
                 )
                 .as_tsv()
             );
@@ -1549,6 +1552,7 @@ fn app_launch_spec_checked(
     let mut spec = path
         .map(AppLaunchSpec::new)
         .unwrap_or_default()
+        .with_sidebar_path_snapshot(SidebarPathSnapshot::discover())
         .with_sidebar_volumes(native_sidebar_volumes_checked(&mut check_control)?);
     check_control()?;
     if let Some(store) = crate::runtime::runtime_progress_store() {

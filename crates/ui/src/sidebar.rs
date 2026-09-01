@@ -1,5 +1,4 @@
 use gpui::{div, prelude::*, px, rgb, IntoElement, Styled};
-use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -559,8 +558,7 @@ impl SidebarVolumeMountState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct SidebarEnvironment {
-    home: PathBuf,
-    icloud_drive: Option<PathBuf>,
+    paths: SidebarPathSnapshot,
     icloud_state: SidebarCloudState,
     icloud_progress_milli: Option<u32>,
     volumes: Vec<SidebarVolumeSpec>,
@@ -568,18 +566,77 @@ struct SidebarEnvironment {
 
 impl SidebarEnvironment {
     pub fn discover() -> Self {
-        let home = env::var_os("HOME")
-            .map(PathBuf::from)
-            .filter(|path| !path.as_os_str().is_empty())
-            .unwrap_or_else(|| PathBuf::from("/"));
-        let icloud_drive = existing_path(home.join("Library/Mobile Documents/com~apple~CloudDocs"));
-
         Self {
-            home,
-            icloud_drive,
+            paths: SidebarPathSnapshot::discover(),
             icloud_state: SidebarCloudState::None,
             icloud_progress_milli: None,
             volumes: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SidebarPathSnapshot {
+    pub home: PathBuf,
+    pub home_state: SidebarPathState,
+    pub desktop_state: SidebarPathState,
+    pub applications_state: SidebarPathState,
+    pub documents_state: SidebarPathState,
+    pub downloads_state: SidebarPathState,
+    pub icloud_drive: Option<PathBuf>,
+    pub icloud_drive_state: SidebarPathState,
+}
+
+impl SidebarPathSnapshot {
+    pub fn discover() -> Self {
+        let home = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .filter(|path| !path.as_os_str().is_empty())
+            .unwrap_or_else(|| PathBuf::from("/"));
+        Self::read(home)
+    }
+
+    pub fn read(home: impl Into<PathBuf>) -> Self {
+        let home = home.into();
+        let icloud_drive_path = home.join("Library/Mobile Documents/com~apple~CloudDocs");
+        let icloud_drive_state = path_state(&icloud_drive_path);
+        Self {
+            home_state: path_state(&home),
+            desktop_state: path_state(&home.join("Desktop")),
+            applications_state: path_state(Path::new("/Applications")),
+            documents_state: path_state(&home.join("Documents")),
+            downloads_state: path_state(&home.join("Downloads")),
+            icloud_drive: icloud_drive_state
+                .enables_row()
+                .then_some(icloud_drive_path),
+            icloud_drive_state,
+            home,
+        }
+    }
+
+    pub fn with_home_state(mut self, state: SidebarPathState) -> Self {
+        self.home_state = state;
+        self
+    }
+
+    pub fn with_icloud_drive(mut self, path: impl Into<PathBuf>, state: SidebarPathState) -> Self {
+        self.icloud_drive = Some(path.into());
+        self.icloud_drive_state = state;
+        self
+    }
+}
+
+impl Default for SidebarPathSnapshot {
+    fn default() -> Self {
+        Self {
+            home: PathBuf::from("/"),
+            home_state: SidebarPathState::Available,
+            desktop_state: SidebarPathState::Missing,
+            applications_state: SidebarPathState::Missing,
+            documents_state: SidebarPathState::Missing,
+            downloads_state: SidebarPathState::Missing,
+            icloud_drive: None,
+            icloud_drive_state: SidebarPathState::Missing,
         }
     }
 }
@@ -607,6 +664,40 @@ impl SidebarContract {
         Self::from_environment(current_path, environment)
     }
 
+    pub fn from_path_snapshot(
+        current_path: impl AsRef<Path>,
+        paths: SidebarPathSnapshot,
+        volumes: Vec<SidebarVolumeSpec>,
+    ) -> Self {
+        Self::from_environment(
+            current_path,
+            SidebarEnvironment {
+                paths,
+                icloud_state: SidebarCloudState::None,
+                icloud_progress_milli: None,
+                volumes,
+            },
+        )
+    }
+
+    pub fn from_path_snapshot_with_icloud_state(
+        current_path: impl AsRef<Path>,
+        paths: SidebarPathSnapshot,
+        cloud_state: SidebarCloudState,
+        progress_milli: Option<u32>,
+        volumes: Vec<SidebarVolumeSpec>,
+    ) -> Self {
+        Self::from_environment(
+            current_path,
+            SidebarEnvironment {
+                paths,
+                icloud_state: cloud_state,
+                icloud_progress_milli: progress_milli,
+                volumes,
+            },
+        )
+    }
+
     pub fn discover_with_icloud_state(
         current_path: impl AsRef<Path>,
         icloud_drive: impl Into<PathBuf>,
@@ -614,7 +705,8 @@ impl SidebarContract {
         progress_milli: Option<u32>,
     ) -> Self {
         let mut environment = SidebarEnvironment::discover();
-        environment.icloud_drive = Some(icloud_drive.into());
+        environment.paths.icloud_drive = Some(icloud_drive.into());
+        environment.paths.icloud_drive_state = SidebarPathState::Available;
         environment.icloud_state = cloud_state;
         environment.icloud_progress_milli = progress_milli;
         Self::from_environment(current_path, environment)
@@ -624,9 +716,10 @@ impl SidebarContract {
         let current_path = current_path.as_ref();
         let mut rows = Vec::new();
 
-        rows.extend(favorite_rows(&environment.home, current_path));
+        rows.extend(favorite_rows(&environment.paths, current_path));
         rows.push(icloud_row(
-            environment.icloud_drive.as_deref(),
+            environment.paths.icloud_drive.as_deref(),
+            environment.paths.icloud_drive_state,
             environment.icloud_state,
             environment.icloud_progress_milli,
             current_path,
@@ -818,7 +911,8 @@ fn eject_cell(row: &SidebarItemSpec) -> gpui::Div {
     }
 }
 
-fn favorite_rows(home: &Path, current_path: &Path) -> Vec<SidebarItemSpec> {
+fn favorite_rows(paths: &SidebarPathSnapshot, current_path: &Path) -> Vec<SidebarItemSpec> {
+    let home = &paths.home;
     vec![
         row(RowDescriptor::new(
             "Favorites",
@@ -844,10 +938,10 @@ fn favorite_rows(home: &Path, current_path: &Path) -> Vec<SidebarItemSpec> {
             "home",
         )
         .path(home.to_path_buf())
-        .state({
-            let state = path_state(home);
-            RowState::path(state, state.enables_row() && same_path(home, current_path))
-        })),
+        .state(RowState::path(
+            paths.home_state,
+            paths.home_state.enables_row() && same_path(home, current_path),
+        ))),
         row(RowDescriptor::new(
             "Favorites",
             "recents",
@@ -862,6 +956,7 @@ fn favorite_rows(home: &Path, current_path: &Path) -> Vec<SidebarItemSpec> {
             "Desktop",
             "desktop-folder",
             home.join("Desktop"),
+            paths.desktop_state,
             current_path,
         ),
         favorite_path(
@@ -869,6 +964,7 @@ fn favorite_rows(home: &Path, current_path: &Path) -> Vec<SidebarItemSpec> {
             "Applications",
             "applications-folder",
             PathBuf::from("/Applications"),
+            paths.applications_state,
             current_path,
         ),
         favorite_path(
@@ -876,6 +972,7 @@ fn favorite_rows(home: &Path, current_path: &Path) -> Vec<SidebarItemSpec> {
             "Documents",
             "documents-folder",
             home.join("Documents"),
+            paths.documents_state,
             current_path,
         ),
         favorite_path(
@@ -883,6 +980,7 @@ fn favorite_rows(home: &Path, current_path: &Path) -> Vec<SidebarItemSpec> {
             "Downloads",
             "downloads-folder",
             home.join("Downloads"),
+            paths.downloads_state,
             current_path,
         ),
     ]
@@ -893,9 +991,9 @@ fn favorite_path(
     label: &'static str,
     role: &'static str,
     path: PathBuf,
+    state: SidebarPathState,
     current_path: &Path,
 ) -> SidebarItemSpec {
-    let state = path_state(&path);
     let selected = state.enables_row() && same_path(&path, current_path);
     row(
         RowDescriptor::new("Favorites", id, label, role, SidebarItemKind::Favorite, id)
@@ -906,14 +1004,12 @@ fn favorite_path(
 
 fn icloud_row(
     icloud_drive: Option<&Path>,
+    path_state: SidebarPathState,
     cloud_state: SidebarCloudState,
     progress_milli: Option<u32>,
     current_path: &Path,
 ) -> SidebarItemSpec {
     let path = icloud_drive.map(Path::to_path_buf);
-    let path_state = path
-        .as_ref()
-        .map_or(SidebarPathState::Missing, |path| path_state(path));
     let selected = path_state.enables_row()
         && path
             .as_ref()
@@ -1151,10 +1247,6 @@ fn stable_id(prefix: &str, label: &str) -> String {
     id.trim_end_matches('-').to_string()
 }
 
-fn existing_path(path: PathBuf) -> Option<PathBuf> {
-    (path_state(&path) == SidebarPathState::Available).then_some(path)
-}
-
 #[cfg(test)]
 fn volume_path_directory_state(path: &Path) -> SidebarPathState {
     match fs::metadata(path) {
@@ -1197,15 +1289,38 @@ fn tag_color(id: &str) -> gpui::Rgba {
 mod tests {
     use super::*;
 
+    fn test_paths(home: impl Into<PathBuf>) -> SidebarPathSnapshot {
+        SidebarPathSnapshot {
+            home: home.into(),
+            home_state: SidebarPathState::Available,
+            desktop_state: SidebarPathState::Available,
+            applications_state: SidebarPathState::Available,
+            documents_state: SidebarPathState::Available,
+            downloads_state: SidebarPathState::Available,
+            icloud_drive: None,
+            icloud_drive_state: SidebarPathState::Missing,
+        }
+    }
+
+    fn test_paths_with_icloud(
+        home: impl Into<PathBuf>,
+        icloud_drive: impl Into<PathBuf>,
+    ) -> SidebarPathSnapshot {
+        let mut paths = test_paths(home);
+        paths.icloud_drive = Some(icloud_drive.into());
+        paths.icloud_drive_state = SidebarPathState::Available;
+        paths
+    }
+
     #[test]
     fn contract_contains_finder_sidebar_sections_and_rows() {
         let contract = SidebarContract::from_environment(
             "/Users/tester/Desktop",
             SidebarEnvironment {
-                home: PathBuf::from("/Users/tester"),
-                icloud_drive: Some(PathBuf::from(
+                paths: test_paths_with_icloud(
+                    "/Users/tester",
                     "/Users/tester/Library/Mobile Documents/com~apple~CloudDocs",
-                )),
+                ),
                 icloud_state: SidebarCloudState::None,
                 icloud_progress_milli: None,
                 volumes: vec![SidebarVolumeSpec::from_native_seed(
@@ -1232,8 +1347,7 @@ mod tests {
         let contract = SidebarContract::from_environment(
             "/Users/tester",
             SidebarEnvironment {
-                home: PathBuf::from("/Users/tester"),
-                icloud_drive: None,
+                paths: test_paths("/Users/tester"),
                 icloud_state: SidebarCloudState::None,
                 icloud_progress_milli: None,
                 volumes: Vec::new(),
@@ -1267,7 +1381,6 @@ mod tests {
         assert_eq!(path_state(&root), SidebarPathState::Available);
         assert_eq!(path_state(&missing), SidebarPathState::Missing);
         assert_eq!(path_state(&unprobeable), SidebarPathState::Unavailable);
-        assert_eq!(existing_path(root.join("icloud-missing")), None);
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -1317,8 +1430,7 @@ mod tests {
         let contract = SidebarContract::from_environment(
             &root,
             SidebarEnvironment {
-                home: home.clone(),
-                icloud_drive: None,
+                paths: test_paths(home.clone()).with_home_state(SidebarPathState::Unavailable),
                 icloud_state: SidebarCloudState::None,
                 icloud_progress_milli: None,
                 volumes: Vec::new(),
@@ -1338,12 +1450,36 @@ mod tests {
     }
 
     #[test]
+    fn contract_uses_sidebar_path_snapshot_without_reprobing_favorites() {
+        let home = PathBuf::from("/Users").join("snapshot-home-unprobeable".repeat(64));
+        let desktop = home.join("Desktop");
+        let mut paths = test_paths(home.clone());
+        paths.desktop_state = SidebarPathState::Unavailable;
+        let contract = SidebarContract::from_path_snapshot(&home, paths, Vec::new());
+
+        let home_row = contract.rows.iter().find(|row| row.id == "home").unwrap();
+        assert_eq!(home_row.path.as_deref(), Some(home.as_path()));
+        assert_eq!(home_row.path_state, SidebarPathState::Available);
+        assert!(home_row.enabled);
+        assert!(home_row.selected);
+
+        let desktop_row = contract
+            .rows
+            .iter()
+            .find(|row| row.id == "desktop")
+            .unwrap();
+        assert_eq!(desktop_row.path.as_deref(), Some(desktop.as_path()));
+        assert_eq!(desktop_row.path_state, SidebarPathState::Unavailable);
+        assert!(!desktop_row.enabled);
+        assert!(!desktop_row.selected);
+    }
+
+    #[test]
     fn volume_rows_carry_typed_volume_state() {
         let contract = SidebarContract::from_environment(
             "/Volumes/Team",
             SidebarEnvironment {
-                home: PathBuf::from("/Users/tester"),
-                icloud_drive: None,
+                paths: test_paths("/Users/tester"),
                 icloud_state: SidebarCloudState::None,
                 icloud_progress_milli: None,
                 volumes: vec![SidebarVolumeSpec::from_native_seed(
@@ -1388,8 +1524,7 @@ mod tests {
         let contract = SidebarContract::from_environment(
             &unprobeable_path,
             SidebarEnvironment {
-                home: PathBuf::from("/Users/tester"),
-                icloud_drive: None,
+                paths: test_paths("/Users/tester"),
                 icloud_state: SidebarCloudState::None,
                 icloud_progress_milli: None,
                 volumes: vec![SidebarVolumeSpec::from_native_seed(

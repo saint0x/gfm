@@ -64,8 +64,8 @@ pub use session::{
 };
 pub use sidebar::{
     SidebarCloudInvalidation, SidebarCloudState, SidebarContract, SidebarItemKind, SidebarItemSpec,
-    SidebarVolumeEventKind, SidebarVolumeInvalidation, SidebarVolumeKind, SidebarVolumeMountState,
-    SidebarVolumeSpec,
+    SidebarPathSnapshot, SidebarPathState, SidebarVolumeEventKind, SidebarVolumeInvalidation,
+    SidebarVolumeKind, SidebarVolumeMountState, SidebarVolumeSpec,
 };
 pub use titlebar::{
     FullScreenPolicy, TitlebarContract, TitlebarFocusPolicy, TitlebarMaterialPolicy,
@@ -93,6 +93,7 @@ pub struct AppLaunchSpec {
     pub transparent_titlebar: bool,
     pub activate_on_launch: bool,
     pub tabbing_identifier: String,
+    pub sidebar_paths: SidebarPathSnapshot,
     pub sidebar_volumes: Vec<SidebarVolumeSpec>,
     pub progress_surfaces: Vec<OperationProgressContract>,
     pub operation_conflicts: Vec<OperationConflictContract>,
@@ -377,6 +378,11 @@ impl AppLaunchSpec {
         self
     }
 
+    pub fn with_sidebar_path_snapshot(mut self, paths: SidebarPathSnapshot) -> Self {
+        self.sidebar_paths = paths;
+        self
+    }
+
     pub fn with_progress_surfaces(mut self, surfaces: Vec<OperationProgressContract>) -> Self {
         self.progress_surfaces = surfaces;
         self
@@ -442,6 +448,7 @@ impl Default for AppLaunchSpec {
             transparent_titlebar: true,
             activate_on_launch: true,
             tabbing_identifier: "gfm-main-window".to_string(),
+            sidebar_paths: SidebarPathSnapshot::default(),
             sidebar_volumes: Vec::new(),
             progress_surfaces: Vec::new(),
             operation_conflicts: Vec::new(),
@@ -464,6 +471,7 @@ pub struct WindowLifecycleContract {
     pub transparent_titlebar: bool,
     pub activate_on_launch: bool,
     pub tabbing_identifier: String,
+    pub sidebar_paths: SidebarPathSnapshot,
     pub sidebar_volumes: Vec<SidebarVolumeSpec>,
     pub progress_surfaces: Vec<OperationProgressContract>,
     pub operation_conflicts: Vec<OperationConflictContract>,
@@ -486,6 +494,7 @@ impl WindowLifecycleContract {
             transparent_titlebar: spec.transparent_titlebar,
             activate_on_launch: spec.activate_on_launch,
             tabbing_identifier: spec.tabbing_identifier.clone(),
+            sidebar_paths: spec.sidebar_paths.clone(),
             sidebar_volumes: spec.sidebar_volumes.clone(),
             progress_surfaces: spec.progress_surfaces.clone(),
             operation_conflicts: spec.operation_conflicts.clone(),
@@ -498,7 +507,7 @@ impl WindowLifecycleContract {
 
     pub fn as_tsv(&self) -> String {
         let mut lines = vec![format!(
-            "window\t{}\t{}\t{}x{}\tmin={}x{}\ttransparent-titlebar={}\tactivate={}\ttabs={}\tpermission-dialog={}",
+            "window\t{}\t{}\t{}x{}\tmin={}x{}\ttransparent-titlebar={}\tactivate={}\ttabs={}\tsidebar-home={}\tsidebar-icloud={}\tpermission-dialog={}",
             self.title,
             self.initial_path.display(),
             self.width,
@@ -508,6 +517,8 @@ impl WindowLifecycleContract {
             self.transparent_titlebar,
             self.activate_on_launch,
             self.tabbing_identifier,
+            self.sidebar_paths.home_state.as_str(),
+            self.sidebar_paths.icloud_drive_state.as_str(),
             self.permission_dialog
                 .map(DialogSurface::as_str)
                 .unwrap_or("none")
@@ -565,8 +576,9 @@ fn open_main_window(
         cx.new(|_| RootView {
             bounds_subscription: None,
             session_writer: WindowSessionWriter::new(session_store),
-            sidebar: sidebar::SidebarContract::discover_with_volumes(
+            sidebar: sidebar::SidebarContract::from_path_snapshot(
                 &spec.initial_path,
+                spec.sidebar_paths.clone(),
                 spec.sidebar_volumes.clone(),
             ),
             icon_view: IconViewContract::from_records(&[], IconViewOptions::default()),
@@ -744,7 +756,7 @@ mod tests {
 
         assert_eq!(
             contract.as_tsv(),
-            "window\tGFM\t/tmp/gfm\t1040x720\tmin=640x420\ttransparent-titlebar=true\tactivate=true\ttabs=gfm-main-window\tpermission-dialog=none"
+            "window\tGFM\t/tmp/gfm\t1040x720\tmin=640x420\ttransparent-titlebar=true\tactivate=true\ttabs=gfm-main-window\tsidebar-home=available\tsidebar-icloud=missing\tpermission-dialog=none"
         );
     }
 
@@ -1004,6 +1016,27 @@ mod tests {
         let contract = WindowLifecycleContract::from_spec(&spec).unwrap();
 
         assert_eq!(contract.sidebar_volumes, vec![volume]);
+    }
+
+    #[test]
+    fn lifecycle_contract_tracks_sidebar_path_snapshot_from_launch_spec() {
+        let paths = SidebarPathSnapshot {
+            home: PathBuf::from("/Users/tester"),
+            home_state: SidebarPathState::Available,
+            desktop_state: SidebarPathState::Unavailable,
+            applications_state: SidebarPathState::Available,
+            documents_state: SidebarPathState::Missing,
+            downloads_state: SidebarPathState::Available,
+            icloud_drive: None,
+            icloud_drive_state: SidebarPathState::Missing,
+        };
+        let spec = AppLaunchSpec::new("/Users/tester").with_sidebar_path_snapshot(paths.clone());
+        let contract = WindowLifecycleContract::from_spec(&spec).unwrap();
+
+        assert_eq!(contract.sidebar_paths, paths);
+        assert!(contract
+            .as_tsv()
+            .contains("\tsidebar-home=available\tsidebar-icloud=missing\t"));
     }
 
     #[test]
