@@ -1475,24 +1475,33 @@ fn operation_volume_copy_policy_from_report(
     let mut policy = OperationVolumeCopyPolicy::default();
     for volume in &report.volumes {
         if operation_touches_volume(operation, &volume.path) {
-            policy = policy
-                .with_root(
-                    volume.path.clone(),
-                    operation_volume_class_for_descriptor(volume),
-                )
-                .with_root_volume_identity(volume.path.clone(), volume.stable_identity.clone());
-            if let Some(supported) = volume.resource_supports_file_cloning {
-                policy = policy.with_root_file_cloning_support(volume.path.clone(), supported);
-            }
-            if let Some(supported) = volume.resource_supports_hard_links {
-                policy = policy.with_root_hard_link_support(volume.path.clone(), supported);
-            }
-            if let Some(supported) = volume.resource_supports_sparse_files {
-                policy = policy.with_root_sparse_file_support(volume.path.clone(), supported);
+            for root in volume_policy_roots(&volume.path) {
+                policy = policy
+                    .with_root(root.clone(), operation_volume_class_for_descriptor(volume))
+                    .with_root_volume_identity(root.clone(), volume.stable_identity.clone());
+                if let Some(supported) = volume.resource_supports_file_cloning {
+                    policy = policy.with_root_file_cloning_support(root.clone(), supported);
+                }
+                if let Some(supported) = volume.resource_supports_hard_links {
+                    policy = policy.with_root_hard_link_support(root.clone(), supported);
+                }
+                if let Some(supported) = volume.resource_supports_sparse_files {
+                    policy = policy.with_root_sparse_file_support(root, supported);
+                }
             }
         }
     }
     policy
+}
+
+fn volume_policy_roots(root: &Path) -> Vec<PathBuf> {
+    let mut roots = vec![root.to_path_buf()];
+    if let Some(alias) = macos_var_alias(root) {
+        roots.push(alias);
+    }
+    roots.sort();
+    roots.dedup();
+    roots
 }
 
 fn operation_volume_report_checked(
@@ -1527,7 +1536,7 @@ fn operation_volume_report_checked(
 fn operation_touches_volume(operation: &Operation, root: &Path) -> bool {
     operation_paths(operation)
         .into_iter()
-        .any(|path| path.starts_with(root))
+        .any(|path| operation_path_starts_with_volume(path, root))
 }
 
 fn operation_paths(operation: &Operation) -> Vec<&Path> {
@@ -2081,6 +2090,70 @@ mod tests {
         );
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operation_volume_policy_registers_private_var_alias_roots() {
+        let source = PathBuf::from("/var/folders/gfm-source.bin");
+        let destination = PathBuf::from("/var/folders/gfm-destination.bin");
+        let mut volume = VolumeDescriptor::for_path("/").unwrap();
+        volume.path = PathBuf::from("/private/var");
+        volume.kind = VolumeKind::External;
+        volume.stable_identity = "mount-table:devfs:/private/var".to_string();
+        volume.resource_supports_file_cloning = Some(true);
+        volume.resource_supports_hard_links = Some(false);
+        volume.resource_supports_sparse_files = Some(false);
+        let report = VolumeDiscoveryReport {
+            volumes: vec![volume],
+        };
+        let operation = Operation::Copy {
+            from: source.clone(),
+            to: destination.clone(),
+        };
+
+        let policy = operation_volume_copy_policy_from_report(&operation, &report);
+
+        assert_eq!(
+            policy.class_for_path(&source),
+            OperationVolumeClass::External
+        );
+        assert_eq!(
+            policy.copy_buffer_bytes_for_paths(&source, &destination),
+            128 * 1024
+        );
+        assert!(policy.file_cloning_supported_for_paths(&source, &destination));
+        assert!(!policy.hard_links_supported_for_path(&destination));
+        assert!(!policy.sparse_files_supported_for_path(&destination));
+    }
+
+    #[test]
+    fn operation_volume_policy_registers_var_alias_for_private_paths() {
+        let source = PathBuf::from("/private/var/tmp/gfm-source.bin");
+        let destination = PathBuf::from("/private/var/tmp/gfm-destination.bin");
+        let mut volume = VolumeDescriptor::for_path("/").unwrap();
+        volume.path = PathBuf::from("/var");
+        volume.kind = VolumeKind::Network;
+        volume.stable_identity = "mount-table:nfs:/var".to_string();
+        volume.resource_supports_file_cloning = Some(false);
+        let report = VolumeDiscoveryReport {
+            volumes: vec![volume],
+        };
+        let operation = Operation::Move {
+            from: source.clone(),
+            to: destination.clone(),
+        };
+
+        let policy = operation_volume_copy_policy_from_report(&operation, &report);
+
+        assert_eq!(
+            policy.class_for_path(&source),
+            OperationVolumeClass::Network
+        );
+        assert_eq!(
+            policy.copy_buffer_bytes_for_paths(&source, &destination),
+            64 * 1024
+        );
+        assert!(!policy.file_cloning_supported_for_paths(&source, &destination));
     }
 
     #[test]
