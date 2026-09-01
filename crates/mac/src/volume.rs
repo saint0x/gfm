@@ -784,8 +784,22 @@ pub struct VolumeTopologyChange {
     pub current_kind: Option<VolumeKind>,
     pub previous_mount_state: Option<MountState>,
     pub current_mount_state: Option<MountState>,
+    pub previous_read_only: Option<bool>,
+    pub current_read_only: Option<bool>,
+    pub previous_writable: Option<bool>,
+    pub current_writable: Option<bool>,
+    pub previous_network: Option<bool>,
+    pub current_network: Option<bool>,
+    pub previous_reachable: Option<bool>,
+    pub current_reachable: Option<bool>,
+    pub previous_ejectable: Option<bool>,
+    pub current_ejectable: Option<bool>,
+    pub previous_removable: Option<bool>,
+    pub current_removable: Option<bool>,
     pub previous_case_sensitive: Option<bool>,
     pub current_case_sensitive: Option<bool>,
+    pub previous_case_preserving: Option<bool>,
+    pub current_case_preserving: Option<bool>,
     pub previous_native_status: Option<NativeVolumeStatus>,
     pub previous_native_reason: Option<String>,
     pub current_native_status: Option<NativeVolumeStatus>,
@@ -816,8 +830,22 @@ impl VolumeTopologyChange {
             current_kind: Some(volume.kind),
             previous_mount_state: None,
             current_mount_state: Some(volume.mount_state),
+            previous_read_only: None,
+            current_read_only: Some(volume.read_only),
+            previous_writable: None,
+            current_writable: Some(volume.writable),
+            previous_network: None,
+            current_network: Some(volume.network),
+            previous_reachable: None,
+            current_reachable: volume.reachable,
+            previous_ejectable: None,
+            current_ejectable: Some(volume.ejectable),
+            previous_removable: None,
+            current_removable: Some(volume.removable),
             previous_case_sensitive: None,
             current_case_sensitive: volume.case_sensitive,
+            previous_case_preserving: None,
+            current_case_preserving: volume.case_preserving,
             previous_native_status: None,
             previous_native_reason: None,
             current_native_status: volume.native_status,
@@ -852,8 +880,22 @@ impl VolumeTopologyChange {
             current_kind: None,
             previous_mount_state: Some(volume.mount_state),
             current_mount_state: None,
+            previous_read_only: Some(volume.read_only),
+            current_read_only: None,
+            previous_writable: Some(volume.writable),
+            current_writable: None,
+            previous_network: Some(volume.network),
+            current_network: None,
+            previous_reachable: volume.reachable,
+            current_reachable: None,
+            previous_ejectable: Some(volume.ejectable),
+            current_ejectable: None,
+            previous_removable: Some(volume.removable),
+            current_removable: None,
             previous_case_sensitive: volume.case_sensitive,
             current_case_sensitive: None,
+            previous_case_preserving: volume.case_preserving,
+            current_case_preserving: None,
             previous_native_status: volume.native_status,
             previous_native_reason: normalized_event_reason_option(volume.native_reason.as_deref()),
             current_native_status: None,
@@ -921,8 +963,22 @@ impl VolumeTopologyChange {
             current_kind: Some(current.kind),
             previous_mount_state: Some(previous.mount_state),
             current_mount_state: Some(current.mount_state),
+            previous_read_only: Some(previous.read_only),
+            current_read_only: Some(current.read_only),
+            previous_writable: Some(previous.writable),
+            current_writable: Some(current.writable),
+            previous_network: Some(previous.network),
+            current_network: Some(current.network),
+            previous_reachable: previous.reachable,
+            current_reachable: current.reachable,
+            previous_ejectable: Some(previous.ejectable),
+            current_ejectable: Some(current.ejectable),
+            previous_removable: Some(previous.removable),
+            current_removable: Some(current.removable),
             previous_case_sensitive: previous.case_sensitive,
             current_case_sensitive: current.case_sensitive,
+            previous_case_preserving: previous.case_preserving,
+            current_case_preserving: current.case_preserving,
             previous_native_status: previous.native_status,
             previous_native_reason: normalized_event_reason_option(
                 previous.native_reason.as_deref(),
@@ -955,7 +1011,7 @@ impl VolumeTopologyChange {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume-topology\t{}\tstable-id={}\tlabel={}\tpath={}\tprevious-kind={}\tcurrent-kind={}\tprevious-mount={}\tcurrent-mount={}\tprevious-case-sensitive={}\tcurrent-case-sensitive={}\tprevious-native-status={}\tprevious-native-reason={}\tcurrent-native-status={}\tcurrent-native-reason={}\tprevious-resource-status={}\tprevious-resource-reason={}\tcurrent-resource-status={}\tcurrent-resource-reason={}\tprevious-mount-status={}\tprevious-mount-reason={}\tcurrent-mount-status={}\tcurrent-mount-reason={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\treason={}",
+            "volume-topology\t{}\tstable-id={}\tlabel={}\tpath={}\tprevious-kind={}\tcurrent-kind={}\tprevious-mount={}\tcurrent-mount={}\tprevious-read-only={}\tcurrent-read-only={}\tprevious-writable={}\tcurrent-writable={}\tprevious-network={}\tcurrent-network={}\tprevious-reachable={}\tcurrent-reachable={}\tprevious-ejectable={}\tcurrent-ejectable={}\tprevious-removable={}\tcurrent-removable={}\tprevious-case-sensitive={}\tcurrent-case-sensitive={}\tprevious-case-preserving={}\tcurrent-case-preserving={}\tprevious-native-status={}\tprevious-native-reason={}\tcurrent-native-status={}\tcurrent-native-reason={}\tprevious-resource-status={}\tprevious-resource-reason={}\tcurrent-resource-status={}\tcurrent-resource-reason={}\tprevious-mount-status={}\tprevious-mount-reason={}\tcurrent-mount-status={}\tcurrent-mount-reason={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\treason={}",
             self.kind.as_str(),
             escape_field(&self.stable_identity),
             escape_field(&self.label),
@@ -966,12 +1022,26 @@ impl VolumeTopologyChange {
                 .map(MountState::as_str)
                 .unwrap_or("-"),
             self.current_mount_state.map(MountState::as_str).unwrap_or("-"),
+            optional_bool(self.previous_read_only),
+            optional_bool(self.current_read_only),
+            optional_bool(self.previous_writable),
+            optional_bool(self.current_writable),
+            optional_bool(self.previous_network),
+            optional_bool(self.current_network),
+            optional_bool(self.previous_reachable),
+            optional_bool(self.current_reachable),
+            optional_bool(self.previous_ejectable),
+            optional_bool(self.current_ejectable),
+            optional_bool(self.previous_removable),
+            optional_bool(self.current_removable),
             self.previous_case_sensitive
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string()),
             self.current_case_sensitive
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string()),
+            optional_bool(self.previous_case_preserving),
+            optional_bool(self.current_case_preserving),
             self.previous_native_status
                 .map(NativeVolumeStatus::as_str)
                 .unwrap_or("-"),
@@ -5290,11 +5360,19 @@ mod tests {
         let diff = VolumeTopologyDiff::evaluate(&previous, &current);
 
         assert_eq!(diff.changes.len(), 1);
-        assert_eq!(diff.changes[0].reason, "volume-media-truth-changed");
-        assert!(diff.changes[0].invalidate_sidebar);
-        assert!(diff.changes[0].invalidate_operation_policy);
-        assert!(diff.changes[0].invalidate_index_admission);
-        assert!(diff.changes[0].rescan_index);
+        let change = &diff.changes[0];
+        assert_eq!(change.reason, "volume-media-truth-changed");
+        assert_eq!(change.previous_removable, Some(false));
+        assert_eq!(change.current_removable, Some(true));
+        assert_eq!(change.previous_ejectable, Some(true));
+        assert_eq!(change.current_ejectable, Some(true));
+        assert!(change.invalidate_sidebar);
+        assert!(change.invalidate_operation_policy);
+        assert!(change.invalidate_index_admission);
+        assert!(change.rescan_index);
+        let tsv = diff.as_tsv();
+        assert!(tsv.contains("\tprevious-removable=false\tcurrent-removable=true\t"));
+        assert!(tsv.contains("\tprevious-ejectable=true\tcurrent-ejectable=true\t"));
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -5326,6 +5404,43 @@ mod tests {
         assert!(diff.changes[0].invalidate_operation_policy);
         assert!(diff.changes[0].invalidate_index_admission);
         assert!(diff.changes[0].rescan_index);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn topology_diff_reports_access_facts_for_policy_changes() {
+        let root = unique_temp_dir("gfm-volume-topology-access");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let mut previous_volume = VolumeDescriptor::for_path(&root).unwrap();
+        previous_volume.read_only = true;
+        previous_volume.writable = false;
+        let mut current_volume = previous_volume.clone();
+        current_volume.read_only = false;
+        current_volume.writable = true;
+        let previous = VolumeDiscoveryReport {
+            volumes: vec![previous_volume],
+        };
+        let current = VolumeDiscoveryReport {
+            volumes: vec![current_volume],
+        };
+
+        let diff = VolumeTopologyDiff::evaluate(&previous, &current);
+
+        assert_eq!(diff.changes.len(), 1);
+        let change = &diff.changes[0];
+        assert_eq!(change.reason, "volume-access-changed");
+        assert_eq!(change.previous_read_only, Some(true));
+        assert_eq!(change.current_read_only, Some(false));
+        assert_eq!(change.previous_writable, Some(false));
+        assert_eq!(change.current_writable, Some(true));
+        assert!(change.invalidate_sidebar);
+        assert!(change.invalidate_operation_policy);
+        assert!(change.invalidate_index_admission);
+        assert!(change.rescan_index);
+        let tsv = diff.as_tsv();
+        assert!(tsv.contains("\tprevious-read-only=true\tcurrent-read-only=false\t"));
+        assert!(tsv.contains("\tprevious-writable=false\tcurrent-writable=true\t"));
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -6435,11 +6550,19 @@ mod tests {
         let diff = VolumeTopologyDiff::evaluate(&previous, &current);
 
         assert_eq!(diff.changes.len(), 1);
-        assert_eq!(diff.changes[0].reason, "volume-locality-changed");
-        assert!(diff.changes[0].invalidate_sidebar);
-        assert!(diff.changes[0].invalidate_operation_policy);
-        assert!(diff.changes[0].invalidate_index_admission);
-        assert!(diff.changes[0].rescan_index);
+        let change = &diff.changes[0];
+        assert_eq!(change.reason, "volume-locality-changed");
+        assert_eq!(change.previous_network, Some(true));
+        assert_eq!(change.current_network, Some(true));
+        assert_eq!(change.previous_reachable, Some(true));
+        assert_eq!(change.current_reachable, Some(false));
+        assert!(change.invalidate_sidebar);
+        assert!(change.invalidate_operation_policy);
+        assert!(change.invalidate_index_admission);
+        assert!(change.rescan_index);
+        let tsv = diff.as_tsv();
+        assert!(tsv.contains("\tprevious-network=true\tcurrent-network=true\t"));
+        assert!(tsv.contains("\tprevious-reachable=true\tcurrent-reachable=false\t"));
 
         fs::remove_dir_all(root).unwrap();
     }

@@ -6180,6 +6180,8 @@ fn reports_volume_topology_removable_media_diff_from_binary() {
     assert!(stdout.contains("volume-topology\tchanged\t"));
     assert!(stdout.contains("\tstable-id=diskarbitration:uuid:REMOVABLE-TOPOLOGY\t"));
     assert!(stdout.contains("\tprevious-kind=external\tcurrent-kind=external\t"));
+    assert!(stdout.contains("\tprevious-removable=false\tcurrent-removable=true\t"));
+    assert!(stdout.contains("\tprevious-ejectable=true\tcurrent-ejectable=true\t"));
     assert!(stdout.contains("\tsidebar=true\toperation-policy=true\tindex-admission=true\t"));
     assert!(stdout.ends_with("reason=volume-media-truth-changed\n"));
 }
