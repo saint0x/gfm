@@ -721,6 +721,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "volume-removable-media-invalidation" => {
             println!("{}", volume_removable_media_invalidation().as_tsv());
         }
+        "volume-api-status-index-invalidation" => {
+            println!("{}", volume_api_status_index_invalidation().as_tsv());
+        }
         "volume-root-filesystem-invalidation" => {
             println!("{}", volume_root_filesystem_invalidation().as_tsv());
         }
@@ -2092,6 +2095,45 @@ fn volume_removable_media_invalidation() -> VolumeEventIndexInvalidationReport {
     VolumeEventIndexInvalidationReport::from_event(
         IndexVolumeEventKind::DescriptionChanged,
         Some(PathBuf::from("/Volumes/Removable Test")),
+        Some(&previous),
+        Some(&current),
+        false,
+        false,
+    )
+}
+
+fn volume_api_status_index_invalidation() -> VolumeEventIndexInvalidationReport {
+    let previous = IndexVolumeDescriptor::new(
+        "API Status Test",
+        "/Volumes/API Status Test",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(VolumeId(46))
+    .with_stable_identity("diskarbitration:uuid:API-STATUS-INDEX")
+    .with_native_status("unavailable")
+    .with_native_reason("DiskArbitration unavailable for index invalidation")
+    .with_resource_status("unavailable")
+    .with_resource_reason("URL resource values unavailable for index invalidation")
+    .with_mount_status("unavailable")
+    .with_mount_reason("mount table unavailable for index invalidation")
+    .with_filesystem_signature("fs=apfs");
+    let current = IndexVolumeDescriptor::new(
+        "API Status Test",
+        "/Volumes/API Status Test",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(VolumeId(46))
+    .with_stable_identity("diskarbitration:uuid:API-STATUS-INDEX")
+    .with_native_status("available")
+    .with_resource_status("available")
+    .with_mount_status("available")
+    .with_filesystem_signature("fs=apfs");
+
+    VolumeEventIndexInvalidationReport::from_event(
+        IndexVolumeEventKind::DescriptionChanged,
+        Some(PathBuf::from("/Volumes/API Status Test")),
         Some(&previous),
         Some(&current),
         false,

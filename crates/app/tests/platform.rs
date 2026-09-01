@@ -6215,6 +6215,44 @@ fn reports_removable_media_volume_event_index_invalidation_from_binary() {
 }
 
 #[test]
+fn reports_api_status_volume_event_index_invalidation_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-api-status-index-invalidation")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with(
+        "volume-event-index-invalidation\tkind=description-changed\tpath=/Volumes/API Status Test\t"
+    ));
+    assert!(stdout.contains("\tprevious-volume=46\tprevious-class=external\t"));
+    assert!(stdout.contains("\tcurrent-volume=46\tcurrent-class=external\t"));
+    assert!(stdout.contains("\tprevious-native-status=unavailable\t"));
+    assert!(stdout
+        .contains("\tprevious-native-reason=DiskArbitration unavailable for index invalidation\t"));
+    assert!(stdout.contains("\tprevious-resource-status=unavailable\t"));
+    assert!(stdout.contains(
+        "\tprevious-resource-reason=URL resource values unavailable for index invalidation\t"
+    ));
+    assert!(stdout.contains("\tprevious-mount-status=unavailable\t"));
+    assert!(
+        stdout.contains("\tprevious-mount-reason=mount table unavailable for index invalidation\t")
+    );
+    assert!(stdout.contains("\tcurrent-native-status=available\t"));
+    assert!(stdout.contains("\tcurrent-resource-status=available\t"));
+    assert!(stdout.contains("\tcurrent-mount-status=available\t"));
+    assert!(stdout.contains("\tapi-status-changed=true\t"));
+    assert!(stdout.contains("\tindex-admission=true\trescan-index=true\t"));
+    assert!(stdout.contains("\tcancel-index-jobs=true\tclear-fsevents-cursor=true\t"));
+    assert!(stdout.ends_with("reason=volume-event-api-status-changed\n"));
+}
+
+#[test]
 fn reports_root_filesystem_volume_event_index_invalidation_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("volume-root-filesystem-invalidation")

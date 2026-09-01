@@ -281,7 +281,7 @@ pub(crate) fn parse_user_activity(value: String) -> Result<UserActivity> {
 }
 
 pub(crate) fn index_volume_descriptor(volume: &VolumeDescriptor) -> IndexVolumeDescriptor {
-    IndexVolumeDescriptor::new(
+    let mut descriptor = IndexVolumeDescriptor::new(
         volume.label.clone(),
         volume.path.clone(),
         index_volume_class(volume.kind),
@@ -295,7 +295,26 @@ pub(crate) fn index_volume_descriptor(volume: &VolumeDescriptor) -> IndexVolumeD
     .with_ejectable(Some(volume.ejectable))
     .with_mountable(volume.mountable)
     .with_case_sensitive(volume.case_sensitive)
-    .with_filesystem_signature(index_volume_filesystem_signature(volume))
+    .with_filesystem_signature(index_volume_filesystem_signature(volume));
+    if let Some(status) = volume.native_status {
+        descriptor = descriptor.with_native_status(status.as_str());
+    }
+    if let Some(reason) = volume.native_reason.as_deref() {
+        descriptor = descriptor.with_native_reason(reason);
+    }
+    if let Some(status) = volume.resource_status {
+        descriptor = descriptor.with_resource_status(status.as_str());
+    }
+    if let Some(reason) = volume.resource_reason.as_deref() {
+        descriptor = descriptor.with_resource_reason(reason);
+    }
+    if let Some(status) = volume.mount_table_status {
+        descriptor = descriptor.with_mount_status(status.as_str());
+    }
+    if let Some(reason) = volume.mount_table_reason.as_deref() {
+        descriptor = descriptor.with_mount_reason(reason);
+    }
+    descriptor
 }
 
 fn index_volume_filesystem_signature(volume: &VolumeDescriptor) -> String {
@@ -1175,6 +1194,38 @@ mod tests {
             .as_deref()
             .unwrap_or_default()
             .contains("removable=1"));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn index_volume_descriptor_carries_api_status_context() {
+        let root = unique_temp_dir("gfm-app-volume-api-status-descriptor");
+        let mut volume = VolumeDescriptor::for_path(&root).unwrap();
+        volume.native_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        volume.native_reason = Some("DiskArbitration probe failed".to_string());
+        volume.resource_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        volume.resource_reason = Some("URL resource probe failed".to_string());
+        volume.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Available);
+        volume.mount_table_reason = Some("mount table probe ok".to_string());
+
+        let descriptor = index_volume_descriptor(&volume);
+
+        assert_eq!(descriptor.native_status.as_deref(), Some("unavailable"));
+        assert_eq!(
+            descriptor.native_reason.as_deref(),
+            Some("DiskArbitration probe failed")
+        );
+        assert_eq!(descriptor.resource_status.as_deref(), Some("unavailable"));
+        assert_eq!(
+            descriptor.resource_reason.as_deref(),
+            Some("URL resource probe failed")
+        );
+        assert_eq!(descriptor.mount_status.as_deref(), Some("available"));
+        assert_eq!(
+            descriptor.mount_reason.as_deref(),
+            Some("mount table probe ok")
+        );
 
         std::fs::remove_dir_all(root).unwrap();
     }

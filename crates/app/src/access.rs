@@ -263,18 +263,24 @@ pub(crate) fn volume_api_status_context(volume: &VolumeDescriptor) -> String {
             .native_status
             .map(gfm_mac::NativeVolumeStatus::as_str)
             .unwrap_or("-"),
-        volume.native_reason.as_deref().unwrap_or("-"),
+        visible_volume_api_reason(volume.native_reason.as_deref()),
         volume
             .resource_status
             .map(gfm_mac::NativeVolumeStatus::as_str)
             .unwrap_or("-"),
-        volume.resource_reason.as_deref().unwrap_or("-"),
+        visible_volume_api_reason(volume.resource_reason.as_deref()),
         volume
             .mount_table_status
             .map(gfm_mac::NativeVolumeStatus::as_str)
             .unwrap_or("-"),
-        volume.mount_table_reason.as_deref().unwrap_or("-")
+        visible_volume_api_reason(volume.mount_table_reason.as_deref())
     )
+}
+
+fn visible_volume_api_reason(reason: Option<&str>) -> &str {
+    reason
+        .filter(|reason| !reason.trim().is_empty())
+        .unwrap_or("-")
 }
 
 fn broad_system_root_allows_path(
@@ -781,6 +787,27 @@ mod tests {
             .contains("mount-reason=mount table unavailable"));
         assert!(admission.as_tsv().contains("\tprobe=unknown\t"));
         assert!(!admission.as_tsv().contains("\tprobe=missing\t"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_api_status_context_normalizes_blank_reasons() {
+        let root = unique_temp_dir("gfm-access-api-blank-reasons");
+        let mut volume = VolumeDescriptor::for_path(&root).unwrap();
+        volume.native_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        volume.native_reason = Some(" \t ".to_string());
+        volume.resource_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        volume.resource_reason = Some(String::new());
+        volume.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        volume.mount_table_reason = Some("\n".to_string());
+
+        let context = volume_api_status_context(&volume);
+
+        assert_eq!(
+            context,
+            "native-status=unavailable; native-reason=-; resource-status=unavailable; resource-reason=-; mount-status=unavailable; mount-reason=-"
+        );
 
         fs::remove_dir_all(root).unwrap();
     }

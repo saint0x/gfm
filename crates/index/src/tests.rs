@@ -2244,6 +2244,82 @@ fn volume_event_index_invalidation_cancels_jobs_for_disconnect_and_unavailable_e
 }
 
 #[test]
+fn index_volume_descriptor_normalizes_blank_api_status_fields() {
+    let descriptor = IndexVolumeDescriptor::new(
+        "Blank API",
+        "/Volumes/Blank API",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_native_status(" \t ")
+    .with_native_reason("")
+    .with_resource_status("\n")
+    .with_resource_reason("URL resource values unavailable")
+    .with_mount_status("unavailable")
+    .with_mount_reason("mount table unavailable");
+
+    assert_eq!(descriptor.native_status, None);
+    assert_eq!(descriptor.native_reason, None);
+    assert_eq!(descriptor.resource_status, None);
+    assert_eq!(
+        descriptor.resource_reason,
+        Some("URL resource values unavailable".to_string())
+    );
+    assert_eq!(descriptor.mount_status, Some("unavailable".to_string()));
+    assert_eq!(
+        descriptor.mount_reason,
+        Some("mount table unavailable".to_string())
+    );
+}
+
+#[test]
+fn volume_event_index_invalidation_rescans_when_native_api_status_changes() {
+    let previous = IndexVolumeDescriptor::new(
+        "API Status",
+        "/Volumes/API Status",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(VolumeId(91))
+    .with_native_status("unavailable")
+    .with_native_reason("DiskArbitration unavailable\tuntil callback resumes");
+    let current = IndexVolumeDescriptor::new(
+        "API Status",
+        "/Volumes/API Status",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(VolumeId(91))
+    .with_native_status("available")
+    .with_native_reason(" \t ");
+
+    let report = VolumeEventIndexInvalidationReport::from_event(
+        IndexVolumeEventKind::DescriptionChanged,
+        Some(PathBuf::from("/Volumes/API Status")),
+        Some(&previous),
+        Some(&current),
+        false,
+        false,
+    );
+    let tsv = report.as_tsv();
+
+    assert!(report.api_status_changed);
+    assert!(report.invalidate_index_admission);
+    assert!(report.rescan_index);
+    assert!(report.cancel_index_jobs);
+    assert!(report.clear_fsevents_cursor);
+    assert_eq!(report.reason, "volume-event-api-status-changed");
+    assert_eq!(report.current_native_reason, None);
+    assert!(tsv.contains("\tprevious-native-status=unavailable\t"));
+    assert!(tsv.contains(
+        "\tprevious-native-reason=DiskArbitration unavailable\\tuntil callback resumes\t"
+    ));
+    assert!(tsv.contains("\tcurrent-native-status=available\t"));
+    assert!(tsv.contains("\tcurrent-native-reason=-\t"));
+    assert!(tsv.contains("\tapi-status-changed=true\t"));
+}
+
+#[test]
 fn volume_invalidation_rescans_policy_when_read_only_state_changes() {
     let previous = IndexVolumeDescriptor::new(
         "Work Drive",
