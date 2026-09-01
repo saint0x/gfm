@@ -3121,7 +3121,7 @@ fn refuses_fileprovider_operations_without_native_provider_from_binary() {
     assert_worker_admitted(&missing_stderr, "fileprovider operation", &missing);
     assert!(missing_stdout.contains("\toperation=download\tdisposition=missing\t"));
     assert!(missing_stdout.contains("\tbefore-state=unknown\tafter-state=-\t"));
-    assert!(missing_stdout.ends_with("reason=fileprovider-path-missing\n"));
+    assert!(missing_stdout.ends_with("reason=native-url-resource-missing\n"));
 
     let _ = std::fs::remove_dir_all(root);
 }

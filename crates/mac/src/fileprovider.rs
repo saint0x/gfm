@@ -1570,11 +1570,7 @@ impl FileProviderOperationReport {
             FileProviderOperation::Evict => before.commands.evict,
         };
         check_control()?;
-        if !path_exists {
-            return Ok(Self::missing(path, operation, before));
-        }
-        check_control()?;
-        if let Some((disposition, reason)) = native_resource_operation_refusal(&before) {
+        if let Some((disposition, reason)) = provider_state_operation_refusal(&before) {
             return Ok(Self::with_disposition(
                 path,
                 operation,
@@ -1582,6 +1578,10 @@ impl FileProviderOperationReport {
                 before,
                 reason,
             ));
+        }
+        check_control()?;
+        if !path_exists {
+            return Ok(Self::missing(path, operation, before));
         }
         check_control()?;
         if before.storage_state == CloudStorageState::Conflict {
@@ -1755,7 +1755,7 @@ impl FileProviderOperationReport {
     }
 }
 
-fn native_resource_operation_refusal(
+fn provider_state_operation_refusal(
     report: &FileProviderStateReport,
 ) -> Option<(FileProviderOperationDisposition, &'static str)> {
     match report.materialization_source {
@@ -1770,6 +1770,30 @@ fn native_resource_operation_refusal(
         CloudMaterializationSource::NativeUrlResourceUnsupported => Some((
             FileProviderOperationDisposition::Unsupported,
             "native-url-resource-unsupported",
+        )),
+        CloudMaterializationSource::NativeFileProviderIdentityMissing => Some((
+            FileProviderOperationDisposition::Missing,
+            "nsfileprovidermanager-missing",
+        )),
+        CloudMaterializationSource::NativeFileProviderIdentityProviderUnavailable => Some((
+            FileProviderOperationDisposition::Unavailable,
+            "nsfileprovidermanager-provider-unavailable",
+        )),
+        CloudMaterializationSource::NativeFileProviderIdentityTimedOut => Some((
+            FileProviderOperationDisposition::Unavailable,
+            "nsfileprovidermanager-timed-out",
+        )),
+        CloudMaterializationSource::NativeFileProviderIdentityUnavailable => Some((
+            FileProviderOperationDisposition::Unavailable,
+            "nsfileprovidermanager-unavailable",
+        )),
+        CloudMaterializationSource::NativeFileProviderIdentityFailed => Some((
+            FileProviderOperationDisposition::Failed,
+            "nsfileprovidermanager-failed",
+        )),
+        CloudMaterializationSource::NativeFileProviderIdentityUnsupported => Some((
+            FileProviderOperationDisposition::Unsupported,
+            "nsfileprovidermanager-unsupported",
         )),
         _ => None,
     }
@@ -5227,6 +5251,54 @@ mod tests {
     }
 
     #[test]
+    fn operations_preserve_native_resource_missing_before_path_missing_fallback() {
+        let path = PathBuf::from("/tmp/Missing.fileprovider");
+        let mut native = native_values();
+        native.status = gfm_mac_sys::NativeFileProviderStatus::Missing;
+        native.reason = Some("native FileProvider URL resource path missing".to_string());
+        let before = FileProviderStateReport::from_hints(
+            path.clone(),
+            CloudHints {
+                native,
+                native_identity: identity_not_queried(),
+                xattrs: Vec::new(),
+                xattr_values: Vec::new(),
+                provider_identifier: None,
+                source: "fixture-name".to_string(),
+            },
+        );
+
+        assert_eq!(
+            provider_state_operation_refusal(&before),
+            Some((
+                FileProviderOperationDisposition::Missing,
+                "native-url-resource-missing"
+            ))
+        );
+
+        let report = FileProviderOperationReport::with_disposition(
+            path,
+            FileProviderOperation::Download,
+            FileProviderOperationDisposition::Missing,
+            before,
+            "native-url-resource-missing",
+        );
+
+        assert_eq!(
+            report.disposition,
+            FileProviderOperationDisposition::Missing
+        );
+        assert_eq!(
+            report.reason.as_deref(),
+            Some("native-url-resource-missing")
+        );
+        assert!(report.as_tsv().contains("\tdisposition=missing\t"));
+        assert!(report
+            .as_tsv()
+            .ends_with("reason=native-url-resource-missing"));
+    }
+
+    #[test]
     fn operations_preserve_native_resource_unavailable_before_command_policy() {
         let path = PathBuf::from("/tmp/Remote.fileprovider");
         let mut native = native_values();
@@ -5247,7 +5319,7 @@ mod tests {
         assert_eq!(before.domain, FileProviderDomain::FileProvider);
         assert_eq!(before.storage_state, CloudStorageState::Unknown);
         assert_eq!(
-            native_resource_operation_refusal(&before),
+            provider_state_operation_refusal(&before),
             Some((
                 FileProviderOperationDisposition::Unavailable,
                 "native-url-resource-unavailable"
@@ -5295,12 +5367,55 @@ mod tests {
         );
 
         assert_eq!(
-            native_resource_operation_refusal(&before),
+            provider_state_operation_refusal(&before),
             Some((
                 FileProviderOperationDisposition::Unsupported,
                 "native-url-resource-unsupported"
             ))
         );
+    }
+
+    #[test]
+    fn operations_preserve_provider_identity_failures_before_command_policy() {
+        for (status, disposition, reason) in [
+            (
+                NativeFileProviderIdentityStatus::TimedOut,
+                FileProviderOperationDisposition::Unavailable,
+                "nsfileprovidermanager-timed-out",
+            ),
+            (
+                NativeFileProviderIdentityStatus::Failed,
+                FileProviderOperationDisposition::Failed,
+                "nsfileprovidermanager-failed",
+            ),
+            (
+                NativeFileProviderIdentityStatus::UnsupportedPath,
+                FileProviderOperationDisposition::Unsupported,
+                "nsfileprovidermanager-unsupported",
+            ),
+        ] {
+            let before = FileProviderStateReport::from_hints(
+                PathBuf::from("/tmp/Remote.fileprovider"),
+                CloudHints {
+                    native: native_values(),
+                    native_identity: NativeFileProviderIdentity {
+                        status,
+                        item_identifier: None,
+                        domain_identifier: None,
+                        reason: Some(reason.to_string()),
+                    },
+                    xattrs: Vec::new(),
+                    xattr_values: Vec::new(),
+                    provider_identifier: None,
+                    source: "fixture-name+nsfileprovidermanager".to_string(),
+                },
+            );
+
+            assert_eq!(
+                provider_state_operation_refusal(&before),
+                Some((disposition, reason))
+            );
+        }
     }
 
     #[test]
