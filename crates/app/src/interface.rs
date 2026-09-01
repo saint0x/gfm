@@ -1366,11 +1366,9 @@ fn resolve_ui_operation_conflict(
     policy: ConflictPolicy,
 ) -> Result<(crate::runtime::RuntimeOperationConflict, PathBuf)> {
     const WORKER: &str = "ui operation conflict resolve";
-    let access_report = InterfaceAccessReport::new_checked(
-        write_probe_path(&store_path)?.to_path_buf(),
-        AccessIntent::Write,
-        || Ok(()),
-    )?;
+    let store_probe = write_probe_existing_ancestor(&store_path, WORKER)?;
+    let access_report =
+        InterfaceAccessReport::new_checked(store_probe, AccessIntent::Write, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
     crate::runtime::run_volume_task_cancellable(

@@ -8157,6 +8157,54 @@ fn ui_operation_conflict_resolve_refuses_unreachable_store_before_mutating_from_
 }
 
 #[test]
+fn ui_operation_conflict_resolve_refuses_unreachable_missing_store_before_probe_from_binary() {
+    let root = unique_temp_dir("gfm-cli-ui-operation-conflict-resolve-missing-root");
+    let offline = unique_temp_dir("gfm-cli-ui-operation-conflict-resolve-missing-offline");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let conflicts = offline.join(format!(
+        "{}.tsv",
+        "operation-conflicts-unavailable".repeat(16)
+    ));
+    let destination = root.join("destination.md");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "ui-operation-conflict-resolve",
+            conflicts.to_str().unwrap(),
+            destination.to_str().unwrap(),
+            "skip",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stdout.contains("operation-conflict-control\tresolve\t"),
+        "{stdout}"
+    );
+    assert!(
+        stderr.contains(
+            "ui operation conflict resolve volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("interface write path metadata unavailable"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("security-worker-admission\tworker=ui operation conflict resolve\t"),
+        "{stderr}"
+    );
+    assert!(!conflicts.exists());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
 fn ui_operation_conflict_resolve_reports_store_probe_failure_before_mutating_from_binary() {
     let root = unique_temp_dir("gfm-cli-ui-operation-conflict-resolve-probe");
     let conflicts = root.join(format!(
