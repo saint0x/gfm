@@ -12,6 +12,7 @@ use crate::extract::{
 use crate::runtime::{
     default_content_job_path, default_extraction_quarantine_path, default_job_journal_path,
     run_retriable_volume_task_cancellable_with_payload_path, run_scheduled_volume_task_cancellable,
+    run_scheduled_volume_task_cancellable_with_volume,
     run_scheduled_volume_task_cancellable_with_volume_and_payload_path,
     run_volume_task_cancellable, run_volume_task_cancellable_without_progress,
     runtime_progress_store, RuntimeJobHandle,
@@ -457,23 +458,32 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     "content-maintain-segments-adaptive requires at least one segment".to_string(),
                 ));
             }
-            let access_reports = ContentSegmentsAccessReports::for_paths(
-                Some(&manifest_path),
-                &output_archive,
-                &segments,
-            )?;
-            let schedule_access_reports = access_reports.clone();
+            let schedule_manifest_path = manifest_path.clone();
+            let schedule_output_archive = output_archive.clone();
+            let schedule_segments = segments.clone();
             let worker = BackgroundContentIndexer::default();
-            let outcome = run_scheduled_volume_task_cancellable_with_volume_and_payload_path(
+            let outcome = run_scheduled_volume_task_cancellable_with_volume(
                 Priority::Background,
                 "content maintenance",
                 pressure,
                 move || {
-                    schedule_access_reports.preflight_volumes("content maintenance")?;
-                    Ok(schedule_access_reports.first_volume())
+                    let access_reports = ContentSegmentsAccessReports::for_paths(
+                        Some(&schedule_manifest_path),
+                        &schedule_output_archive,
+                        &schedule_segments,
+                        "content maintenance",
+                    )?;
+                    access_reports.preflight_volumes("content maintenance")?;
+                    Ok(access_reports.first_volume())
                 },
-                output_archive.clone(),
                 move |cancellation| {
+                    cancellation.check()?;
+                    let access_reports = ContentSegmentsAccessReports::for_paths(
+                        Some(&manifest_path),
+                        &output_archive,
+                        &segments,
+                        "content maintenance",
+                    )?;
                     cancellation.check()?;
                     let _access = access_reports
                         .access_checked("content maintenance", || cancellation.check())?;
@@ -954,7 +964,7 @@ fn run_extraction_cache(path: PathBuf) -> Result<String> {
 
 fn run_content_compaction(output: PathBuf, segments: Vec<PathBuf>) -> Result<usize> {
     const WORKER: &str = "content compaction";
-    let access_reports = ContentSegmentsAccessReports::for_paths(None, &output, &segments)?;
+    let access_reports = ContentSegmentsAccessReports::for_paths(None, &output, &segments, WORKER)?;
     access_reports.preflight_volumes(WORKER)?;
     let volume = access_reports.first_volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
@@ -972,7 +982,7 @@ fn run_tiered_content_compaction(
     segments: Vec<PathBuf>,
 ) -> Result<gfm_index::ContentMergeOutcome> {
     const WORKER: &str = "tiered content compaction";
-    let access_reports = ContentSegmentsAccessReports::for_paths(None, &output, &segments)?;
+    let access_reports = ContentSegmentsAccessReports::for_paths(None, &output, &segments, WORKER)?;
     access_reports.preflight_volumes(WORKER)?;
     let volume = access_reports.first_volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
@@ -995,8 +1005,12 @@ fn run_content_segment_maintenance(
     segments: Vec<PathBuf>,
 ) -> Result<ContentMaintenanceReport> {
     const WORKER: &str = "content maintenance";
-    let access_reports =
-        ContentSegmentsAccessReports::for_paths(Some(&manifest_path), &output_archive, &segments)?;
+    let access_reports = ContentSegmentsAccessReports::for_paths(
+        Some(&manifest_path),
+        &output_archive,
+        &segments,
+        WORKER,
+    )?;
     access_reports.preflight_volumes(WORKER)?;
     let volume = access_reports.first_volume();
     let worker = BackgroundContentIndexer::default();
@@ -1596,6 +1610,42 @@ mod tests {
     }
 
     #[test]
+    fn foreground_content_index_reports_refuse_unreachable_output_before_write_probe() {
+        let root = unique_temp_dir("gfm-content-index-report-unreachable-before-probe-root");
+        let offline = unique_temp_dir("gfm-content-index-report-unreachable-before-probe-output");
+        fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let records = offline.join(format!(
+            "{}.gfmidx",
+            "content-index-records-unavailable".repeat(8)
+        ));
+        let content = root.join("content.gfmcontent");
+
+        let err = match ForegroundContentIndexAccessReports::for_paths_checked(
+            root.clone(),
+            records.clone(),
+            content,
+            || Ok(()),
+        ) {
+            Ok(_) => panic!("unreachable content index output was admitted before write probe"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("content index volume access blocked: unreachable volume network"),
+            "{err}"
+        );
+        assert!(
+            !err.to_string()
+                .contains("content write path metadata unavailable"),
+            "{err}"
+        );
+        assert!(!records.exists());
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(offline).unwrap();
+    }
+
+    #[test]
     fn retry_probe_report_checked_honors_pre_cancelled_control_before_probe() {
         let path = std::env::temp_dir()
             .join(format!(
@@ -1608,6 +1658,34 @@ mod tests {
 
         assert_eq!(result.err(), Some(GfmError::Cancelled));
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn retry_probe_report_refuses_unreachable_output_before_write_probe() {
+        let offline = unique_temp_dir("gfm-content-retry-report-unreachable-before-probe");
+        fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let retry_probe = offline.join(format!(
+            "{}.state",
+            "content-retry-probe-unavailable".repeat(8)
+        ));
+
+        let err = match retry_probe_access_report_checked(Some(&retry_probe), || Ok(())) {
+            Ok(_) => panic!("unreachable content retry probe was admitted before volume preflight"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("content index volume access blocked: unreachable volume network"),
+            "{err}"
+        );
+        assert!(
+            !err.to_string()
+                .contains("content write path metadata unavailable"),
+            "{err}"
+        );
+        assert!(!retry_probe.exists());
+        fs::remove_dir_all(offline).unwrap();
     }
 
     #[test]
@@ -1677,6 +1755,40 @@ mod tests {
     }
 
     #[test]
+    fn content_segment_index_reports_refuse_unreachable_output_before_write_probe() {
+        let root = unique_temp_dir("gfm-content-segment-report-unreachable-before-probe-root");
+        let offline = unique_temp_dir("gfm-content-segment-report-unreachable-before-probe-output");
+        fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let output = offline.join(format!(
+            "{}.gfmseg",
+            "content-segment-output-unavailable".repeat(8)
+        ));
+
+        let err =
+            match ContentSegmentIndexAccessReports::for_paths_checked(&root, &output, || Ok(())) {
+                Ok(_) => {
+                    panic!("unreachable content segment output was admitted before write probe")
+                }
+                Err(err) => err,
+            };
+
+        assert!(
+            err.to_string().contains(
+                "content segment index volume access blocked: unreachable volume network"
+            ),
+            "{err}"
+        );
+        assert!(
+            !err.to_string()
+                .contains("content write path metadata unavailable"),
+            "{err}"
+        );
+        assert!(!output.exists());
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(offline).unwrap();
+    }
+
+    #[test]
     fn content_segments_reports_checked_can_cancel_between_segments() {
         let root = unique_temp_dir("gfm-content-segments-report-cancel");
         let output = root.join("output.gfmcontent");
@@ -1686,18 +1798,59 @@ mod tests {
         ];
         let mut checks = 0;
 
-        let result =
-            ContentSegmentsAccessReports::for_paths_checked(None, &output, &segments, || {
+        let result = ContentSegmentsAccessReports::for_paths_checked(
+            None,
+            &output,
+            &segments,
+            "content compaction",
+            || {
                 checks += 1;
                 if checks > 5 {
                     Err(GfmError::Cancelled)
                 } else {
                     Ok(())
                 }
-            });
+            },
+        );
 
         assert_eq!(result.err(), Some(GfmError::Cancelled));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn content_segments_reports_refuse_unreachable_output_before_write_probe() {
+        let offline = unique_temp_dir("gfm-content-segments-report-unreachable-before-probe");
+        fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let output = offline.join(format!(
+            "{}.gfmcontent",
+            "content-compaction-output-unavailable".repeat(8)
+        ));
+
+        let err = match ContentSegmentsAccessReports::for_paths_checked(
+            None,
+            &output,
+            &[],
+            "content compaction",
+            || Ok(()),
+        ) {
+            Ok(_) => {
+                panic!("unreachable content compaction output was admitted before write probe")
+            }
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("content compaction volume access blocked: unreachable volume network"),
+            "{err}"
+        );
+        assert!(
+            !err.to_string()
+                .contains("content write path metadata unavailable"),
+            "{err}"
+        );
+        assert!(!output.exists());
+        fs::remove_dir_all(offline).unwrap();
     }
 
     #[test]
@@ -1752,6 +1905,91 @@ mod tests {
 
         assert_eq!(result.err(), Some(GfmError::Cancelled));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn content_job_reports_refuse_unreachable_records_before_write_probe() {
+        let root = unique_temp_dir("gfm-content-job-report-unreachable-before-probe-root");
+        let offline = unique_temp_dir("gfm-content-job-report-unreachable-before-probe-output");
+        fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let records = offline.join(format!(
+            "{}.gfmidx",
+            "background-content-records-unavailable".repeat(8)
+        ));
+        let spec = ContentIndexJobSpec::new(
+            root.join("input"),
+            root.join("segments"),
+            records.clone(),
+            root.join("content.gfmcontent"),
+        );
+        let spec_path = root.join("job.tsv");
+        let journal_path = root.join("journal.tsv");
+
+        let err = match ContentJobAccessReports::for_spec_checked(
+            &spec,
+            &spec_path,
+            Some(&journal_path),
+            || Ok(()),
+        ) {
+            Ok(_) => {
+                panic!(
+                    "unreachable background content records were admitted before volume preflight"
+                )
+            }
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains(
+                "background content index volume access blocked: unreachable volume network"
+            ),
+            "{err}"
+        );
+        assert!(
+            !err.to_string()
+                .contains("content write path metadata unavailable"),
+            "{err}"
+        );
+        assert!(!records.exists());
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(offline).unwrap();
+    }
+
+    #[test]
+    fn extraction_quarantine_reports_refuse_unreachable_store_before_write_probe() {
+        let root = unique_temp_dir("gfm-extraction-quarantine-unreachable-before-probe-root");
+        let offline = unique_temp_dir("gfm-extraction-quarantine-unreachable-before-probe-store");
+        fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let path = root.join("document.txt");
+        fs::write(&path, "quarantine candidate").unwrap();
+        let store = offline.join(format!(
+            "{}.gfmquarantine",
+            "extract-quarantine-store-unavailable".repeat(8)
+        ));
+
+        let err = match ExtractionQuarantineAccessReports::for_paths(&path, &store) {
+            Ok(_) => {
+                panic!(
+                    "unreachable extraction quarantine store was admitted before volume preflight"
+                )
+            }
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains(
+                "extraction quarantine volume access blocked: unreachable volume network"
+            ),
+            "{err}"
+        );
+        assert!(
+            !err.to_string()
+                .contains("content write path metadata unavailable"),
+            "{err}"
+        );
+        assert!(!store.exists());
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(offline).unwrap();
     }
 
     #[test]
@@ -1941,7 +2179,7 @@ impl ExtractionQuarantineAccessReports {
                     || Ok(()),
                 )?,
                 ForegroundContentIndexAccessReports::entry_checked(
-                    checked_write_probe_path(store)?.to_path_buf(),
+                    checked_write_probe_path(store, "extraction quarantine", || Ok(()))?,
                     AccessIntent::Write,
                     || Ok(()),
                 )?,
@@ -2088,9 +2326,11 @@ impl ForegroundContentIndexAccessReports {
         mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<Self> {
         check_control()?;
-        let records_probe = write_probe_path(&records)?.to_path_buf();
+        let records_probe =
+            checked_write_probe_path(&records, "content index", &mut check_control)?;
         check_control()?;
-        let content_probe = write_probe_path(&content)?.to_path_buf();
+        let content_probe =
+            checked_write_probe_path(&content, "content index", &mut check_control)?;
         check_control()?;
         Ok(Self {
             entries: vec![
@@ -2144,7 +2384,8 @@ fn retry_probe_access_report_checked(
     retry_probe
         .map(|retry_probe| {
             check_control()?;
-            let retry_probe = write_probe_path(retry_probe)?.to_path_buf();
+            let retry_probe =
+                checked_write_probe_path(retry_probe, "content index", &mut check_control)?;
             check_control()?;
             ForegroundContentIndexAccessReports::entry_checked(
                 retry_probe,
@@ -2181,7 +2422,8 @@ impl ContentSegmentIndexAccessReports {
         mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<Self> {
         check_control()?;
-        let output_probe = write_probe_path(output)?.to_path_buf();
+        let output_probe =
+            checked_write_probe_path(output, "content segment index", &mut check_control)?;
         check_control()?;
         Ok(Self {
             entries: [
@@ -2232,14 +2474,16 @@ impl ContentSegmentsAccessReports {
         manifest_path: Option<&Path>,
         output_archive: &Path,
         segments: &[PathBuf],
+        worker: &str,
     ) -> Result<Self> {
-        Self::for_paths_checked(manifest_path, output_archive, segments, || Ok(()))
+        Self::for_paths_checked(manifest_path, output_archive, segments, worker, || Ok(()))
     }
 
     fn for_paths_checked(
         manifest_path: Option<&Path>,
         output_archive: &Path,
         segments: &[PathBuf],
+        worker: &str,
         mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<Self> {
         let mut entries =
@@ -2253,7 +2497,7 @@ impl ContentSegmentsAccessReports {
             )?);
         }
         check_control()?;
-        let output_archive = write_probe_path(output_archive)?.to_path_buf();
+        let output_archive = checked_write_probe_path(output_archive, worker, &mut check_control)?;
         check_control()?;
         entries.push(ForegroundContentIndexAccessReports::entry_checked(
             output_archive,
@@ -2330,7 +2574,8 @@ impl ContentJobAccessReports {
             quarantine_path.as_path(),
         ] {
             check_control()?;
-            let path = write_probe_path(path)?.to_path_buf();
+            let path =
+                checked_write_probe_path(path, "background content index", &mut check_control)?;
             check_control()?;
             entries.push(ForegroundContentIndexAccessReports::entry_checked(
                 path,
@@ -2340,7 +2585,11 @@ impl ContentJobAccessReports {
         }
         if let Some(journal_path) = journal_path {
             check_control()?;
-            let journal_path = write_probe_path(journal_path)?.to_path_buf();
+            let journal_path = checked_write_probe_path(
+                journal_path,
+                "background content index",
+                &mut check_control,
+            )?;
             check_control()?;
             entries.push(ForegroundContentIndexAccessReports::entry_checked(
                 journal_path,
@@ -2360,7 +2609,8 @@ impl ContentJobAccessReports {
         mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<ForegroundContentIndexAccessReport> {
         check_control()?;
-        let spec_path = write_probe_path(spec_path)?.to_path_buf();
+        let spec_path =
+            checked_write_probe_path(spec_path, "background content index", &mut check_control)?;
         check_control()?;
         ForegroundContentIndexAccessReports::entry_checked(
             spec_path,
@@ -2409,6 +2659,7 @@ fn retain_content_segments_access_checked(
         manifest_path,
         output_archive,
         segments,
+        worker,
         &mut check_control,
     )?;
     access_reports.access_checked(worker, &mut check_control)
@@ -2440,8 +2691,35 @@ fn write_probe_path(path: &Path) -> Result<&Path> {
     }
 }
 
-fn checked_write_probe_path(path: &Path) -> Result<&Path> {
-    write_probe_path(path)
+fn checked_write_probe_path(
+    path: &Path,
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<PathBuf> {
+    check_control()?;
+    preflight_write_target_volume_checked(path, worker, &mut check_control)?;
+    check_control()?;
+    let probe = write_probe_path(path)?.to_path_buf();
+    check_control()?;
+    Ok(probe)
+}
+
+fn preflight_write_target_volume_checked(
+    path: &Path,
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    check_control()?;
+    let volume_path = crate::parent_or_cwd(path);
+    let volume_report =
+        VolumeDiscoveryReport::for_containing_path_checked(volume_path, &mut check_control)?;
+    check_control()?;
+    preflight_volume_access_scope_with_report(
+        volume_path,
+        AccessIntent::Write,
+        worker,
+        &volume_report,
+    )
 }
 
 fn validate_write_file_name(path: &Path) -> Result<()> {

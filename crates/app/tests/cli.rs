@@ -10725,7 +10725,10 @@ fn quarantined_adaptive_extraction_worker_refuses_unreachable_store_before_recor
     let store_root = unique_temp_dir("gfm-cli-extract-worker-quarantine-store-unreachable");
     fs::write(store_root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
     let path = source_root.join("document.txt");
-    let store = store_root.join("quarantine.gfmquarantine");
+    let store = store_root.join(format!(
+        "{}.gfmquarantine",
+        "extract-quarantine-store-unavailable".repeat(8)
+    ));
     fs::write(&path, "timeout worker marker").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -10748,9 +10751,7 @@ fn quarantined_adaptive_extraction_worker_refuses_unreachable_store_before_recor
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stdout.contains("quarantine\t"), "{stdout}");
     assert!(
-        stderr.contains(
-            "quarantined adaptive extraction volume access blocked: unreachable volume network"
-        ),
+        stderr.contains("extraction quarantine volume access blocked: unreachable volume network"),
         "{stderr}"
     );
     assert!(
@@ -10912,6 +10913,10 @@ fn extract_quarantine_refuses_unreachable_store_before_recording_from_binary() {
         "{stderr}"
     );
     assert!(
+        !stderr.contains("content write path metadata unavailable"),
+        "{stderr}"
+    );
+    assert!(
         !stderr.contains("security-worker-admission\tworker=extraction quarantine\t"),
         "{stderr}"
     );
@@ -11036,7 +11041,10 @@ fn index_content_refuses_unreachable_records_output_before_scanning_from_binary(
         "network-unreachable\n",
     )
     .unwrap();
-    let records = output_root.join("records.gfmidx");
+    let records = output_root.join(format!(
+        "{}.gfmidx",
+        "index-content-records-unavailable".repeat(8)
+    ));
     let content = unique_temp_path("gfm-cli-index-content-local", "gfmcontent");
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -11055,6 +11063,10 @@ fn index_content_refuses_unreachable_records_output_before_scanning_from_binary(
     assert!(!stdout.contains("hit\t"), "{stdout}");
     assert!(
         stderr.contains("content index volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("content write path metadata unavailable"),
         "{stderr}"
     );
     assert!(
@@ -11083,7 +11095,10 @@ fn index_content_refuses_unreachable_content_output_before_scanning_from_binary(
     )
     .unwrap();
     let records = unique_temp_path("gfm-cli-index-content-records-local", "gfmidx");
-    let content = output_root.join("content.gfmcontent");
+    let content = output_root.join(format!(
+        "{}.gfmcontent",
+        "index-content-archive-unavailable".repeat(8)
+    ));
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
@@ -11101,6 +11116,10 @@ fn index_content_refuses_unreachable_content_output_before_scanning_from_binary(
     assert!(!stdout.contains("hit\t"), "{stdout}");
     assert!(
         stderr.contains("content index volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("content write path metadata unavailable"),
         "{stderr}"
     );
     assert!(
@@ -14895,7 +14914,10 @@ fn index_content_segment_refuses_unreachable_output_before_scanning_from_binary(
         "network-unreachable\n",
     )
     .unwrap();
-    let segment = output_root.join("content.gfmseg");
+    let segment = output_root.join(format!(
+        "{}.gfmseg",
+        "content-segment-output-unavailable".repeat(8)
+    ));
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
@@ -14912,6 +14934,10 @@ fn index_content_segment_refuses_unreachable_output_before_scanning_from_binary(
     assert!(!stdout.contains("hit\t"), "{stdout}");
     assert!(
         stderr.contains("content segment index volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("content write path metadata unavailable"),
         "{stderr}"
     );
     assert!(
@@ -14933,7 +14959,10 @@ fn compact_content_refuses_unreachable_output_before_merge_from_binary() {
     let source_root = unique_temp_dir("gfm-cli-segment-compact-source");
     let output_root = unique_temp_dir("gfm-cli-segment-compact-output-unreachable");
     let segment = unique_temp_path("gfm-cli-segment-compact-source", "gfmseg");
-    let content = output_root.join("content.gfmcontent");
+    let content = output_root.join(format!(
+        "{}.gfmcontent",
+        "content-compaction-output-unavailable".repeat(8)
+    ));
     fs::write(source_root.join("segment.md"), "offline segment marker").unwrap();
 
     let segment_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -14968,6 +14997,10 @@ fn compact_content_refuses_unreachable_output_before_merge_from_binary() {
     let stderr = String::from_utf8_lossy(&compact_output.stderr);
     assert!(
         stderr.contains("content compaction volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("content write path metadata unavailable"),
         "{stderr}"
     );
     assert!(!content.exists());
