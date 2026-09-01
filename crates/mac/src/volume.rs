@@ -243,15 +243,8 @@ impl VolumeDescriptor {
         );
         let mount_state = MountState::Mounted;
         let marker_value = marker.as_deref();
-        let removable = marker_removable(marker_value)
-            .or_else(|| resource.as_ref().and_then(|resource| resource.is_removable))
-            .or_else(|| native.as_ref().and_then(|native| native.media_removable))
-            .unwrap_or({
-                matches!(
-                    kind,
-                    VolumeKind::External | VolumeKind::Removable | VolumeKind::DiskImage
-                )
-            });
+        let removable =
+            volume_removable_state(marker_value, native.as_ref(), resource.as_ref(), kind);
         let local = volume_local_state(
             marker_value,
             native.as_ref(),
@@ -273,10 +266,13 @@ impl VolumeDescriptor {
             resource.as_ref(),
             &path,
         );
-        let ejectable = marker_ejectable(marker_value)
-            .or_else(|| resource.as_ref().and_then(|resource| resource.is_ejectable))
-            .or_else(|| native.as_ref().and_then(|native| native.media_ejectable))
-            .unwrap_or(removable || network);
+        let ejectable = volume_ejectable_state(
+            marker_value,
+            native.as_ref(),
+            resource.as_ref(),
+            removable,
+            network,
+        );
         let access = volume_access_state(
             marker_value,
             native.as_ref(),
@@ -2703,6 +2699,64 @@ fn volume_local_state(
         .or_else(|| (kind == VolumeKind::Network).then_some(false))
 }
 
+fn volume_removable_state(
+    marker: Option<&str>,
+    native: Option<&NativeVolumeDescription>,
+    resource: Option<&NativeVolumeResourceValues>,
+    kind: VolumeKind,
+) -> bool {
+    if let Some(removable) = marker_removable(marker) {
+        return removable;
+    }
+    if native
+        .filter(|native| native.status == NativeVolumeStatus::Available)
+        .and_then(|native| native.media_removable)
+        == Some(true)
+    {
+        return true;
+    }
+    resource
+        .filter(|resource| resource.status == NativeVolumeStatus::Available)
+        .and_then(|resource| resource.is_removable)
+        .or_else(|| {
+            native
+                .filter(|native| native.status == NativeVolumeStatus::Available)
+                .and_then(|native| native.media_removable)
+        })
+        .unwrap_or(matches!(
+            kind,
+            VolumeKind::External | VolumeKind::Removable | VolumeKind::DiskImage
+        ))
+}
+
+fn volume_ejectable_state(
+    marker: Option<&str>,
+    native: Option<&NativeVolumeDescription>,
+    resource: Option<&NativeVolumeResourceValues>,
+    removable: bool,
+    network: bool,
+) -> bool {
+    if let Some(ejectable) = marker_ejectable(marker) {
+        return ejectable;
+    }
+    if native
+        .filter(|native| native.status == NativeVolumeStatus::Available)
+        .and_then(|native| native.media_ejectable)
+        == Some(true)
+    {
+        return true;
+    }
+    resource
+        .filter(|resource| resource.status == NativeVolumeStatus::Available)
+        .and_then(|resource| resource.is_ejectable)
+        .or_else(|| {
+            native
+                .filter(|native| native.status == NativeVolumeStatus::Available)
+                .and_then(|native| native.media_ejectable)
+        })
+        .unwrap_or(removable || network)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct VolumeAccessState {
     writable: bool,
@@ -3689,6 +3743,68 @@ mod tests {
             ),
             Some(false)
         );
+    }
+
+    #[test]
+    fn volume_removable_state_prefers_positive_diskarbitration_media_truth() {
+        let native = native_description(|description| {
+            description.media_removable = Some(true);
+        });
+        let resource = resource_values(|values| {
+            values.is_removable = Some(false);
+        });
+
+        assert!(volume_removable_state(
+            None,
+            Some(&native),
+            Some(&resource),
+            VolumeKind::Internal,
+        ));
+    }
+
+    #[test]
+    fn volume_ejectable_state_prefers_positive_diskarbitration_media_truth() {
+        let native = native_description(|description| {
+            description.media_ejectable = Some(true);
+        });
+        let resource = resource_values(|values| {
+            values.is_ejectable = Some(false);
+        });
+
+        assert!(volume_ejectable_state(
+            None,
+            Some(&native),
+            Some(&resource),
+            false,
+            false,
+        ));
+    }
+
+    #[test]
+    fn volume_media_truth_ignores_unavailable_diskarbitration_values() {
+        let native = native_description(|description| {
+            description.status = NativeVolumeStatus::Unavailable;
+            description.media_removable = Some(true);
+            description.media_ejectable = Some(true);
+        });
+        let resource = resource_values(|values| {
+            values.is_removable = Some(false);
+            values.is_ejectable = Some(false);
+        });
+
+        assert!(!volume_removable_state(
+            None,
+            Some(&native),
+            Some(&resource),
+            VolumeKind::Internal,
+        ));
+        assert!(!volume_ejectable_state(
+            None,
+            Some(&native),
+            Some(&resource),
+            false,
+            false,
+        ));
     }
 
     #[test]
