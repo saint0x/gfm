@@ -55,6 +55,7 @@ use gfm_ui::{
     SidebarVolumeSpec,
 };
 use std::collections::BTreeSet;
+use std::ffi::OsString;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -3652,7 +3653,7 @@ pub(crate) fn run_fileprovider_observer_probe(
             let mut observer =
                 FileProviderStateObserver::watch(&[WatchRoot::tree(&root)], previous)?;
             cancellation.check()?;
-            std::fs::write(&target, b"observer-probe").map_err(|err| GfmError::io(&target, err))?;
+            write_fileprovider_observer_probe_target_checked(&target, || cancellation.check())?;
             cancellation.check()?;
             let observed = drain_fileprovider_observer_probe(&mut observer, &cancellation)?;
             cancellation.check()?;
@@ -3664,6 +3665,61 @@ pub(crate) fn run_fileprovider_observer_probe(
             Ok(observed)
         },
     )
+}
+
+fn write_fileprovider_observer_probe_target_checked(
+    target: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    const PROBE_BYTES: &[u8] = b"observer-probe";
+    check_control()?;
+    let preserved_xattrs = preserved_fileprovider_probe_xattrs(target);
+    check_control()?;
+    gfm_store::atomic_write_checked(target, &mut check_control, |writer, check_control| {
+        for chunk in PROBE_BYTES.chunks(4) {
+            check_control()?;
+            writer
+                .write_all(chunk)
+                .map_err(|err| GfmError::io(target, err))?;
+            check_control()?;
+        }
+        Ok(())
+    })?;
+    restore_fileprovider_probe_xattrs(target, preserved_xattrs)?;
+    check_control()?;
+    Ok(())
+}
+
+fn preserved_fileprovider_probe_xattrs(target: &Path) -> Vec<(OsString, Vec<u8>)> {
+    xattr::list(target)
+        .ok()
+        .into_iter()
+        .flatten()
+        .filter_map(|name| {
+            xattr::get(target, &name)
+                .ok()
+                .flatten()
+                .map(|value| (name, value))
+        })
+        .collect()
+}
+
+fn restore_fileprovider_probe_xattrs(
+    target: &Path,
+    xattrs: Vec<(OsString, Vec<u8>)>,
+) -> Result<()> {
+    for (name, value) in xattrs {
+        xattr::set(target, &name, &value).map_err(|err| {
+            GfmError::io(
+                target,
+                format!(
+                    "fileprovider observer probe could not restore xattr `{}`: {err}",
+                    name.to_string_lossy()
+                ),
+            )
+        })?;
+    }
+    Ok(())
 }
 
 fn observed_preview_cache_invalidation_tsv(
@@ -4329,6 +4385,89 @@ mod tests {
             "cancelled observer poll pause waited {:?}",
             started.elapsed()
         );
+    }
+
+    #[test]
+    fn fileprovider_observer_probe_target_write_honors_pre_cancelled_control() {
+        let path = std::env::temp_dir()
+            .join(format!(
+                "gfm-fileprovider-observer-target-pre-cancelled-{}",
+                std::process::id()
+            ))
+            .join("Observed.icloud-placeholder");
+
+        let err =
+            write_fileprovider_observer_probe_target_checked(&path, || Err(GfmError::Cancelled))
+                .expect_err("pre-cancelled observer target write should not create the file");
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn fileprovider_observer_probe_target_write_preserves_target_when_cancelled_mid_write() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-fileprovider-observer-target-mid-cancelled-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("Observed.icloud-placeholder");
+        std::fs::write(&path, "existing placeholder").unwrap();
+        let mut checks = 0usize;
+
+        let err = write_fileprovider_observer_probe_target_checked(&path, || {
+            checks += 1;
+            if checks >= 4 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        })
+        .expect_err("cancelled observer target write should stop before replacing the target");
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "existing placeholder"
+        );
+        let leftovers = std::fs::read_dir(&root)
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".Observed.icloud-placeholder")
+            })
+            .count();
+        assert_eq!(leftovers, 0);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fileprovider_observer_probe_target_write_restores_provider_xattrs() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-fileprovider-observer-target-xattrs-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("Observed.icloud-placeholder");
+        std::fs::write(&path, "existing placeholder").unwrap();
+        xattr::set(&path, "com.apple.icloud.placeholder", b"1").unwrap();
+
+        write_fileprovider_observer_probe_target_checked(&path, || Ok(()))
+            .expect("observer target write should replace content and keep provider metadata");
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "observer-probe");
+        assert_eq!(
+            xattr::get(&path, "com.apple.icloud.placeholder")
+                .unwrap()
+                .unwrap(),
+            b"1"
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
