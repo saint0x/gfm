@@ -8870,6 +8870,43 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "search-content-index-set-session-provider-invalidation",
+        "tmp/gfm-fozzy-content-set-search-retry.gfmidx",
+        "set",
+        "tmp/gfm-fozzy-content-set-search-retry-root/Reports/SetContentRetry.md",
+        "downloaded",
+        "evicted",
+        "true",
+        "true",
+        "fileprovider-state-changed",
+        "tmp/gfm-fozzy-content-set-search-retry-first.gfmcontent",
+        "tmp/gfm-fozzy-content-set-search-retry-second.gfmcontent"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "search-content-index-set-session-provider-invalidation",
+        "tmp/gfm-fozzy-content-set-search-retry.gfmidx",
+        "set",
+        "tmp/gfm-fozzy-content-set-search-retry-root/Reports/SetContentRetry.md",
+        "downloaded",
+        "evicted",
+        "true",
+        "true",
+        "fileprovider-state-changed",
+        "tmp/gfm-fozzy-content-set-search-retry-first.gfmcontent",
+        "tmp/gfm-fozzy-content-set-search-retry-second.gfmcontent"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "content-manifest-write",
         "tmp/gfm-fozzy-content-manifest-search-retry.gfmmanifest",
         "hot:tmp/gfm-fozzy-content-set-search-retry-first.gfmcontent",

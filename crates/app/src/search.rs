@@ -8,9 +8,10 @@ use crate::runtime::run_retriable_volume_task_cancellable_with_payload_path;
 use crate::{parse_required_scheduling_pressure, parse_usize_arg, required_path, required_string};
 use gfm_content::Extractor;
 use gfm_index::{
-    Indexer, LiveIndex, SearchLookupBudget, SearchMetadataPosting, SearchPrefixPosting,
-    SearchQuery, SearchRecordColumns, SearchStreamStage, SearchVolumeScope,
-    SidecarIndexQuerySession, SidecarQueryImport, SidecarQuerySessionReport,
+    Indexer, LiveIndex, ProviderMetadataInvalidationReport, SearchLookupBudget,
+    SearchMetadataPosting, SearchPrefixPosting, SearchQuery, SearchRecordColumns,
+    SearchStreamStage, SearchVolumeScope, SidecarIndexQuerySession, SidecarQueryImport,
+    SidecarQuerySessionReport,
 };
 use gfm_jobs::Cancellation;
 use gfm_jobs::Priority;
@@ -294,6 +295,72 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 ));
             }
             let output = run_content_index_set_session(records, content_paths, query, retry_probe)?;
+            for diagnostic in output.diagnostics {
+                eprintln!("{diagnostic}");
+            }
+            for hit in output.hits {
+                print_hit(&hit);
+            }
+        }
+        "search-content-index-set-session-provider-invalidation" => {
+            let records = required_path(
+                args.next(),
+                "search-content-index-set-session-provider-invalidation requires a records path",
+            )?;
+            let query = required_string(
+                args.next(),
+                "search-content-index-set-session-provider-invalidation requires a query string",
+            )?;
+            let provider_path = required_path(
+                args.next(),
+                "search-content-index-set-session-provider-invalidation requires a provider path",
+            )?;
+            let previous_state = required_string(
+                args.next(),
+                "search-content-index-set-session-provider-invalidation requires a previous provider state",
+            )?;
+            let current_state = required_string(
+                args.next(),
+                "search-content-index-set-session-provider-invalidation requires a current provider state",
+            )?;
+            let reindex_metadata = parse_search_bool(
+                &required_string(
+                    args.next(),
+                    "search-content-index-set-session-provider-invalidation requires reindex metadata",
+                )?,
+                "reindex metadata",
+            )?;
+            let state_changed = parse_search_bool(
+                &required_string(
+                    args.next(),
+                    "search-content-index-set-session-provider-invalidation requires state changed",
+                )?,
+                "state changed",
+            )?;
+            let provider_reason = required_string(
+                args.next(),
+                "search-content-index-set-session-provider-invalidation requires a provider reason",
+            )?;
+            let content_paths: Vec<PathBuf> = args.map(PathBuf::from).collect();
+            if content_paths.is_empty() {
+                return Err(gfm_types::GfmError::Format(
+                    "search-content-index-set-session-provider-invalidation requires at least one content archive"
+                        .to_string(),
+                ));
+            }
+            let output = run_content_index_set_session_provider_invalidation(
+                records,
+                content_paths,
+                query,
+                ProviderMetadataInvalidationReport::from_provider_transition(
+                    provider_path,
+                    previous_state,
+                    current_state,
+                    reindex_metadata,
+                    state_changed,
+                    provider_reason,
+                ),
+            )?;
             for diagnostic in output.diagnostics {
                 eprintln!("{diagnostic}");
             }
@@ -2233,6 +2300,90 @@ fn run_content_index_set_session(
     )
 }
 
+fn run_content_index_set_session_provider_invalidation(
+    records: PathBuf,
+    content_paths: Vec<PathBuf>,
+    query: String,
+    provider: ProviderMetadataInvalidationReport,
+) -> Result<ContentIndexSessionOutput> {
+    const WORKER: &str = "content index set session provider invalidation";
+    let volume_reports =
+        preflight_content_index_set_volume_access(&records, &content_paths, WORKER)?;
+    let volume = volume_reports.first_volume();
+    run_retriable_volume_task_cancellable_with_payload_path(
+        volume,
+        Priority::Visible,
+        WORKER,
+        records.clone(),
+        move |cancellation| {
+            let records = records.clone();
+            let content_paths = content_paths.clone();
+            let query = query.clone();
+            let provider = provider.clone();
+            let _access =
+                preflight_content_index_set_search_access_checked(&volume_reports, WORKER, || {
+                    cancellation.check()
+                })?;
+            cancellation.check()?;
+            let session = Indexer::default().load_content_set_query_session_cancellable(
+                &records,
+                &content_paths,
+                &cancellation,
+            )?;
+            let parsed = SearchQuery::parse_cancellable(&query, &cancellation)?;
+            let first = session.search_structured_with_budget_cancellable(
+                &parsed,
+                50,
+                SearchLookupBudget::default(),
+                &cancellation,
+            )?;
+            let mut diagnostics = vec![format_content_session_report(
+                "content-session-provider-first",
+                content_paths.len(),
+                &first,
+            )];
+            let mut hits = first.search.hits;
+
+            cancellation.check()?;
+            let second = session.search_structured_with_budget_cancellable(
+                &parsed,
+                50,
+                SearchLookupBudget::default(),
+                &cancellation,
+            )?;
+            diagnostics.push(format_content_session_report(
+                "content-session-provider-second",
+                content_paths.len(),
+                &second,
+            ));
+            hits.extend(second.search.hits);
+
+            cancellation.check()?;
+            diagnostics.push(provider.as_tsv());
+            diagnostics.push(
+                session
+                    .apply_provider_metadata_invalidation(&provider)
+                    .as_tsv(),
+            );
+
+            cancellation.check()?;
+            let third = session.search_structured_with_budget_cancellable(
+                &parsed,
+                50,
+                SearchLookupBudget::default(),
+                &cancellation,
+            )?;
+            diagnostics.push(format_content_session_report(
+                "content-session-provider-third",
+                content_paths.len(),
+                &third,
+            ));
+            hits.extend(third.search.hits);
+            Ok(ContentIndexSessionOutput { diagnostics, hits })
+        },
+    )
+}
+
 fn run_content_index_manifest_search(
     records: PathBuf,
     manifest: PathBuf,
@@ -3355,6 +3506,16 @@ fn print_empty_sidecar_session_report(label: &str, budget: SearchLookupBudget) {
 
 fn volume_scope_is_empty(scope: &SearchVolumeScope) -> bool {
     matches!(scope, SearchVolumeScope::Only(volumes) if volumes.is_empty())
+}
+
+fn parse_search_bool(value: &str, name: &str) -> Result<bool> {
+    match value {
+        "true" | "1" | "yes" => Ok(true),
+        "false" | "0" | "no" => Ok(false),
+        other => Err(GfmError::Format(format!(
+            "invalid {name} `{other}`, expected true or false"
+        ))),
+    }
 }
 
 fn highlight_snippet(snippet: &gfm_types::SearchSnippet) -> String {

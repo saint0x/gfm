@@ -13469,6 +13469,56 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
         "{session_stderr}"
     );
 
+    let provider_path = root.join("left.md");
+    let provider_session_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "search-content-index-set-session-provider-invalidation",
+            records.to_str().unwrap(),
+            "setneedle",
+            provider_path.to_str().unwrap(),
+            "downloaded",
+            "evicted",
+            "true",
+            "true",
+            "fileprovider-state-changed",
+            first_content.to_str().unwrap(),
+            second_content.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        provider_session_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&provider_session_output.stderr)
+    );
+    let provider_session_stdout = String::from_utf8(provider_session_output.stdout).unwrap();
+    assert!(
+        provider_session_stdout.contains("left.md"),
+        "{provider_session_stdout}"
+    );
+    assert!(
+        provider_session_stdout.contains("right.md"),
+        "{provider_session_stdout}"
+    );
+    let provider_session_stderr = String::from_utf8(provider_session_output.stderr).unwrap();
+    assert!(
+        provider_session_stderr.contains(
+            "content-session-provider-second\tcontent-archives=2\tcontent-keys=1\trecords-loaded=2"
+        ) && provider_session_stderr.contains(
+            "provider-metadata-invalidation\t"
+        ) && provider_session_stderr.contains(
+            "\treindex-metadata=true\tschedule-metadata-update=true\tinvalidate-query-cache=true\t"
+        ) && provider_session_stderr.contains(
+            "content-query-cache-invalidation\t"
+        ) && provider_session_stderr.contains(
+            "\tinvalidated=true\tresult-entries-before=1\tresult-entries-after=0\t"
+        ) && provider_session_stderr.contains(
+            "content-session-provider-third\tcontent-archives=2\tcontent-keys=1\trecords-loaded=2"
+        ) && provider_session_stderr.contains("\tposting-cache-hits=1\tposting-cache-misses=0")
+            && provider_session_stderr.contains("\tresult-cache-hits=0\tresult-cache-misses=1"),
+        "{provider_session_stderr}"
+    );
+
     let manifest_session_search_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
             "search-content-index-manifest-session",
