@@ -33,6 +33,13 @@ impl SearchVolumeScope {
             Self::Only(volumes) => volumes.contains(&volume),
         }
     }
+
+    pub(crate) fn single_volume(&self) -> Option<VolumeId> {
+        match self {
+            Self::Only(volumes) if volumes.len() == 1 => volumes.first().copied(),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -324,6 +331,22 @@ impl ShardedSearchIndex {
                 lookup: SearchLookupTelemetry::default(),
             });
         }
+        if let Some(volume) = scope.single_volume() {
+            let Some(shard) = self.shards.get(&volume) else {
+                return Ok(SearchQueryReport {
+                    hits: Vec::new(),
+                    lookup: SearchLookupTelemetry::default(),
+                });
+            };
+            let scoped_lookup = VolumeScopedSearchLookup { lookup, volume };
+            return shard.query_structured_with_lookup_budget_cancellable(
+                query,
+                limit,
+                &scoped_lookup,
+                budget,
+                cancellation,
+            );
+        }
         let shards = self.scoped_shards(scope);
         if shards.is_empty() {
             return Ok(SearchQueryReport {
@@ -431,6 +454,12 @@ impl ShardedSearchIndex {
         cancellation.check()?;
         if query.is_empty() || limit == 0 || self.shards.is_empty() {
             return Ok(Vec::new());
+        }
+        if let Some(volume) = scope.single_volume() {
+            let Some(shard) = self.shards.get(&volume) else {
+                return Ok(Vec::new());
+            };
+            return shard.stream_structured_cancellable(query, limit, cancellation);
         }
         let shards = self.scoped_shards(scope);
         if shards.is_empty() {

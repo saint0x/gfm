@@ -2106,6 +2106,20 @@ fn sharded_search_volume_scope_queries_only_admitted_volumes() {
 }
 
 #[test]
+fn search_volume_scope_direct_dispatch_is_only_for_exactly_one_volume() {
+    assert_eq!(
+        SearchVolumeScope::only([VolumeId(7)]).single_volume(),
+        Some(VolumeId(7))
+    );
+    assert_eq!(SearchVolumeScope::all().single_volume(), None);
+    assert_eq!(SearchVolumeScope::only([]).single_volume(), None);
+    assert_eq!(
+        SearchVolumeScope::only([VolumeId(1), VolumeId(2)]).single_volume(),
+        None
+    );
+}
+
+#[test]
 fn sharded_search_volume_scope_uses_volume_specific_sidecar_lookup() {
     let mut index = ShardedSearchIndex::new();
     index.insert_with_columns_deferred_sidecars(
