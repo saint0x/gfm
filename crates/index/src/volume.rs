@@ -633,6 +633,7 @@ pub struct VolumeInvalidationReport {
     pub current_mount_status: Option<String>,
     pub current_mount_reason: Option<String>,
     pub api_status_changed: bool,
+    pub filesystem_identity_changed: bool,
     pub invalidate_sidebar: bool,
     pub invalidate_operation_policy: bool,
     pub invalidate_index_admission: bool,
@@ -686,6 +687,7 @@ pub struct VolumeEventIndexInvalidationReport {
     pub case_sensitive_changed: bool,
     pub api_status_changed: bool,
     pub stable_identity_changed: bool,
+    pub filesystem_identity_changed: bool,
     pub filesystem_signature_changed: bool,
     pub invalidate_index_admission: bool,
     pub rescan_index: bool,
@@ -743,6 +745,8 @@ impl VolumeInvalidationReport {
                     &previous_mount_status,
                     &current_mount_status,
                 );
+        let filesystem_identity_changed =
+            filesystem_identity_changed(previous.as_ref(), current.as_ref());
 
         let (
             invalidate_sidebar,
@@ -913,6 +917,15 @@ impl VolumeInvalidationReport {
                 true,
                 "volume-api-status-changed",
             ),
+            (Some(previous), Some(_)) if filesystem_identity_changed => (
+                true,
+                true,
+                true,
+                true,
+                previous.mount_state == IndexMountState::Mounted,
+                true,
+                "volume-filesystem-identity-changed",
+            ),
             (Some(previous), Some(current))
                 if known_optional_value_lost_or_changed(
                     &previous.filesystem_signature,
@@ -974,6 +987,7 @@ impl VolumeInvalidationReport {
             current_mount_status,
             current_mount_reason,
             api_status_changed,
+            filesystem_identity_changed,
             invalidate_sidebar,
             invalidate_operation_policy,
             invalidate_index_admission,
@@ -1061,6 +1075,8 @@ impl VolumeEventIndexInvalidationReport {
             &previous.and_then(|volume| volume.filesystem_signature.clone()),
             &current.and_then(|volume| volume.filesystem_signature.clone()),
         );
+        let filesystem_identity_changed =
+            filesystem_identity_changed(previous.as_ref(), current.as_ref());
         let read_only_changed = known_optional_value_lost_or_changed(
             &previous.and_then(|volume| volume.read_only),
             &current.and_then(|volume| volume.read_only),
@@ -1104,6 +1120,7 @@ impl VolumeEventIndexInvalidationReport {
             || current.is_some()
             || source_invalidates_index_admission;
         let descriptor_changed = stable_identity_changed
+            || filesystem_identity_changed
             || filesystem_signature_changed
             || read_only_changed
             || writable_changed
@@ -1150,6 +1167,9 @@ impl VolumeEventIndexInvalidationReport {
             }
             IndexVolumeEventKind::DescriptionChanged if api_status_changed => {
                 "volume-event-api-status-changed"
+            }
+            IndexVolumeEventKind::DescriptionChanged if filesystem_identity_changed => {
+                "volume-event-filesystem-identity-changed"
             }
             IndexVolumeEventKind::DescriptionChanged if filesystem_signature_changed => {
                 "volume-event-filesystem-changed"
@@ -1213,6 +1233,7 @@ impl VolumeEventIndexInvalidationReport {
             case_sensitive_changed,
             api_status_changed,
             stable_identity_changed,
+            filesystem_identity_changed,
             filesystem_signature_changed,
             invalidate_index_admission,
             rescan_index,
@@ -1300,6 +1321,33 @@ impl VolumeEventIndexInvalidationReport {
 
 fn known_optional_value_lost_or_changed<T: Eq>(previous: &Option<T>, current: &Option<T>) -> bool {
     matches!((previous, current), (Some(_), None) | (Some(_), Some(_))) && previous != current
+}
+
+fn filesystem_identity_changed(
+    previous: Option<&&IndexVolumeDescriptor>,
+    current: Option<&&IndexVolumeDescriptor>,
+) -> bool {
+    let previous = previous.copied();
+    let current = current.copied();
+    known_optional_value_lost_or_changed(
+        &previous.and_then(|volume| volume.filesystem.clone()),
+        &current.and_then(|volume| volume.filesystem.clone()),
+    ) || known_optional_value_lost_or_changed(
+        &previous.and_then(|volume| volume.volume_uuid.clone()),
+        &current.and_then(|volume| volume.volume_uuid.clone()),
+    ) || known_optional_value_lost_or_changed(
+        &previous.and_then(|volume| volume.apfs_container_uuid.clone()),
+        &current.and_then(|volume| volume.apfs_container_uuid.clone()),
+    ) || known_optional_value_lost_or_changed(
+        &previous.and_then(|volume| volume.apfs_role.clone()),
+        &current.and_then(|volume| volume.apfs_role.clone()),
+    ) || known_optional_value_lost_or_changed(
+        &previous.and_then(|volume| volume.media_uuid.clone()),
+        &current.and_then(|volume| volume.media_uuid.clone()),
+    ) || known_optional_value_lost_or_changed(
+        &previous.and_then(|volume| volume.resource_uuid.clone()),
+        &current.and_then(|volume| volume.resource_uuid.clone()),
+    )
 }
 
 fn format_optional_bool(value: Option<bool>) -> String {
@@ -1487,5 +1535,59 @@ mod tests {
         let tsv = report.as_tsv();
         assert!(tsv.contains("\tprevious-removable=false\t"), "{tsv}");
         assert!(tsv.contains("\tcurrent-removable=true\t"), "{tsv}");
+    }
+
+    #[test]
+    fn volume_event_index_invalidation_uses_structured_filesystem_identity() {
+        let previous = external_volume("/Volumes/Data")
+            .with_filesystem("apfs")
+            .with_apfs_container_uuid("OLD-CONTAINER")
+            .with_media_uuid("MEDIA")
+            .with_resource_uuid("RESOURCE")
+            .with_filesystem_signature("legacy-signature");
+        let current = external_volume("/Volumes/Data")
+            .with_filesystem("apfs")
+            .with_apfs_container_uuid("NEW-CONTAINER")
+            .with_media_uuid("MEDIA")
+            .with_resource_uuid("RESOURCE")
+            .with_filesystem_signature("legacy-signature");
+
+        let report = VolumeEventIndexInvalidationReport::from_event(
+            IndexVolumeEventKind::DescriptionChanged,
+            Some(PathBuf::from("/Volumes/Data")),
+            Some(&previous),
+            Some(&current),
+            false,
+            false,
+        );
+
+        assert!(report.filesystem_identity_changed);
+        assert!(!report.filesystem_signature_changed);
+        assert!(report.invalidate_index_admission);
+        assert!(report.rescan_index);
+        assert!(report.cancel_index_jobs);
+        assert_eq!(report.reason, "volume-event-filesystem-identity-changed");
+    }
+
+    #[test]
+    fn volume_invalidation_uses_structured_filesystem_identity() {
+        let previous = external_volume("/Volumes/Data")
+            .with_filesystem("apfs")
+            .with_volume_uuid("OLD-VOLUME")
+            .with_apfs_role("data")
+            .with_filesystem_signature("legacy-signature");
+        let current = external_volume("/Volumes/Data")
+            .with_filesystem("apfs")
+            .with_volume_uuid("NEW-VOLUME")
+            .with_apfs_role("data")
+            .with_filesystem_signature("legacy-signature");
+
+        let report = VolumeInvalidationReport::evaluate(Some(&previous), Some(&current));
+
+        assert!(report.filesystem_identity_changed);
+        assert!(report.invalidate_index_admission);
+        assert!(report.rescan_index);
+        assert!(report.cancel_index_jobs);
+        assert_eq!(report.reason, "volume-filesystem-identity-changed");
     }
 }
