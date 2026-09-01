@@ -2230,6 +2230,48 @@ fn single_shard_search_dispatches_directly_with_query_report() {
 }
 
 #[test]
+fn single_shard_search_direct_dispatch_keeps_volume_scoped_sidecar_lookup() {
+    let mut index = ShardedSearchIndex::new();
+    index.insert_with_columns_deferred_sidecars(
+        volume_record(7, 1, "/Volumes/Only/original.md", "original.md"),
+        SearchRecordColumns {
+            id: FileId::new(VolumeId(7), 1),
+            name: "project-alpha.md".to_string(),
+            path: "/Volumes/Only/project-alpha.md".to_string(),
+            extension: Some("md".to_string()),
+            tags: Vec::new(),
+            comment: None,
+        },
+    );
+    let lookup = TrackingVolumeLookup {
+        prefix_ids: vec![FileId::new(VolumeId(7), 1), FileId::new(VolumeId(9), 9)],
+        global_prefix_calls: AtomicUsize::new(0),
+        volume_prefix_calls: AtomicUsize::new(0),
+        global_fuzzy_calls: AtomicUsize::new(0),
+        bounded_fuzzy_calls: AtomicUsize::new(0),
+    };
+
+    let report = index
+        .query_structured_with_lookup_budget_cancellable(
+            &SearchQuery::parse("proj"),
+            10,
+            &lookup,
+            SearchLookupBudget::default(),
+            &Cancellation::default(),
+        )
+        .unwrap();
+
+    assert_eq!(report.hits.len(), 1);
+    assert_eq!(
+        report.hits[0].record.path,
+        PathBuf::from("/Volumes/Only/original.md")
+    );
+    assert_eq!(lookup.global_prefix_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(lookup.volume_prefix_calls.load(Ordering::SeqCst), 1);
+    assert!(lookup.bounded_fuzzy_calls.load(Ordering::SeqCst) > 0);
+}
+
+#[test]
 fn sharded_prefix_sidecar_import_partitions_ids_by_volume() {
     let mut index = ShardedSearchIndex::new();
     index.insert_with_columns_deferred_sidecars(

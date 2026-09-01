@@ -331,6 +331,23 @@ impl ShardedSearchIndex {
                 lookup: SearchLookupTelemetry::default(),
             });
         }
+        if matches!(scope, SearchVolumeScope::All) && self.shards.len() == 1 {
+            let (volume, shard) = self
+                .shards
+                .first_key_value()
+                .expect("non-empty single-shard index must have a first shard");
+            let scoped_lookup = VolumeScopedSearchLookup {
+                lookup,
+                volume: *volume,
+            };
+            return shard.query_structured_with_lookup_budget_cancellable(
+                query,
+                limit,
+                &scoped_lookup,
+                budget,
+                cancellation,
+            );
+        }
         if let Some(volume) = scope.single_volume() {
             let Some(shard) = self.shards.get(&volume) else {
                 return Ok(SearchQueryReport {
@@ -454,6 +471,13 @@ impl ShardedSearchIndex {
         cancellation.check()?;
         if query.is_empty() || limit == 0 || self.shards.is_empty() {
             return Ok(Vec::new());
+        }
+        if matches!(scope, SearchVolumeScope::All) && self.shards.len() == 1 {
+            let (_, shard) = self
+                .shards
+                .first_key_value()
+                .expect("non-empty single-shard index must have a first shard");
+            return shard.stream_structured_cancellable(query, limit, cancellation);
         }
         if let Some(volume) = scope.single_volume() {
             let Some(shard) = self.shards.get(&volume) else {
