@@ -1,7 +1,8 @@
 use crate::access::{
     preflight_access_scope_checked, preflight_access_scope_checked_with_volume_report,
     preflight_volume_access_scope_with_report, volume_api_status_context,
-    worker_admission_with_volume_gate_checked, worker_admissions_with_shared_volume_report_checked,
+    worker_admission_blocked_by_volume, worker_admission_with_volume_gate_checked,
+    worker_admission_with_volume_report, worker_admissions_with_shared_volume_report_checked,
     worker_admissions_with_volume_report, ScopedAccessGuard, WorkerAdmissionRequest,
 };
 use crate::volume::{resolve_volume_event_path, volume_event_invalidation_for_descriptor};
@@ -1976,6 +1977,10 @@ impl PreviewAccessReport {
         )
     }
 
+    fn record_after_access_checked(&self, cancellation: &Cancellation) -> Result<FileRecord> {
+        record_for_path_checked(&self.path, None, false, || cancellation.check())
+    }
+
     fn volume(&self) -> Option<VolumeId> {
         preview_volume_id_from_report(&self.volume_path, &self.volume_report)
     }
@@ -3105,7 +3110,7 @@ fn run_adaptive_quicklook_session(
                 cancellation.cancel();
             }
             cancellation.check()?;
-            let record = access_report.record_checked(WORKER, &cancellation)?;
+            let record = access_report.record_after_access_checked(&cancellation)?;
             cancellation.check()?;
             let cloud =
                 fileprovider_materialization_for_preview(&access_report.path, &cancellation)?;
@@ -3146,6 +3151,7 @@ fn run_adaptive_thumbnail_generation(
     const VOLUME_WORKER: &str = "adaptive thumbnail generation volume";
     const WORKER: &str = "adaptive thumbnail generation";
     let access_report = PreviewAccessReport::new_checked(path, || Ok(()))?;
+    preflight_preview_input_denial_before_runtime(&access_report, WORKER)?;
     let volume_access_report = access_report.clone();
     let payload_path = access_report.path.clone();
     run_preview_contract_adaptive_with_volume_and_payload_path(
@@ -3164,7 +3170,7 @@ fn run_adaptive_thumbnail_generation(
                 cancellation.cancel();
             }
             cancellation.check()?;
-            let record = access_report.record_checked(WORKER, &cancellation)?;
+            let record = access_report.record_after_access_checked(&cancellation)?;
             cancellation.check()?;
             let cloud =
                 fileprovider_materialization_for_preview(&access_report.path, &cancellation)?;
@@ -3196,6 +3202,24 @@ fn run_adaptive_thumbnail_generation(
             )
         },
     )
+}
+
+fn preflight_preview_input_denial_before_runtime(
+    access_report: &PreviewAccessReport,
+    worker: &str,
+) -> Result<()> {
+    let admission = worker_admission_with_volume_report(
+        &access_report.path,
+        AccessIntent::Preview,
+        worker,
+        &access_report.volume_report,
+    );
+    if admission.can_touch_filesystem || worker_admission_blocked_by_volume(&admission) {
+        return Ok(());
+    }
+    access_report
+        .access_checked(worker, || Ok(()))
+        .map(|_access| ())
 }
 
 fn fileprovider_materialization_for_preview(

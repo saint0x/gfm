@@ -18608,6 +18608,50 @@ fn deferred_adaptive_thumbnail_persists_runtime_payload_and_progress_from_binary
 }
 
 #[test]
+fn adaptive_thumbnail_refuses_missing_target_before_runtime_record_from_binary() {
+    let root = unique_temp_dir("gfm-cli-runtime-missing-thumbnail-root");
+    let image = root.join("Missing.png");
+    let catalog = unique_temp_path("gfm-cli-runtime-missing-thumbnail", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-runtime-missing-thumbnail", "gfmprogress");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "thumbnail-generation-adaptive",
+            image.to_str().unwrap(),
+            "saturated",
+            "critical",
+            "low",
+            "active",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("thumbnail-generation\t"), "{stdout}");
+    assert!(
+        stderr.contains(
+            "adaptive thumbnail generation access blocked: path is not present on this host"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!(
+            "security-worker-admission\tworker=adaptive thumbnail generation\tpath={}",
+            image.display()
+        )),
+        "{stderr}"
+    );
+    assert!(!catalog.exists());
+    assert!(!progress.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn deferred_adaptive_thumbnail_does_not_touch_unreachable_target_from_binary() {
     let root = unique_temp_dir("gfm-cli-runtime-deferred-thumbnail-unreachable-root");
     let image = root.join("Deferred.png");
