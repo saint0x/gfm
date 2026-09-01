@@ -16848,6 +16848,47 @@ fn ui_progress_surfaces_refuse_unreachable_store_before_reading_from_binary() {
 }
 
 #[test]
+fn ui_payload_catalog_refuses_unreachable_volume_before_metadata_probe_from_binary() {
+    let root = unique_temp_dir("gfm-cli-ui-payload-catalog-unreachable");
+    let progress_root = unique_temp_dir("gfm-cli-ui-payload-progress-local");
+    let progress = progress_root.join("jobs.gfmprogress");
+    let catalog = root.join(format!(
+        "{}.gfmjobs",
+        "ui-payload-catalog-unavailable".repeat(16)
+    ));
+    fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    fs::write(
+        &progress,
+        "gfm-job-progress-v1\nprogress\t2\tvisible\tvisible\tcopy file\t-\trunning\t42\t100\tcopying\t123\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .arg("ui-contract")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("operation-progress\t"), "{stdout}");
+    assert!(
+        stderr.contains("ui payload catalog volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("ui payload catalog metadata unavailable"),
+        "{stderr}"
+    );
+    assert!(!catalog.exists());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(progress_root).unwrap();
+}
+
+#[test]
 fn reports_retry_backoff_plan_from_binary() {
     let transient = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["jobs-retry-plan", "3", "1", "temporary", "busy"])

@@ -1271,7 +1271,7 @@ fn read_ui_restorable_progress_snapshots(path: &Path) -> Result<Vec<JobProgressS
     read_ui_progress_snapshots_with(path, JobProgressStore::restorable)
 }
 
-fn read_ui_payload_records(path: &Path) -> Result<HashMap<JobId, JobPayloadRecord>> {
+fn read_optional_ui_payload_records(path: &Path) -> Result<HashMap<JobId, JobPayloadRecord>> {
     const WORKER: &str = "ui payload catalog";
     let access_report =
         InterfaceAccessReport::new_checked(path.to_path_buf(), AccessIntent::Read, || Ok(()))?;
@@ -1283,6 +1283,20 @@ fn read_ui_payload_records(path: &Path) -> Result<HashMap<JobId, JobPayloadRecor
         Priority::Visible,
         WORKER,
         move |cancellation| {
+            cancellation.check()?;
+            match fs::metadata(&path) {
+                Ok(metadata) if metadata.is_file() => {}
+                Ok(_) => return Ok(HashMap::new()),
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                    return Ok(HashMap::new());
+                }
+                Err(err) => {
+                    return Err(GfmError::io(
+                        &path,
+                        format!("{WORKER} metadata unavailable: {err}"),
+                    ))
+                }
+            }
             cancellation.check()?;
             let _access = access_report.access_checked(WORKER, || cancellation.check())?;
             cancellation.check()?;
@@ -1296,19 +1310,6 @@ fn read_ui_payload_records(path: &Path) -> Result<HashMap<JobId, JobPayloadRecor
                 })
         },
     )
-}
-
-fn read_optional_ui_payload_records(path: &Path) -> Result<HashMap<JobId, JobPayloadRecord>> {
-    const WORKER: &str = "ui payload catalog";
-    match fs::metadata(path) {
-        Ok(metadata) if metadata.is_file() => read_ui_payload_records(path),
-        Ok(_) => Ok(HashMap::new()),
-        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(HashMap::new()),
-        Err(err) => Err(GfmError::io(
-            path,
-            format!("{WORKER} metadata unavailable: {err}"),
-        )),
-    }
 }
 
 fn read_ui_progress_snapshots_with(
