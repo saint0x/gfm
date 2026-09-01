@@ -49,7 +49,12 @@ pub fn correlate_rename_checked(
     if removed_records.is_empty() {
         let record = gfm_fs::record_for_path_checked(to, None, false, &mut check_control)?;
         check_control()?;
+        let inserted_path = record.path.clone();
         index.insert(record);
+        if let Err(err) = check_control() {
+            index.remove_path(&inserted_path);
+            return Err(err);
+        }
         return Ok(RenameCorrelationReport {
             from: from.to_path_buf(),
             to: to.to_path_buf(),
@@ -101,8 +106,19 @@ pub fn correlate_rename_checked(
     }
 
     let inserted = moved_records.len();
+    let inserted_paths = moved_records
+        .iter()
+        .map(|record| record.path.clone())
+        .collect::<Vec<_>>();
     for moved in moved_records {
         index.insert(moved);
+    }
+    if let Err(err) = check_control() {
+        for path in inserted_paths {
+            index.remove_path(path);
+        }
+        restore_removed(index, removed_records);
+        return Err(err);
     }
 
     Ok(RenameCorrelationReport {

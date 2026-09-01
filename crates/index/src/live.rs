@@ -899,32 +899,39 @@ impl LiveIndex {
         event: &FileEvent,
         cancellation: &Cancellation,
     ) -> Result<UpdateOutcome> {
-        cancellation.check()?;
+        self.apply_event_checked(event, || cancellation.check())
+    }
+
+    pub(crate) fn apply_event_checked(
+        &mut self,
+        event: &FileEvent,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<UpdateOutcome> {
+        check_control()?;
         match &event.kind {
             FileEventKind::Create | FileEventKind::Other => {
-                self.upsert_path_cancellable(&event.path, cancellation)
+                self.upsert_path_checked(&event.path, &mut check_control)
             }
             FileEventKind::Metadata | FileEventKind::Modify => {
-                let report = self.apply_metadata_update_cancellable(&event.path, cancellation)?;
+                let report = self.apply_metadata_update_checked(&event.path, &mut check_control)?;
                 Ok(UpdateOutcome::MetadataUpdated {
                     changed: report.changed.len(),
                 })
             }
             FileEventKind::Remove => {
-                cancellation.check()?;
-                let removed = self.index.remove_subtree(&event.path).len();
-                cancellation.check()?;
+                let removed =
+                    remove_subtree_transactional(&mut self.index, &event.path, &mut check_control)?;
                 Ok(UpdateOutcome::Removed { records: removed })
             }
             FileEventKind::Rename { from, to } => {
-                let report = self.apply_rename_cancellable(from, to, cancellation)?;
+                let report = self.apply_rename_checked(from, to, &mut check_control)?;
                 Ok(UpdateOutcome::Renamed {
                     removed: report.removed,
                     inserted: report.inserted,
                 })
             }
             FileEventKind::Rescan => {
-                cancellation.check()?;
+                check_control()?;
                 Ok(UpdateOutcome::NeedsRescan)
             }
         }
@@ -940,7 +947,16 @@ impl LiveIndex {
         to: &Path,
         cancellation: &Cancellation,
     ) -> Result<RenameCorrelationReport> {
-        crate::correlate_rename_checked(&mut self.index, from, to, || cancellation.check())
+        self.apply_rename_checked(from, to, || cancellation.check())
+    }
+
+    pub(crate) fn apply_rename_checked(
+        &mut self,
+        from: &Path,
+        to: &Path,
+        check_control: impl FnMut() -> Result<()>,
+    ) -> Result<RenameCorrelationReport> {
+        crate::correlate_rename_checked(&mut self.index, from, to, check_control)
     }
 
     pub fn apply_metadata_update(&mut self, path: &Path) -> Result<MetadataUpdateReport> {
@@ -952,32 +968,38 @@ impl LiveIndex {
         path: &Path,
         cancellation: &Cancellation,
     ) -> Result<MetadataUpdateReport> {
-        cancellation.check()?;
+        self.apply_metadata_update_checked(path, || cancellation.check())
+    }
+
+    pub(crate) fn apply_metadata_update_checked(
+        &mut self,
+        path: &Path,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<MetadataUpdateReport> {
+        check_control()?;
         let previous = self.index.get_path(path).cloned();
-        cancellation.check()?;
+        check_control()?;
         let current = gfm_fs::record_for_path_checked(
             path,
             previous.as_ref().and_then(|r| r.parent),
             false,
-            || cancellation.check(),
+            &mut check_control,
         )?;
-        cancellation.check()?;
+        check_control()?;
         let report = MetadataUpdateReport::from_records(path, previous.as_ref(), &current);
-        self.index.insert(current);
-        cancellation.check()?;
+        insert_record_transactional(&mut self.index, current, &mut check_control)?;
         Ok(report)
     }
 
-    fn upsert_path_cancellable(
+    fn upsert_path_checked(
         &mut self,
         path: &Path,
-        cancellation: &Cancellation,
+        mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<UpdateOutcome> {
-        cancellation.check()?;
-        let record = gfm_fs::record_for_path_checked(path, None, false, || cancellation.check())?;
-        cancellation.check()?;
-        self.index.insert(record);
-        cancellation.check()?;
+        check_control()?;
+        let record = gfm_fs::record_for_path_checked(path, None, false, &mut check_control)?;
+        check_control()?;
+        insert_record_transactional(&mut self.index, record, &mut check_control)?;
         Ok(UpdateOutcome::Upserted)
     }
 }
@@ -989,6 +1011,61 @@ pub enum UpdateOutcome {
     Removed { records: usize },
     Renamed { removed: usize, inserted: usize },
     NeedsRescan,
+}
+
+pub(crate) fn insert_record_transactional(
+    index: &mut ShardedSearchIndex,
+    record: FileRecord,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    let inserted_path = record.path.clone();
+    let inserted_id = record.id;
+    let replaced_path = index.remove_path(&inserted_path);
+    let replaced_id = if replaced_path
+        .as_ref()
+        .is_some_and(|record| record.id == inserted_id)
+    {
+        None
+    } else {
+        index.remove(inserted_id)
+    };
+
+    index.insert(record);
+    if let Err(err) = check_control() {
+        index.remove_path(&inserted_path);
+        restore_record(index, replaced_id);
+        restore_record(index, replaced_path);
+        return Err(err);
+    }
+
+    Ok(())
+}
+
+pub(crate) fn remove_subtree_transactional(
+    index: &mut ShardedSearchIndex,
+    root: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<usize> {
+    check_control()?;
+    let removed = index.remove_subtree(root);
+    let count = removed.len();
+    if let Err(err) = check_control() {
+        restore_records(index, removed);
+        return Err(err);
+    }
+    Ok(count)
+}
+
+fn restore_record(index: &mut ShardedSearchIndex, record: Option<FileRecord>) {
+    if let Some(record) = record {
+        index.insert(record);
+    }
+}
+
+fn restore_records(index: &mut ShardedSearchIndex, records: Vec<FileRecord>) {
+    for record in records {
+        index.insert(record);
+    }
 }
 
 fn insert_mmap_record_with_columns_checked(

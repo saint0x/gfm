@@ -15,6 +15,7 @@ use gfm_types::{
 };
 use std::collections::HashSet;
 use std::fs;
+use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[test]
@@ -1543,6 +1544,56 @@ fn live_index_metadata_update_cancellable_stops_before_hydrating_record() {
         1
     );
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn live_index_transactional_insert_rolls_back_new_record_after_mutation_cancel() {
+    let mut index = gfm_search::ShardedSearchIndex::new();
+    let record = volume_file_record(1, 10, "/tmp/gfm/Needle.txt", "Needle.txt");
+
+    let result =
+        crate::live::insert_record_transactional(&mut index, record, || Err(GfmError::Cancelled));
+
+    assert_eq!(result, Err(GfmError::Cancelled));
+    assert!(index.query("needle", 5).is_empty());
+}
+
+#[test]
+fn live_index_transactional_insert_restores_replaced_record_after_mutation_cancel() {
+    let mut index = gfm_search::ShardedSearchIndex::new();
+    let original = volume_file_record(1, 10, "/tmp/gfm/Original.txt", "Original.txt");
+    let replacement = volume_file_record(1, 10, "/tmp/gfm/Renamed.txt", "Renamed.txt");
+    index.insert(original);
+
+    let result = crate::live::insert_record_transactional(&mut index, replacement, || {
+        Err(GfmError::Cancelled)
+    });
+
+    assert_eq!(result, Err(GfmError::Cancelled));
+    assert_eq!(index.query("original", 5).len(), 1);
+    assert!(index.query("renamed", 5).is_empty());
+}
+
+#[test]
+fn live_index_transactional_remove_subtree_restores_records_after_mutation_cancel() {
+    let mut index = gfm_search::ShardedSearchIndex::new();
+    index.insert(volume_file_record(1, 10, "/tmp/gfm/Project", "Project"));
+    index.insert(volume_file_record(
+        1,
+        11,
+        "/tmp/gfm/Project/Needle.md",
+        "Needle.md",
+    ));
+
+    let result = crate::live::remove_subtree_transactional(
+        &mut index,
+        Path::new("/tmp/gfm/Project"),
+        || Err(GfmError::Cancelled),
+    );
+
+    assert_eq!(result, Err(GfmError::Cancelled));
+    assert!(index.get_path("/tmp/gfm/Project").is_some());
+    assert!(index.get_path("/tmp/gfm/Project/Needle.md").is_some());
 }
 
 #[test]
@@ -3096,6 +3147,54 @@ fn rename_correlation_cancel_during_moved_record_build_restores_original_records
     assert!(matches!(result, Err(GfmError::Cancelled)));
     assert_eq!(index.len(), before);
     assert_eq!(index.query("needle", 5).len(), 1);
+    assert!(index.query("newproject", 5).is_empty());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn rename_correlation_cancel_after_insert_restores_original_records() {
+    let root = unique_temp_dir("gfm-rename-cancel-after-insert-root");
+    let from = root.join("OldProject");
+    let to = root.join("NewProject");
+    let nested = from.join("Nested");
+    fs::create_dir_all(&nested).unwrap();
+    fs::write(nested.join("Needle.md"), "first").unwrap();
+
+    let snapshot = Indexer::default().build(&root).unwrap();
+    fs::rename(&from, &to).unwrap();
+
+    let mut success_index = gfm_search::ShardedSearchIndex::new();
+    for record in snapshot.records.iter().cloned() {
+        success_index.insert(record);
+    }
+    let mut success_checks = 0usize;
+    correlate_rename_checked(&mut success_index, &from, &to, || {
+        success_checks += 1;
+        Ok(())
+    })
+    .unwrap();
+    assert!(!success_index.query("newproject", 5).is_empty());
+
+    let mut index = gfm_search::ShardedSearchIndex::new();
+    for record in snapshot.records.iter().cloned() {
+        index.insert(record);
+    }
+    let before = index.len();
+    let mut checks = 0usize;
+    let result = correlate_rename_checked(&mut index, &from, &to, || {
+        checks += 1;
+        if checks == success_checks {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert_eq!(result, Err(GfmError::Cancelled));
+    assert_eq!(checks, success_checks);
+    assert_eq!(index.len(), before);
+    assert_eq!(index.query("needle", 5).len(), 1);
+    assert!(!index.query("oldproject", 5).is_empty());
     assert!(index.query("newproject", 5).is_empty());
     fs::remove_dir_all(root).unwrap();
 }
