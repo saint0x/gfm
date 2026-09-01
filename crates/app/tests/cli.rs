@@ -9803,6 +9803,30 @@ fn extract_report_refuses_missing_path_before_extraction_from_binary() {
 }
 
 #[test]
+fn extract_report_surfaces_unavailable_probe_before_extraction_from_binary() {
+    let path = std::env::temp_dir().join("gfm-cli-extract-unavailable-probe".repeat(64));
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["extract-report", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("extract\t"), "{stdout}");
+    assert!(stderr.contains("security-scope\t"), "{stderr}");
+    assert_eq!(stderr.matches("security-scope\t").count(), 1, "{stderr}");
+    assert!(stderr.contains("\tprobe=unavailable\t"), "{stderr}");
+    assert!(
+        stderr.contains(
+            "content extraction access blocked: access probe failed because the host filesystem or permission API was unavailable"
+        ),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn adaptive_extraction_worker_applies_pressure_budget_from_binary() {
     let root = unique_temp_dir("gfm-cli-extract-worker-budget-root");
     let path = root.join("large.txt");
