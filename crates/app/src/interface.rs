@@ -1463,17 +1463,15 @@ fn read_ui_fileprovider_sidebar_state_with_cancel_after_access(
     cancel_after_access: bool,
 ) -> Result<FileProviderStateReport> {
     const WORKER: &str = "ui fileprovider sidebar state";
+    let access_report =
+        InterfaceAccessReport::new_checked(path.clone(), AccessIntent::Read, || Ok(()))?;
+    access_report.preflight_volume(WORKER)?;
+    let volume = access_report.volume();
     crate::runtime::run_volume_task_cancellable(
-        None,
+        volume,
         Priority::Visible,
         WORKER,
         move |cancellation| {
-            cancellation.check()?;
-            let access_report =
-                InterfaceAccessReport::new_checked(path.clone(), AccessIntent::Read, || {
-                    cancellation.check()
-                })?;
-            access_report.preflight_volume(WORKER)?;
             cancellation.check()?;
             let _access = access_report.access_checked(WORKER, || cancellation.check())?;
             cancellation.check()?;
@@ -1490,17 +1488,15 @@ fn read_ui_fileprovider_sidebar_invalidation(
     previous: CloudStorageState,
 ) -> Result<FileProviderInvalidationReport> {
     const WORKER: &str = "ui fileprovider sidebar invalidation";
+    let access_report =
+        InterfaceAccessReport::new_checked(path.clone(), AccessIntent::Read, || Ok(()))?;
+    access_report.preflight_volume(WORKER)?;
+    let volume = access_report.volume();
     crate::runtime::run_volume_task_cancellable(
-        None,
+        volume,
         Priority::Visible,
         WORKER,
         move |cancellation| {
-            cancellation.check()?;
-            let access_report =
-                InterfaceAccessReport::new_checked(path.clone(), AccessIntent::Read, || {
-                    cancellation.check()
-                })?;
-            access_report.preflight_volume(WORKER)?;
             cancellation.check()?;
             let _access = access_report.access_checked(WORKER, || cancellation.check())?;
             cancellation.check()?;
@@ -1513,17 +1509,15 @@ fn read_ui_fileprovider_sidebar_invalidation(
 
 fn read_ui_fileprovider_conflict(path: PathBuf) -> Result<FileProviderConflictReport> {
     const WORKER: &str = "ui fileprovider conflict";
+    let access_report =
+        InterfaceAccessReport::new_checked(path.clone(), AccessIntent::Read, || Ok(()))?;
+    access_report.preflight_volume(WORKER)?;
+    let volume = access_report.volume();
     crate::runtime::run_volume_task_cancellable(
-        None,
+        volume,
         Priority::Visible,
         WORKER,
         move |cancellation| {
-            cancellation.check()?;
-            let access_report =
-                InterfaceAccessReport::new_checked(path.clone(), AccessIntent::Read, || {
-                    cancellation.check()
-                })?;
-            access_report.preflight_volume(WORKER)?;
             cancellation.check()?;
             let _access = access_report.access_checked(WORKER, || cancellation.check())?;
             cancellation.check()?;
