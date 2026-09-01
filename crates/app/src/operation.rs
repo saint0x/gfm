@@ -551,7 +551,7 @@ fn execute_operation_inner(
             let access_gate =
                 operation_access_gate_checked(&operation, &volume_report, || cancellation.check())?;
             cancellation.check()?;
-            preflight_operation_target_probe(&operation)?;
+            preflight_operation_target_probe(&operation, &volume_report, || cancellation.check())?;
             cancellation.check()?;
             let _journal_access =
                 preflight_operation_journal_write_checked(&journal, || cancellation.check())?;
@@ -846,12 +846,27 @@ fn preflight_trash_metadata_write_checked(
         .access_checked("trash metadata", check_control)
 }
 
-fn preflight_operation_target_probe(operation: &Operation) -> Result<()> {
+fn preflight_operation_target_probe(
+    operation: &Operation,
+    volume_report: &VolumeDiscoveryReport,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
     for requirement in operation.access_requirements() {
+        check_control()?;
         if requirement.role != OperationAccessRole::DestinationParent {
             continue;
         }
-        let probe_path = operation_access_probe_path(&requirement.path, requirement.role);
+        let probe_path = operation_target_probe_path_checked(
+            &requirement.path,
+            requirement.role,
+            volume_report,
+            &mut check_control,
+        )?;
+        check_control()?;
+        if volume_blocks_operation_probe(volume_report, &probe_path) {
+            continue;
+        }
+        check_control()?;
         match probe_path.try_exists() {
             Ok(_) => {}
             Err(err) => {
@@ -931,7 +946,12 @@ fn operation_access_gate_with_bookmark_store_checked(
     check_control()?;
     for requirement in operation.access_requirements() {
         check_control()?;
-        let probe_path = operation_access_probe_path(&requirement.path, requirement.role);
+        let probe_path = operation_access_probe_path_checked(
+            &requirement.path,
+            requirement.role,
+            volume_report,
+            &mut check_control,
+        )?;
         check_control()?;
         let admission = worker_admission_with_volume_report(
             &probe_path,
@@ -1017,7 +1037,12 @@ fn operation_access_gate_with_bookmark_store_checked(
     }
     for requirement in operation.access_requirements() {
         check_control()?;
-        let probe_path = operation_access_probe_path(&requirement.path, requirement.role);
+        let probe_path = operation_access_probe_path_checked(
+            &requirement.path,
+            requirement.role,
+            volume_report,
+            &mut check_control,
+        )?;
         let Some(volume) = unavailable_mount_volume_for_path(volume_report, &probe_path) else {
             continue;
         };
@@ -1042,7 +1067,12 @@ fn operation_access_gate_with_bookmark_store_checked(
     }
     for requirement in operation.access_requirements() {
         check_control()?;
-        let probe_path = operation_access_probe_path(&requirement.path, requirement.role);
+        let probe_path = operation_access_probe_path_checked(
+            &requirement.path,
+            requirement.role,
+            volume_report,
+            &mut check_control,
+        )?;
         let Some(volume) = unreachable_volume_for_path(volume_report, &probe_path) else {
             continue;
         };
@@ -1070,7 +1100,12 @@ fn operation_access_gate_with_bookmark_store_checked(
         if !requirement_mutates_volume(operation, requirement.role) {
             continue;
         }
-        let probe_path = operation_access_probe_path(&requirement.path, requirement.role);
+        let probe_path = operation_access_probe_path_checked(
+            &requirement.path,
+            requirement.role,
+            volume_report,
+            &mut check_control,
+        )?;
         let Some(volume) = read_only_volume_for_path(volume_report, &probe_path) else {
             continue;
         };
@@ -1205,7 +1240,12 @@ fn operation_security_accesses_from_store_checked(
     check_control()?;
     for requirement in operation.access_requirements() {
         check_control()?;
-        let probe_path = operation_access_probe_path(&requirement.path, requirement.role);
+        let probe_path = operation_access_probe_path_checked(
+            &requirement.path,
+            requirement.role,
+            volume_report,
+            &mut check_control,
+        )?;
         check_control()?;
         let admission = worker_admission_with_volume_report(
             &probe_path,
@@ -1294,14 +1334,76 @@ fn stored_bookmark_decision_with_refresh_checked(
     }
 }
 
+#[cfg(test)]
 fn operation_access_probe_path(path: &Path, role: OperationAccessRole) -> PathBuf {
+    operation_access_probe_path_with_policy(path, role, None, ProbePathErrorPolicy::Stop, || Ok(()))
+        .unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn operation_access_probe_path_checked(
+    path: &Path,
+    role: OperationAccessRole,
+    volume_report: &VolumeDiscoveryReport,
+    check_control: impl FnMut() -> Result<()>,
+) -> Result<PathBuf> {
+    operation_access_probe_path_with_policy(
+        path,
+        role,
+        Some(volume_report),
+        ProbePathErrorPolicy::Stop,
+        check_control,
+    )
+}
+
+fn operation_target_probe_path_checked(
+    path: &Path,
+    role: OperationAccessRole,
+    volume_report: &VolumeDiscoveryReport,
+    check_control: impl FnMut() -> Result<()>,
+) -> Result<PathBuf> {
+    operation_access_probe_path_with_policy(
+        path,
+        role,
+        Some(volume_report),
+        ProbePathErrorPolicy::Report,
+        check_control,
+    )
+}
+
+#[derive(Clone, Copy)]
+enum ProbePathErrorPolicy {
+    Stop,
+    Report,
+}
+
+fn operation_access_probe_path_with_policy(
+    path: &Path,
+    role: OperationAccessRole,
+    volume_report: Option<&VolumeDiscoveryReport>,
+    error_policy: ProbePathErrorPolicy,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<PathBuf> {
+    check_control()?;
     if !matches!(role, OperationAccessRole::DestinationParent) {
-        return path.to_path_buf();
+        return Ok(path.to_path_buf());
+    }
+    if volume_report.is_some_and(|report| volume_blocks_operation_probe(report, path)) {
+        return Ok(path.to_path_buf());
     }
     let mut candidate = path.to_path_buf();
     loop {
+        check_control()?;
         match candidate.try_exists() {
-            Ok(true) | Err(_) => break,
+            Ok(true) => break,
+            Err(err) => match error_policy {
+                ProbePathErrorPolicy::Stop => break,
+                ProbePathErrorPolicy::Report => {
+                    return Err(GfmError::io(
+                        &candidate,
+                        format!("operation target path existence unavailable: {err}"),
+                    ))
+                }
+            },
             Ok(false) => {
                 let Some(parent) = candidate.parent() else {
                     break;
@@ -1313,7 +1415,30 @@ fn operation_access_probe_path(path: &Path, role: OperationAccessRole) -> PathBu
             }
         }
     }
-    candidate
+    Ok(candidate)
+}
+
+fn volume_blocks_operation_probe(report: &VolumeDiscoveryReport, path: &Path) -> bool {
+    report.volumes.iter().any(|volume| {
+        operation_path_starts_with_volume(path, &volume.path)
+            && (!matches!(volume.mount_state, MountState::Mounted)
+                || volume.reachable == Some(false))
+    })
+}
+
+fn operation_path_starts_with_volume(path: &Path, volume_root: &Path) -> bool {
+    path.starts_with(volume_root)
+        || macos_var_alias(path).is_some_and(|path| path.starts_with(volume_root))
+        || macos_var_alias(volume_root).is_some_and(|volume_root| path.starts_with(volume_root))
+}
+
+fn macos_var_alias(path: &Path) -> Option<PathBuf> {
+    if let Ok(suffix) = path.strip_prefix("/var") {
+        return Some(Path::new("/private/var").join(suffix));
+    }
+    path.strip_prefix("/private/var")
+        .ok()
+        .map(|suffix| Path::new("/var").join(suffix))
 }
 
 fn operation_volume_copy_policy_from_report(
@@ -2123,6 +2248,60 @@ mod tests {
             unavailable_child
         );
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn checked_destination_parent_probe_honors_pre_cancelled_control() {
+        let root = unique_temp_dir("gfm-app-op-destination-parent-cancel");
+        let destination = root.join("missing").join("leaf.txt");
+        let operation = Operation::Copy {
+            from: root.join("source.txt"),
+            to: destination,
+        };
+        let report = VolumeDiscoveryReport::from_paths(vec![root.clone()]);
+
+        let err =
+            preflight_operation_target_probe(&operation, &report, || Err(GfmError::Cancelled))
+                .expect_err("cancelled target preflight must not probe destination parents");
+
+        assert_eq!(err, GfmError::Cancelled);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn checked_destination_parent_probe_uses_unreachable_volume_before_parent_walk() {
+        let root = unique_temp_dir("gfm-app-op-destination-parent-unreachable");
+        let source_root = root.join("Source");
+        let volume = root.join("TeamShare");
+        fs::create_dir_all(&source_root).unwrap();
+        fs::create_dir_all(&volume).unwrap();
+        fs::write(volume.join(".gfm-volume-kind"), "network-smb\n").unwrap();
+        let source = source_root.join("source.txt");
+        let destination = volume
+            .join("destination-parent-unavailable".repeat(16))
+            .join("copy.txt");
+        fs::write(&source, "content").unwrap();
+        let operation = Operation::Copy {
+            from: source,
+            to: destination,
+        };
+        let mut report = VolumeDiscoveryReport::from_paths(vec![volume.clone()]);
+        report.volumes[0].reachable = Some(false);
+
+        preflight_operation_target_probe(&operation, &report, || Ok(()))
+            .expect("known unreachable volume should skip local destination-parent probe");
+        let gate = operation_access_gate_checked(&operation, &report, || Ok(())).unwrap();
+        let err = gate
+            .check(&operation)
+            .expect_err("unreachable destination volume should still deny the operation");
+
+        assert!(err.to_string().contains("unreachable volume network"));
+        assert!(
+            !err.to_string()
+                .contains("operation target path existence unavailable"),
+            "{err}"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
