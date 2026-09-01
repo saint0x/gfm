@@ -1,5 +1,6 @@
 use gfm_types::{GfmError, Result};
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -247,12 +248,12 @@ fn require_path_utility(name: &str, label: &str) -> Result<PathBuf> {
             None,
         ));
     }
-    path_from_stdout(name, label, output.stdout)
+    validated_tool_path_from_stdout(name, label, output.stdout)
 }
 
 fn require_xcrun_utility(name: &str, developer_dir: &Path, label: &str) -> Result<PathBuf> {
     let output = xcrun_find(name, developer_dir, label)?;
-    path_from_stdout(name, label, output.stdout)
+    validated_tool_path_from_stdout(name, label, output.stdout)
 }
 
 fn xcrun_find(name: &str, developer_dir: &Path, label: &str) -> Result<std::process::Output> {
@@ -406,6 +407,34 @@ fn path_from_stdout(name: &str, label: &str, stdout: Vec<u8>) -> Result<PathBuf>
     Ok(PathBuf::from(path))
 }
 
+fn validated_tool_path_from_stdout(name: &str, label: &str, stdout: Vec<u8>) -> Result<PathBuf> {
+    let path = path_from_stdout(name, label, stdout)?;
+    validate_tool_path(name, label, &path)?;
+    Ok(path)
+}
+
+fn validate_tool_path(name: &str, label: &str, path: &Path) -> Result<()> {
+    let metadata = fs::metadata(path).map_err(|err| {
+        GfmError::io(
+            path,
+            format!("{label} `{name}` metadata unavailable: {err}"),
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(GfmError::Format(format!(
+            "{label} `{name}` resolved to {}, which is not an executable file",
+            path.display()
+        )));
+    }
+    if metadata.permissions().mode() & 0o111 == 0 {
+        return Err(GfmError::Format(format!(
+            "{label} `{name}` resolved to {}, which is not executable",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
 fn command_failure(
     label: &str,
     command: &str,
@@ -513,12 +542,85 @@ mod tests {
     }
 
     #[test]
+    fn validated_tool_path_accepts_executable_file() {
+        let root = unique_temp_dir("gfm-tool-path-executable").unwrap();
+        let tool = root.join("tool");
+        fs::write(&tool, "#!/bin/sh\nexit 0\n").unwrap();
+        let mut permissions = fs::metadata(&tool).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&tool, permissions).unwrap();
+
+        let path = validated_tool_path_from_stdout(
+            "tool",
+            "production release",
+            format!("{}\n", tool.display()).into_bytes(),
+        )
+        .unwrap();
+
+        assert_eq!(path, tool);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn validated_tool_path_rejects_directories() {
+        let root = unique_temp_dir("gfm-tool-path-directory").unwrap();
+
+        let err = validated_tool_path_from_stdout(
+            "tool",
+            "production release",
+            format!("{}\n", root.display()).into_bytes(),
+        )
+        .expect_err("tool lookup must not accept a directory");
+
+        assert!(err.to_string().contains("which is not an executable file"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn validated_tool_path_rejects_non_executable_files() {
+        let root = unique_temp_dir("gfm-tool-path-non-executable").unwrap();
+        let tool = root.join("tool");
+        fs::write(&tool, "not executable\n").unwrap();
+        let mut permissions = fs::metadata(&tool).unwrap().permissions();
+        permissions.set_mode(0o644);
+        fs::set_permissions(&tool, permissions).unwrap();
+
+        let err = validated_tool_path_from_stdout(
+            "tool",
+            "production release",
+            format!("{}\n", tool.display()).into_bytes(),
+        )
+        .expect_err("tool lookup must reject non-executable files");
+
+        assert!(err.to_string().contains("which is not executable"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn metal_probe_source_is_a_real_kernel() {
         let source = metal_probe_source();
 
         assert!(source.contains("#include <metal_stdlib>"));
         assert!(source.contains("kernel void gfm_toolchain_probe"));
         assert!(source.contains("thread_position_in_grid"));
+    }
+
+    #[test]
+    fn rejects_missing_tool_path_reported_by_lookup() {
+        let root = unique_temp_dir("gfm-missing-tool-path-test").expect("temp root");
+        let missing = root.join("metal");
+
+        let err = validated_tool_path_from_stdout(
+            "metal",
+            "production release",
+            missing.to_string_lossy().into_owned().into_bytes(),
+        )
+        .expect_err("missing resolved tool path fails");
+        let _ = fs::remove_dir_all(&root);
+        let message = err.to_string();
+
+        assert!(message.contains("production release `metal` metadata unavailable"));
+        assert!(message.contains(&missing.display().to_string()));
     }
 
     #[test]
