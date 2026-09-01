@@ -2791,12 +2791,8 @@ fn run_icon_preview_retry_probe(
     const WORKER: &str = "icon preview";
     let access_report = PreviewAccessReport::new_checked(path, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
-    PlatformAccessReport::new_checked(
-        checked_write_probe_path(&attempt_state, WORKER)?,
-        AccessIntent::Write,
-        || Ok(()),
-    )?
-    .preflight_volume(WORKER)?;
+    let retry_probe = PreviewRetryProbe::new_checked(attempt_state, WORKER, || Ok(()))?;
+    retry_probe.preflight_volume()?;
     let volume = access_report.volume();
     let payload_path = access_report.path.clone();
     run_preview_contract_cancellable_with_payload_path(
@@ -2804,7 +2800,7 @@ fn run_icon_preview_retry_probe(
         WORKER,
         payload_path,
         move |cancellation| {
-            fail_first_retry_probe_attempt(&attempt_state, WORKER, &cancellation)?;
+            fail_first_retry_probe_attempt(&retry_probe, &cancellation)?;
             build_icon_preview_contract(&access_report, WORKER, &cancellation)
         },
     )
@@ -2831,12 +2827,8 @@ fn run_quicklook_session_retry_probe(
     const WORKER: &str = "quicklook preview";
     let access_report = PreviewAccessReport::new_checked(path, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
-    PlatformAccessReport::new_checked(
-        checked_write_probe_path(&attempt_state, WORKER)?,
-        AccessIntent::Write,
-        || Ok(()),
-    )?
-    .preflight_volume(WORKER)?;
+    let retry_probe = PreviewRetryProbe::new_checked(attempt_state, WORKER, || Ok(()))?;
+    retry_probe.preflight_volume()?;
     let volume = access_report.volume();
     let payload_path = access_report.path.clone();
     run_preview_contract_cancellable_with_payload_path(
@@ -2844,7 +2836,7 @@ fn run_quicklook_session_retry_probe(
         WORKER,
         payload_path,
         move |cancellation| {
-            fail_first_retry_probe_attempt(&attempt_state, WORKER, &cancellation)?;
+            fail_first_retry_probe_attempt(&retry_probe, &cancellation)?;
             build_quicklook_session_contract(&access_report, WORKER, &cancellation)
         },
     )
@@ -2873,12 +2865,8 @@ fn run_thumbnail_generation_retry_probe(
     const WORKER: &str = "thumbnail generation";
     let access_report = PreviewAccessReport::new_checked(path, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
-    PlatformAccessReport::new_checked(
-        checked_write_probe_path(&attempt_state, WORKER)?,
-        AccessIntent::Write,
-        || Ok(()),
-    )?
-    .preflight_volume(WORKER)?;
+    let retry_probe = PreviewRetryProbe::new_checked(attempt_state, WORKER, || Ok(()))?;
+    retry_probe.preflight_volume()?;
     let volume = access_report.volume();
     let payload_path = access_report.path.clone();
     run_preview_contract_cancellable_with_payload_path(
@@ -2886,7 +2874,7 @@ fn run_thumbnail_generation_retry_probe(
         WORKER,
         payload_path,
         move |cancellation| {
-            fail_first_retry_probe_attempt(&attempt_state, WORKER, &cancellation)?;
+            fail_first_retry_probe_attempt(&retry_probe, &cancellation)?;
             build_thumbnail_generation_contract(&access_report, WORKER, &cancellation)
         },
     )
@@ -2985,24 +2973,57 @@ fn build_thumbnail_generation_contract(
     )
 }
 
+#[derive(Clone)]
+struct PreviewRetryProbe {
+    attempt_state: PathBuf,
+    access_report: PlatformAccessReport,
+    worker: &'static str,
+}
+
+impl PreviewRetryProbe {
+    fn new_checked(
+        attempt_state: PathBuf,
+        worker: &'static str,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check_control()?;
+        let probe = checked_write_probe_path(&attempt_state, worker)?;
+        check_control()?;
+        let access_report =
+            PlatformAccessReport::new_checked(probe, AccessIntent::Write, &mut check_control)?;
+        check_control()?;
+        Ok(Self {
+            attempt_state,
+            access_report,
+            worker,
+        })
+    }
+
+    fn preflight_volume(&self) -> Result<()> {
+        self.access_report.preflight_volume(self.worker)
+    }
+}
+
 fn fail_first_retry_probe_attempt(
-    attempt_state: &Path,
-    worker: &str,
+    retry_probe: &PreviewRetryProbe,
     cancellation: &Cancellation,
 ) -> Result<()> {
     cancellation.check()?;
-    let probe = checked_write_probe_path(attempt_state, worker)?;
-    let _access = preflight_access_scope_checked(&probe, AccessIntent::Write, worker, || {
+    let _access = retry_probe
+        .access_report
+        .access_checked(retry_probe.worker, || cancellation.check())?;
+    cancellation.check()?;
+    let attempts =
+        read_retry_probe_attempt_checked(&retry_probe.attempt_state, || cancellation.check())?;
+    cancellation.check()?;
+    write_retry_probe_attempt_checked(&retry_probe.attempt_state, attempts + 1, || {
         cancellation.check()
     })?;
     cancellation.check()?;
-    let attempts = read_retry_probe_attempt_checked(attempt_state, || cancellation.check())?;
-    cancellation.check()?;
-    write_retry_probe_attempt_checked(attempt_state, attempts + 1, || cancellation.check())?;
-    cancellation.check()?;
     if attempts == 0 {
         return Err(GfmError::Format(format!(
-            "temporary {worker} retry probe busy"
+            "temporary {} retry probe busy",
+            retry_probe.worker
         )));
     }
     Ok(())
@@ -4226,6 +4247,27 @@ mod tests {
 
         assert_eq!(result.err(), Some(GfmError::Cancelled));
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn preview_retry_probe_attempt_honors_pre_cancelled_control_before_state_io() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-preview-retry-probe-pre-cancel-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let state = root.join("preview-retry.state");
+        let retry_probe =
+            PreviewRetryProbe::new_checked(state.clone(), "quicklook preview", || Ok(())).unwrap();
+        let cancellation = Cancellation::default();
+        cancellation.cancel();
+
+        let result = fail_first_retry_probe_attempt(&retry_probe, &cancellation);
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!state.exists());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
