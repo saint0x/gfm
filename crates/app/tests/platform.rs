@@ -6748,6 +6748,79 @@ fn reports_volume_operation_policy_refusal_from_binary() {
 }
 
 #[test]
+fn preview_retry_routes_refuse_unreachable_attempt_state_before_probe_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-preview-retry-unreachable-inputs-{}",
+        std::process::id()
+    ));
+    let offline = std::env::temp_dir().join(format!(
+        "gfm-preview-retry-unreachable-state-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&offline);
+    std::fs::create_dir_all(root.join("GFM.app")).unwrap();
+    std::fs::create_dir_all(&offline).unwrap();
+    std::fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let app = root.join("GFM.app");
+    let pdf = root.join("Retry.pdf");
+    let image = root.join("Retry.png");
+    std::fs::write(&pdf, b"%PDF-1.7\nretry quicklook").unwrap();
+    std::fs::write(&image, b"\x89PNG\r\n\x1a\nretry thumbnail").unwrap();
+
+    for (command, path, worker, forbidden) in [
+        (
+            "icon-preview-retry-probe",
+            app.as_path(),
+            "icon preview",
+            "icon-preview\t",
+        ),
+        (
+            "quicklook-session-retry-probe",
+            pdf.as_path(),
+            "quicklook preview",
+            "quicklook-session\t",
+        ),
+        (
+            "thumbnail-generation-retry-probe",
+            image.as_path(),
+            "thumbnail generation",
+            "thumbnail-generation\t",
+        ),
+    ] {
+        let attempt_state = offline.join(format!(
+            "{}.state",
+            format!("{}-attempt-state-unavailable", command).repeat(8)
+        ));
+        let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+            .arg(command)
+            .arg(path)
+            .arg(&attempt_state)
+            .output()
+            .unwrap();
+
+        assert!(!output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!stdout.contains(forbidden), "{stdout}");
+        assert!(
+            stderr.contains(&format!(
+                "{worker} volume access blocked: unreachable volume network"
+            )),
+            "{stderr}"
+        );
+        assert!(
+            !stderr.contains("platform write path metadata unavailable"),
+            "{stderr}"
+        );
+        assert!(!attempt_state.exists());
+    }
+
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(offline);
+}
+
+#[test]
 fn volume_operation_refuses_nested_volume_path_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-volume-operation-nested-{}",

@@ -2708,7 +2708,7 @@ fn run_icon_preview_retry_probe(
     let access_report = PreviewAccessReport::new_checked(path, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     PlatformAccessReport::new_checked(
-        write_probe_path(&attempt_state)?.to_path_buf(),
+        checked_write_probe_path(&attempt_state, WORKER)?,
         AccessIntent::Write,
         || Ok(()),
     )?
@@ -2748,7 +2748,7 @@ fn run_quicklook_session_retry_probe(
     let access_report = PreviewAccessReport::new_checked(path, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     PlatformAccessReport::new_checked(
-        write_probe_path(&attempt_state)?.to_path_buf(),
+        checked_write_probe_path(&attempt_state, WORKER)?,
         AccessIntent::Write,
         || Ok(()),
     )?
@@ -2790,7 +2790,7 @@ fn run_thumbnail_generation_retry_probe(
     let access_report = PreviewAccessReport::new_checked(path, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     PlatformAccessReport::new_checked(
-        write_probe_path(&attempt_state)?.to_path_buf(),
+        checked_write_probe_path(&attempt_state, WORKER)?,
         AccessIntent::Write,
         || Ok(()),
     )?
@@ -2907,7 +2907,7 @@ fn fail_first_retry_probe_attempt(
     cancellation: &Cancellation,
 ) -> Result<()> {
     cancellation.check()?;
-    let probe = write_probe_path(attempt_state)?.to_path_buf();
+    let probe = checked_write_probe_path(attempt_state, worker)?;
     let _access = preflight_access_scope_checked(&probe, AccessIntent::Write, worker, || {
         cancellation.check()
     })?;
@@ -3865,6 +3865,11 @@ fn write_probe_path(path: &Path) -> Result<&Path> {
             format!("platform write path metadata unavailable: {err}"),
         )),
     }
+}
+
+fn checked_write_probe_path(path: &Path, worker: &str) -> Result<PathBuf> {
+    preflight_write_target_volume(path, worker)?;
+    Ok(write_probe_path(path)?.to_path_buf())
 }
 
 fn write_probe_existing_ancestor(path: &Path, worker: &str) -> Result<PathBuf> {
