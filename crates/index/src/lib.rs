@@ -81,7 +81,9 @@ pub use recovery::{
 pub use rename::{correlate_rename, correlate_rename_checked, RenameCorrelationReport};
 pub use repair::{RepairPriority, RepairReason, RepairSchedule, SubtreeRepairJob};
 pub use scan::{FairScanReport, FairScanScheduler, FairScanSummary, ScanLane};
-pub use session::{ContentIndexQuerySession, ContentQuerySessionReport};
+pub use session::{
+    ContentIndexQuerySession, ContentQueryCacheInvalidationReport, ContentQuerySessionReport,
+};
 pub use state::{IndexVolumeState, INDEX_STATE_SCHEMA_VERSION};
 pub use volume::{
     parse_volume_indexing_policy, volume_indexing_policy_name, IndexMountState, IndexVolumeClass,

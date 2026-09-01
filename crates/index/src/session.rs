@@ -1,4 +1,4 @@
-use crate::{ContentQueryLoadReport, LiveIndex};
+use crate::{ContentQueryLoadReport, LiveIndex, ProviderMetadataInvalidationReport};
 use gfm_jobs::Cancellation;
 use gfm_search::{SearchLookupBudget, SearchLookupTelemetry, SearchQuery, SearchQueryReport};
 use gfm_store::{MmapContentSet, MmapRecordArchive};
@@ -23,6 +23,28 @@ pub struct ContentQuerySessionReport {
     pub record_cache_misses: usize,
     pub result_cache_hits: usize,
     pub result_cache_misses: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentQueryCacheInvalidationReport {
+    pub path: std::path::PathBuf,
+    pub invalidated: bool,
+    pub result_entries_before: usize,
+    pub result_entries_after: usize,
+    pub reason: String,
+}
+
+impl ContentQueryCacheInvalidationReport {
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "content-query-cache-invalidation\t{}\tinvalidated={}\tresult-entries-before={}\tresult-entries-after={}\treason={}",
+            self.path.display(),
+            self.invalidated,
+            self.result_entries_before,
+            self.result_entries_after,
+            self.reason
+        )
+    }
 }
 
 #[derive(Debug)]
@@ -153,6 +175,25 @@ impl ContentIndexQuerySession {
             self.result_cache_hits.load(Ordering::Relaxed),
             self.result_cache_misses.load(Ordering::Relaxed),
         )
+    }
+
+    pub fn apply_provider_metadata_invalidation(
+        &self,
+        report: &ProviderMetadataInvalidationReport,
+    ) -> ContentQueryCacheInvalidationReport {
+        let mut cache = self.result_cache_lock();
+        let result_entries_before = cache.len();
+        if report.invalidate_query_cache {
+            cache.clear();
+        }
+        let result_entries_after = cache.len();
+        ContentQueryCacheInvalidationReport {
+            path: report.path.clone(),
+            invalidated: report.invalidate_query_cache,
+            result_entries_before,
+            result_entries_after,
+            reason: report.reason.clone(),
+        }
     }
 
     pub fn search(&self, query: &str, limit: usize) -> Result<ContentQuerySessionReport> {
@@ -600,6 +641,15 @@ impl ContentResultCache {
             self.values.remove(&expired);
         }
     }
+
+    fn clear(&mut self) {
+        self.order.clear();
+        self.values.clear();
+    }
+
+    fn len(&self) -> usize {
+        self.values.len()
+    }
 }
 
 fn refresh_string_recency(order: &mut VecDeque<String>, key: &str) {
@@ -707,6 +757,70 @@ mod tests {
         assert_eq!(second.result_cache_hits, 1);
         assert_eq!(second.result_cache_misses, 0);
         assert_eq!(session.result_cache_telemetry(), (1, 1));
+    }
+
+    #[test]
+    fn provider_metadata_invalidation_clears_content_query_results() {
+        let fixture = ContentSessionFixture::new("provider-cache-clear");
+        let session = fixture.session();
+        let first = session.search("needle", 5).unwrap();
+        let cached = session.search("needle", 5).unwrap();
+        assert_eq!(first.search.hits, cached.search.hits);
+        assert_eq!(cached.result_cache_hits, 1);
+
+        let provider = ProviderMetadataInvalidationReport::from_provider_transition(
+            fixture.root.join("Needle.md"),
+            "downloaded",
+            "evicted",
+            true,
+            true,
+            "fileprovider-state-changed",
+        );
+        let invalidation = session.apply_provider_metadata_invalidation(&provider);
+        let after = session.search("needle", 5).unwrap();
+
+        assert!(invalidation.invalidated);
+        assert_eq!(invalidation.result_entries_before, 1);
+        assert_eq!(invalidation.result_entries_after, 0);
+        assert_eq!(invalidation.reason, "provider-metadata-state-changed");
+        assert_eq!(
+            invalidation.as_tsv(),
+            format!(
+                "content-query-cache-invalidation\t{}\tinvalidated=true\tresult-entries-before=1\tresult-entries-after=0\treason=provider-metadata-state-changed",
+                fixture.root.join("Needle.md").display()
+            )
+        );
+        assert_eq!(after.result_cache_hits, 0);
+        assert_eq!(after.result_cache_misses, 1);
+        assert_eq!(after.posting_cache_hits, 1);
+    }
+
+    #[test]
+    fn provider_metadata_noop_preserves_content_query_results() {
+        let fixture = ContentSessionFixture::new("provider-cache-noop");
+        let session = fixture.session();
+        let first = session.search("needle", 5).unwrap();
+        let cached = session.search("needle", 5).unwrap();
+        assert_eq!(first.search.hits, cached.search.hits);
+        assert_eq!(cached.result_cache_hits, 1);
+
+        let provider = ProviderMetadataInvalidationReport::from_provider_transition(
+            fixture.root.join("Needle.md"),
+            "downloaded",
+            "downloaded",
+            true,
+            false,
+            "fileprovider-state-unchanged",
+        );
+        let invalidation = session.apply_provider_metadata_invalidation(&provider);
+        let after = session.search("needle", 5).unwrap();
+
+        assert!(!invalidation.invalidated);
+        assert_eq!(invalidation.result_entries_before, 1);
+        assert_eq!(invalidation.result_entries_after, 1);
+        assert_eq!(invalidation.reason, "provider-state-unchanged");
+        assert_eq!(after.result_cache_hits, 1);
+        assert_eq!(after.result_cache_misses, 0);
     }
 
     #[test]
