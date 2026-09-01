@@ -444,7 +444,7 @@ impl SidecarIndexQuerySession {
         let mut postings = Vec::with_capacity(selected.len());
         let mut misses = Vec::new();
         {
-            let cache = self.content_cache_lock();
+            let mut cache = self.content_cache_lock();
             for term in &selected {
                 cancellation.check()?;
                 let key = bounded_posting_cache_key(term, limit_per_term);
@@ -561,7 +561,7 @@ impl SidecarIndexQuerySession {
         let mut postings = Vec::with_capacity(selected.len());
         let mut misses = Vec::new();
         {
-            let cache = self.content_cache_lock();
+            let mut cache = self.content_cache_lock();
             for term in &selected {
                 cancellation.check()?;
                 let key = bounded_volume_posting_cache_key(term, volume, limit_per_term);
@@ -921,7 +921,7 @@ impl SearchArchiveLookup {
         let mut postings = Vec::with_capacity(selected.len());
         let mut misses = Vec::new();
         {
-            let cache = self.prefix_cache_lock();
+            let mut cache = self.prefix_cache_lock();
             for prefix in &selected {
                 cancellation.check()?;
                 self.prefix_requests.fetch_add(1, Ordering::Relaxed);
@@ -1008,7 +1008,7 @@ impl SearchArchiveLookup {
         let mut postings = Vec::with_capacity(selected.len());
         let mut misses = Vec::new();
         {
-            let cache = self.fuzzy_cache_lock();
+            let mut cache = self.fuzzy_cache_lock();
             for key in &selected {
                 cancellation.check()?;
                 self.fuzzy_requests.fetch_add(1, Ordering::Relaxed);
@@ -1872,6 +1872,31 @@ mod tests {
     }
 
     #[test]
+    fn lookup_cache_refreshes_recency_on_hit() {
+        let mut cache = LookupCache::new(2);
+        cache.insert("first".to_string(), vec![1]);
+        cache.insert("second".to_string(), vec![2]);
+
+        assert_eq!(cache.get("first"), Some(vec![1]));
+        cache.insert("third".to_string(), vec![3]);
+
+        assert_eq!(cache.get("first"), Some(vec![1]));
+        assert_eq!(cache.get("second"), None);
+    }
+
+    #[test]
+    fn lookup_cache_refreshes_recency_on_update() {
+        let mut cache = LookupCache::new(2);
+        cache.insert("first".to_string(), vec![1]);
+        cache.insert("second".to_string(), vec![2]);
+        cache.insert("first".to_string(), vec![11]);
+        cache.insert("third".to_string(), vec![3]);
+
+        assert_eq!(cache.get("first"), Some(vec![11]));
+        assert_eq!(cache.get("second"), None);
+    }
+
+    #[test]
     fn sidecar_session_empty_zero_limit_and_empty_scope_skip_cache_work() {
         let fixture = SidecarFixture::new("empty-query");
         let session = fixture.session();
@@ -2292,15 +2317,19 @@ impl<V: Clone> LookupCache<V> {
         }
     }
 
-    fn get(&self, key: &str) -> Option<V> {
-        self.values.get(key).cloned()
+    fn get(&mut self, key: &str) -> Option<V> {
+        let value = self.values.get(key).cloned()?;
+        refresh_string_recency(&mut self.order, key);
+        Some(value)
     }
 
     fn insert(&mut self, key: String, value: V) {
         if self.capacity == 0 {
             return;
         }
-        if !self.values.contains_key(&key) {
+        if self.values.contains_key(&key) {
+            refresh_string_recency(&mut self.order, &key);
+        } else {
             self.order.push_back(key.clone());
         }
         self.values.insert(key, value);
@@ -2316,4 +2345,14 @@ impl<V: Clone> LookupCache<V> {
     fn len(&self) -> usize {
         self.values.len()
     }
+}
+
+fn refresh_string_recency(order: &mut VecDeque<String>, key: &str) {
+    let Some(index) = order.iter().position(|candidate| candidate == key) else {
+        return;
+    };
+    let Some(key) = order.remove(index) else {
+        return;
+    };
+    order.push_back(key);
 }
