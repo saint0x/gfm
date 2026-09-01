@@ -6558,6 +6558,12 @@ fn reports_volume_operation_refusal_from_binary() {
     assert!(stdout.starts_with("volume-operation\teject\t"));
     assert!(stdout.contains("\tdisposition=refused\tnative-status=-\tdissenter-status=-\t"));
     assert!(stdout.contains("\tvolume-kind=external\tmount=mounted\t"));
+    assert!(stdout.contains("\tvolume-native-status="));
+    assert!(stdout.contains("\tvolume-native-reason="));
+    assert!(stdout.contains("\tvolume-resource-status="));
+    assert!(stdout.contains("\tvolume-resource-reason="));
+    assert!(stdout.contains("\tvolume-mount-status="));
+    assert!(stdout.contains("\tvolume-mount-reason="));
     assert!(stdout.contains("\treason=fixture-volume-native-operation-disabled\n"));
 
     let _ = std::fs::remove_dir_all(root);

@@ -2021,7 +2021,17 @@ impl VolumeOperationReport {
     }
 
     pub fn as_tsv(&self) -> String {
-        let (kind, mount, stable_identity) = self
+        let (
+            kind,
+            mount,
+            stable_identity,
+            volume_native_status,
+            volume_native_reason,
+            volume_resource_status,
+            volume_resource_reason,
+            volume_mount_status,
+            volume_mount_reason,
+        ) = self
             .volume
             .as_ref()
             .map(|volume| {
@@ -2029,11 +2039,36 @@ impl VolumeOperationReport {
                     volume.kind.as_str(),
                     volume.mount_state.as_str(),
                     escape_field(&volume.stable_identity),
+                    volume
+                        .native_status
+                        .map(NativeVolumeStatus::as_str)
+                        .unwrap_or("-"),
+                    visible_volume_api_reason(volume.native_reason.as_deref()).to_string(),
+                    volume
+                        .resource_status
+                        .map(NativeVolumeStatus::as_str)
+                        .unwrap_or("-"),
+                    visible_volume_api_reason(volume.resource_reason.as_deref()).to_string(),
+                    volume
+                        .mount_table_status
+                        .map(NativeVolumeStatus::as_str)
+                        .unwrap_or("-"),
+                    visible_volume_api_reason(volume.mount_table_reason.as_deref()).to_string(),
                 )
             })
-            .unwrap_or(("-", "-", "-".to_string()));
+            .unwrap_or((
+                "-",
+                "-",
+                "-".to_string(),
+                "-",
+                "-".to_string(),
+                "-",
+                "-".to_string(),
+                "-",
+                "-".to_string(),
+            ));
         format!(
-            "volume-operation\t{}\tpath={}\tdisposition={}\tnative-status={}\tdissenter-status={}\tvolume-kind={}\tmount={}\tstable-id={}\treason={}",
+            "volume-operation\t{}\tpath={}\tdisposition={}\tnative-status={}\tdissenter-status={}\tvolume-kind={}\tmount={}\tstable-id={}\tvolume-native-status={}\tvolume-native-reason={}\tvolume-resource-status={}\tvolume-resource-reason={}\tvolume-mount-status={}\tvolume-mount-reason={}\treason={}",
             self.operation.as_str(),
             self.path.display(),
             self.disposition.as_str(),
@@ -2046,9 +2081,21 @@ impl VolumeOperationReport {
             kind,
             mount,
             stable_identity,
+            volume_native_status,
+            escape_field(&volume_native_reason),
+            volume_resource_status,
+            escape_field(&volume_resource_reason),
+            volume_mount_status,
+            escape_field(&volume_mount_reason),
             escape_field(&self.reason)
         )
     }
+}
+
+fn visible_volume_api_reason(reason: Option<&str>) -> &str {
+    reason
+        .filter(|reason| !reason.trim().is_empty())
+        .unwrap_or("-")
 }
 
 fn operation_volume_for_path_checked(
@@ -3916,6 +3963,38 @@ mod tests {
         assert!(report
             .as_tsv()
             .contains("\treason=internal-volume-not-ejectable"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_operation_tsv_reports_volume_api_status_context() {
+        let root = unique_temp_dir("gfm-volume-operation-api-context");
+        let mut volume = VolumeDescriptor::for_path(&root).unwrap();
+        volume.native_status = Some(NativeVolumeStatus::Unavailable);
+        volume.native_reason = Some("DiskArbitration unavailable\tuntil retry".to_string());
+        volume.resource_status = Some(NativeVolumeStatus::Unavailable);
+        volume.resource_reason = Some("".to_string());
+        volume.mount_table_status = Some(NativeVolumeStatus::Available);
+        volume.mount_table_reason = Some("\n".to_string());
+
+        let report = VolumeOperationReport::with_volume(
+            VolumeOperation::Eject,
+            VolumeOperationDisposition::Refused,
+            None,
+            None,
+            volume,
+            "diskarbitration-volume-unavailable",
+        );
+        let tsv = report.as_tsv();
+
+        assert!(tsv.contains("\tvolume-native-status=unavailable\t"));
+        assert!(tsv.contains("\tvolume-native-reason=DiskArbitration unavailable\\tuntil retry\t"));
+        assert!(tsv.contains("\tvolume-resource-status=unavailable\t"));
+        assert!(tsv.contains("\tvolume-resource-reason=-\t"));
+        assert!(tsv.contains("\tvolume-mount-status=available\t"));
+        assert!(tsv.contains("\tvolume-mount-reason=-\t"));
+        assert!(tsv.ends_with("reason=diskarbitration-volume-unavailable"));
 
         fs::remove_dir_all(root).unwrap();
     }
