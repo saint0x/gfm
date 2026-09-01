@@ -17581,6 +17581,62 @@ fn deferred_adaptive_resume_content_index_job_skips_unreachable_recovery_paths_f
 }
 
 #[test]
+fn deferred_adaptive_resume_content_index_job_refuses_missing_spec_before_runtime_record_from_binary(
+) {
+    let base = unique_temp_dir("gfm-cli-resume-content-adaptive-missing-spec-base");
+    let spec = base.join("missing.job");
+    let journal = base.join("jobs.journal");
+    let catalog = base.join("catalog.gfmjobs");
+    let progress = base.join("progress.gfmprogress");
+    fs::write(&journal, "99\t1\tstarted\tbackground content index\n").unwrap();
+
+    let resume_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "resume-content-background-adaptive",
+            spec.to_str().unwrap(),
+            journal.to_str().unwrap(),
+            "saturated",
+            "nominal",
+            "ac",
+            "idle",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!resume_output.status.success());
+    let stdout = String::from_utf8_lossy(&resume_output.stdout);
+    let stderr = String::from_utf8_lossy(&resume_output.stderr);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        !stderr.contains("resumed-background-content-deferred"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(
+            "resume background content index access blocked: path is not present on this host"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("security-worker-admission\tworker=resume background content index\tpath=")
+            && stderr.contains("missing.job\tintent=read")
+            && stderr.contains("probe=missing")
+            && stderr.contains("worker-action=deny"),
+        "{stderr}"
+    );
+    assert_eq!(
+        fs::read_to_string(&journal).unwrap(),
+        "99\t1\tstarted\tbackground content index\n"
+    );
+    assert!(!catalog.exists());
+    assert!(!progress.exists());
+
+    fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
 fn diagnostics_index_rebuild_adaptive_refuses_missing_root_before_runtime_record_from_binary() {
     let root = unique_temp_path("gfm-cli-diagnostics-rebuild-missing-root", "missing");
     let records = unique_temp_path("gfm-cli-diagnostics-rebuild-missing-root", "gfmidx");

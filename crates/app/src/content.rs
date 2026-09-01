@@ -680,6 +680,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let pressure = parse_required_scheduling_pressure(args, "resume content job")?;
             let journal = JobJournal::new(journal_path);
             if pressure.decide(Priority::Background, 1, 1).action == SchedulingAction::Defer {
+                let spec_access_report = ForegroundContentIndexAccessReports::entry_checked(
+                    spec_path.clone(),
+                    AccessIntent::Read,
+                    || Ok(()),
+                )?;
+                preflight_content_input_denial_before_runtime(
+                    &spec_access_report,
+                    "resume background content index",
+                )?;
                 let outcome = run_scheduled_volume_task_cancellable(
                     None,
                     Priority::Background,
