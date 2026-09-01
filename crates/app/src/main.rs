@@ -297,6 +297,24 @@ pub(crate) fn index_volume_descriptor(volume: &VolumeDescriptor) -> IndexVolumeD
     .with_mountable(volume.mountable)
     .with_case_sensitive(volume.case_sensitive)
     .with_filesystem_signature(index_volume_filesystem_signature(volume));
+    if let Some(filesystem) = volume.filesystem.as_deref() {
+        descriptor = descriptor.with_filesystem(filesystem);
+    }
+    if let Some(volume_uuid) = volume.volume_uuid.as_deref() {
+        descriptor = descriptor.with_volume_uuid(volume_uuid);
+    }
+    if let Some(apfs_container_uuid) = volume.apfs_container_uuid.as_deref() {
+        descriptor = descriptor.with_apfs_container_uuid(apfs_container_uuid);
+    }
+    if let Some(apfs_role) = volume.apfs_role {
+        descriptor = descriptor.with_apfs_role(apfs_role.as_str());
+    }
+    if let Some(media_uuid) = volume.media_uuid.as_deref() {
+        descriptor = descriptor.with_media_uuid(media_uuid);
+    }
+    if let Some(resource_uuid) = volume.resource_uuid.as_deref() {
+        descriptor = descriptor.with_resource_uuid(resource_uuid);
+    }
     if let Some(status) = volume.native_status {
         descriptor = descriptor.with_native_status(status.as_str());
     }
@@ -1233,6 +1251,37 @@ mod tests {
             .as_deref()
             .unwrap_or_default()
             .contains("removable=1"));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn index_volume_descriptor_carries_native_filesystem_identity() {
+        let root = unique_temp_dir("gfm-app-volume-identity-descriptor");
+        let mut volume = VolumeDescriptor::for_path(&root).unwrap();
+        volume.filesystem = Some("apfs".to_string());
+        volume.volume_uuid = Some("VOLUME-UUID".to_string());
+        volume.apfs_container_uuid = Some("APFS-CONTAINER-UUID".to_string());
+        volume.apfs_role = Some(gfm_mac::ApfsVolumeRole::Data);
+        volume.media_uuid = Some("MEDIA-UUID".to_string());
+        volume.resource_uuid = Some("RESOURCE-UUID".to_string());
+
+        let descriptor = index_volume_descriptor(&volume);
+
+        assert_eq!(descriptor.filesystem.as_deref(), Some("apfs"));
+        assert_eq!(descriptor.volume_uuid.as_deref(), Some("VOLUME-UUID"));
+        assert_eq!(
+            descriptor.apfs_container_uuid.as_deref(),
+            Some("APFS-CONTAINER-UUID")
+        );
+        assert_eq!(descriptor.apfs_role.as_deref(), Some("data"));
+        assert_eq!(descriptor.media_uuid.as_deref(), Some("MEDIA-UUID"));
+        assert_eq!(descriptor.resource_uuid.as_deref(), Some("RESOURCE-UUID"));
+        assert!(descriptor
+            .filesystem_signature
+            .as_deref()
+            .unwrap_or_default()
+            .contains("apfs-container-uuid=APFS-CONTAINER-UUID"));
 
         std::fs::remove_dir_all(root).unwrap();
     }

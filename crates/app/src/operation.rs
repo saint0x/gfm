@@ -554,8 +554,10 @@ fn execute_operation_inner(
         label,
         move |cancellation, runtime| {
             cancellation.check()?;
-            let access_gate =
-                operation_access_gate_checked(&operation, &volume_report, || cancellation.check())?;
+            let access_preflight =
+                operation_access_preflight_checked(&operation, &volume_report, || {
+                    cancellation.check()
+                })?;
             cancellation.check()?;
             let _retry_probe_access = retry_probe_access_report
                 .as_ref()
@@ -575,11 +577,12 @@ fn execute_operation_inner(
                 || cancellation.check(),
             )?;
             cancellation.check()?;
-            if access_gate.check(&operation).is_ok() {
-                let _security_scope =
-                    operation_security_accesses_checked(&operation, &volume_report, || {
-                        cancellation.check()
-                    })?;
+            if access_preflight.gate.check(&operation).is_ok() {
+                let _security_scope = operation_security_accesses_from_probes_checked(
+                    &access_preflight.probes,
+                    &SecurityScopedBookmarkStore::new(default_security_bookmarks_path()),
+                    || cancellation.check(),
+                )?;
                 let conflict_report = OperationConflictReport::evaluate(&operation, conflict)?;
                 if conflict_report.blocks_operation {
                     if let Some(store) = runtime_operation_conflict_store() {
@@ -589,7 +592,7 @@ fn execute_operation_inner(
                 let mut context = OperationContext::new(journal)
                     .with_conflict(conflict)
                     .with_trash_metadata_path(trash_metadata)
-                    .with_access_gate(access_gate)
+                    .with_access_gate(access_preflight.gate)
                     .with_volume_copy_policy(volume_copy_policy);
                 if let Some(retry_probe) = retry_probe.clone() {
                     context = context.with_retry_probe_path(retry_probe);
@@ -605,7 +608,7 @@ fn execute_operation_inner(
             let mut context = OperationContext::new(journal)
                 .with_conflict(conflict)
                 .with_trash_metadata_path(trash_metadata)
-                .with_access_gate(access_gate)
+                .with_access_gate(access_preflight.gate)
                 .with_volume_copy_policy(volume_copy_policy);
             if let Some(retry_probe) = retry_probe {
                 context = context.with_retry_probe_path(retry_probe);
@@ -970,6 +973,40 @@ fn operation_access_gate_with_bookmark_store_checked(
     bookmark_store: &SecurityScopedBookmarkStore,
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<OperationAccessGate> {
+    Ok(operation_access_preflight_with_bookmark_store_checked(
+        operation,
+        volume_report,
+        bookmark_store,
+        &mut check_control,
+    )?
+    .gate)
+}
+
+struct OperationAccessPreflight {
+    gate: OperationAccessGate,
+    probes: Vec<OperationAccessProbe>,
+}
+
+fn operation_access_preflight_checked(
+    operation: &Operation,
+    volume_report: &VolumeDiscoveryReport,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<OperationAccessPreflight> {
+    let bookmark_store = SecurityScopedBookmarkStore::new(default_security_bookmarks_path());
+    operation_access_preflight_with_bookmark_store_checked(
+        operation,
+        volume_report,
+        &bookmark_store,
+        &mut check_control,
+    )
+}
+
+fn operation_access_preflight_with_bookmark_store_checked(
+    operation: &Operation,
+    volume_report: &VolumeDiscoveryReport,
+    bookmark_store: &SecurityScopedBookmarkStore,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<OperationAccessPreflight> {
     let mut gate = OperationAccessGate::new();
     check_control()?;
     let probes = operation_access_probes_checked(operation, volume_report, &mut check_control)?;
@@ -1126,7 +1163,7 @@ fn operation_access_gate_with_bookmark_store_checked(
         check_control()?;
     }
     check_control()?;
-    Ok(gate)
+    Ok(OperationAccessPreflight { gate, probes })
 }
 
 struct OperationAccessProbe {
@@ -1257,6 +1294,7 @@ fn mutation_allowed_for_role(path: &Path, role: OperationAccessRole) -> bool {
     )
 }
 
+#[cfg(test)]
 fn operation_security_accesses_checked(
     operation: &Operation,
     volume_report: &VolumeDiscoveryReport,
@@ -1271,16 +1309,26 @@ fn operation_security_accesses_checked(
     )
 }
 
+#[cfg(test)]
 fn operation_security_accesses_from_store_checked(
     operation: &Operation,
     volume_report: &VolumeDiscoveryReport,
     store: &SecurityScopedBookmarkStore,
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<SecurityScopedBookmarkAccess>> {
+    check_control()?;
+    let probes = operation_access_probes_checked(operation, volume_report, &mut check_control)?;
+    operation_security_accesses_from_probes_checked(&probes, store, check_control)
+}
+
+fn operation_security_accesses_from_probes_checked(
+    probes: &[OperationAccessProbe],
+    store: &SecurityScopedBookmarkStore,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Vec<SecurityScopedBookmarkAccess>> {
     let mut accesses = Vec::new();
     let mut retained = BTreeSet::new();
     check_control()?;
-    let probes = operation_access_probes_checked(operation, volume_report, &mut check_control)?;
     for probe in probes {
         check_control()?;
         let report = &probe.admission.access;
@@ -1307,7 +1355,7 @@ fn operation_security_accesses_from_store_checked(
         check_control()?;
         let Some(resolution) = lookup.resolution else {
             return Err(GfmError::Permission {
-                path: probe.probe_path,
+                path: probe.probe_path.clone(),
                 message: format!(
                     "{} requires stored security-scoped access before mutation",
                     probe.requirement.role.as_str()
@@ -1330,7 +1378,7 @@ fn operation_security_accesses_from_store_checked(
         check_control()?;
         let Some(access) = lookup.access else {
             return Err(GfmError::Permission {
-                path: probe.probe_path,
+                path: probe.probe_path.clone(),
                 message: format!(
                     "{} requires stored security-scoped access before mutation",
                     probe.requirement.role.as_str()

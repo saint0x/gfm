@@ -223,6 +223,12 @@ pub struct IndexVolumeDescriptor {
     pub mountable: Option<bool>,
     pub case_sensitive: Option<bool>,
     pub stable_identity: Option<String>,
+    pub filesystem: Option<String>,
+    pub volume_uuid: Option<String>,
+    pub apfs_container_uuid: Option<String>,
+    pub apfs_role: Option<String>,
+    pub media_uuid: Option<String>,
+    pub resource_uuid: Option<String>,
     pub filesystem_signature: Option<String>,
     pub native_status: Option<String>,
     pub native_reason: Option<String>,
@@ -253,6 +259,12 @@ impl IndexVolumeDescriptor {
             mountable: None,
             case_sensitive: None,
             stable_identity: None,
+            filesystem: None,
+            volume_uuid: None,
+            apfs_container_uuid: None,
+            apfs_role: None,
+            media_uuid: None,
+            resource_uuid: None,
             filesystem_signature: None,
             native_status: None,
             native_reason: None,
@@ -305,6 +317,36 @@ impl IndexVolumeDescriptor {
 
     pub fn with_case_sensitive(mut self, case_sensitive: Option<bool>) -> Self {
         self.case_sensitive = case_sensitive;
+        self
+    }
+
+    pub fn with_filesystem(mut self, filesystem: impl Into<String>) -> Self {
+        self.filesystem = normalized_descriptor_field(filesystem);
+        self
+    }
+
+    pub fn with_volume_uuid(mut self, volume_uuid: impl Into<String>) -> Self {
+        self.volume_uuid = normalized_descriptor_field(volume_uuid);
+        self
+    }
+
+    pub fn with_apfs_container_uuid(mut self, apfs_container_uuid: impl Into<String>) -> Self {
+        self.apfs_container_uuid = normalized_descriptor_field(apfs_container_uuid);
+        self
+    }
+
+    pub fn with_apfs_role(mut self, apfs_role: impl Into<String>) -> Self {
+        self.apfs_role = normalized_descriptor_field(apfs_role);
+        self
+    }
+
+    pub fn with_media_uuid(mut self, media_uuid: impl Into<String>) -> Self {
+        self.media_uuid = normalized_descriptor_field(media_uuid);
+        self
+    }
+
+    pub fn with_resource_uuid(mut self, resource_uuid: impl Into<String>) -> Self {
+        self.resource_uuid = normalized_descriptor_field(resource_uuid);
         self
     }
 
