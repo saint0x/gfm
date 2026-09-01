@@ -13034,6 +13034,10 @@ fn search_content_index_set_dedupes_repeated_content_admission_from_binary() {
     let stdout = String::from_utf8(search_output.stdout).unwrap();
     let stderr = String::from_utf8(search_output.stderr).unwrap();
     assert!(stdout.contains("archive.md"), "{stdout}");
+    assert!(
+        stderr.contains("content-archives 1 content-keys 1 records-loaded 1"),
+        "{stderr}"
+    );
     assert_eq!(
         stderr
             .matches(&format!(
@@ -13043,6 +13047,44 @@ fn search_content_index_set_dedupes_repeated_content_admission_from_binary() {
             .count(),
         1,
         "{stderr}"
+    );
+
+    let session_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "search-content-index-set-session",
+            records.to_str().unwrap(),
+            "setdedupemarker",
+            content.to_str().unwrap(),
+            content.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        session_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&session_output.stderr)
+    );
+
+    let session_stdout = String::from_utf8(session_output.stdout).unwrap();
+    let session_stderr = String::from_utf8(session_output.stderr).unwrap();
+    assert!(session_stdout.contains("archive.md"), "{session_stdout}");
+    assert!(
+        session_stderr.contains(
+            "content-session-first\tcontent-archives=1\tcontent-keys=1\trecords-loaded=1"
+        ) && session_stderr.contains(
+            "content-session-second\tcontent-archives=1\tcontent-keys=1\trecords-loaded=1"
+        ),
+        "{session_stderr}"
+    );
+    assert_eq!(
+        session_stderr
+            .matches(&format!(
+                "security-worker-admission\tworker=content index set session content\tpath={}",
+                content.display()
+            ))
+            .count(),
+        1,
+        "{session_stderr}"
     );
 
     fs::remove_dir_all(root).unwrap();

@@ -2305,7 +2305,7 @@ fn run_content_index_set_search(
                     cancellation.check()
                 })?;
             cancellation.check()?;
-            let archive_count = content_paths.len();
+            let archive_count = unique_search_paths(&content_paths).len();
             let (live, report) = Indexer::default().load_live_with_content_set_cancellable(
                 records,
                 &content_paths,
@@ -2386,6 +2386,7 @@ fn run_content_index_set_session(
                 &content_paths,
                 &cancellation,
             )?;
+            let archive_count = session.archive_count();
             let parsed = SearchQuery::parse_cancellable(&query, &cancellation)?;
             let first = session.search_structured_with_budget_cancellable(
                 &parsed,
@@ -2395,7 +2396,7 @@ fn run_content_index_set_session(
             )?;
             let mut diagnostics = vec![format_content_session_report(
                 "content-session-first",
-                content_paths.len(),
+                archive_count,
                 &first,
             )];
             let mut hits = first.search.hits;
@@ -2408,7 +2409,7 @@ fn run_content_index_set_session(
             )?;
             diagnostics.push(format_content_session_report(
                 "content-session-second",
-                content_paths.len(),
+                archive_count,
                 &second,
             ));
             hits.extend(second.search.hits);
@@ -2447,6 +2448,7 @@ fn run_content_index_set_session_provider_invalidation(
                 &content_paths,
                 &cancellation,
             )?;
+            let archive_count = session.archive_count();
             let parsed = SearchQuery::parse_cancellable(&query, &cancellation)?;
             let first = session.search_structured_with_budget_cancellable(
                 &parsed,
@@ -2456,7 +2458,7 @@ fn run_content_index_set_session_provider_invalidation(
             )?;
             let mut diagnostics = vec![format_content_session_report(
                 "content-session-provider-first",
-                content_paths.len(),
+                archive_count,
                 &first,
             )];
             let mut hits = first.search.hits;
@@ -2470,7 +2472,7 @@ fn run_content_index_set_session_provider_invalidation(
             )?;
             diagnostics.push(format_content_session_report(
                 "content-session-provider-second",
-                content_paths.len(),
+                archive_count,
                 &second,
             ));
             hits.extend(second.search.hits);
@@ -2492,7 +2494,7 @@ fn run_content_index_set_session_provider_invalidation(
             )?;
             diagnostics.push(format_content_session_report(
                 "content-session-provider-third",
-                content_paths.len(),
+                archive_count,
                 &third,
             ));
             hits.extend(third.search.hits);

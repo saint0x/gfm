@@ -29,13 +29,16 @@ impl MmapContentSet {
         P: AsRef<Path>,
     {
         check_control()?;
-        let archives = paths
-            .into_iter()
-            .map(|path| {
-                check_control()?;
-                MmapContentArchive::open_checked(path, &mut check_control)
-            })
-            .collect::<Result<Vec<_>>>()?;
+        let mut seen = BTreeSet::new();
+        let mut archives = Vec::new();
+        for path in paths {
+            check_control()?;
+            let path = path.as_ref();
+            if !seen.insert(path.to_path_buf()) {
+                continue;
+            }
+            archives.push(MmapContentArchive::open_checked(path, &mut check_control)?);
+        }
         check_control()?;
         Ok(Self { archives })
     }
@@ -383,6 +386,30 @@ mod tests {
 
         assert!(matches!(result, Err(GfmError::Cancelled)));
         assert!(checks >= 3);
+    }
+
+    #[test]
+    fn content_set_open_dedupes_repeated_archive_paths() {
+        let path = temp_path("gfm-content-set-open-dedupe", "gfmcontent");
+        write_content_postings(
+            &path,
+            &[ContentPosting {
+                term: "needle".to_string(),
+                ids: vec![FileId::new(VolumeId(1), 7)],
+                positions: Vec::new(),
+            }],
+        )
+        .unwrap();
+
+        let set = MmapContentSet::open([&path, &path]).unwrap();
+
+        assert_eq!(set.archive_count(), 1);
+        assert_eq!(
+            set.ids_for_term("needle").unwrap(),
+            vec![FileId::new(VolumeId(1), 7)]
+        );
+
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
