@@ -104,6 +104,12 @@ pub(crate) fn worker_admissions_with_volume_report(
         .collect()
 }
 
+pub(crate) fn worker_admission_blocked_by_volume(
+    admission: &SecurityWorkerAdmissionReport,
+) -> bool {
+    !admission.can_touch_filesystem && admission.reason.contains(" volume access blocked: ")
+}
+
 pub(crate) fn preflight_access_scope_checked(
     path: &Path,
     intent: AccessIntent,
@@ -570,6 +576,7 @@ mod tests {
         assert!(admission
             .as_tsv()
             .contains("\tcan-touch-filesystem=false\t"));
+        assert!(worker_admission_blocked_by_volume(&admission));
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -615,6 +622,7 @@ mod tests {
             .contains("preview worker volume access blocked"));
         assert!(admission.as_tsv().contains("\tprobe=unknown\t"));
         assert!(!admission.as_tsv().contains("\tprobe=missing\t"));
+        assert!(worker_admission_blocked_by_volume(&admission));
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -758,6 +766,7 @@ mod tests {
         assert!(admission.reason.contains("mount=stale"));
         assert!(admission.as_tsv().contains("\tprobe=unknown\t"));
         assert!(!admission.as_tsv().contains("\tprobe=missing\t"));
+        assert!(worker_admission_blocked_by_volume(&admission));
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -813,6 +822,7 @@ mod tests {
             .contains("mount-reason=mount table unavailable"));
         assert!(admission.as_tsv().contains("\tprobe=unavailable\t"));
         assert!(!admission.as_tsv().contains("\tprobe=unknown\t"));
+        assert!(worker_admission_blocked_by_volume(&admission));
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -942,6 +952,7 @@ mod tests {
             .reason
             .contains("export worker volume access blocked"));
         assert!(admission.reason.contains("read-only volume external"));
+        assert!(worker_admission_blocked_by_volume(&admission));
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -974,6 +985,7 @@ mod tests {
         assert!(admission
             .reason
             .contains("preview worker may start with filesystem access"));
+        assert!(!worker_admission_blocked_by_volume(&admission));
 
         fs::remove_dir_all(root).unwrap();
     }

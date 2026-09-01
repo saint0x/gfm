@@ -10407,6 +10407,50 @@ fn deferred_adaptive_extraction_worker_does_not_touch_unreachable_target_from_bi
 }
 
 #[test]
+fn adaptive_extraction_worker_refuses_missing_target_before_runtime_record_from_binary() {
+    let root = unique_temp_dir("gfm-cli-extract-worker-missing-runtime-root");
+    let path = root.join("Missing.txt");
+    let catalog = unique_temp_path("gfm-cli-extract-worker-missing-runtime", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-extract-worker-missing-runtime", "gfmprogress");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "extract-worker-adaptive",
+            path.to_str().unwrap(),
+            "saturated",
+            "nominal",
+            "ac",
+            "idle",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("extract\t"), "{stdout}");
+    assert!(
+        stderr.contains(
+            "adaptive extraction worker access blocked: path is not present on this host"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!(
+            "security-worker-admission\tworker=adaptive extraction worker\tpath={}",
+            path.display()
+        )),
+        "{stderr}"
+    );
+    assert!(!catalog.exists());
+    assert!(!progress.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn adaptive_extraction_worker_refuses_unreachable_scratch_before_launch_from_binary() {
     let root = unique_temp_dir("gfm-cli-extract-worker-scratch-root");
     let scratch = unique_temp_dir("gfm-cli-extract-worker-scratch-unreachable");
@@ -11317,6 +11361,61 @@ fn deferred_quarantined_adaptive_extraction_worker_does_not_touch_unreachable_st
     fs::remove_file(progress).unwrap();
     fs::remove_dir_all(source_root).unwrap();
     fs::remove_dir_all(store_root).unwrap();
+}
+
+#[test]
+fn quarantined_adaptive_extraction_worker_refuses_missing_target_before_runtime_record_from_binary()
+{
+    let root = unique_temp_dir("gfm-cli-extract-worker-quarantine-missing-runtime-root");
+    let path = root.join("Missing.txt");
+    let store = root.join("quarantine.gfmquarantine");
+    let catalog = unique_temp_path(
+        "gfm-cli-extract-worker-quarantine-missing-runtime",
+        "gfmjobs",
+    );
+    let progress = unique_temp_path(
+        "gfm-cli-extract-worker-quarantine-missing-runtime",
+        "gfmprogress",
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "extract-worker-quarantine-adaptive",
+            path.to_str().unwrap(),
+            store.to_str().unwrap(),
+            "saturated",
+            "nominal",
+            "ac",
+            "idle",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("extract\t"), "{stdout}");
+    assert!(!stdout.contains("quarantine\t"), "{stdout}");
+    assert!(
+        stderr.contains(
+            "quarantined adaptive extraction access blocked: path is not present on this host"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!(
+            "security-worker-admission\tworker=quarantined adaptive extraction\tpath={}",
+            path.display()
+        )),
+        "{stderr}"
+    );
+    assert!(!store.exists());
+    assert!(!catalog.exists());
+    assert!(!progress.exists());
+
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

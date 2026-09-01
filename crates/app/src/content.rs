@@ -2,7 +2,7 @@
 use crate::access::preflight_access_scope_checked;
 use crate::access::{
     preflight_access_scope_checked_with_volume_report, preflight_volume_access_scope_with_report,
-    worker_admission_with_volume_report, ScopedAccessGuard,
+    worker_admission_blocked_by_volume, worker_admission_with_volume_report, ScopedAccessGuard,
 };
 use crate::extract::{
     extraction_budget_profile_from_volume_report, preflight_adaptive_extraction_worker_scratch,
@@ -185,6 +185,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 AccessIntent::Read,
                 || Ok(()),
             )?;
+            preflight_content_input_denial_before_runtime(
+                &access_report,
+                "adaptive extraction worker",
+            )?;
             let volume_report = access_report.clone();
             let outcome = run_scheduled_volume_task_cancellable_with_volume_and_payload_path(
                 Priority::Background,
@@ -266,6 +270,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .transpose()?
                 .unwrap_or(2);
             let _scratch_access = preflight_adaptive_extraction_worker_scratch()?;
+            let input_access_report = ForegroundContentIndexAccessReports::entry_checked(
+                path.clone(),
+                AccessIntent::Read,
+                || Ok(()),
+            )?;
+            preflight_content_input_denial_before_runtime(
+                &input_access_report,
+                "quarantined adaptive extraction",
+            )?;
             let volume_path = path.clone();
             let volume_store = store.clone();
             let outcome = run_scheduled_volume_task_cancellable_with_volume_and_payload_path(
@@ -992,6 +1005,24 @@ fn preflight_content_input_admission_before_runtime(
         &access_report.volume_report,
     );
     if admission.can_touch_filesystem {
+        return Ok(());
+    }
+    access_report
+        .access_checked(worker, || Ok(()))
+        .map(|_access| ())
+}
+
+fn preflight_content_input_denial_before_runtime(
+    access_report: &ForegroundContentIndexAccessReport,
+    worker: &str,
+) -> Result<()> {
+    let admission = worker_admission_with_volume_report(
+        &access_report.path,
+        access_report.intent,
+        worker,
+        &access_report.volume_report,
+    );
+    if admission.can_touch_filesystem || worker_admission_blocked_by_volume(&admission) {
         return Ok(());
     }
     access_report
