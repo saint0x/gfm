@@ -3554,6 +3554,9 @@ fn observed_preview_cache_invalidation_tsv(
     cancellation: &Cancellation,
 ) -> Result<String> {
     cancellation.check()?;
+    if observed.report.changes.is_empty() {
+        return Ok(observed.as_tsv());
+    }
     let mut cache =
         PreviewCache::new_cancellable(PreviewCacheConfig::new(cache_root), cancellation)?;
     let mut lines = vec![observed.as_tsv()];
@@ -4180,6 +4183,40 @@ mod tests {
         .expect_err("pre-cancelled observed invalidation should stop before cache open");
 
         assert_eq!(err, GfmError::Cancelled);
+        assert!(!root.exists());
+    }
+
+    #[test]
+    fn observed_preview_cache_invalidation_skips_disk_cache_for_empty_change_batch() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-platform-empty-preview-cache-observed-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let observed = FileProviderObservedInvalidation {
+            events: 1,
+            event_kinds: Vec::new(),
+            paths: Vec::new(),
+            report: FileProviderStateInvalidationReport {
+                initialized: true,
+                changes: Vec::new(),
+                invalidate_icon: false,
+                invalidate_preview_memory: false,
+                invalidate_preview_disk: false,
+                invalidate_sidebar: false,
+                reindex_metadata: false,
+            },
+        };
+
+        let output = observed_preview_cache_invalidation_tsv(
+            &observed,
+            &root,
+            PreviewKind::Thumbnail,
+            &Cancellation::default(),
+        )
+        .expect("empty observed invalidation should be a cache noop");
+
+        assert_eq!(output, observed.as_tsv());
         assert!(!root.exists());
     }
 
