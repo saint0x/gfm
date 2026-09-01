@@ -7141,6 +7141,28 @@ fn volume_operation_cancel_after_access_stops_before_native_execution_from_binar
 }
 
 #[test]
+fn volume_operation_cancel_before_probe_stops_before_path_existence_from_binary() {
+    let path = std::env::temp_dir().join("gfm-volume-operation-cancel-probe".repeat(64));
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-operation-cancel-before-probe")
+        .arg("eject")
+        .arg(&path)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("volume-operation\t"), "{stdout}");
+    assert!(stderr.contains("operation was cancelled"), "{stderr}");
+    assert!(
+        !stderr.contains("volume-path-existence-unavailable"),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn operation_access_refuses_unavailable_volume_api_state_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-operation-access-api-unavailable-{}",

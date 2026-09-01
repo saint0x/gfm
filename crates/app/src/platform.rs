@@ -770,7 +770,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 println!("{line}");
             }
         }
-        "volume-operation" | "volume-operation-cancel-after-access" => {
+        "volume-operation"
+        | "volume-operation-cancel-before-probe"
+        | "volume-operation-cancel-after-access" => {
+            let cancel_before_probe = command == "volume-operation-cancel-before-probe";
             let cancel_after_access = command == "volume-operation-cancel-after-access";
             let operation = VolumeOperation::parse(&required_string(
                 args.next(),
@@ -779,7 +782,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let path = required_path(args.next(), "volume-operation requires a path")?;
             println!(
                 "{}",
-                run_volume_operation(path, operation, cancel_after_access)?.as_tsv()
+                run_volume_operation(path, operation, cancel_before_probe, cancel_after_access)?
+                    .as_tsv()
             );
         }
         "volume-mount-bsd" | "volume-mount-bsd-cancel-before-native" => {
@@ -2640,12 +2644,34 @@ fn run_fileprovider_operation(
 fn run_volume_operation(
     path: PathBuf,
     operation: VolumeOperation,
+    cancel_before_probe: bool,
     cancel_after_access: bool,
 ) -> Result<VolumeOperationReport> {
     const WORKER: &str = "volume operation";
-    match path.try_exists() {
-        Ok(true) => {}
-        Ok(false) | Err(_) => return VolumeOperationReport::execute(path, operation),
+    let path_probe = run_volume_task_cancellable(None, Priority::Visible, WORKER, {
+        let path = path.clone();
+        move |cancellation| {
+            if cancel_before_probe {
+                cancellation.cancel();
+            }
+            cancellation.check()?;
+            match path.try_exists() {
+                Ok(true) => Ok(None),
+                Ok(false) => Ok(Some(VolumeOperationReport::execute_checked(
+                    &path,
+                    operation,
+                    || cancellation.check(),
+                )?)),
+                Err(_) => Ok(Some(VolumeOperationReport::execute_checked(
+                    &path,
+                    operation,
+                    || cancellation.check(),
+                )?)),
+            }
+        }
+    })?;
+    if let Some(report) = path_probe {
+        return Ok(report);
     }
     let access_report = PlatformAccessReport::new_checked(path, AccessIntent::Operate, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
