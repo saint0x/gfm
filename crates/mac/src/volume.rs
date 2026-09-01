@@ -2162,14 +2162,14 @@ impl VolumeOperationReport {
             ));
         }
         check()?;
-        if volume.native_status != Some(NativeVolumeStatus::Available) {
+        if let Some(reason) = operation_api_refusal_reason(&volume) {
             return Ok(Self::with_volume(
                 operation,
                 VolumeOperationDisposition::Refused,
                 None,
                 None,
                 volume,
-                "diskarbitration-volume-unavailable",
+                reason,
             ));
         }
         check()?;
@@ -2472,6 +2472,37 @@ fn disabled_command_reason(
             .unwrap_or_else(|| format!("{}-command-disabled", operation.as_str())),
         VolumeOperation::Mount => "mount-command-disabled".to_string(),
     })
+}
+
+fn operation_api_refusal_reason(volume: &VolumeDescriptor) -> Option<&'static str> {
+    [
+        ("diskarbitration-volume", volume.native_status),
+        ("url-resource-volume", volume.resource_status),
+        ("mount-table-volume", volume.mount_table_status),
+    ]
+    .into_iter()
+    .find_map(|(prefix, status)| operation_api_status_refusal_reason(prefix, status))
+}
+
+fn operation_api_status_refusal_reason(
+    prefix: &'static str,
+    status: Option<NativeVolumeStatus>,
+) -> Option<&'static str> {
+    match status {
+        Some(NativeVolumeStatus::Available) | None => None,
+        Some(NativeVolumeStatus::Missing) => Some(match prefix {
+            "diskarbitration-volume" => "diskarbitration-volume-missing",
+            "url-resource-volume" => "url-resource-volume-missing",
+            "mount-table-volume" => "mount-table-volume-missing",
+            _ => "volume-api-missing",
+        }),
+        Some(NativeVolumeStatus::Unavailable) => Some(match prefix {
+            "diskarbitration-volume" => "diskarbitration-volume-unavailable",
+            "url-resource-volume" => "url-resource-volume-unavailable",
+            "mount-table-volume" => "mount-table-volume-unavailable",
+            _ => "volume-api-unavailable",
+        }),
+    }
 }
 
 fn normalized_volume_map(volumes: &[VolumeDescriptor]) -> BTreeMap<String, &VolumeDescriptor> {
@@ -4461,6 +4492,54 @@ mod tests {
         assert!(tsv.contains("\tvolume-mount-status=available\t"));
         assert!(tsv.contains("\tvolume-mount-reason=-\t"));
         assert!(tsv.ends_with("reason=diskarbitration-volume-unavailable"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_operation_api_gate_refuses_unavailable_diskarbitration_status() {
+        let root = unique_temp_dir("gfm-volume-operation-native-api-gate");
+        let mut volume = VolumeDescriptor::for_path(&root).unwrap();
+        volume.native_status = Some(NativeVolumeStatus::Unavailable);
+        volume.resource_status = Some(NativeVolumeStatus::Available);
+        volume.mount_table_status = Some(NativeVolumeStatus::Available);
+
+        assert_eq!(
+            operation_api_refusal_reason(&volume),
+            Some("diskarbitration-volume-unavailable")
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_operation_api_gate_refuses_unavailable_resource_status() {
+        let root = unique_temp_dir("gfm-volume-operation-resource-api-gate");
+        let mut volume = VolumeDescriptor::for_path(&root).unwrap();
+        volume.native_status = Some(NativeVolumeStatus::Available);
+        volume.resource_status = Some(NativeVolumeStatus::Unavailable);
+        volume.mount_table_status = Some(NativeVolumeStatus::Available);
+
+        assert_eq!(
+            operation_api_refusal_reason(&volume),
+            Some("url-resource-volume-unavailable")
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_operation_api_gate_refuses_unavailable_mount_table_status() {
+        let root = unique_temp_dir("gfm-volume-operation-mount-table-api-gate");
+        let mut volume = VolumeDescriptor::for_path(&root).unwrap();
+        volume.native_status = Some(NativeVolumeStatus::Available);
+        volume.resource_status = Some(NativeVolumeStatus::Available);
+        volume.mount_table_status = Some(NativeVolumeStatus::Unavailable);
+
+        assert_eq!(
+            operation_api_refusal_reason(&volume),
+            Some("mount-table-volume-unavailable")
+        );
 
         fs::remove_dir_all(root).unwrap();
     }
