@@ -2020,7 +2020,6 @@ fn should_read_provider_xattrs(
     }
     has_path_hint
         || native_identity.status == NativeFileProviderIdentityStatus::Available
-        || native.status != gfm_mac_sys::NativeFileProviderStatus::Available
         || native.is_ubiquitous == Some(true)
         || native_has_ubiquitous_materialization_evidence(native)
 }
@@ -7218,7 +7217,7 @@ mod tests {
     }
 
     #[test]
-    fn provider_xattr_gate_keeps_fallback_paths_for_provider_uncertainty() {
+    fn provider_xattr_gate_keeps_fallback_paths_only_for_provider_uncertainty() {
         let mut missing_native = native_values();
         missing_native.status = NativeFileProviderStatus::Missing;
         let mut provider_native = native_values();
@@ -7239,10 +7238,15 @@ mod tests {
             &identity_not_queried(),
             true
         ));
-        assert!(should_read_provider_xattrs(
+        assert!(!should_read_provider_xattrs(
             &missing_native,
             &identity_not_queried(),
             false
+        ));
+        assert!(should_read_provider_xattrs(
+            &missing_native,
+            &identity_not_queried(),
+            true
         ));
         assert!(should_read_provider_xattrs(
             &provider_native,
