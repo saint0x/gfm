@@ -1,6 +1,7 @@
 use gfm_mac_sys::{
     NativeVolumeDescription, NativeVolumeMountTableEntry, NativeVolumeOperation,
-    NativeVolumeOperationStatus, NativeVolumeResourceValues, NativeVolumeStatus,
+    NativeVolumeOperationResult, NativeVolumeOperationStatus, NativeVolumeResourceValues,
+    NativeVolumeStatus,
 };
 use gfm_types::{GfmError, Result, VolumeId};
 use std::collections::{BTreeMap, BTreeSet};
@@ -2339,11 +2340,25 @@ impl VolumeMountIdentityReport {
         check()?;
         let bsd_name = bsd_name.into();
         check()?;
-        Ok(Self::from_native(bsd_name))
+        let native = gfm_mac_sys::submit_volume_mount_by_bsd_name(&bsd_name);
+        Self::from_native_result_checked(bsd_name, native, check)
     }
 
     fn from_native(bsd_name: String) -> Self {
         let native = gfm_mac_sys::submit_volume_mount_by_bsd_name(&bsd_name);
+        Self::from_native_result(bsd_name, native)
+    }
+
+    fn from_native_result_checked(
+        bsd_name: String,
+        native: NativeVolumeOperationResult,
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check()?;
+        Ok(Self::from_native_result(bsd_name, native))
+    }
+
+    fn from_native_result(bsd_name: String, native: NativeVolumeOperationResult) -> Self {
         let disposition = disposition_for_native_operation(native.status);
         Self {
             bsd_name,
@@ -4390,6 +4405,25 @@ mod tests {
             Err(GfmError::Cancelled)
         })
         .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+    }
+
+    #[test]
+    fn checked_volume_mount_identity_cancels_after_native_submission_before_publish() {
+        let native = NativeVolumeOperationResult {
+            operation: NativeVolumeOperation::Mount,
+            status: NativeVolumeOperationStatus::Succeeded,
+            dissenter_status: None,
+            reason: None,
+        };
+
+        let err = VolumeMountIdentityReport::from_native_result_checked(
+            "disk9s9".to_string(),
+            native,
+            || Err(GfmError::Cancelled),
+        )
+        .expect_err("completed native mount submission must still honor cancelled publish");
 
         assert_eq!(err, GfmError::Cancelled);
     }
