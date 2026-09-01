@@ -3497,7 +3497,7 @@ fn fileprovider_snapshot_routes_refuse_unreachable_volume_before_state_persisten
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
-    let state = root.join("fileprovider-state.tsv");
+    let state = root.join("fileprovider-state-unavailable".repeat(16));
     let item = root.join("Remote.icloud-placeholder");
     std::fs::write(&item, "placeholder").unwrap();
     mark_evicted_fixture(&item);
@@ -3522,6 +3522,10 @@ fn fileprovider_snapshot_routes_refuse_unreachable_volume_before_state_persisten
         ),
         "{scan_stderr}"
     );
+    assert!(
+        !scan_stderr.contains("platform write path metadata unavailable"),
+        "{scan_stderr}"
+    );
     assert!(!state.exists());
 
     let event = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -3543,6 +3547,10 @@ fn fileprovider_snapshot_routes_refuse_unreachable_volume_before_state_persisten
         event_stderr.contains(
             "fileprovider invalidation event volume access blocked: unreachable volume network"
         ),
+        "{event_stderr}"
+    );
+    assert!(
+        !event_stderr.contains("platform write path metadata unavailable"),
         "{event_stderr}"
     );
     assert!(!state.exists());

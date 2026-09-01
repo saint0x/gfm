@@ -3497,14 +3497,14 @@ pub(crate) fn run_fileprovider_observer_probe(
     let root_worker = format!("{worker} root");
     let target_worker = format!("{worker} target");
     let state_worker = format!("{worker} state");
-    let target_probe = write_probe_existing_ancestor(target, &target_worker)?;
     let root_access_report =
         PlatformAccessReport::new_checked(root.to_path_buf(), AccessIntent::Index, || Ok(()))?;
+    root_access_report.preflight_volume(&root_worker)?;
+    let target_probe = write_probe_existing_ancestor(target, &target_worker)?;
     let target_access_report =
         PlatformAccessReport::new_checked(target_probe, AccessIntent::Write, || Ok(()))?;
     let state_access_reports =
         fileprovider_snapshot_access_reports(state_path, &[target.to_path_buf()], &state_worker)?;
-    root_access_report.preflight_volume(&root_worker)?;
     target_access_report.preflight_volume(&target_worker)?;
     state_access_reports.preflight_volumes(&state_worker)?;
     let state_path = state_path.to_path_buf();
@@ -3868,6 +3868,7 @@ fn write_probe_path(path: &Path) -> Result<&Path> {
 }
 
 fn write_probe_existing_ancestor(path: &Path, worker: &str) -> Result<PathBuf> {
+    preflight_write_target_volume(path, worker)?;
     let mut candidate = write_probe_path(path)?.to_path_buf();
     loop {
         match candidate.try_exists() {
@@ -3889,6 +3890,17 @@ fn write_probe_existing_ancestor(path: &Path, worker: &str) -> Result<PathBuf> {
             }
         }
     }
+}
+
+fn preflight_write_target_volume(path: &Path, worker: &str) -> Result<()> {
+    let volume_path = crate::parent_or_cwd(path);
+    let volume_report = VolumeDiscoveryReport::for_containing_path_checked(volume_path, || Ok(()))?;
+    preflight_volume_access_scope_with_report(
+        volume_path,
+        AccessIntent::Write,
+        worker,
+        &volume_report,
+    )
 }
 
 fn fileprovider_state_file_exists(path: &Path, worker: &str) -> Result<bool> {
