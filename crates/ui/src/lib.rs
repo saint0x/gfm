@@ -99,8 +99,101 @@ pub struct AppLaunchSpec {
     pub operation_conflicts: Vec<OperationConflictContract>,
     pub permission_dialog: Option<DialogContract>,
     pub permission_prompt: Option<PermissionPromptKind>,
+    pub permission_onboarding: Option<PermissionOnboardingContract>,
     pub permission_access: Option<PermissionAccessContract>,
     pub permission_refresh: Option<PermissionRefreshContract>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionOnboardingContract {
+    pub action: String,
+    pub prompt_kind: PermissionPromptKind,
+    pub prompt_mode: String,
+    pub finder_parity_default: bool,
+    pub machine_search_ready: bool,
+    pub scopes: Vec<PermissionOnboardingScopeContract>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PermissionOnboardingScopeContract {
+    pub scope: String,
+    pub state: String,
+    pub path: String,
+    pub reason: String,
+}
+
+impl PermissionOnboardingContract {
+    pub fn new(
+        action: impl Into<String>,
+        prompt_kind: PermissionPromptKind,
+        prompt_mode: impl Into<String>,
+        finder_parity_default: bool,
+        machine_search_ready: bool,
+    ) -> Self {
+        Self {
+            action: action.into(),
+            prompt_kind,
+            prompt_mode: prompt_mode.into(),
+            finder_parity_default,
+            machine_search_ready,
+            scopes: Vec::new(),
+        }
+    }
+
+    pub fn with_scopes(mut self, scopes: Vec<PermissionOnboardingScopeContract>) -> Self {
+        self.scopes = scopes;
+        self
+    }
+
+    pub fn requires_surface(&self) -> bool {
+        self.finder_parity_default
+            || !self.machine_search_ready
+            || self.prompt_kind != PermissionPromptKind::General
+            || self.action != "continue-normally"
+    }
+
+    pub fn as_tsv(&self) -> String {
+        let mut lines = vec![format!(
+            "permission-onboarding\taction={}\tprompt-kind={}\tprompt-mode={}\tfinder-parity-default={}\tmachine-search-ready={}",
+            escape_contract_field(&self.action),
+            self.prompt_kind.as_str(),
+            escape_contract_field(&self.prompt_mode),
+            self.finder_parity_default,
+            self.machine_search_ready
+        )];
+        lines.extend(
+            self.scopes
+                .iter()
+                .map(PermissionOnboardingScopeContract::as_tsv),
+        );
+        lines.join("\n")
+    }
+}
+
+impl PermissionOnboardingScopeContract {
+    pub fn new(
+        scope: impl Into<String>,
+        state: impl Into<String>,
+        path: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            scope: scope.into(),
+            state: state.into(),
+            path: path.into(),
+            reason: reason.into(),
+        }
+    }
+
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "permission-scope\t{}\tstate={}\tpath={}\treason={}",
+            escape_contract_field(&self.scope),
+            escape_contract_field(&self.state),
+            escape_contract_field(&self.path),
+            escape_contract_field(&self.reason)
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -373,6 +466,16 @@ impl AppLaunchSpec {
         self
     }
 
+    pub fn with_permission_onboarding(mut self, onboarding: PermissionOnboardingContract) -> Self {
+        if onboarding.requires_surface() {
+            self.permission_dialog =
+                Some(DialogContract::permission_prompt(onboarding.prompt_kind));
+            self.permission_prompt = Some(onboarding.prompt_kind);
+        }
+        self.permission_onboarding = Some(onboarding);
+        self
+    }
+
     pub fn with_sidebar_volumes(mut self, volumes: Vec<SidebarVolumeSpec>) -> Self {
         self.sidebar_volumes = volumes;
         self
@@ -454,6 +557,7 @@ impl Default for AppLaunchSpec {
             operation_conflicts: Vec::new(),
             permission_dialog: None,
             permission_prompt: None,
+            permission_onboarding: None,
             permission_access: None,
             permission_refresh: None,
         }
@@ -477,6 +581,7 @@ pub struct WindowLifecycleContract {
     pub operation_conflicts: Vec<OperationConflictContract>,
     pub permission_dialog: Option<DialogSurface>,
     pub permission_prompt: Option<PermissionPromptKind>,
+    pub permission_onboarding: Option<PermissionOnboardingContract>,
     pub permission_access: Option<PermissionAccessContract>,
     pub permission_refresh: Option<PermissionRefreshContract>,
 }
@@ -500,6 +605,7 @@ impl WindowLifecycleContract {
             operation_conflicts: spec.operation_conflicts.clone(),
             permission_dialog: spec.permission_dialog.as_ref().map(|dialog| dialog.surface),
             permission_prompt: spec.permission_prompt,
+            permission_onboarding: spec.permission_onboarding.clone(),
             permission_access: spec.permission_access.clone(),
             permission_refresh: spec.permission_refresh.clone(),
         })
@@ -541,6 +647,9 @@ impl WindowLifecycleContract {
         }
         if let Some(access) = &self.permission_access {
             lines.push(access.as_tsv());
+        }
+        if let Some(onboarding) = &self.permission_onboarding {
+            lines.push(onboarding.as_tsv());
         }
         if let Some(refresh) = &self.permission_refresh {
             lines.push(refresh.as_tsv());
@@ -585,6 +694,7 @@ fn open_main_window(
             progress_surfaces: spec.progress_surfaces,
             operation_conflicts: spec.operation_conflicts,
             permission_dialog: spec.permission_dialog,
+            permission_onboarding: spec.permission_onboarding,
             permission_access: spec.permission_access,
             permission_refresh: spec.permission_refresh,
             initial_path: spec.initial_path,
@@ -654,6 +764,7 @@ struct RootView {
     progress_surfaces: Vec<OperationProgressContract>,
     operation_conflicts: Vec<OperationConflictContract>,
     permission_dialog: Option<DialogContract>,
+    permission_onboarding: Option<PermissionOnboardingContract>,
     permission_access: Option<PermissionAccessContract>,
     permission_refresh: Option<PermissionRefreshContract>,
     initial_path: PathBuf,
@@ -696,6 +807,14 @@ impl Render for RootView {
                     .child(access.as_tsv()),
             );
         }
+        if let Some(onboarding) = &self.permission_onboarding {
+            root = root.child(
+                div()
+                    .id("permission-onboarding-state")
+                    .invisible()
+                    .child(onboarding.as_tsv()),
+            );
+        }
         for progress in &self.progress_surfaces {
             root = root
                 .child(dialog::render(&progress.dialog))
@@ -735,6 +854,7 @@ mod tests {
         assert!(contract.sidebar_volumes.is_empty());
         assert!(contract.progress_surfaces.is_empty());
         assert_eq!(contract.permission_dialog, None);
+        assert_eq!(contract.permission_onboarding, None);
         assert_eq!(contract.permission_refresh, None);
     }
 
@@ -775,6 +895,59 @@ mod tests {
         assert!(contract
             .as_tsv()
             .contains("\npermission-prompt\tkind=bookmark-acquisition\tsurface=permission"));
+    }
+
+    #[test]
+    fn lifecycle_contract_tracks_permission_onboarding_state() {
+        let onboarding = PermissionOnboardingContract::new(
+            "open-full-disk-access",
+            PermissionPromptKind::FullDiskAccess,
+            "first-run",
+            true,
+            false,
+        )
+        .with_scopes(vec![PermissionOnboardingScopeContract::new(
+            "desktop",
+            "denied",
+            "/Users/me/Desktop",
+            "full disk access required",
+        )]);
+        let spec =
+            AppLaunchSpec::new("/Users/me/Desktop").with_permission_onboarding(onboarding.clone());
+        let contract = WindowLifecycleContract::from_spec(&spec).unwrap();
+
+        assert_eq!(contract.permission_dialog, Some(DialogSurface::Permission));
+        assert_eq!(
+            contract.permission_prompt,
+            Some(PermissionPromptKind::FullDiskAccess)
+        );
+        assert_eq!(contract.permission_onboarding, Some(onboarding));
+        assert!(contract.as_tsv().contains(
+            "\npermission-onboarding\taction=open-full-disk-access\tprompt-kind=full-disk-access\tprompt-mode=first-run\tfinder-parity-default=true\tmachine-search-ready=false"
+        ));
+        assert!(contract.as_tsv().contains(
+            "\npermission-scope\tdesktop\tstate=denied\tpath=/Users/me/Desktop\treason=full disk access required"
+        ));
+    }
+
+    #[test]
+    fn lifecycle_contract_keeps_ready_permission_onboarding_nonmodal() {
+        let onboarding = PermissionOnboardingContract::new(
+            "continue-normally",
+            PermissionPromptKind::General,
+            "ready",
+            false,
+            true,
+        );
+        let spec = AppLaunchSpec::new("/Users/me").with_permission_onboarding(onboarding.clone());
+        let contract = WindowLifecycleContract::from_spec(&spec).unwrap();
+
+        assert_eq!(contract.permission_dialog, None);
+        assert_eq!(contract.permission_prompt, None);
+        assert_eq!(contract.permission_onboarding, Some(onboarding));
+        assert!(contract
+            .as_tsv()
+            .contains("\npermission-onboarding\taction=continue-normally\t"));
     }
 
     #[test]

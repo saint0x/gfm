@@ -24,14 +24,15 @@ use gfm_ui::{
     GalleryViewOptions, IconViewContract, IconViewOptions, ListViewContract, ListViewOptions,
     MenuContract, OperationConflictContract, OperationConflictInput, OperationConflictPaths,
     OperationProgressContract, OperationProgressInput, OperationProgressPayloadKind,
-    OperationProgressState, PermissionAccessContract, PermissionPromptKind,
-    PermissionRefreshChangeContract, PermissionRefreshContract, ProviderConflictContract,
-    ProviderConflictInput, SearchResultsBatch, SearchResultsContract, SearchResultsOptions,
-    SearchResultsStage, SidebarCloudInvalidation, SidebarCloudState, SidebarContract,
-    SidebarPathSnapshot, SidebarPathState, SidebarVolumeEventKind, SidebarVolumeInvalidation,
-    SidebarVolumeKind, SidebarVolumeMountState, SidebarVolumeSpec, TitlebarContract,
-    ToolbarContract, TrashEntryMetadata, TrashViewContract, TrashViewOptions, VirtualSurface,
-    VirtualizationContract, WindowLifecycleContract, WindowSessionContract, WindowSessionStore,
+    OperationProgressState, PermissionAccessContract, PermissionOnboardingContract,
+    PermissionOnboardingScopeContract, PermissionPromptKind, PermissionRefreshChangeContract,
+    PermissionRefreshContract, ProviderConflictContract, ProviderConflictInput, SearchResultsBatch,
+    SearchResultsContract, SearchResultsOptions, SearchResultsStage, SidebarCloudInvalidation,
+    SidebarCloudState, SidebarContract, SidebarPathSnapshot, SidebarPathState,
+    SidebarVolumeEventKind, SidebarVolumeInvalidation, SidebarVolumeKind, SidebarVolumeMountState,
+    SidebarVolumeSpec, TitlebarContract, ToolbarContract, TrashEntryMetadata, TrashViewContract,
+    TrashViewOptions, VirtualSurface, VirtualizationContract, WindowLifecycleContract,
+    WindowSessionContract, WindowSessionStore,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
@@ -709,25 +710,12 @@ fn print_permission_onboarding_contract(
     plan: gfm_mac::PermissionOnboardingPlan,
     refresh: Option<PermissionRefreshContract>,
 ) {
-    let prompt = permission_prompt_kind(&plan);
-    println!("{}", DialogContract::permission_prompt(prompt).as_tsv());
+    let onboarding = permission_onboarding_contract(&plan);
     println!(
-        "permission-onboarding\taction={}\tprompt-kind={}\tprompt-mode={}\tfinder-parity-default={}\tmachine-search-ready={}",
-        plan.action.as_str(),
-        prompt.as_str(),
-        plan.policy.prompt_mode.as_str(),
-        plan.finder_parity_default,
-        plan.granted_for_machine_search()
+        "{}",
+        DialogContract::permission_prompt(onboarding.prompt_kind).as_tsv()
     );
-    for item in plan.readiness {
-        println!(
-            "permission-scope\t{}\tstate={}\tpath={}\treason={}",
-            item.scope.as_str(),
-            item.state.as_str(),
-            item.path.display(),
-            escape_interface_field(&item.reason)
-        );
-    }
+    println!("{}", onboarding.as_tsv());
     if let Some(refresh) = refresh {
         println!("{}", refresh.as_tsv());
     }
@@ -1587,9 +1575,7 @@ fn app_launch_spec_checked(
     check_control()?;
     let plan = current_permission_onboarding_checked(&mut check_control)?;
     check_control()?;
-    if plan.finder_parity_default || plan.action != gfm_mac::PermissionAction::ContinueNormally {
-        spec = spec.with_permission_prompt(permission_prompt_kind(&plan));
-    }
+    spec = spec.with_permission_onboarding(permission_onboarding_contract(&plan));
     let admission = crate::access::worker_admission_with_volume_gate_checked(
         &spec.initial_path,
         AccessIntent::Read,
@@ -1645,6 +1631,31 @@ fn permission_refresh_contract(
                 current: change.current.as_str().to_string(),
                 path: change.path.display().to_string(),
                 reason: change.reason.clone(),
+            })
+            .collect(),
+    )
+}
+
+fn permission_onboarding_contract(
+    plan: &gfm_mac::PermissionOnboardingPlan,
+) -> PermissionOnboardingContract {
+    PermissionOnboardingContract::new(
+        plan.action.as_str(),
+        permission_prompt_kind(plan),
+        plan.policy.prompt_mode.as_str(),
+        plan.finder_parity_default,
+        plan.granted_for_machine_search(),
+    )
+    .with_scopes(
+        plan.readiness
+            .iter()
+            .map(|item| {
+                PermissionOnboardingScopeContract::new(
+                    item.scope.as_str(),
+                    item.state.as_str(),
+                    item.path.display().to_string(),
+                    item.reason.clone(),
+                )
             })
             .collect(),
     )
@@ -2144,6 +2155,43 @@ mod tests {
             permission_onboarding_contract_inputs_checked(|| Err(GfmError::Cancelled)).unwrap_err();
 
         assert_eq!(err, GfmError::Cancelled);
+    }
+
+    #[test]
+    fn permission_onboarding_contract_carries_machine_search_readiness() {
+        let plan = PermissionOnboardingPlan {
+            policy: gfm_mac::PermissionPolicy::default(),
+            readiness: vec![
+                gfm_mac::PermissionReadiness {
+                    scope: gfm_mac::PermissionScope::Documents,
+                    path: PathBuf::from("/Users/me/Documents"),
+                    state: gfm_mac::PermissionState::Denied,
+                    reason: "operation denied by host".to_string(),
+                },
+                gfm_mac::PermissionReadiness {
+                    scope: gfm_mac::PermissionScope::FullDiskAccess,
+                    path: PathBuf::from("/Users/me/Library/Mail"),
+                    state: gfm_mac::PermissionState::Granted,
+                    reason: "read probe succeeded".to_string(),
+                },
+            ],
+            action: gfm_mac::PermissionAction::ContinueDegraded,
+            finder_parity_default: true,
+        };
+
+        let contract = permission_onboarding_contract(&plan);
+
+        assert_eq!(contract.action, "continue-degraded");
+        assert_eq!(contract.prompt_kind, PermissionPromptKind::DegradedSearch);
+        assert_eq!(contract.prompt_mode, "defer-until-needed");
+        assert!(contract.finder_parity_default);
+        assert!(!contract.machine_search_ready);
+        assert_eq!(contract.scopes.len(), 2);
+        assert_eq!(contract.scopes[0].scope, "documents");
+        assert_eq!(contract.scopes[0].state, "denied");
+        assert!(contract
+            .as_tsv()
+            .contains("\npermission-scope\tdocuments\tstate=denied\tpath=/Users/me/Documents\t"));
     }
 
     #[test]

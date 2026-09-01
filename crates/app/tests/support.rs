@@ -48,12 +48,34 @@ fn reports_ui_lifecycle_contract_from_binary() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
 
-    assert_eq!(
-        stdout.trim(),
-        format!(
-            "window\tGFM\t{}\t1040x720\tmin=640x420\ttransparent-titlebar=true\tactivate=true\ttabs=gfm-main-window\tpermission-dialog=permission\npermission-prompt\tkind=general\tsurface=permission",
+    assert!(
+        stdout.trim().starts_with(&format!(
+            "window\tGFM\t{}\t1040x720\tmin=640x420\ttransparent-titlebar=true\tactivate=true\ttabs=gfm-main-window\tsidebar-home=",
             root.display()
-        )
+        )),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tsidebar-icloud="), "{stdout}");
+    assert!(
+        stdout.contains(
+            "\tpermission-dialog=permission\npermission-prompt\tkind=general\tsurface=permission"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "\npermission-onboarding\taction=continue-normally\tprompt-kind=general\tprompt-mode=defer-until-needed\tfinder-parity-default=true\t"
+        ),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tmachine-search-ready="), "{stdout}");
+    assert!(
+        stdout.contains("\npermission-scope\tdesktop\tstate="),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\npermission-scope\tfull-disk-access\tstate="),
+        "{stdout}"
     );
 
     let _ = std::fs::remove_dir_all(root);
