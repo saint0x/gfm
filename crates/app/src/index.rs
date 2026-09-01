@@ -837,6 +837,8 @@ fn existing_dropped_root_reports_checked(
     let mut existing = Vec::new();
     for root in dropped_roots {
         check_control()?;
+        root.preflight_volume()?;
+        check_control()?;
         if !root.path.try_exists().map_err(|err| {
             GfmError::io(
                 &root.path,
@@ -845,8 +847,6 @@ fn existing_dropped_root_reports_checked(
         })? {
             continue;
         }
-        check_control()?;
-        root.preflight_volume()?;
         check_control()?;
         existing.push(root.clone());
     }
@@ -1517,6 +1517,33 @@ mod tests {
         let result = existing_dropped_root_reports_checked(&[report], || Err(GfmError::Cancelled));
 
         assert_eq!(result.err(), Some(GfmError::Cancelled));
+    }
+
+    #[test]
+    fn dropped_repair_root_filter_refuses_unreachable_volume_before_existence_probe() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-repair-root-filter-unreachable-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let report = IndexPathAccessReport::new_checked(
+            root.clone(),
+            AccessIntent::Read,
+            "fsevents repair schedule dropped root",
+            || Ok(()),
+        )
+        .unwrap();
+
+        let err = match existing_dropped_root_reports_checked(&[report], || Ok(())) {
+            Ok(_) => panic!("unreachable dropped root was admitted before volume preflight"),
+            Err(err) => err,
+        };
+        assert!(err
+            .to_string()
+            .contains("fsevents repair schedule dropped root volume access blocked"));
+        assert!(err.to_string().contains("unreachable volume network"));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
