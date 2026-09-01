@@ -5699,6 +5699,40 @@ fn drains_volume_event_stream_with_explicit_bound_from_binary() {
 }
 
 #[test]
+fn drains_volume_event_stream_into_state_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-volume-events-state-drain-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-events-state-drain-probe")
+        .arg("0")
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("volume-events-state-drain\tattached="));
+    assert!(stdout.contains("\tmax=0\tinput=0\tapplied=0\tresulting-volumes=1\t"));
+    assert!(stdout.contains("\tsidebar=false\toperation-policy=false\t"));
+    assert!(stdout.contains("\tindex-admission=false\trescan-index=false\n"));
+    assert!(
+        stdout.contains("\nvolume-event-state-batch\tinput=0\tapplied=0\tresulting-volumes=1\t")
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_volume_event_invalidation_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-volume-event-invalidation-{}",

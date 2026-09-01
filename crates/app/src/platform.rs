@@ -599,6 +599,21 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     .as_tsv()
             );
         }
+        "volume-events-state-drain-probe" => {
+            let max_events = parse_usize_arg(
+                args.next(),
+                "volume-events-state-drain-probe requires max events",
+            )?;
+            let previous_paths: Vec<PathBuf> = args.map(PathBuf::from).collect();
+            let mut state = VolumeEventState::new(volume_discovery_report(previous_paths, false)?);
+            let stream = VolumeEventStream::start();
+            println!(
+                "{}",
+                stream
+                    .drain_into_state_checked(&mut state, max_events, || Ok(()))?
+                    .as_tsv()
+            );
+        }
         "volume-events-shutdown-probe" => {
             let stream = VolumeEventStream::start();
             let pending = stream.try_recv_checked(|| Ok(()))?.is_some();

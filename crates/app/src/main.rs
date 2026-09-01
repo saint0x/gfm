@@ -902,6 +902,7 @@ fn print_usage() {
   gfm volume-events-probe
   gfm volume-events-cancel-before-recv
   gfm volume-events-drain-probe <max-events>
+  gfm volume-events-state-drain-probe <max-events> [previous-volume-paths...]
   gfm volume-events-shutdown-probe
   gfm volume-event-invalidation <appeared|description-changed|disappeared|unavailable> [path]
   gfm volume-event-transition-invalidation <appeared|description-changed|disappeared|unavailable> <path> <previous-label> <current-label>

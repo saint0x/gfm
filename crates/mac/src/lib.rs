@@ -56,9 +56,9 @@ pub use spotlight::{
 pub use volume::{
     ApfsVolumeRole, MountState, VolumeCapacity, VolumeCommandPolicy, VolumeCommandState,
     VolumeDescriptor, VolumeDiscoveryReport, VolumeEventInvalidationReport, VolumeEventKind,
-    VolumeEventReport, VolumeEventState, VolumeEventStateBatchReport, VolumeEventStateTransition,
-    VolumeEventStream, VolumeKind, VolumeMountIdentityReport, VolumeOperation,
-    VolumeOperationDisposition, VolumeOperationReport, VolumeTopologyChange,
+    VolumeEventReport, VolumeEventState, VolumeEventStateBatchReport, VolumeEventStateDrainReport,
+    VolumeEventStateTransition, VolumeEventStream, VolumeKind, VolumeMountIdentityReport,
+    VolumeOperation, VolumeOperationDisposition, VolumeOperationReport, VolumeTopologyChange,
     VolumeTopologyChangeKind, VolumeTopologyDiff,
 };
 pub use watch::{map_notify_event, FileEventStream, WatchDepth, WatchRoot};

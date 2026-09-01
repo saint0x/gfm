@@ -1123,6 +1123,13 @@ pub struct VolumeEventStateBatchReport {
     pub transitions: Vec<VolumeEventStateTransition>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VolumeEventStateDrainReport {
+    pub attached: bool,
+    pub max_events: usize,
+    pub batch: VolumeEventStateBatchReport,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VolumeEventShutdownReport {
     pub attached_before_shutdown: bool,
@@ -1865,6 +1872,30 @@ impl VolumeEventStream {
         })
     }
 
+    pub fn drain_into_state_checked(
+        &self,
+        state: &mut VolumeEventState,
+        max_events: usize,
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<VolumeEventStateDrainReport> {
+        check()?;
+        let mut events = Vec::with_capacity(max_events);
+        for _ in 0..max_events {
+            check()?;
+            let Some(event) = self.try_recv_checked(&mut check)? else {
+                break;
+            };
+            events.push(event);
+        }
+        check()?;
+        let batch = state.apply_events_checked(events, &mut check)?;
+        Ok(VolumeEventStateDrainReport {
+            attached: self.is_attached(),
+            max_events,
+            batch,
+        })
+    }
+
     pub fn shutdown(self) -> VolumeEventShutdownReport {
         let shutdown = self.stream.shutdown();
         VolumeEventShutdownReport {
@@ -1872,6 +1903,24 @@ impl VolumeEventStream {
             stop_requested: shutdown.stop_requested,
             thread_joined: shutdown.thread_joined,
         }
+    }
+}
+
+impl VolumeEventStateDrainReport {
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "volume-events-state-drain\tattached={}\tmax={}\tinput={}\tapplied={}\tresulting-volumes={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\n{}",
+            self.attached,
+            self.max_events,
+            self.batch.input_events,
+            self.batch.applied_events,
+            self.batch.resulting_volumes,
+            self.batch.invalidate_sidebar,
+            self.batch.invalidate_operation_policy,
+            self.batch.invalidate_index_admission,
+            self.batch.rescan_index,
+            self.batch.as_tsv()
+        )
     }
 }
 
@@ -4798,6 +4847,44 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(err, GfmError::Cancelled);
+        drop(stream);
+    }
+
+    #[test]
+    fn volume_event_stream_state_drain_applies_zero_bound_without_mutating_state() {
+        let root = unique_temp_dir("gfm-volume-event-state-drain-zero");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let mut state =
+            VolumeEventState::new(VolumeDiscoveryReport::from_paths(vec![root.clone()]));
+        let stream = VolumeEventStream::start();
+
+        let report = stream
+            .drain_into_state_checked(&mut state, 0, || Ok(()))
+            .unwrap();
+
+        assert_eq!(report.max_events, 0);
+        assert_eq!(report.batch.input_events, 0);
+        assert_eq!(report.batch.applied_events, 0);
+        assert_eq!(report.batch.resulting_volumes, 1);
+        assert_eq!(state.report().volumes.len(), 1);
+        assert_eq!(report.attached, stream.is_attached());
+        drop(stream);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_event_stream_state_drain_honors_pre_cancelled_control() {
+        let mut state = VolumeEventState::new(VolumeDiscoveryReport {
+            volumes: Vec::new(),
+        });
+        let stream = VolumeEventStream::start();
+
+        let err = stream
+            .drain_into_state_checked(&mut state, 4, || Err(GfmError::Cancelled))
+            .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert!(state.report().volumes.is_empty());
         drop(stream);
     }
 
