@@ -1151,9 +1151,7 @@ impl FileProviderStateInvalidationReport {
                 changes.push(change);
             }
         }
-        let snapshot = FileProviderStateSnapshot {
-            entries: current_entries,
-        };
+        let snapshot = merge_scanned_snapshot(previous, &seen_current_paths, current_entries)?;
         Ok((Self::from_changes(initialized, changes), snapshot))
     }
 
@@ -1199,6 +1197,24 @@ fn should_persist_fileprovider_snapshot_entry(report: &FileProviderStateReport) 
 
 fn fileprovider_invalidation_change_is_visible(change: &FileProviderInvalidationReport) -> bool {
     change.reason != "not-provider-visible"
+}
+
+fn merge_scanned_snapshot(
+    previous: Option<&FileProviderStateSnapshot>,
+    scanned_paths: &BTreeSet<PathBuf>,
+    current_entries: Vec<FileProviderStateSnapshotEntry>,
+) -> Result<FileProviderStateSnapshot> {
+    let mut entries = previous
+        .map(|snapshot| snapshot.entries.clone())
+        .unwrap_or_default();
+    entries.retain(|entry| !scanned_paths.contains(&entry.path));
+    entries.extend(current_entries);
+    entries.sort_by(|left, right| left.path.cmp(&right.path));
+    validate_unique_fileprovider_snapshot_paths(
+        Path::new("merged scanned FileProvider snapshot"),
+        &entries,
+    )?;
+    Ok(FileProviderStateSnapshot { entries })
 }
 
 impl FileProviderObservedInvalidation {
@@ -1287,11 +1303,17 @@ fn merge_observed_snapshot(
         .iter()
         .map(PathBuf::as_path)
         .collect::<BTreeSet<_>>();
+    let event_snapshot_paths = event_snapshot
+        .entries
+        .iter()
+        .map(|entry| entry.path.as_path())
+        .collect::<BTreeSet<_>>();
     let mut entries = previous
         .map(|snapshot| snapshot.entries.clone())
         .unwrap_or_default();
     entries.retain(|entry| {
         !observed_exact.contains(entry.path.as_path())
+            && !event_snapshot_paths.contains(entry.path.as_path())
             && !observed_paths
                 .iter()
                 .any(|path| entry.path.starts_with(path))
@@ -4613,23 +4635,32 @@ mod tests {
     #[test]
     fn observed_snapshot_merge_rejects_duplicate_merged_paths() {
         let root = PathBuf::from("/tmp/gfm-merge-observed-snapshot-duplicate");
-        let unrelated = root.join("Unrelated.icloud-placeholder");
         let observed = root.join("Observed.icloud-placeholder");
         let previous = FileProviderStateSnapshot {
             entries: vec![FileProviderStateSnapshotEntry {
-                path: unrelated.clone(),
+                path: root.join("Unrelated.icloud-placeholder"),
                 state: CloudStorageState::Evicted,
             }],
         };
         let event_snapshot = FileProviderStateSnapshot {
-            entries: vec![FileProviderStateSnapshotEntry {
-                path: unrelated.clone(),
-                state: CloudStorageState::Downloaded,
-            }],
+            entries: vec![
+                FileProviderStateSnapshotEntry {
+                    path: observed.clone(),
+                    state: CloudStorageState::Downloaded,
+                },
+                FileProviderStateSnapshotEntry {
+                    path: observed.clone(),
+                    state: CloudStorageState::Evicted,
+                },
+            ],
         };
 
-        let err =
-            merge_observed_snapshot(Some(&previous), &[observed], event_snapshot).unwrap_err();
+        let err = merge_observed_snapshot(
+            Some(&previous),
+            std::slice::from_ref(&observed),
+            event_snapshot,
+        )
+        .unwrap_err();
 
         assert!(err
             .to_string()
@@ -4637,7 +4668,7 @@ mod tests {
         assert!(err
             .to_string()
             .contains("merged observed FileProvider snapshot"));
-        assert!(err.to_string().contains(&unrelated.display().to_string()));
+        assert!(err.to_string().contains(&observed.display().to_string()));
     }
 
     #[test]
@@ -5764,6 +5795,85 @@ mod tests {
             })
             .count();
         assert_eq!(leftovers, 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn state_invalidation_scan_preserves_unscanned_snapshot_entries() {
+        let root = unique_temp_dir();
+        let unchanged = root.join("Unchanged.icloud-placeholder");
+        let changed = root.join("Changed.icloud-placeholder");
+        fs::write(&unchanged, "unchanged").unwrap();
+        fs::write(&changed, "changed").unwrap();
+        mark_evicted_fixture(&unchanged);
+        mark_evicted_fixture(&changed);
+        let previous = FileProviderStateSnapshot {
+            entries: vec![
+                FileProviderStateSnapshotEntry {
+                    path: unchanged.clone(),
+                    state: CloudStorageState::Evicted,
+                },
+                FileProviderStateSnapshotEntry {
+                    path: changed.clone(),
+                    state: CloudStorageState::Downloaded,
+                },
+            ],
+        };
+
+        let (report, snapshot) =
+            FileProviderStateInvalidationReport::evaluate(Some(&previous), [changed.clone()])
+                .unwrap();
+
+        assert!(!report.initialized);
+        assert_eq!(report.changes.len(), 1);
+        assert_eq!(report.changes[0].path, changed);
+        assert_eq!(report.changes[0].previous, CloudStorageState::Downloaded);
+        assert_eq!(
+            report.changes[0].current.storage_state,
+            CloudStorageState::Evicted
+        );
+        assert!(snapshot
+            .entries
+            .iter()
+            .any(|entry| { entry.path == unchanged && entry.state == CloudStorageState::Evicted }));
+        assert_eq!(snapshot.entries.len(), 2);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn state_invalidation_scan_removes_scanned_local_entry_only() {
+        let root = unique_temp_dir();
+        let unchanged = root.join("Unchanged.icloud-placeholder");
+        let local = root.join("Downloaded.icloud.md");
+        fs::write(&unchanged, "unchanged").unwrap();
+        fs::write(&local, "local").unwrap();
+        mark_evicted_fixture(&unchanged);
+        let previous = FileProviderStateSnapshot {
+            entries: vec![
+                FileProviderStateSnapshotEntry {
+                    path: unchanged.clone(),
+                    state: CloudStorageState::Evicted,
+                },
+                FileProviderStateSnapshotEntry {
+                    path: local.clone(),
+                    state: CloudStorageState::Downloaded,
+                },
+            ],
+        };
+
+        let (report, snapshot) =
+            FileProviderStateInvalidationReport::evaluate(Some(&previous), [local.clone()])
+                .unwrap();
+
+        assert_eq!(report.changes.len(), 1);
+        assert_eq!(report.changes[0].path, local);
+        assert_eq!(
+            report.changes[0].current.storage_state,
+            CloudStorageState::LocalOnly
+        );
+        assert_eq!(snapshot.entries.len(), 1);
+        assert_eq!(snapshot.entries[0].path, unchanged);
+        assert_eq!(snapshot.entries[0].state, CloudStorageState::Evicted);
         fs::remove_dir_all(root).unwrap();
     }
 
