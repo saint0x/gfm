@@ -3219,30 +3219,68 @@ fn preview_cache_refuses_unreachable_cache_root_before_invalidation_from_binary(
     std::fs::create_dir_all(&root).unwrap();
     std::fs::create_dir_all(&offline).unwrap();
     std::fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
-    let cache = offline.join("cache");
+    let cache = offline.join(format!("{}.cache", "preview-cache-unavailable".repeat(12)));
     let evicted = root.join("Remote.icloud-placeholder");
+    let state = root.join("fileprovider-state.tsv");
     std::fs::write(&evicted, "placeholder").unwrap();
     mark_evicted_fixture(&evicted);
+    std::fs::write(
+        &state,
+        format!(
+            "gfm-fileprovider-state-v1\ndownloaded\t{}\n",
+            evicted.display()
+        ),
+    )
+    .unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
-        .arg("preview-cache-fileprovider-invalidation")
-        .arg(&cache)
-        .arg("downloaded")
-        .arg(&evicted)
-        .arg("thumbnail")
-        .output()
-        .unwrap();
+    for args in [
+        vec![
+            "preview-cache-fileprovider-invalidation".to_string(),
+            cache.display().to_string(),
+            "downloaded".to_string(),
+            evicted.display().to_string(),
+            "thumbnail".to_string(),
+        ],
+        vec![
+            "preview-cache-fileprovider-observed-invalidation".to_string(),
+            cache.display().to_string(),
+            state.display().to_string(),
+            "thumbnail".to_string(),
+            "metadata".to_string(),
+            evicted.display().to_string(),
+        ],
+        vec![
+            "preview-cache-fileprovider-observer-probe".to_string(),
+            cache.display().to_string(),
+            state.display().to_string(),
+            "thumbnail".to_string(),
+            root.display().to_string(),
+            evicted.display().to_string(),
+        ],
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+            .args(args)
+            .output()
+            .unwrap();
 
-    assert!(!output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!stdout.contains("preview-cache-invalidation\t"), "{stdout}");
-    assert!(
-        stderr.contains("preview cache root volume access blocked: unreachable volume network"),
-        "{stderr}"
-    );
-    assert!(!stderr.contains("security-worker-admission\t"), "{stderr}");
-    assert!(!cache.exists());
+        assert!(!output.status.success());
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!stdout.contains("preview-cache-invalidation\t"), "{stdout}");
+        assert!(
+            stderr.contains("preview cache root volume access blocked: unreachable volume network")
+                || stderr.contains(
+                    "preview cache fileprovider observer cache volume access blocked: unreachable volume network"
+                ),
+            "{stderr}"
+        );
+        assert!(
+            !stderr.contains("platform write path metadata unavailable"),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("security-worker-admission\t"), "{stderr}");
+        assert!(!cache.exists());
+    }
 
     let _ = std::fs::remove_dir_all(root);
     let _ = std::fs::remove_dir_all(offline);
@@ -4193,6 +4231,69 @@ fn fileprovider_invalidation_scan_removes_tracked_entry_without_provider_evidenc
     );
 
     let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn fileprovider_progress_job_refuses_unreachable_journal_before_provider_read_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-fileprovider-progress-journal-blocked-{}",
+        std::process::id()
+    ));
+    let offline = std::env::temp_dir().join(format!(
+        "gfm-fileprovider-progress-journal-offline-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&offline);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&offline).unwrap();
+    std::fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let downloading = root.join("Downloading.icloud-downloading.md");
+    let progress = root.join("progress.gfmprogress");
+    let catalog = root.join("payloads.gfmjobs");
+    let journal = offline.join(format!(
+        "{}.gfmjournal",
+        "fileprovider-progress-journal-unavailable".repeat(8)
+    ));
+    std::fs::write(&downloading, "downloading").unwrap();
+    xattr::set(&downloading, "com.apple.fileprovider.state", b"downloading").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_JOURNAL", &journal)
+        .arg("fileprovider-progress-job")
+        .arg(&downloading)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("fileprovider-progress\t"), "{stdout}");
+    assert!(
+        stderr.contains(
+            "fileprovider progress job volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("platform write path metadata unavailable"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=fileprovider progress job\tpath={}",
+            downloading.display()
+        )),
+        "{stderr}"
+    );
+    assert!(!progress.exists());
+    assert!(!catalog.exists());
+    assert!(!journal.exists());
+
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(offline);
 }
 
 #[test]

@@ -298,7 +298,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let path = required_path(args.next(), "fileprovider-progress-job requires a path")?;
             let _runtime_access = preflight_runtime_job_state("fileprovider progress job")?;
             let journal = default_job_journal_path();
-            let journal_probe = write_probe_path(&journal)?.to_path_buf();
+            let journal_probe = checked_write_probe_path(&journal, "fileprovider progress job")?;
             let _journal_access = preflight_access_scope_checked(
                 &journal_probe,
                 AccessIntent::Write,
@@ -438,17 +438,18 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "preview-cache-fileprovider-observer-probe requires a FileProvider target path",
             )?;
+            let cache_probe =
+                checked_write_probe_path(&cache_root, "preview cache fileprovider observer cache")?;
+            let cache_access_report =
+                PlatformAccessReport::new_checked(cache_probe, AccessIntent::Write, || Ok(()))?;
+            cache_access_report.preflight_volume("preview cache fileprovider observer cache")?;
+            let volume = cache_access_report.volume();
             let observed = run_fileprovider_observer_probe(
                 &state_path,
                 &root,
                 &target,
                 "preview cache fileprovider observer",
             )?;
-            let cache_probe = write_probe_path(&cache_root)?.to_path_buf();
-            let cache_access_report =
-                PlatformAccessReport::new_checked(cache_probe, AccessIntent::Write, || Ok(()))?;
-            cache_access_report.preflight_volume("preview cache fileprovider observer cache")?;
-            let volume = cache_access_report.volume();
             println!(
                 "{}",
                 run_volume_task_cancellable(
@@ -3065,7 +3066,7 @@ fn run_security_bookmark_create(path: PathBuf, intent: AccessIntent) -> Result<V
     }
     let store = SecurityScopedBookmarkStore::new(crate::runtime::default_security_bookmarks_path());
     let store_access_report = PlatformAccessReport::new_checked(
-        write_probe_path(store.path())?.to_path_buf(),
+        checked_write_probe_path(store.path(), STORE_WORKER)?,
         AccessIntent::Write,
         || Ok(()),
     )?;
@@ -3096,7 +3097,7 @@ fn run_security_bookmark_reconcile() -> Result<gfm_mac::SecurityScopedBookmarkSt
     const WORKER: &str = "security bookmark reconcile";
     let store = SecurityScopedBookmarkStore::new(crate::runtime::default_security_bookmarks_path());
     let store_access_report = PlatformAccessReport::new_checked(
-        write_probe_path(store.path())?.to_path_buf(),
+        checked_write_probe_path(store.path(), WORKER)?,
         AccessIntent::Write,
         || Ok(()),
     )?;
@@ -3194,7 +3195,7 @@ fn run_preview_cache_fileprovider_invalidation(
 ) -> Result<String> {
     const CACHE_WORKER: &str = "preview cache root";
     const WORKER: &str = "preview cache";
-    let cache_probe = write_probe_path(&cache_root)?.to_path_buf();
+    let cache_probe = checked_write_probe_path(&cache_root, CACHE_WORKER)?;
     let cache_access_report =
         PlatformAccessReport::new_checked(cache_probe, AccessIntent::Write, || Ok(()))?;
     let path_access_report =
@@ -3242,7 +3243,7 @@ fn run_preview_cache_fileprovider_observed_invalidation(
     event: FileEvent,
 ) -> Result<String> {
     const WORKER: &str = "preview cache fileprovider observed invalidation";
-    let cache_probe = write_probe_path(&cache_root)?.to_path_buf();
+    let cache_probe = checked_write_probe_path(&cache_root, "preview cache root")?;
     let cache_access_report =
         PlatformAccessReport::new_checked(cache_probe, AccessIntent::Write, || Ok(()))?;
     let event_access_reports =

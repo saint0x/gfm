@@ -1175,6 +1175,10 @@ fn security_bookmark_create_refuses_unreachable_store_before_persisting_from_bin
         "{stderr}"
     );
     assert!(
+        !stderr.contains("platform write path metadata unavailable"),
+        "{stderr}"
+    );
+    assert!(
         !stderr.contains("security-worker-admission\tworker=security bookmark store\t"),
         "{stderr}"
     );
@@ -1557,6 +1561,10 @@ fn preview_cache_invalidation_refuses_unreachable_cache_root_before_disk_touch_f
     assert!(!stdout.contains("preview-cache-invalidation\t"), "{stdout}");
     assert!(
         stderr.contains("preview cache root volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("platform write path metadata unavailable"),
         "{stderr}"
     );
     assert!(!cache_root.exists());
