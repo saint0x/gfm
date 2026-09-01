@@ -288,7 +288,7 @@ impl ContentIndexQuerySession {
         let mut postings = Vec::with_capacity(selected.len());
         let mut misses = Vec::new();
         {
-            let cache = self.posting_cache_lock();
+            let mut cache = self.posting_cache_lock();
             for term in &selected {
                 cancellation.check()?;
                 let key = posting_cache_key(term, budget.max_content_ids_per_term);
@@ -529,15 +529,19 @@ impl ContentPostingCache {
         }
     }
 
-    fn get(&self, key: &str) -> Option<Option<ContentPosting>> {
-        self.values.get(key).cloned()
+    fn get(&mut self, key: &str) -> Option<Option<ContentPosting>> {
+        let value = self.values.get(key).cloned()?;
+        refresh_string_recency(&mut self.order, key);
+        Some(value)
     }
 
     fn insert(&mut self, key: String, posting: Option<ContentPosting>) {
         if self.capacity == 0 {
             return;
         }
-        if !self.values.contains_key(&key) {
+        if self.values.contains_key(&key) {
+            refresh_string_recency(&mut self.order, &key);
+        } else {
             self.order.push_back(key.clone());
         }
         self.values.insert(key, posting);
@@ -573,15 +577,19 @@ impl ContentResultCache {
         }
     }
 
-    fn get(&self, key: &str) -> Option<ContentQuerySessionReport> {
-        self.values.get(key).cloned()
+    fn get(&mut self, key: &str) -> Option<ContentQuerySessionReport> {
+        let value = self.values.get(key).cloned()?;
+        refresh_string_recency(&mut self.order, key);
+        Some(value)
     }
 
     fn insert(&mut self, key: String, report: ContentQuerySessionReport) {
         if self.capacity == 0 {
             return;
         }
-        if !self.values.contains_key(&key) {
+        if self.values.contains_key(&key) {
+            refresh_string_recency(&mut self.order, &key);
+        } else {
             self.order.push_back(key.clone());
         }
         self.values.insert(key, report);
@@ -592,6 +600,16 @@ impl ContentResultCache {
             self.values.remove(&expired);
         }
     }
+}
+
+fn refresh_string_recency(order: &mut VecDeque<String>, key: &str) {
+    let Some(index) = order.iter().position(|candidate| candidate == key) else {
+        return;
+    };
+    let Some(key) = order.remove(index) else {
+        return;
+    };
+    order.push_back(key);
 }
 
 impl ContentRecordCache {
@@ -689,6 +707,53 @@ mod tests {
         assert_eq!(second.result_cache_hits, 1);
         assert_eq!(second.result_cache_misses, 0);
         assert_eq!(session.result_cache_telemetry(), (1, 1));
+    }
+
+    #[test]
+    fn content_posting_cache_refreshes_recency_on_hit() {
+        let first = ContentPosting {
+            term: "first".to_string(),
+            ids: vec![FileId::new(VolumeId(1), 1)],
+            positions: Vec::new(),
+        };
+        let second = ContentPosting {
+            term: "second".to_string(),
+            ids: vec![FileId::new(VolumeId(1), 2)],
+            positions: Vec::new(),
+        };
+        let third = ContentPosting {
+            term: "third".to_string(),
+            ids: vec![FileId::new(VolumeId(1), 3)],
+            positions: Vec::new(),
+        };
+        let mut cache = ContentPostingCache::new(2);
+        cache.insert("first".to_string(), Some(first.clone()));
+        cache.insert("second".to_string(), Some(second));
+
+        assert_eq!(cache.get("first"), Some(Some(first.clone())));
+        cache.insert("third".to_string(), Some(third));
+
+        assert_eq!(cache.get("first"), Some(Some(first)));
+        assert_eq!(cache.get("second"), None);
+    }
+
+    #[test]
+    fn content_result_cache_refreshes_recency_on_hit() {
+        let mut first = empty_content_query_session_report();
+        first.result_cache_misses = 11;
+        let mut second = empty_content_query_session_report();
+        second.result_cache_misses = 22;
+        let mut third = empty_content_query_session_report();
+        third.result_cache_misses = 33;
+        let mut cache = ContentResultCache::new(2);
+        cache.insert("first".to_string(), first.clone());
+        cache.insert("second".to_string(), second);
+
+        assert_eq!(cache.get("first"), Some(first.clone()));
+        cache.insert("third".to_string(), third);
+
+        assert_eq!(cache.get("first"), Some(first));
+        assert_eq!(cache.get("second"), None);
     }
 
     #[test]
