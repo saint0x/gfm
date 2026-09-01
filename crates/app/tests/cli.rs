@@ -2984,6 +2984,62 @@ fn derived_sidecar_rebuild_retry_probe_recovers_transient_failure_from_binary() 
 }
 
 #[test]
+fn derived_sidecar_rebuild_retry_probe_refuses_unreachable_state_before_repair_from_binary() {
+    let root = unique_temp_dir("gfm-cli-derived-rebuild-retry-probe-root");
+    let offline = unique_temp_dir("gfm-cli-derived-rebuild-retry-probe-offline");
+    let records = unique_temp_path("gfm-cli-derived-rebuild-retry-probe-records", "gfmidx");
+    let prefixes = unique_temp_path("gfm-cli-derived-rebuild-retry-probe-prefixes", "gfmprefix");
+    let backup = unique_temp_dir("gfm-cli-derived-rebuild-retry-probe-backup");
+    let retry_probe = offline.join("derived-sidecar-retry.state");
+    fs::write(root.join("BlockedSidecar.md"), "derived blocked").unwrap();
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+
+    let index = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["index", root.to_str().unwrap(), records.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        index.status.success(),
+        "{}",
+        String::from_utf8_lossy(&index.stderr)
+    );
+
+    let rebuild = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "derived-sidecar-rebuild-retry-probe",
+            records.to_str().unwrap(),
+            "prefixes",
+            prefixes.to_str().unwrap(),
+            backup.to_str().unwrap(),
+            retry_probe.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!rebuild.status.success());
+    let stdout = String::from_utf8_lossy(&rebuild.stdout);
+    let stderr = String::from_utf8_lossy(&rebuild.stderr);
+    assert!(!stdout.contains("derived-sidecar-rebuild\t"), "{stdout}");
+    assert!(
+        stderr
+            .contains("derived sidecar rebuild volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("archive write path metadata unavailable"),
+        "{stderr}"
+    );
+    assert!(!retry_probe.exists());
+    assert!(!prefixes.exists());
+    assert!(fs::read_dir(&backup).unwrap().next().is_none());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_dir_all(backup).unwrap();
+}
+
+#[test]
 fn derived_sidecar_rebuild_reports_output_probe_failure_before_repair_from_binary() {
     let root = unique_temp_dir("gfm-cli-derived-rebuild-output-probe");
     let records = root.join("records.gfmidx");
@@ -6855,6 +6911,65 @@ fn sidecar_recover_retries_transient_corrupt_sidecar_from_binary() {
 }
 
 #[test]
+fn sidecar_recover_retry_probe_refuses_unreachable_state_before_repair_from_binary() {
+    let root = unique_temp_dir("gfm-cli-sidecar-recovery-retry-probe-root");
+    let offline = unique_temp_dir("gfm-cli-sidecar-recovery-retry-probe-offline");
+    let records = unique_temp_path("gfm-cli-sidecar-recovery-retry-probe", "gfmidx");
+    let prefixes = unique_temp_path("gfm-cli-sidecar-recovery-retry-probe", "gfmprefix");
+    let quarantine = unique_temp_dir("gfm-cli-sidecar-recovery-retry-probe-quarantine");
+    let retry_probe = offline.join("sidecar-repair-retry.state");
+    fs::write(root.join("RepairBlocked.md"), "sidecar blocked").unwrap();
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+
+    let index = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["index", root.to_str().unwrap(), records.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        index.status.success(),
+        "{}",
+        String::from_utf8_lossy(&index.stderr)
+    );
+
+    let recover = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "sidecar-recover-retry-probe",
+            records.to_str().unwrap(),
+            quarantine.to_str().unwrap(),
+            retry_probe.to_str().unwrap(),
+            "-",
+            "-",
+            prefixes.to_str().unwrap(),
+            "-",
+            "-",
+            "-",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!recover.status.success());
+    let stdout = String::from_utf8_lossy(&recover.stdout);
+    let stderr = String::from_utf8_lossy(&recover.stderr);
+    assert!(!stdout.contains("sidecar-recovery\t"), "{stdout}");
+    assert!(
+        stderr.contains("sidecar repair volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("archive write path metadata unavailable"),
+        "{stderr}"
+    );
+    assert!(!retry_probe.exists());
+    assert!(!prefixes.exists());
+    assert!(fs::read_dir(&quarantine).unwrap().next().is_none());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_dir_all(quarantine).unwrap();
+}
+
+#[test]
 fn sidecar_recovery_plan_refuses_unreachable_sidecar_before_inspection_from_binary() {
     let root = unique_temp_dir("gfm-cli-sidecar-recovery-plan-root");
     let offline = unique_temp_dir("gfm-cli-sidecar-recovery-plan-offline");
@@ -7541,6 +7656,48 @@ fn live_copy_operation_retries_transient_failure_from_binary() {
     );
 
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn operation_retry_probe_refuses_unreachable_state_before_mutating_from_binary() {
+    let root = unique_temp_dir("gfm-cli-ops-retry-probe-root");
+    let offline = unique_temp_dir("gfm-cli-ops-retry-probe-offline");
+    let journal = root.join("ops.journal");
+    let source = root.join("source.txt");
+    let destination = root.join("destination.txt");
+    let state = offline.join("retry.state");
+    fs::write(&source, "must not copy").unwrap();
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_OPS_JOURNAL", &journal)
+        .args([
+            "copy-retry-probe",
+            source.to_str().unwrap(),
+            destination.to_str().unwrap(),
+            state.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.contains("operation retry probe volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("operation write path metadata unavailable"),
+        "{stderr}"
+    );
+    assert!(!destination.exists());
+    assert!(!journal.exists());
+    assert!(!state.exists());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
 }
 
 #[test]

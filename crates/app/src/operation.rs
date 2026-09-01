@@ -542,6 +542,11 @@ fn execute_operation_inner(
     let volume_report = operation_volume_report_checked(&operation, || Ok(()))?;
     let volume_copy_policy = operation_volume_copy_policy_from_report(&operation, &volume_report);
     let volume = operation_volume(&operation, &volume_report);
+    let retry_probe_access_report =
+        operation_retry_probe_access_report_checked(retry_probe.as_deref(), || Ok(()))?;
+    if let Some(report) = &retry_probe_access_report {
+        report.preflight_volume("operation retry probe")?;
+    }
     let entry = run_volume_task_cancellable_with_runtime(
         volume,
         Priority::Interactive,
@@ -550,6 +555,13 @@ fn execute_operation_inner(
             cancellation.check()?;
             let access_gate =
                 operation_access_gate_checked(&operation, &volume_report, || cancellation.check())?;
+            cancellation.check()?;
+            let _retry_probe_access = retry_probe_access_report
+                .as_ref()
+                .map(|report| {
+                    report.access_checked("operation retry probe", || cancellation.check())
+                })
+                .transpose()?;
             cancellation.check()?;
             preflight_operation_target_probe(&operation, &volume_report, || cancellation.check())?;
             cancellation.check()?;
@@ -810,6 +822,21 @@ fn operation_uses_trash_metadata(operation: &Operation) -> bool {
             | Operation::EmptyTrash { .. }
             | Operation::Restore { .. }
     )
+}
+
+fn operation_retry_probe_access_report_checked(
+    retry_probe: Option<&Path>,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Option<OperationPathAccessReport>> {
+    retry_probe
+        .map(|retry_probe| {
+            check_control()?;
+            let probe =
+                write_probe_path_checked(retry_probe, "operation retry probe", &mut check_control)?;
+            check_control()?;
+            OperationPathAccessReport::new_checked(probe, AccessIntent::Write, &mut check_control)
+        })
+        .transpose()
 }
 
 fn preflight_operation_journal_write_checked(
@@ -2629,6 +2656,51 @@ mod tests {
             "{err}"
         );
         assert!(!journal.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operation_retry_probe_access_checked_honors_pre_cancelled_control_before_write_probe() {
+        let root = unique_temp_dir("gfm-app-op-retry-probe-pre-cancel");
+        let retry_probe = root.join("retry.state");
+
+        let result = operation_retry_probe_access_report_checked(Some(&retry_probe), || {
+            Err(GfmError::Cancelled)
+        });
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!retry_probe.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operation_retry_probe_refuses_unreachable_volume_before_write_probe() {
+        let root = unique_temp_dir("gfm-app-op-retry-probe-unreachable-before-probe");
+        fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let retry_probe = root.join(format!(
+            "{}.state",
+            "operation-retry-unavailable".repeat(16)
+        ));
+
+        let err = match operation_retry_probe_access_report_checked(Some(&retry_probe), || Ok(())) {
+            Ok(_) => {
+                panic!("unreachable operation retry probe was admitted before volume preflight")
+            }
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains(
+                "operation retry probe volume access blocked: unreachable volume network"
+            ),
+            "{err}"
+        );
+        assert!(
+            !err.to_string()
+                .contains("operation write path metadata unavailable"),
+            "{err}"
+        );
+        assert!(!retry_probe.exists());
         fs::remove_dir_all(root).unwrap();
     }
 

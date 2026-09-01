@@ -1,6 +1,6 @@
 use crate::access::{
-    preflight_access_scope_checked, preflight_access_scope_checked_with_volume_report,
-    preflight_volume_access_scope_with_report, ScopedAccessGuard,
+    preflight_access_scope_checked_with_volume_report, preflight_volume_access_scope_with_report,
+    ScopedAccessGuard,
 };
 use crate::runtime::{
     run_retriable_volume_task_cancellable_with_payload_path,
@@ -277,13 +277,18 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 derived_sidecar_rebuild_access_reports(&records, &sidecar, &backup_dir)?;
             access_reports.preflight_volumes()?;
             let volume = access_reports.first_volume();
-            if let Some(retry_probe) = retry_probe.as_ref() {
-                ArchiveAccessReport::new_checked(
-                    write_probe_path_checked(retry_probe, "derived sidecar rebuild", || Ok(()))?,
-                    AccessIntent::Write,
-                    || Ok(()),
-                )?
-                .preflight_volume("derived sidecar rebuild")?;
+            let retry_probe_access = retry_probe
+                .as_ref()
+                .map(|retry_probe| {
+                    ArchiveRetryProbe::new_checked(
+                        retry_probe.clone(),
+                        "derived sidecar rebuild",
+                        || Ok(()),
+                    )
+                })
+                .transpose()?;
+            if let Some(retry_probe) = &retry_probe_access {
+                retry_probe.preflight_volume()?;
             }
             let rebuild = run_retriable_volume_task_cancellable_with_payload_path(
                 volume,
@@ -295,9 +300,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     let sidecar = sidecar.clone();
                     let backup_dir = backup_dir.clone();
                     let retry_probe = retry_probe.clone();
+                    let retry_probe_access = retry_probe_access.clone();
                     cancellation.check()?;
-                    if let Some(retry_probe) = retry_probe.as_ref() {
-                        fail_first_archive_retry_probe_attempt(
+                    if let (Some(retry_probe), Some(retry_probe_access)) =
+                        (retry_probe.as_ref(), retry_probe_access.as_ref())
+                    {
+                        fail_first_archive_retry_probe_attempt_with_access(
+                            retry_probe_access,
                             retry_probe,
                             "derived sidecar rebuild",
                             &cancellation,
@@ -508,13 +517,14 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let access_reports = sidecar_recovery_access_reports(&records, &sidecars, &quarantine)?;
             access_reports.preflight_volumes()?;
             let volume = access_reports.first_volume();
-            if let Some(retry_probe) = retry_probe.as_ref() {
-                ArchiveAccessReport::new_checked(
-                    write_probe_path_checked(retry_probe, "sidecar repair", || Ok(()))?,
-                    AccessIntent::Write,
-                    || Ok(()),
-                )?
-                .preflight_volume("sidecar repair")?;
+            let retry_probe_access = retry_probe
+                .as_ref()
+                .map(|retry_probe| {
+                    ArchiveRetryProbe::new_checked(retry_probe.clone(), "sidecar repair", || Ok(()))
+                })
+                .transpose()?;
+            if let Some(retry_probe) = &retry_probe_access {
+                retry_probe.preflight_volume()?;
             }
             let report = run_retriable_volume_task_cancellable_with_payload_path(
                 volume,
@@ -526,9 +536,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     let sidecars = sidecars.clone();
                     let quarantine = quarantine.clone();
                     let retry_probe = retry_probe.clone();
+                    let retry_probe_access = retry_probe_access.clone();
                     cancellation.check()?;
-                    if let Some(retry_probe) = retry_probe.as_ref() {
-                        fail_first_archive_retry_probe_attempt(
+                    if let (Some(retry_probe), Some(retry_probe_access)) =
+                        (retry_probe.as_ref(), retry_probe_access.as_ref())
+                    {
+                        fail_first_archive_retry_probe_attempt_with_access(
+                            retry_probe_access,
                             retry_probe,
                             "sidecar repair",
                             &cancellation,
@@ -1287,16 +1301,53 @@ fn preflight_write_target_volume_checked(
     )
 }
 
-fn fail_first_archive_retry_probe_attempt(
+#[derive(Clone)]
+struct ArchiveRetryProbe {
+    access_report: ArchiveAccessReport,
+    worker: &'static str,
+}
+
+impl ArchiveRetryProbe {
+    fn new_checked(
+        attempt_state: PathBuf,
+        worker: &'static str,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check_control()?;
+        let probe = write_probe_path_checked(&attempt_state, worker, &mut check_control)?;
+        check_control()?;
+        let access_report =
+            ArchiveAccessReport::new_checked(probe, AccessIntent::Write, &mut check_control)?;
+        check_control()?;
+        Ok(Self {
+            access_report,
+            worker,
+        })
+    }
+
+    fn preflight_volume(&self) -> Result<()> {
+        self.access_report.preflight_volume(self.worker)
+    }
+}
+
+fn fail_first_archive_retry_probe_attempt_with_access(
+    retry_probe: &ArchiveRetryProbe,
     attempt_state: &Path,
     worker: &str,
     cancellation: &Cancellation,
 ) -> Result<()> {
     cancellation.check()?;
-    let probe = write_probe_path_checked(attempt_state, worker, || cancellation.check())?;
-    let _access = preflight_access_scope_checked(&probe, AccessIntent::Write, worker, || {
-        cancellation.check()
-    })?;
+    let _access = retry_probe
+        .access_report
+        .access_checked(retry_probe.worker, || cancellation.check())?;
+    fail_first_archive_retry_probe_attempt_after_access(attempt_state, worker, cancellation)
+}
+
+fn fail_first_archive_retry_probe_attempt_after_access(
+    attempt_state: &Path,
+    worker: &str,
+    cancellation: &Cancellation,
+) -> Result<()> {
     cancellation.check()?;
     let attempts =
         read_archive_retry_probe_attempt_checked(attempt_state, || cancellation.check())?;
