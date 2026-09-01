@@ -1075,6 +1075,11 @@ pub struct VolumeEventInvalidationReport {
     pub path: Option<PathBuf>,
     pub previous_kind: Option<VolumeKind>,
     pub previous_mount_state: Option<MountState>,
+    pub previous_read_only: Option<bool>,
+    pub previous_writable: Option<bool>,
+    pub previous_network: Option<bool>,
+    pub previous_reachable: Option<bool>,
+    pub previous_ejectable: Option<bool>,
     pub previous_case_sensitive: Option<bool>,
     pub previous_native_status: Option<NativeVolumeStatus>,
     pub previous_native_reason: Option<String>,
@@ -1084,6 +1089,11 @@ pub struct VolumeEventInvalidationReport {
     pub previous_mount_table_reason: Option<String>,
     pub current_kind: Option<VolumeKind>,
     pub current_mount_state: Option<MountState>,
+    pub current_read_only: Option<bool>,
+    pub current_writable: Option<bool>,
+    pub current_network: Option<bool>,
+    pub current_reachable: Option<bool>,
+    pub current_ejectable: Option<bool>,
     pub current_case_sensitive: Option<bool>,
     pub current_native_status: Option<NativeVolumeStatus>,
     pub current_native_reason: Option<String>,
@@ -1281,6 +1291,11 @@ impl VolumeEventInvalidationReport {
                     path,
                     previous_kind: previous.map(|descriptor| descriptor.kind),
                     previous_mount_state: previous.map(|descriptor| descriptor.mount_state),
+                    previous_read_only: previous.map(|descriptor| descriptor.read_only),
+                    previous_writable: previous.map(|descriptor| descriptor.writable),
+                    previous_network: previous.map(|descriptor| descriptor.network),
+                    previous_reachable: previous.and_then(|descriptor| descriptor.reachable),
+                    previous_ejectable: previous.map(|descriptor| descriptor.ejectable),
                     previous_case_sensitive: previous
                         .and_then(|descriptor| descriptor.case_sensitive),
                     previous_native_status: previous
@@ -1300,6 +1315,11 @@ impl VolumeEventInvalidationReport {
                     }),
                     current_kind: current.map(|descriptor| descriptor.kind),
                     current_mount_state: current.map(|descriptor| descriptor.mount_state),
+                    current_read_only: current.map(|descriptor| descriptor.read_only),
+                    current_writable: current.map(|descriptor| descriptor.writable),
+                    current_network: current.map(|descriptor| descriptor.network),
+                    current_reachable: current.and_then(|descriptor| descriptor.reachable),
+                    current_ejectable: current.map(|descriptor| descriptor.ejectable),
                     current_case_sensitive: current
                         .and_then(|descriptor| descriptor.case_sensitive),
                     current_native_status: current.and_then(|descriptor| descriptor.native_status),
@@ -1334,6 +1354,16 @@ impl VolumeEventInvalidationReport {
                 let current_mount_state = current.map(|descriptor| descriptor.mount_state);
                 let previous_kind = previous.map(|descriptor| descriptor.kind);
                 let previous_mount_state = previous.map(|descriptor| descriptor.mount_state);
+                let current_read_only = current.map(|descriptor| descriptor.read_only);
+                let current_writable = current.map(|descriptor| descriptor.writable);
+                let current_network = current.map(|descriptor| descriptor.network);
+                let current_reachable = current.and_then(|descriptor| descriptor.reachable);
+                let current_ejectable = current.map(|descriptor| descriptor.ejectable);
+                let previous_read_only = previous.map(|descriptor| descriptor.read_only);
+                let previous_writable = previous.map(|descriptor| descriptor.writable);
+                let previous_network = previous.map(|descriptor| descriptor.network);
+                let previous_reachable = previous.and_then(|descriptor| descriptor.reachable);
+                let previous_ejectable = previous.map(|descriptor| descriptor.ejectable);
                 let topology_reason = previous
                     .zip(current)
                     .and_then(|(previous, current)| topology_change_reason(previous, current))
@@ -1356,6 +1386,11 @@ impl VolumeEventInvalidationReport {
                     path,
                     previous_kind,
                     previous_mount_state,
+                    previous_read_only,
+                    previous_writable,
+                    previous_network,
+                    previous_reachable,
+                    previous_ejectable,
                     previous_case_sensitive: previous
                         .and_then(|descriptor| descriptor.case_sensitive),
                     previous_native_status: previous
@@ -1375,6 +1410,11 @@ impl VolumeEventInvalidationReport {
                     }),
                     current_kind,
                     current_mount_state,
+                    current_read_only,
+                    current_writable,
+                    current_network,
+                    current_reachable,
+                    current_ejectable,
                     current_case_sensitive: current
                         .and_then(|descriptor| descriptor.case_sensitive),
                     current_native_status: current.and_then(|descriptor| descriptor.native_status),
@@ -1440,6 +1480,21 @@ impl VolumeEventInvalidationReport {
             previous_mount_state: (kind == VolumeEventKind::Disappeared)
                 .then(|| descriptor.map(|descriptor| descriptor.mount_state))
                 .flatten(),
+            previous_read_only: (kind == VolumeEventKind::Disappeared)
+                .then(|| descriptor.map(|descriptor| descriptor.read_only))
+                .flatten(),
+            previous_writable: (kind == VolumeEventKind::Disappeared)
+                .then(|| descriptor.map(|descriptor| descriptor.writable))
+                .flatten(),
+            previous_network: (kind == VolumeEventKind::Disappeared)
+                .then(|| descriptor.map(|descriptor| descriptor.network))
+                .flatten(),
+            previous_reachable: (kind == VolumeEventKind::Disappeared)
+                .then(|| descriptor.and_then(|descriptor| descriptor.reachable))
+                .flatten(),
+            previous_ejectable: (kind == VolumeEventKind::Disappeared)
+                .then(|| descriptor.map(|descriptor| descriptor.ejectable))
+                .flatten(),
             previous_case_sensitive: (kind == VolumeEventKind::Disappeared)
                 .then(|| descriptor.and_then(|descriptor| descriptor.case_sensitive))
                 .flatten(),
@@ -1481,6 +1536,21 @@ impl VolumeEventInvalidationReport {
             } else {
                 descriptor.map(|descriptor| descriptor.mount_state)
             },
+            current_read_only: (kind != VolumeEventKind::Disappeared)
+                .then(|| descriptor.map(|descriptor| descriptor.read_only))
+                .flatten(),
+            current_writable: (kind != VolumeEventKind::Disappeared)
+                .then(|| descriptor.map(|descriptor| descriptor.writable))
+                .flatten(),
+            current_network: (kind != VolumeEventKind::Disappeared)
+                .then(|| descriptor.map(|descriptor| descriptor.network))
+                .flatten(),
+            current_reachable: (kind != VolumeEventKind::Disappeared)
+                .then(|| descriptor.and_then(|descriptor| descriptor.reachable))
+                .flatten(),
+            current_ejectable: (kind != VolumeEventKind::Disappeared)
+                .then(|| descriptor.map(|descriptor| descriptor.ejectable))
+                .flatten(),
             current_case_sensitive: (kind != VolumeEventKind::Disappeared)
                 .then(|| descriptor.and_then(|descriptor| descriptor.case_sensitive))
                 .flatten(),
@@ -1524,7 +1594,7 @@ impl VolumeEventInvalidationReport {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume-event-invalidation\tkind={}\tnative-status={}\tpath={}\tprevious-kind={}\tprevious-mount={}\tprevious-case-sensitive={}\tprevious-native-status={}\tprevious-native-reason={}\tprevious-resource-status={}\tprevious-resource-reason={}\tprevious-mount-status={}\tprevious-mount-reason={}\tcurrent-kind={}\tcurrent-mount={}\tcurrent-case-sensitive={}\tcurrent-native-status={}\tcurrent-native-reason={}\tcurrent-resource-status={}\tcurrent-resource-reason={}\tcurrent-mount-status={}\tcurrent-mount-reason={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\treason={}",
+            "volume-event-invalidation\tkind={}\tnative-status={}\tpath={}\tprevious-kind={}\tprevious-mount={}\tprevious-read-only={}\tprevious-writable={}\tprevious-network={}\tprevious-reachable={}\tprevious-ejectable={}\tprevious-case-sensitive={}\tprevious-native-status={}\tprevious-native-reason={}\tprevious-resource-status={}\tprevious-resource-reason={}\tprevious-mount-status={}\tprevious-mount-reason={}\tcurrent-kind={}\tcurrent-mount={}\tcurrent-read-only={}\tcurrent-writable={}\tcurrent-network={}\tcurrent-reachable={}\tcurrent-ejectable={}\tcurrent-case-sensitive={}\tcurrent-native-status={}\tcurrent-native-reason={}\tcurrent-resource-status={}\tcurrent-resource-reason={}\tcurrent-mount-status={}\tcurrent-mount-reason={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\treason={}",
             self.kind.as_str(),
             self.native_status.as_str(),
             self.path
@@ -1533,6 +1603,11 @@ impl VolumeEventInvalidationReport {
                 .unwrap_or_else(|| "-".to_string()),
             self.previous_kind.map(VolumeKind::as_str).unwrap_or("-"),
             self.previous_mount_state.map(MountState::as_str).unwrap_or("-"),
+            optional_bool(self.previous_read_only),
+            optional_bool(self.previous_writable),
+            optional_bool(self.previous_network),
+            optional_bool(self.previous_reachable),
+            optional_bool(self.previous_ejectable),
             self.previous_case_sensitive
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string()),
@@ -1550,6 +1625,11 @@ impl VolumeEventInvalidationReport {
             format_optional_event_reason(self.previous_mount_table_reason.as_deref()),
             self.current_kind.map(VolumeKind::as_str).unwrap_or("-"),
             self.current_mount_state.map(MountState::as_str).unwrap_or("-"),
+            optional_bool(self.current_read_only),
+            optional_bool(self.current_writable),
+            optional_bool(self.current_network),
+            optional_bool(self.current_reachable),
+            optional_bool(self.current_ejectable),
             self.current_case_sensitive
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string()),
@@ -1588,6 +1668,12 @@ fn format_optional_event_reason(reason: Option<&str>) -> String {
     normalized_event_reason_option(reason)
         .as_deref()
         .map(escape_field)
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn optional_bool(value: Option<bool>) -> String {
+    value
+        .map(|value| value.to_string())
         .unwrap_or_else(|| "-".to_string())
 }
 
@@ -6359,11 +6445,32 @@ mod tests {
             transition.invalidation.previous_mount_state,
             Some(MountState::Mounted)
         );
+        assert_eq!(transition.invalidation.previous_read_only, Some(false));
+        assert_eq!(transition.invalidation.previous_writable, Some(true));
+        assert_eq!(transition.invalidation.previous_network, Some(true));
+        assert_eq!(transition.invalidation.previous_reachable, Some(true));
+        assert_eq!(transition.invalidation.previous_ejectable, Some(true));
         assert_eq!(
             transition.invalidation.current_mount_state,
             Some(MountState::Unmounted)
         );
+        assert_eq!(transition.invalidation.current_read_only, None);
+        assert_eq!(transition.invalidation.current_writable, None);
+        assert_eq!(transition.invalidation.current_network, None);
+        assert_eq!(transition.invalidation.current_reachable, None);
+        assert_eq!(transition.invalidation.current_ejectable, None);
         assert!(transition.invalidation.invalidate_index_admission);
+        let tsv = transition.invalidation.as_tsv();
+        assert!(tsv.contains("\tprevious-read-only=false\t"));
+        assert!(tsv.contains("\tprevious-writable=true\t"));
+        assert!(tsv.contains("\tprevious-network=true\t"));
+        assert!(tsv.contains("\tprevious-reachable=true\t"));
+        assert!(tsv.contains("\tprevious-ejectable=true\t"));
+        assert!(tsv.contains("\tcurrent-read-only=-\t"));
+        assert!(tsv.contains("\tcurrent-writable=-\t"));
+        assert!(tsv.contains("\tcurrent-network=-\t"));
+        assert!(tsv.contains("\tcurrent-reachable=-\t"));
+        assert!(tsv.contains("\tcurrent-ejectable=-\t"));
         assert!(state.report().volumes.is_empty());
     }
 
@@ -6387,6 +6494,27 @@ mod tests {
         );
 
         assert_eq!(transition.invalidation.reason, "volume-locality-changed");
+        assert_eq!(transition.invalidation.previous_read_only, Some(false));
+        assert_eq!(transition.invalidation.previous_writable, Some(true));
+        assert_eq!(transition.invalidation.previous_network, Some(false));
+        assert_eq!(transition.invalidation.previous_reachable, Some(true));
+        assert_eq!(transition.invalidation.previous_ejectable, Some(true));
+        assert_eq!(transition.invalidation.current_read_only, Some(false));
+        assert_eq!(transition.invalidation.current_writable, Some(true));
+        assert_eq!(transition.invalidation.current_network, Some(false));
+        assert_eq!(transition.invalidation.current_reachable, Some(false));
+        assert_eq!(transition.invalidation.current_ejectable, Some(true));
+        let tsv = transition.invalidation.as_tsv();
+        assert!(tsv.contains("\tprevious-read-only=false\t"));
+        assert!(tsv.contains("\tprevious-writable=true\t"));
+        assert!(tsv.contains("\tprevious-network=false\t"));
+        assert!(tsv.contains("\tprevious-reachable=true\t"));
+        assert!(tsv.contains("\tprevious-ejectable=true\t"));
+        assert!(tsv.contains("\tcurrent-read-only=false\t"));
+        assert!(tsv.contains("\tcurrent-writable=true\t"));
+        assert!(tsv.contains("\tcurrent-network=false\t"));
+        assert!(tsv.contains("\tcurrent-reachable=false\t"));
+        assert!(tsv.contains("\tcurrent-ejectable=true\t"));
         assert_eq!(state.report().volumes, vec![current]);
 
         fs::remove_dir_all(root).unwrap();
