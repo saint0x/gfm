@@ -16592,6 +16592,37 @@ fn resume_content_index_job_reports_journal_path_probe_failure_before_recovery_r
 }
 
 #[test]
+fn resume_content_index_job_cancel_before_recovery_probe_stops_before_journal_probe_from_binary() {
+    let root = unique_temp_dir("gfm-cli-resume-content-cancel-probe-root");
+    let journal = root.join("gfm-recovery-journal-cancel".repeat(64));
+    let spec = unique_temp_path("gfm-cli-resume-content-cancel-probe", "job");
+    fs::write(&spec, "not-a-content-job-spec\n").unwrap();
+
+    let resume_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "resume-content-background-cancel-before-recovery-probe",
+            spec.to_str().unwrap(),
+            journal.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!resume_output.status.success());
+    let stdout = String::from_utf8_lossy(&resume_output.stdout);
+    let stderr = String::from_utf8_lossy(&resume_output.stderr);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(stderr.contains("operation was cancelled"), "{stderr}");
+    assert!(
+        !stderr.contains("background content recovery journal existence unavailable"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("content job spec"), "{stderr}");
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(spec).unwrap();
+}
+
+#[test]
 fn resume_content_index_job_refuses_unreachable_progress_store_before_recovery_read_from_binary() {
     let offline = unique_temp_dir("gfm-cli-resume-content-progress-unreachable");
     let progress = offline.join("jobs.gfmprogress");

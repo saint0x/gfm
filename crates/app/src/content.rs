@@ -574,7 +574,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 );
             }
         }
-        "resume-content-background" => {
+        "resume-content-background" | "resume-content-background-cancel-before-recovery-probe" => {
+            let cancel_before_recovery_probe =
+                command == "resume-content-background-cancel-before-recovery-probe";
             let spec_path = args
                 .next()
                 .map(PathBuf::from)
@@ -584,8 +586,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .map(PathBuf::from)
                 .unwrap_or_else(default_job_journal_path);
             let journal = JobJournal::new(journal);
-            let Some((recovery, spec)) =
-                load_resumable_content_job_spec(spec_path.clone(), &journal)?
+            let Some((recovery, spec)) = load_resumable_content_job_spec(
+                spec_path.clone(),
+                &journal,
+                cancel_before_recovery_probe,
+            )?
             else {
                 eprintln!("no recoverable background content jobs");
                 return Ok(true);
@@ -652,7 +657,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 );
             } else {
                 let Some((recovery, spec)) =
-                    load_resumable_content_job_spec(spec_path.clone(), &journal)?
+                    load_resumable_content_job_spec(spec_path.clone(), &journal, false)?
                 else {
                     eprintln!("no recoverable background content jobs");
                     return Ok(true);
@@ -1049,10 +1054,10 @@ fn run_content_segment_maintenance(
 fn load_resumable_content_job_spec(
     spec_path: PathBuf,
     journal: &JobJournal,
+    cancel_before_recovery_probe: bool,
 ) -> Result<Option<(RecoverableContentJobs, ContentIndexJobSpec)>> {
     const WORKER: &str = "resume background content recovery";
     let access_reports = BackgroundContentRecoveryAccessReports::for_paths(&spec_path, journal)?;
-    access_reports.preflight_recovery_stores()?;
     let volume = access_reports.first_volume();
     let journal = JobJournal::new(journal.path().to_path_buf());
     run_volume_task_cancellable_without_progress(
@@ -1060,6 +1065,10 @@ fn load_resumable_content_job_spec(
         Priority::Visible,
         WORKER,
         move |cancellation| {
+            if cancel_before_recovery_probe {
+                cancellation.cancel();
+            }
+            access_reports.preflight_recovery_stores_checked(|| cancellation.check())?;
             cancellation.check()?;
             let recoverable =
                 recoverable_background_content_jobs_checked(&journal, &access_reports, || {
@@ -2091,12 +2100,21 @@ impl BackgroundContentRecoveryAccessReports {
         })
     }
 
-    fn preflight_recovery_stores(&self) -> Result<()> {
+    fn preflight_recovery_stores_checked(
+        &self,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<()> {
+        check_control()?;
         self.journal
-            .preflight_volumes("background content recovery journal")?;
+            .preflight_volumes_checked("background content recovery journal", &mut check_control)?;
         if let Some(progress) = &self.progress {
-            progress.preflight_volumes("background content recovery progress")?;
+            check_control()?;
+            progress.preflight_volumes_checked(
+                "background content recovery progress",
+                &mut check_control,
+            )?;
         }
+        check_control()?;
         Ok(())
     }
 
@@ -2134,11 +2152,19 @@ impl OptionalRecoveryStoreAccessReports {
         })
     }
 
-    fn preflight_volumes(&self, worker: &str) -> Result<()> {
+    fn preflight_volumes_checked(
+        &self,
+        worker: &str,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<()> {
+        check_control()?;
         self.parent.preflight_volume(worker)?;
-        if optional_recovery_store_exists(&self.store.path, worker)? {
+        check_control()?;
+        if optional_recovery_store_exists_checked(&self.store.path, worker, &mut check_control)? {
+            check_control()?;
             self.store.preflight_volume(worker)?;
         }
+        check_control()?;
         Ok(())
     }
 
