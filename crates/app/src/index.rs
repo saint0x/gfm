@@ -424,6 +424,68 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             }
             println!("{}", queue.snapshot().as_tsv());
         }
+        "event-backpressure-drain-cancel" => {
+            let capacity = parse_usize_arg(
+                args.next(),
+                "event-backpressure-drain-cancel requires a capacity",
+            )?;
+            let visible_burst = parse_usize_arg(
+                args.next(),
+                "event-backpressure-drain-cancel requires a visible burst size",
+            )?;
+            let background = parse_usize_arg(
+                args.next(),
+                "event-backpressure-drain-cancel requires a background event count",
+            )?;
+            let visible = parse_usize_arg(
+                args.next(),
+                "event-backpressure-drain-cancel requires a visible event count",
+            )?;
+            let cancel_after = parse_usize_arg(
+                args.next(),
+                "event-backpressure-drain-cancel requires a cancellation check count",
+            )?;
+            let mut queue = EventBackpressureQueue::new(capacity, visible_burst);
+            for index in 0..background {
+                queue.enqueue(
+                    EventPriority::Background,
+                    FileEvent::new(
+                        format!("/tmp/gfm-background-{index}.md"),
+                        FileEventKind::Modify,
+                    ),
+                );
+            }
+            for index in 0..visible {
+                queue.enqueue(
+                    EventPriority::Visible,
+                    FileEvent::new(
+                        format!("/tmp/gfm-visible-{index}.md"),
+                        FileEventKind::Modify,
+                    ),
+                );
+            }
+            let mut checks = 0usize;
+            let drain = queue.drain_batch_checked(background.saturating_add(visible), || {
+                checks = checks.saturating_add(1);
+                if checks >= cancel_after {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            });
+            match drain {
+                Ok(drained) => println!(
+                    "event-backpressure-drain\tstatus=drained\tcount={}\t{}",
+                    drained.len(),
+                    queue.snapshot().as_tsv()
+                ),
+                Err(GfmError::Cancelled) => println!(
+                    "event-backpressure-drain\tstatus=cancelled\tchecks={checks}\t{}",
+                    queue.snapshot().as_tsv()
+                ),
+                Err(err) => return Err(err),
+            }
+        }
         "fsevents-cursor-checkpoint" => {
             let state = required_path(
                 args.next(),

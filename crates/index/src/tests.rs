@@ -1731,6 +1731,69 @@ fn event_backpressure_preserves_visible_progress_under_background_load() {
 }
 
 #[test]
+fn checked_event_backpressure_drain_preserves_queue_on_pre_cancel() {
+    let mut queue = EventBackpressureQueue::new(5, 2);
+    queue.enqueue(
+        EventPriority::Visible,
+        FileEvent::new("/tmp/visible.md", FileEventKind::Modify),
+    );
+    queue.enqueue(
+        EventPriority::Background,
+        FileEvent::new("/tmp/background.md", FileEventKind::Modify),
+    );
+
+    let err = queue
+        .drain_batch_checked(2, || Err(GfmError::Cancelled))
+        .expect_err("pre-cancelled drain must not consume admitted events");
+
+    assert!(matches!(err, GfmError::Cancelled));
+    let snapshot = queue.snapshot();
+    assert_eq!(snapshot.pending_visible, 1);
+    assert_eq!(snapshot.pending_background, 1);
+    let drained = queue.drain_batch(2);
+    assert_eq!(drained[0].path, PathBuf::from("/tmp/visible.md"));
+    assert_eq!(drained[1].path, PathBuf::from("/tmp/background.md"));
+}
+
+#[test]
+fn checked_event_backpressure_drain_preserves_queue_on_mid_batch_cancel() {
+    let mut queue = EventBackpressureQueue::new(8, 2);
+    queue.enqueue(
+        EventPriority::Visible,
+        FileEvent::new("/tmp/visible-a.md", FileEventKind::Modify),
+    );
+    queue.enqueue(
+        EventPriority::Visible,
+        FileEvent::new("/tmp/visible-b.md", FileEventKind::Modify),
+    );
+    queue.enqueue(
+        EventPriority::Background,
+        FileEvent::new("/tmp/background.md", FileEventKind::Modify),
+    );
+    let mut checks = 0usize;
+
+    let err = queue
+        .drain_batch_checked(3, || {
+            checks += 1;
+            if checks >= 3 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        })
+        .expect_err("mid-drain cancellation must not publish partial queue consumption");
+
+    assert!(matches!(err, GfmError::Cancelled));
+    let snapshot = queue.snapshot();
+    assert_eq!(snapshot.pending_visible, 2);
+    assert_eq!(snapshot.pending_background, 1);
+    let drained = queue.drain_batch(3);
+    assert_eq!(drained[0].path, PathBuf::from("/tmp/visible-a.md"));
+    assert_eq!(drained[1].path, PathBuf::from("/tmp/visible-b.md"));
+    assert_eq!(drained[2].path, PathBuf::from("/tmp/background.md"));
+}
+
+#[test]
 fn fair_scan_prioritizes_visible_roots_during_background_crawl() {
     let root = unique_temp_dir("gfm-fair-scan-root");
     let visible = root.join("Visible");

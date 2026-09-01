@@ -1,4 +1,4 @@
-use gfm_types::{FileEvent, FileEventKind};
+use gfm_types::{FileEvent, FileEventKind, Result};
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
@@ -114,14 +114,39 @@ impl EventBackpressureQueue {
     }
 
     pub fn drain_batch(&mut self, max: usize) -> Vec<FileEvent> {
+        self.drain_batch_checked(max, || Ok(()))
+            .expect("infallible event backpressure drain failed")
+    }
+
+    pub fn drain_batch_checked(
+        &mut self,
+        max: usize,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<FileEvent>> {
+        check_control()?;
+        let mut staged = self.clone();
+        let drained = staged.drain_batch_mutating_checked(max, &mut check_control)?;
+        check_control()?;
+        *self = staged;
+        Ok(drained)
+    }
+
+    fn drain_batch_mutating_checked(
+        &mut self,
+        max: usize,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<FileEvent>> {
+        check_control()?;
         let mut drained = Vec::new();
         let mut visible_credit = 0usize;
         let max = max.min(self.pending());
         while drained.len() < max {
+            check_control()?;
             if visible_credit < self.visible_burst {
                 if let Some(event) = self.visible.pop_front() {
                     visible_credit += 1;
                     drained.push(event);
+                    check_control()?;
                     continue;
                 }
             }
@@ -129,17 +154,19 @@ impl EventBackpressureQueue {
             if let Some(event) = self.background.pop_front() {
                 visible_credit = 0;
                 drained.push(event);
+                check_control()?;
                 continue;
             }
 
             if let Some(event) = self.visible.pop_front() {
                 visible_credit += 1;
                 drained.push(event);
+                check_control()?;
             } else {
                 break;
             }
         }
-        drained
+        Ok(drained)
     }
 
     pub fn snapshot(&self) -> EventBackpressureSnapshot {
