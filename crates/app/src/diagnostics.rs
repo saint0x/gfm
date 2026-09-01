@@ -271,15 +271,21 @@ fn rebuild_access_reports_checked(
     spec: &RebuildSpec,
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<DiagnosticsAccessReports> {
+    let root_entry = DiagnosticsAccessReportEntry::new_checked(
+        spec.root.clone(),
+        AccessIntent::Index,
+        "index rebuild root",
+        &mut check_control,
+    )?;
+    root_entry.report.preflight_volume(root_entry.worker)?;
     let mut entries = vec![
+        root_entry,
         DiagnosticsAccessReportEntry::new_checked(
-            spec.root.clone(),
-            AccessIntent::Index,
-            "index rebuild root",
-            &mut check_control,
-        )?,
-        DiagnosticsAccessReportEntry::new_checked(
-            write_probe_path(&spec.records_path)?.to_path_buf(),
+            checked_write_probe_path(
+                &spec.records_path,
+                "index rebuild records",
+                &mut check_control,
+            )?,
             AccessIntent::Write,
             "index rebuild records",
             &mut check_control,
@@ -288,7 +294,7 @@ fn rebuild_access_reports_checked(
     if let Some(content_path) = &spec.content_path {
         check_control()?;
         entries.push(DiagnosticsAccessReportEntry::new_checked(
-            write_probe_path(content_path)?.to_path_buf(),
+            checked_write_probe_path(content_path, "index rebuild content", &mut check_control)?,
             AccessIntent::Write,
             "index rebuild content",
             &mut check_control,
@@ -329,27 +335,41 @@ fn recovery_access_reports_checked(
     spec: &PersistentIndexRecoverySpec,
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<DiagnosticsAccessReports> {
+    let root_entry = DiagnosticsAccessReportEntry::new_checked(
+        spec.root.clone(),
+        AccessIntent::Index,
+        "persistent index repair root",
+        &mut check_control,
+    )?;
+    root_entry.report.preflight_volume(root_entry.worker)?;
     Ok(DiagnosticsAccessReports::new(vec![
+        root_entry,
         DiagnosticsAccessReportEntry::new_checked(
-            spec.root.clone(),
-            AccessIntent::Index,
-            "persistent index repair root",
-            &mut check_control,
-        )?,
-        DiagnosticsAccessReportEntry::new_checked(
-            write_probe_path(&spec.records_path)?.to_path_buf(),
+            checked_write_probe_path(
+                &spec.records_path,
+                "persistent index repair records",
+                &mut check_control,
+            )?,
             AccessIntent::Write,
             "persistent index repair records",
             &mut check_control,
         )?,
         DiagnosticsAccessReportEntry::new_checked(
-            write_probe_path(&spec.state_path)?.to_path_buf(),
+            checked_write_probe_path(
+                &spec.state_path,
+                "persistent index repair state",
+                &mut check_control,
+            )?,
             AccessIntent::Write,
             "persistent index repair state",
             &mut check_control,
         )?,
         DiagnosticsAccessReportEntry::new_checked(
-            write_probe_path(&spec.quarantine_dir)?.to_path_buf(),
+            checked_write_probe_path(
+                &spec.quarantine_dir,
+                "persistent index repair quarantine",
+                &mut check_control,
+            )?,
             AccessIntent::Write,
             "persistent index repair quarantine",
             &mut check_control,
@@ -480,7 +500,7 @@ impl DiagnosticsAccessReports {
 
 fn run_trace_export(output: PathBuf) -> Result<String> {
     const WORKER: &str = "diagnostics trace export";
-    let output_probe = write_probe_path(&output)?.to_path_buf();
+    let output_probe = checked_write_probe_path(&output, WORKER, || Ok(()))?;
     let access_report =
         DiagnosticsAccessReport::new_checked(output_probe, AccessIntent::Write, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
@@ -584,6 +604,37 @@ fn write_probe_path(path: &Path) -> Result<&Path> {
     }
 }
 
+fn checked_write_probe_path(
+    path: &Path,
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<PathBuf> {
+    check_control()?;
+    preflight_write_target_volume_checked(path, worker, &mut check_control)?;
+    check_control()?;
+    let probe = write_probe_path(path)?.to_path_buf();
+    check_control()?;
+    Ok(probe)
+}
+
+fn preflight_write_target_volume_checked(
+    path: &Path,
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    check_control()?;
+    let volume_path = crate::parent_or_cwd(path);
+    let volume_report =
+        VolumeDiscoveryReport::for_containing_path_checked(volume_path, &mut check_control)?;
+    check_control()?;
+    preflight_volume_access_scope_with_report(
+        volume_path,
+        AccessIntent::Write,
+        worker,
+        &volume_report,
+    )
+}
+
 fn print_index_rebuild_report(report: gfm_diagnostics::RebuildReport) {
     println!(
         "{}\t{}\t{}\t{}\t{}",
@@ -637,6 +688,40 @@ mod tests {
     }
 
     #[test]
+    fn rebuild_access_refuses_unreachable_records_before_write_probe() {
+        let root = unique_temp_dir("gfm-diagnostics-rebuild-source");
+        let offline = unique_temp_dir("gfm-diagnostics-rebuild-output-unreachable");
+        fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let records = offline.join(format!(
+            "{}.gfmidx",
+            "diagnostics-rebuild-records-unavailable".repeat(8)
+        ));
+        let spec = RebuildSpec::records(root.clone(), records.clone());
+
+        let err = match retain_rebuild_access_checked(&spec, || Ok(())) {
+            Ok(_) => {
+                panic!("unreachable diagnostics rebuild output was admitted before write probe")
+            }
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains(
+                "index rebuild records volume access blocked: unreachable volume network"
+            ),
+            "{err}"
+        );
+        assert!(
+            !err.to_string()
+                .contains("diagnostics write path metadata unavailable"),
+            "{err}"
+        );
+        assert!(!records.exists());
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(offline).unwrap();
+    }
+
+    #[test]
     fn recovery_access_checked_can_cancel_before_state_probe() {
         let root = unique_temp_dir("gfm-diagnostics-recovery-access-cancel");
         let spec = PersistentIndexRecoverySpec::new(
@@ -660,6 +745,45 @@ mod tests {
         assert!(checks >= 3);
         assert!(!spec.state_path.exists());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recovery_access_refuses_unreachable_state_before_write_probe() {
+        let root = unique_temp_dir("gfm-diagnostics-recovery-source");
+        let offline = unique_temp_dir("gfm-diagnostics-recovery-state-unreachable");
+        fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let state = offline.join(format!(
+            "{}.gfmstate",
+            "diagnostics-recovery-state-unavailable".repeat(8)
+        ));
+        let spec = PersistentIndexRecoverySpec::new(
+            root.clone(),
+            root.join("records.gfmidx"),
+            state.clone(),
+            root.join("quarantine"),
+        );
+
+        let err = match retain_recovery_access_checked(&spec, || Ok(())) {
+            Ok(_) => {
+                panic!("unreachable diagnostics recovery state was admitted before write probe")
+            }
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains(
+                "persistent index repair state volume access blocked: unreachable volume network"
+            ),
+            "{err}"
+        );
+        assert!(
+            !err.to_string()
+                .contains("diagnostics write path metadata unavailable"),
+            "{err}"
+        );
+        assert!(!state.exists());
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(offline).unwrap();
     }
 
     fn unique_temp_dir(prefix: &str) -> PathBuf {

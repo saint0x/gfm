@@ -279,7 +279,8 @@ impl PackagingAccessReports {
         mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<Self> {
         check_control()?;
-        let output_probe = write_probe_path(&spec.output_dir)?.to_path_buf();
+        let output_probe =
+            checked_write_probe_path(&spec.output_dir, "bundle app output", &mut check_control)?;
         check_control()?;
         Ok(Self {
             entries: vec![
@@ -314,7 +315,8 @@ impl PackagingAccessReports {
         mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<Self> {
         check_control()?;
-        let output_probe = write_probe_path(&spec.output_dir)?.to_path_buf();
+        let output_probe =
+            checked_write_probe_path(&spec.output_dir, "notarize output", &mut check_control)?;
         check_control()?;
         let mut entries = vec![
             PackagingAccessReport::new_checked(
@@ -415,6 +417,37 @@ fn write_probe_path(path: &Path) -> Result<&Path> {
             format!("packaging write path metadata unavailable: {err}"),
         )),
     }
+}
+
+fn checked_write_probe_path(
+    path: &Path,
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<PathBuf> {
+    check_control()?;
+    preflight_write_target_volume_checked(path, worker, &mut check_control)?;
+    check_control()?;
+    let probe = write_probe_path(path)?.to_path_buf();
+    check_control()?;
+    Ok(probe)
+}
+
+fn preflight_write_target_volume_checked(
+    path: &Path,
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    check_control()?;
+    let volume_path = crate::parent_or_cwd(path);
+    let volume_report =
+        VolumeDiscoveryReport::for_containing_path_checked(volume_path, &mut check_control)?;
+    check_control()?;
+    preflight_volume_access_scope_with_report(
+        volume_path,
+        AccessIntent::Write,
+        worker,
+        &volume_report,
+    )
 }
 
 fn notarization_credentials(
@@ -537,6 +570,35 @@ mod tests {
     }
 
     #[test]
+    fn bundle_access_refuses_unreachable_output_before_write_probe() {
+        let root = unique_temp_dir("gfm-bundle-access-unreachable-root");
+        let offline = unique_temp_dir("gfm-bundle-access-unreachable-output");
+        fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let executable = root.join("gfm");
+        let icon = root.join("gfm.icns");
+        let output = offline.join("GFM-unavailable".repeat(16));
+
+        let err = match retain_bundle_access_checked(&executable, &icon, &output, || Ok(())) {
+            Ok(_) => panic!("unreachable bundle output was admitted before volume preflight"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("bundle app output volume access blocked: unreachable volume network"),
+            "{err}"
+        );
+        assert!(
+            !err.to_string()
+                .contains("packaging write path metadata unavailable"),
+            "{err}"
+        );
+        assert!(!output.exists());
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(offline).unwrap();
+    }
+
+    #[test]
     fn notarize_access_checked_can_cancel_before_api_key_probe() {
         let root = unique_temp_dir("gfm-notarize-access-cancel");
         let app = root.join("GFM.app");
@@ -564,6 +626,42 @@ mod tests {
         assert!(checks >= 5);
         assert!(!output.exists());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn notarize_access_refuses_unreachable_output_before_write_probe() {
+        let root = unique_temp_dir("gfm-notarize-access-unreachable-root");
+        let offline = unique_temp_dir("gfm-notarize-access-unreachable-output");
+        fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let app = root.join("GFM.app");
+        let output = offline.join("notarize-unavailable".repeat(16));
+        let key_path = root.join("AuthKey.p8");
+        fs::create_dir_all(&app).unwrap();
+        fs::write(&key_path, "key").unwrap();
+        let credentials = NotarizationCredentials::ApiKey {
+            key_id: "KEY".to_string(),
+            issuer_id: "ISSUER".to_string(),
+            key_path,
+        };
+
+        let err = match retain_notarize_access_checked(&app, &output, &credentials, || Ok(())) {
+            Ok(_) => panic!("unreachable notarize output was admitted before volume preflight"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("notarize output volume access blocked: unreachable volume network"),
+            "{err}"
+        );
+        assert!(
+            !err.to_string()
+                .contains("packaging write path metadata unavailable"),
+            "{err}"
+        );
+        assert!(!output.exists());
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(offline).unwrap();
     }
 
     fn unique_temp_dir(prefix: &str) -> PathBuf {

@@ -202,8 +202,14 @@ fn adaptive_diagnostics_rebuild_refuses_unreachable_outputs_before_worker_from_b
     let offline = unique_temp_dir("gfm-cli-diagnostics-rebuild-adaptive-offline");
     fs::write(root.join("needle.md"), "diagnostic needle").unwrap();
     fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
-    let records = offline.join("records.gfmidx");
-    let content = offline.join("content.gfmcontent");
+    let records = offline.join(format!(
+        "{}.gfmidx",
+        "diagnostics-rebuild-records-unavailable".repeat(8)
+    ));
+    let content = offline.join(format!(
+        "{}.gfmcontent",
+        "diagnostics-rebuild-content-unavailable".repeat(8)
+    ));
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
@@ -225,6 +231,10 @@ fn adaptive_diagnostics_rebuild_refuses_unreachable_outputs_before_worker_from_b
     assert!(!stdout.contains("records.gfmidx"), "{stdout}");
     assert!(
         stderr.contains("index rebuild records volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("diagnostics write path metadata unavailable"),
         "{stderr}"
     );
     assert!(
@@ -280,7 +290,10 @@ fn diagnostics_rebuild_reports_output_probe_failure_before_worker_from_binary() 
 fn diagnostics_trace_and_storage_refuse_unreachable_paths_before_io_from_binary() {
     let offline = unique_temp_dir("gfm-cli-diagnostics-io-preflight-offline");
     fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
-    let trace = offline.join("trace.json");
+    let trace = offline.join(format!(
+        "{}.json",
+        "diagnostics-trace-unavailable".repeat(8)
+    ));
     let storage = offline.join("records.gfmidx");
     fs::write(&storage, "gfm-records-v1\n").unwrap();
 
@@ -295,6 +308,10 @@ fn diagnostics_trace_and_storage_refuse_unreachable_paths_before_io_from_binary(
     assert!(
         trace_stderr
             .contains("diagnostics trace export volume access blocked: unreachable volume network"),
+        "{trace_stderr}"
+    );
+    assert!(
+        !trace_stderr.contains("diagnostics write path metadata unavailable"),
         "{trace_stderr}"
     );
     assert!(

@@ -83,8 +83,8 @@ fn packaging_routes_refuse_unreachable_paths_before_toolchain_or_bundle_io_from_
     let icon = root.join("GFM.icns");
     let app = root.join("GFM.app");
     let offline_app = offline.join("GFM.app");
-    let offline_dist = offline.join("dist");
-    let offline_notary = offline.join("notary");
+    let offline_dist = offline.join("bundle-unavailable".repeat(16));
+    let offline_notary = offline.join("notarize-unavailable".repeat(16));
     let offline_key = offline.join("AuthKey.p8");
     let local_notary = root.join("notary");
     fs::write(&executable, b"bin").unwrap();
@@ -171,10 +171,14 @@ fn packaging_routes_refuse_unreachable_paths_before_toolchain_or_bundle_io_from_
             !stderr.contains("requires xcrun") && !stderr.contains("requires codesign"),
             "{route}: {stderr}"
         );
+        assert!(
+            !stderr.contains("packaging write path metadata unavailable"),
+            "{route}: {stderr}"
+        );
     }
 
-    assert!(!offline.join("dist").exists());
-    assert!(!offline.join("notary").exists());
+    assert!(!offline_dist.exists());
+    assert!(!offline_notary.exists());
 
     fs::remove_dir_all(root).unwrap();
     fs::remove_dir_all(offline).unwrap();
