@@ -433,7 +433,11 @@ impl WorkerSandbox {
             monotonic_nanos()
         ));
         check_control()?;
-        let profile_probe = write_probe_path(&profile_path)?.to_path_buf();
+        let profile_probe = checked_write_probe_path(
+            &profile_path,
+            "adaptive extraction sandbox profile",
+            &mut check_control,
+        )?;
         check_control()?;
         let _profile_access = preflight_access_scope_checked(
             &profile_probe,
@@ -705,11 +709,23 @@ fn retain_worker_scratch_access_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
     check_control()?;
-    let stdout_probe = write_probe_path(stdout_path)?.to_path_buf();
+    let stdout_probe = checked_write_probe_path(
+        stdout_path,
+        "adaptive extraction stdout",
+        &mut check_control,
+    )?;
     check_control()?;
-    let stderr_probe = write_probe_path(stderr_path)?.to_path_buf();
+    let stderr_probe = checked_write_probe_path(
+        stderr_path,
+        "adaptive extraction stderr",
+        &mut check_control,
+    )?;
     check_control()?;
-    let permission_state_probe = write_probe_path(permission_state_dir)?.to_path_buf();
+    let permission_state_probe = checked_write_probe_path(
+        permission_state_dir,
+        "adaptive extraction permission state",
+        &mut check_control,
+    )?;
     check_control()?;
     Ok(vec![
         preflight_access_scope_checked(
@@ -1401,6 +1417,42 @@ mod tests {
         assert!(!stderr.exists());
         assert!(!permission_state.exists());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn worker_scratch_access_refuses_unreachable_permission_state_before_write_probe() {
+        let root = unique_temp_dir("gfm-extract-scratch-access-root");
+        let scratch = unique_temp_dir("gfm-extract-scratch-access-offline");
+        fs::write(scratch.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let stdout = root.join("stdout");
+        let stderr = root.join("stderr");
+        let permission_state = scratch.join("permission-state-unavailable".repeat(16));
+
+        let err =
+            match retain_worker_scratch_access_checked(&stdout, &stderr, &permission_state, || {
+                Ok(())
+            }) {
+                Ok(_) => {
+                    panic!(
+                        "unreachable scratch permission state was admitted before volume preflight"
+                    )
+                }
+                Err(err) => err,
+            };
+
+        assert!(err.to_string().contains(
+            "adaptive extraction permission state volume access blocked: unreachable volume network"
+        ));
+        assert!(
+            !err.to_string()
+                .contains("extraction write path existence unavailable"),
+            "{err}"
+        );
+        assert!(!stdout.exists());
+        assert!(!stderr.exists());
+        assert!(!permission_state.exists());
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(scratch).unwrap();
     }
 
     #[test]
