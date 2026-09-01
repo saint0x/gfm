@@ -1574,6 +1574,16 @@ impl FileProviderOperationReport {
             return Ok(Self::missing(path, operation, before));
         }
         check_control()?;
+        if let Some((disposition, reason)) = native_resource_operation_refusal(&before) {
+            return Ok(Self::with_disposition(
+                path,
+                operation,
+                disposition,
+                before,
+                reason,
+            ));
+        }
+        check_control()?;
         if before.storage_state == CloudStorageState::Conflict {
             return Ok(Self::refused(
                 path,
@@ -1696,6 +1706,23 @@ impl FileProviderOperationReport {
         }
     }
 
+    fn with_disposition(
+        path: PathBuf,
+        operation: FileProviderOperation,
+        disposition: FileProviderOperationDisposition,
+        before: FileProviderStateReport,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            path,
+            operation,
+            disposition,
+            before,
+            after: None,
+            reason: Some(reason.into()),
+        }
+    }
+
     fn missing(
         path: PathBuf,
         operation: FileProviderOperation,
@@ -1725,6 +1752,26 @@ impl FileProviderOperationReport {
             after: None,
             reason: Some(reason.into()),
         }
+    }
+}
+
+fn native_resource_operation_refusal(
+    report: &FileProviderStateReport,
+) -> Option<(FileProviderOperationDisposition, &'static str)> {
+    match report.materialization_source {
+        CloudMaterializationSource::NativeUrlResourceMissing => Some((
+            FileProviderOperationDisposition::Missing,
+            "native-url-resource-missing",
+        )),
+        CloudMaterializationSource::NativeUrlResourceUnavailable => Some((
+            FileProviderOperationDisposition::Unavailable,
+            "native-url-resource-unavailable",
+        )),
+        CloudMaterializationSource::NativeUrlResourceUnsupported => Some((
+            FileProviderOperationDisposition::Unsupported,
+            "native-url-resource-unsupported",
+        )),
+        _ => None,
     }
 }
 
@@ -5177,6 +5224,83 @@ mod tests {
         assert!(report.as_tsv().contains("\tdisposition=unavailable\t"));
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operations_preserve_native_resource_unavailable_before_command_policy() {
+        let path = PathBuf::from("/tmp/Remote.fileprovider");
+        let mut native = native_values();
+        native.status = gfm_mac_sys::NativeFileProviderStatus::Unavailable;
+        native.reason = Some("native FileProvider URL resource values unavailable".to_string());
+        let before = FileProviderStateReport::from_hints(
+            path.clone(),
+            CloudHints {
+                native,
+                native_identity: identity_not_queried(),
+                xattrs: Vec::new(),
+                xattr_values: Vec::new(),
+                provider_identifier: None,
+                source: "fixture-name".to_string(),
+            },
+        );
+
+        assert_eq!(before.domain, FileProviderDomain::FileProvider);
+        assert_eq!(before.storage_state, CloudStorageState::Unknown);
+        assert_eq!(
+            native_resource_operation_refusal(&before),
+            Some((
+                FileProviderOperationDisposition::Unavailable,
+                "native-url-resource-unavailable"
+            ))
+        );
+
+        let report = FileProviderOperationReport::with_disposition(
+            path,
+            FileProviderOperation::Download,
+            FileProviderOperationDisposition::Unavailable,
+            before,
+            "native-url-resource-unavailable",
+        );
+
+        assert_eq!(
+            report.disposition,
+            FileProviderOperationDisposition::Unavailable
+        );
+        assert_eq!(
+            report.reason.as_deref(),
+            Some("native-url-resource-unavailable")
+        );
+        assert!(report.as_tsv().contains("\tdisposition=unavailable\t"));
+        assert!(report
+            .as_tsv()
+            .ends_with("reason=native-url-resource-unavailable"));
+    }
+
+    #[test]
+    fn operations_preserve_native_resource_unsupported_before_command_policy() {
+        let path = PathBuf::from("/tmp/Remote.fileprovider");
+        let mut native = native_values();
+        native.status = gfm_mac_sys::NativeFileProviderStatus::UnsupportedPath;
+        native.reason = Some("native URL resource values unsupported".to_string());
+        let before = FileProviderStateReport::from_hints(
+            path.clone(),
+            CloudHints {
+                native,
+                native_identity: identity_not_queried(),
+                xattrs: Vec::new(),
+                xattr_values: Vec::new(),
+                provider_identifier: None,
+                source: "fixture-name".to_string(),
+            },
+        );
+
+        assert_eq!(
+            native_resource_operation_refusal(&before),
+            Some((
+                FileProviderOperationDisposition::Unsupported,
+                "native-url-resource-unsupported"
+            ))
+        );
     }
 
     #[test]

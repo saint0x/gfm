@@ -525,6 +525,16 @@ fn validate_permission_prompt_orchestration(access: &PermissionAccessContract) -
             access.path
         )));
     }
+    if !access.promptable
+        && is_blocked_prompt
+        && has_prompt_action
+        && !access.prompt_action.starts_with("blocked-")
+    {
+        return Err(GfmError::Format(format!(
+            "native app permission access for `{}` blocks access with an interactive prompt action",
+            access.path
+        )));
+    }
     if has_prompt_source && !has_prompt_action {
         return Err(GfmError::Format(format!(
             "native app permission access for `{}` names a prompt source without a prompt action",
@@ -1164,6 +1174,34 @@ mod tests {
         assert!(err
             .to_string()
             .contains("blocks access without a concrete failure source"));
+    }
+
+    #[test]
+    fn rejects_blocked_permission_access_with_interactive_prompt_action() {
+        let access = PermissionAccessContract {
+            path: "/tmp/gfm".to_string(),
+            intent: "read".to_string(),
+            scope: "none".to_string(),
+            probe: "missing".to_string(),
+            mode: "denied".to_string(),
+            access_action: "deny".to_string(),
+            worker_action: "deny".to_string(),
+            can_touch_filesystem: false,
+            bookmark_required: false,
+            bookmark_access: false,
+            refresh_on_permission_change: false,
+            prompt_kind: PermissionPromptKind::Blocked,
+            prompt_action: "choose-location".to_string(),
+            promptable: false,
+            prompt_source: "missing-path".to_string(),
+            reason: "path is not present on this host".to_string(),
+        };
+        let spec = AppLaunchSpec::new("/tmp/gfm").with_permission_access(access);
+
+        let err = WindowLifecycleContract::from_spec(&spec).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("blocks access with an interactive prompt action"));
     }
 
     #[test]
