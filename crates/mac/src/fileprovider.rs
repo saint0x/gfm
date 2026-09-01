@@ -2430,7 +2430,6 @@ fn native_storage_state(values: &NativeFileProviderResourceValues) -> Option<Clo
             )
         )
         || values.percent_downloaded_milli == Some(100_000)
-        || values.percent_uploaded_milli == Some(100_000)
     {
         Some(CloudStorageState::Downloaded)
     } else if values
@@ -2455,7 +2454,7 @@ fn native_storage_state(values: &NativeFileProviderResourceValues) -> Option<Clo
         Some(CloudStorageState::Unknown)
     } else if values.is_uploaded == Some(false) {
         Some(CloudStorageState::Waiting)
-    } else if values.is_uploaded == Some(true) {
+    } else if values.is_uploaded == Some(true) || values.percent_uploaded_milli == Some(100_000) {
         Some(CloudStorageState::Downloaded)
     } else {
         None
@@ -6100,6 +6099,54 @@ mod tests {
             report.materialization_source,
             CloudMaterializationSource::NativeUrlResource
         );
+    }
+
+    #[test]
+    fn native_not_downloaded_truth_overrides_completed_upload_signals() {
+        let path = PathBuf::from("/tmp/Document.pdf");
+        let mut native = native_values();
+        native.has_unresolved_conflicts = Some(false);
+        native.is_downloaded = Some(false);
+        native.is_downloading = Some(false);
+        native.is_uploading = Some(false);
+        native.is_uploaded = Some(true);
+        native.percent_uploaded_milli = Some(100_000);
+        native.download_requested = Some(false);
+        native.downloading_status = Some(NativeUbiquitousDownloadingStatus::NotDownloaded);
+        let hints = CloudHints {
+            native,
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::NotQueried,
+                item_identifier: None,
+                domain_identifier: None,
+                reason: Some("hot path skipped native manager identity".to_string()),
+            },
+            xattrs: Vec::new(),
+            xattr_values: Vec::new(),
+            provider_identifier: None,
+            source: "native-url-resource".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.domain, FileProviderDomain::ICloudDrive);
+        assert_eq!(report.storage_state, CloudStorageState::Evicted);
+        assert_eq!(
+            report.materialization,
+            CloudMaterialization::RemotePlaceholder
+        );
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::NativeUrlResource
+        );
+        assert_eq!(
+            report.materialization_reason.as_deref(),
+            Some("native-url-resource-remote-placeholder")
+        );
+        assert_eq!(report.progress.direction, CloudTransferDirection::Download);
+        assert_eq!(report.progress.percent_milli, Some(0));
+        assert_eq!(report.commands.download, CloudCommandState::Enabled);
+        assert_eq!(report.commands.evict, CloudCommandState::Disabled);
     }
 
     #[test]
