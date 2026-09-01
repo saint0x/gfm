@@ -1544,14 +1544,33 @@ impl FileProviderOperationReport {
         check_control()?;
         let path = path.as_ref().to_path_buf();
         check_control()?;
-        let before = FileProviderStateReport::read_path_checked(&path, &mut check_control)?;
+        let path_exists = match path.try_exists() {
+            Ok(exists) => exists,
+            Err(err) => {
+                check_control()?;
+                let before =
+                    FileProviderStateReport::from_path_checked(path.clone(), &mut check_control)?;
+                return Ok(Self::unavailable(
+                    path,
+                    operation,
+                    before,
+                    format!("fileprovider-path-existence-unavailable: {err}"),
+                ));
+            }
+        };
+        check_control()?;
+        let before = if path_exists {
+            FileProviderStateReport::read_path_checked(&path, &mut check_control)?
+        } else {
+            FileProviderStateReport::from_path_checked(path.clone(), &mut check_control)?
+        };
         check_control()?;
         let command = match operation {
             FileProviderOperation::Download => before.commands.download,
             FileProviderOperation::Evict => before.commands.evict,
         };
         check_control()?;
-        if path.try_exists().ok() == Some(false) {
+        if !path_exists {
             return Ok(Self::missing(path, operation, before));
         }
         check_control()?;
@@ -1689,6 +1708,22 @@ impl FileProviderOperationReport {
             before,
             after: None,
             reason: Some("fileprovider-path-missing".to_string()),
+        }
+    }
+
+    fn unavailable(
+        path: PathBuf,
+        operation: FileProviderOperation,
+        before: FileProviderStateReport,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            path,
+            operation,
+            disposition: FileProviderOperationDisposition::Unavailable,
+            before,
+            after: None,
+            reason: Some(reason.into()),
         }
     }
 }
@@ -5021,6 +5056,39 @@ mod tests {
         .expect_err("pre-cancelled FileProvider operation must stop before probing path");
 
         assert_eq!(err, GfmError::Cancelled);
+    }
+
+    #[test]
+    fn operations_report_unavailable_path_probe_before_native_call() {
+        let root = unique_temp_dir();
+        let unavailable = root.join(format!(
+            "{}.icloud",
+            "fileprovider-operation-unavailable".repeat(16)
+        ));
+
+        let report =
+            FileProviderOperationReport::execute(&unavailable, FileProviderOperation::Download)
+                .unwrap();
+
+        assert_eq!(
+            report.disposition,
+            FileProviderOperationDisposition::Unavailable
+        );
+        assert_eq!(report.before.storage_state, CloudStorageState::Unknown);
+        assert_eq!(
+            report.before.materialization_source,
+            CloudMaterializationSource::NativeUrlResourceUnavailable
+        );
+        assert!(
+            report
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("fileprovider-path-existence-unavailable")),
+            "{report:?}"
+        );
+        assert!(report.as_tsv().contains("\tdisposition=unavailable\t"));
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
