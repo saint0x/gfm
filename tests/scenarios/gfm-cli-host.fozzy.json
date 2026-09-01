@@ -4774,8 +4774,42 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "volume-operation",
+        "unmount",
+        "tmp/gfm-fozzy-dist"
+      ],
+      "exit_code": 0,
+      "stdout": "volume-operation\tunmount\tpath=tmp/gfm-fozzy-dist\tdisposition=refused\tnative-status=-\tdissenter-status=-\tvolume-kind=external\tmount=mounted\tstable-id=fixture-marker:external-removable:dev:16777230:tmp/gfm-fozzy-dist\treason=fixture-volume-native-operation-disabled\n",
+      "stderr": "",
+      "times": 1
+    },
+    {
+      "type": "proc_spawn",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "volume-operation",
+        "unmount",
+        "tmp/gfm-fozzy-dist"
+      ],
+      "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "volume-operation-cancel-after-access",
         "eject",
+        "tmp/gfm-fozzy-dist"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "volume-operation-cancel-after-access",
+        "unmount",
         "tmp/gfm-fozzy-dist"
       ],
       "exit_code": 1,

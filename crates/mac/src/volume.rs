@@ -4396,6 +4396,25 @@ mod tests {
     }
 
     #[test]
+    fn volume_unmount_operation_refuses_fixture_volume_before_native_call() {
+        let root = unique_temp_dir("gfm-volume-unmount-operation-fixture");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+
+        let report = VolumeOperationReport::execute(&root, VolumeOperation::Unmount).unwrap();
+
+        assert_eq!(report.operation, VolumeOperation::Unmount);
+        assert_eq!(report.disposition, VolumeOperationDisposition::Refused);
+        assert_eq!(report.native_status, None);
+        assert_eq!(report.dissenter_status, None);
+        assert_eq!(report.reason, "fixture-volume-native-operation-disabled");
+        assert!(report.as_tsv().starts_with("volume-operation\tunmount\t"));
+        assert!(report.as_tsv().contains("\tvolume-kind=external\t"));
+        assert!(report.as_tsv().contains("\tmount=mounted\t"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn volume_operation_refuses_disabled_command_with_policy_reason() {
         let root = unique_temp_dir("gfm-volume-operation-policy");
         fs::write(root.join(VOLUME_MARKER), "internal\n").unwrap();
