@@ -2,7 +2,7 @@
 use crate::access::preflight_access_scope_checked;
 use crate::access::{
     preflight_access_scope_checked_with_volume_report, preflight_volume_access_scope_with_report,
-    ScopedAccessGuard,
+    worker_admission_with_volume_report, ScopedAccessGuard,
 };
 use crate::extract::{
     extraction_budget_profile_checked, preflight_adaptive_extraction_worker_scratch,
@@ -893,9 +893,7 @@ fn run_extraction_report(
     )?;
     let retry_probe_access_report = retry_probe_access_report(retry_probe.as_deref())?;
     access_report.preflight_volume(worker)?;
-    if matches!(fs::metadata(&path), Err(err) if err.kind() == io::ErrorKind::NotFound) {
-        let _access = access_report.access_checked(worker, || Ok(()))?;
-    }
+    preflight_content_input_admission_before_runtime(&access_report, worker)?;
     if let Some(report) = retry_probe_access_report.as_ref() {
         report.preflight_volume(worker)?;
     }
@@ -933,6 +931,24 @@ fn run_extraction_report(
             Ok(format!("{}\n{}\n", report.as_tsv(), decision.as_tsv()))
         },
     )
+}
+
+fn preflight_content_input_admission_before_runtime(
+    access_report: &ForegroundContentIndexAccessReport,
+    worker: &str,
+) -> Result<()> {
+    let admission = worker_admission_with_volume_report(
+        &access_report.path,
+        access_report.intent,
+        worker,
+        &access_report.volume_report,
+    );
+    if admission.can_touch_filesystem {
+        return Ok(());
+    }
+    access_report
+        .access_checked(worker, || Ok(()))
+        .map(|_access| ())
 }
 
 fn run_extraction_cache(path: PathBuf) -> Result<String> {
