@@ -5,7 +5,7 @@ use crate::{
 use gfm_mac::{
     AccessIntent, SecurityDecisionAction, SecurityScopedAccessReport, SecurityScopedBookmarkAccess,
     SecurityScopedBookmarkStore, SecurityWorkerAction, SecurityWorkerAdmissionReport,
-    VolumeDiscoveryReport,
+    VolumeDescriptor, VolumeDiscoveryReport,
 };
 use gfm_types::{GfmError, Result};
 use std::path::Path;
@@ -227,24 +227,13 @@ fn volume_access_block_reason_in_report(
     }
     if volume.platform_state_unavailable() {
         return Some(format!(
-            "{worker} volume access blocked: unavailable volume {}; label={}; root={}; stable-id={}; mount={}; native-status={}; resource-status={}; mount-status={}",
+            "{worker} volume access blocked: unavailable volume {}; label={}; root={}; stable-id={}; mount={}; {}",
             volume.kind.as_str(),
             volume.label,
             volume.path.display(),
             volume.stable_identity,
             volume.mount_state.as_str(),
-            volume
-                .native_status
-                .map(gfm_mac::NativeVolumeStatus::as_str)
-                .unwrap_or("-"),
-            volume
-                .resource_status
-                .map(gfm_mac::NativeVolumeStatus::as_str)
-                .unwrap_or("-"),
-            volume
-                .mount_table_status
-                .map(gfm_mac::NativeVolumeStatus::as_str)
-                .unwrap_or("-")
+            volume_api_status_context(volume)
         ));
     }
     if mutating_intent(intent)
@@ -265,6 +254,27 @@ fn volume_access_block_reason_in_report(
 
 const fn mutating_intent(intent: AccessIntent) -> bool {
     matches!(intent, AccessIntent::Write | AccessIntent::Operate)
+}
+
+pub(crate) fn volume_api_status_context(volume: &VolumeDescriptor) -> String {
+    format!(
+        "native-status={}; native-reason={}; resource-status={}; resource-reason={}; mount-status={}; mount-reason={}",
+        volume
+            .native_status
+            .map(gfm_mac::NativeVolumeStatus::as_str)
+            .unwrap_or("-"),
+        volume.native_reason.as_deref().unwrap_or("-"),
+        volume
+            .resource_status
+            .map(gfm_mac::NativeVolumeStatus::as_str)
+            .unwrap_or("-"),
+        volume.resource_reason.as_deref().unwrap_or("-"),
+        volume
+            .mount_table_status
+            .map(gfm_mac::NativeVolumeStatus::as_str)
+            .unwrap_or("-"),
+        volume.mount_table_reason.as_deref().unwrap_or("-")
+    )
 }
 
 fn broad_system_root_allows_path(
@@ -652,8 +662,11 @@ mod tests {
         volume.kind = VolumeKind::Network;
         volume.reachable = Some(true);
         volume.native_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        volume.native_reason = Some("DiskArbitration event session unavailable".to_string());
         volume.resource_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        volume.resource_reason = Some("URL resource values unavailable".to_string());
         volume.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        volume.mount_table_reason = Some("mount table unavailable".to_string());
         let report = VolumeDiscoveryReport {
             volumes: vec![volume],
         };
@@ -728,8 +741,11 @@ mod tests {
         volume.kind = VolumeKind::Network;
         volume.reachable = Some(true);
         volume.native_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        volume.native_reason = Some("DiskArbitration event session unavailable".to_string());
         volume.resource_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        volume.resource_reason = Some("URL resource values unavailable".to_string());
         volume.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        volume.mount_table_reason = Some("mount table unavailable".to_string());
         let report = VolumeDiscoveryReport {
             volumes: vec![volume],
         };
@@ -752,8 +768,17 @@ mod tests {
             .contains("preview worker volume access blocked"));
         assert!(admission.reason.contains("unavailable volume network"));
         assert!(admission.reason.contains("native-status=unavailable"));
+        assert!(admission
+            .reason
+            .contains("native-reason=DiskArbitration event session unavailable"));
         assert!(admission.reason.contains("resource-status=unavailable"));
+        assert!(admission
+            .reason
+            .contains("resource-reason=URL resource values unavailable"));
         assert!(admission.reason.contains("mount-status=unavailable"));
+        assert!(admission
+            .reason
+            .contains("mount-reason=mount table unavailable"));
         assert!(admission.as_tsv().contains("\tprobe=unknown\t"));
         assert!(!admission.as_tsv().contains("\tprobe=missing\t"));
 
@@ -768,8 +793,11 @@ mod tests {
         volume.kind = VolumeKind::Network;
         volume.reachable = Some(true);
         volume.native_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        volume.native_reason = Some("DiskArbitration event session unavailable".to_string());
         volume.resource_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        volume.resource_reason = Some("URL resource values unavailable".to_string());
         volume.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        volume.mount_table_reason = Some("mount table unavailable".to_string());
         let report = VolumeDiscoveryReport {
             volumes: vec![volume],
         };

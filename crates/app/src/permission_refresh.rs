@@ -1,4 +1,4 @@
-use crate::runtime::default_permission_state_path;
+use crate::{access::volume_api_status_context, runtime::default_permission_state_path};
 use gfm_mac::{
     current_permission_onboarding_checked, AccessIntent, MountState,
     PermissionStateInvalidationReport, PermissionStateSnapshot, SecurityDecisionAction,
@@ -139,24 +139,13 @@ fn preflight_permission_state_volume_with_report(
         return Err(GfmError::Permission {
             path: path.to_path_buf(),
             message: format!(
-                "permission state volume access blocked: unavailable volume {}; label={}; root={}; stable-id={}; mount={}; native-status={}; resource-status={}; mount-status={}",
+                "permission state volume access blocked: unavailable volume {}; label={}; root={}; stable-id={}; mount={}; {}",
                 volume.kind.as_str(),
                 volume.label,
                 volume.path.display(),
                 volume.stable_identity,
                 volume.mount_state.as_str(),
-                volume
-                    .native_status
-                    .map(gfm_mac::NativeVolumeStatus::as_str)
-                    .unwrap_or("-"),
-                volume
-                    .resource_status
-                    .map(gfm_mac::NativeVolumeStatus::as_str)
-                    .unwrap_or("-"),
-                volume
-                    .mount_table_status
-                    .map(gfm_mac::NativeVolumeStatus::as_str)
-                    .unwrap_or("-")
+                volume_api_status_context(volume)
             ),
         });
     }
@@ -359,8 +348,11 @@ mod tests {
         volume.mount_state = MountState::Mounted;
         volume.reachable = Some(true);
         volume.native_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        volume.native_reason = Some("DiskArbitration unavailable during refresh".to_string());
         volume.resource_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        volume.resource_reason = Some("URL resource values unavailable during refresh".to_string());
         volume.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        volume.mount_table_reason = Some("mount table unavailable during refresh".to_string());
         let report = VolumeDiscoveryReport {
             volumes: vec![volume],
         };
@@ -373,8 +365,17 @@ mod tests {
             .to_string()
             .contains("permission state volume access blocked: unavailable volume network"));
         assert!(err.to_string().contains("native-status=unavailable"));
+        assert!(err
+            .to_string()
+            .contains("native-reason=DiskArbitration unavailable during refresh"));
         assert!(err.to_string().contains("resource-status=unavailable"));
+        assert!(err
+            .to_string()
+            .contains("resource-reason=URL resource values unavailable during refresh"));
         assert!(err.to_string().contains("mount-status=unavailable"));
+        assert!(err
+            .to_string()
+            .contains("mount-reason=mount table unavailable during refresh"));
         assert!(!state.exists());
         assert!(!state.parent().unwrap().exists());
 

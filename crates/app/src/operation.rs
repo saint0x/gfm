@@ -1064,8 +1064,12 @@ fn unavailable_volume_api_report(root: &Path) -> Result<VolumeDiscoveryReport> {
     volume.mount_state = MountState::Mounted;
     volume.reachable = Some(true);
     volume.native_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+    volume.native_reason = Some("DiskArbitration unavailable for operation volume".to_string());
     volume.resource_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+    volume.resource_reason =
+        Some("URL resource values unavailable for operation volume".to_string());
     volume.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+    volume.mount_table_reason = Some("mount table unavailable for operation volume".to_string());
     Ok(VolumeDiscoveryReport {
         volumes: vec![volume],
     })
@@ -2000,6 +2004,15 @@ mod tests {
         assert!(matches!(err, GfmError::Permission { .. }));
         assert!(err.to_string().contains("unavailable volume network"));
         assert!(err.to_string().contains("native-status=unavailable"));
+        assert!(err
+            .to_string()
+            .contains("native-reason=DiskArbitration unavailable for operation volume"));
+        assert!(err
+            .to_string()
+            .contains("resource-reason=URL resource values unavailable for operation volume"));
+        assert!(err
+            .to_string()
+            .contains("mount-reason=mount table unavailable for operation volume"));
         assert!(err.to_string().contains("role=destination-parent"));
         assert!(err
             .to_string()

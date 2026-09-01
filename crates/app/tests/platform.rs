@@ -481,8 +481,11 @@ fn permission_invalidation_refuses_unavailable_volume_api_state_from_binary() {
         "{stderr}"
     );
     assert!(stderr.contains("native-status=unavailable"), "{stderr}");
+    assert!(stderr.contains("native-reason=DiskArbitration"), "{stderr}");
     assert!(stderr.contains("resource-status=unavailable"), "{stderr}");
+    assert!(stderr.contains("resource-reason="), "{stderr}");
     assert!(stderr.contains("mount-status=unavailable"), "{stderr}");
+    assert!(stderr.contains("mount-reason="), "{stderr}");
     assert!(!state.exists());
     assert!(!state.parent().unwrap().exists());
 
@@ -6690,8 +6693,20 @@ fn operation_access_refuses_unavailable_volume_api_state_from_binary() {
     assert!(stdout.starts_with("operation-access\tcopy\taction=deny\t"));
     assert!(stdout.contains("unavailable volume network"), "{stdout}");
     assert!(stdout.contains("native-status=unavailable"), "{stdout}");
+    assert!(
+        stdout.contains("native-reason=DiskArbitration unavailable for operation volume"),
+        "{stdout}"
+    );
     assert!(stdout.contains("resource-status=unavailable"), "{stdout}");
+    assert!(
+        stdout.contains("resource-reason=URL resource values unavailable for operation volume"),
+        "{stdout}"
+    );
     assert!(stdout.contains("mount-status=unavailable"), "{stdout}");
+    assert!(
+        stdout.contains("mount-reason=mount table unavailable for operation volume"),
+        "{stdout}"
+    );
     assert!(
         stdout.contains("refresh-on-permission-change=true"),
         "{stdout}"

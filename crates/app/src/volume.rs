@@ -129,6 +129,7 @@ fn status_or_reason(
         return None;
     }
     reason
+        .filter(|reason| !reason.trim().is_empty())
         .map(str::to_string)
         .or_else(|| status_reason(prefix, status))
 }
@@ -266,6 +267,28 @@ mod tests {
             report.reason,
             "DiskArbitration did not return a disk description"
         );
+
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn descriptor_blank_native_failure_reason_uses_typed_status_reason() {
+        let path = std::env::temp_dir().join(format!(
+            "gfm-volume-event-descriptor-blank-native-reason-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        let mut descriptor = VolumeDescriptor::for_path(&path).unwrap();
+        descriptor.native_status = Some(NativeVolumeStatus::Unavailable);
+        descriptor.native_reason = Some(" \t ".to_string());
+
+        let report = descriptor_event_invalidation(&path, &descriptor);
+
+        assert_eq!(
+            native_reason_for_event_descriptor(&descriptor).as_deref(),
+            Some("diskarbitration-volume-unavailable")
+        );
+        assert_eq!(report.reason, "diskarbitration-volume-unavailable");
 
         std::fs::remove_dir_all(path).unwrap();
     }

@@ -1228,7 +1228,10 @@ impl VolumeEventInvalidationReport {
                     invalidate_operation_policy: event_visible,
                     invalidate_index_admission: event_visible,
                     rescan_index: event_visible,
-                    reason: native_reason.unwrap_or_else(|| "volume-event-unavailable".to_string()),
+                    reason: normalized_event_reason(
+                        native_reason.as_deref(),
+                        "volume-event-unavailable",
+                    ),
                 }
             }
             VolumeEventKind::DescriptionChanged => {
@@ -1248,7 +1251,7 @@ impl VolumeEventInvalidationReport {
                         if previous.is_some() && current.is_some() {
                             None
                         } else {
-                            native_reason
+                            normalized_event_reason_option(native_reason.as_deref())
                         }
                     })
                     .unwrap_or_else(|| "volume-event-description-changed".to_string());
@@ -1307,14 +1310,15 @@ impl VolumeEventInvalidationReport {
                     | VolumeEventKind::Unavailable
             );
         let reason = match kind {
-            VolumeEventKind::Appeared => "volume-event-appeared",
-            VolumeEventKind::DescriptionChanged => native_reason
-                .as_deref()
-                .unwrap_or("volume-event-description-changed"),
-            VolumeEventKind::Disappeared => "volume-event-disappeared",
-            VolumeEventKind::Unavailable => native_reason
-                .as_deref()
-                .unwrap_or("volume-event-unavailable"),
+            VolumeEventKind::Appeared => "volume-event-appeared".to_string(),
+            VolumeEventKind::DescriptionChanged => normalized_event_reason(
+                native_reason.as_deref(),
+                "volume-event-description-changed",
+            ),
+            VolumeEventKind::Disappeared => "volume-event-disappeared".to_string(),
+            VolumeEventKind::Unavailable => {
+                normalized_event_reason(native_reason.as_deref(), "volume-event-unavailable")
+            }
         };
         Self {
             kind,
@@ -1362,7 +1366,7 @@ impl VolumeEventInvalidationReport {
             invalidate_operation_policy: invalidates,
             invalidate_index_admission: invalidates,
             rescan_index: invalidates,
-            reason: reason.to_string(),
+            reason,
         }
     }
 
@@ -1410,6 +1414,16 @@ impl VolumeEventInvalidationReport {
             escape_field(&self.reason)
         )
     }
+}
+
+fn normalized_event_reason(reason: Option<&str>, fallback: &str) -> String {
+    normalized_event_reason_option(reason).unwrap_or_else(|| fallback.to_string())
+}
+
+fn normalized_event_reason_option(reason: Option<&str>) -> Option<String> {
+    reason
+        .filter(|reason| !reason.trim().is_empty())
+        .map(str::to_string)
 }
 
 fn description_change_invalidates_policy(reason: &str) -> bool {
@@ -4573,6 +4587,26 @@ mod tests {
     }
 
     #[test]
+    fn description_changed_volume_event_ignores_blank_native_reason() {
+        let report = VolumeEventInvalidationReport::from_parts(
+            VolumeEventKind::DescriptionChanged,
+            NativeVolumeStatus::Unavailable,
+            Some(PathBuf::from("/Volumes/Unprobeable")),
+            None,
+            Some(" \t ".to_string()),
+        );
+
+        assert_eq!(report.reason, "volume-event-description-changed");
+        assert!(report.invalidate_sidebar);
+        assert!(report.invalidate_operation_policy);
+        assert!(report.invalidate_index_admission);
+        assert!(report.rescan_index);
+        assert!(report
+            .as_tsv()
+            .ends_with("reason=volume-event-description-changed"));
+    }
+
+    #[test]
     fn volume_event_transition_keeps_label_only_change_sidebar_scoped() {
         let root = unique_temp_dir("gfm-volume-event-label-change");
         fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
@@ -5269,6 +5303,24 @@ mod tests {
         assert!(report
             .as_tsv()
             .contains("\treason=diskarbitration-session-unavailable"));
+    }
+
+    #[test]
+    fn unavailable_volume_event_ignores_blank_native_reason() {
+        let report = VolumeEventInvalidationReport::from_parts(
+            VolumeEventKind::Unavailable,
+            NativeVolumeStatus::Unavailable,
+            None,
+            None,
+            Some("\n\t ".to_string()),
+        );
+
+        assert_eq!(report.reason, "volume-event-unavailable");
+        assert!(report.invalidate_sidebar);
+        assert!(report.invalidate_operation_policy);
+        assert!(report.invalidate_index_admission);
+        assert!(report.rescan_index);
+        assert!(report.as_tsv().ends_with("reason=volume-event-unavailable"));
     }
 
     #[test]

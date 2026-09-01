@@ -119,8 +119,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             volume.mount_state = gfm_mac::MountState::Mounted;
             volume.reachable = Some(true);
             volume.native_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+            volume.native_reason = Some("DiskArbitration unavailable during refresh".to_string());
             volume.resource_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+            volume.resource_reason =
+                Some("URL resource values unavailable during refresh".to_string());
             volume.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+            volume.mount_table_reason = Some("mount table unavailable during refresh".to_string());
             let report = VolumeDiscoveryReport {
                 volumes: vec![volume],
             };
@@ -153,8 +157,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             volume.mount_state = gfm_mac::MountState::Mounted;
             volume.reachable = Some(true);
             volume.native_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+            volume.native_reason = Some("DiskArbitration unavailable during refresh".to_string());
             volume.resource_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+            volume.resource_reason =
+                Some("URL resource values unavailable during refresh".to_string());
             volume.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+            volume.mount_table_reason = Some("mount table unavailable during refresh".to_string());
             let report = VolumeDiscoveryReport {
                 volumes: vec![volume],
             };
@@ -781,8 +789,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             volume.mount_state = gfm_mac::MountState::Mounted;
             volume.reachable = Some(true);
             volume.native_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+            volume.native_reason = Some("DiskArbitration unavailable during refresh".to_string());
             volume.resource_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+            volume.resource_reason =
+                Some("URL resource values unavailable during refresh".to_string());
             volume.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+            volume.mount_table_reason = Some("mount table unavailable during refresh".to_string());
             let report = VolumeDiscoveryReport {
                 volumes: vec![volume],
             };
