@@ -621,8 +621,18 @@ fn run_fsevents_repair_schedule(
     let access_reports =
         FseventsRepairScheduleAccessReports::for_paths(&state, &cursor, &dropped_roots);
     access_reports.preflight_state_and_cursor_volumes()?;
-    if let Some(retry_probe) = retry_probe.as_ref() {
-        preflight_index_write(retry_probe, "fsevents repair schedule")?;
+    let retry_probe_access_report = retry_probe
+        .as_ref()
+        .map(|retry_probe| {
+            IndexPathAccessReport::write_probe_checked(
+                retry_probe,
+                "fsevents repair schedule",
+                || Ok(()),
+            )
+        })
+        .transpose()?;
+    if let Some(report) = &retry_probe_access_report {
+        report.preflight_volume()?;
     }
     let volume = access_reports.first_volume();
     run_retriable_volume_task_cancellable_with_payload_path(
@@ -636,10 +646,14 @@ fn run_fsevents_repair_schedule(
             let observed_event_ids = observed_event_ids.clone();
             let reason = reason.clone();
             let retry_probe = retry_probe.clone();
+            let retry_probe_access_report = retry_probe_access_report.clone();
             let access_reports = access_reports.clone();
             cancellation.check()?;
-            if let Some(retry_probe) = retry_probe.as_ref() {
-                fail_first_index_retry_probe_attempt(
+            if let (Some(retry_probe), Some(retry_probe_access_report)) =
+                (retry_probe.as_ref(), retry_probe_access_report.as_ref())
+            {
+                fail_first_index_retry_probe_attempt_with_access(
+                    retry_probe_access_report,
                     retry_probe,
                     "fsevents repair schedule",
                     &cancellation,
@@ -1197,10 +1211,7 @@ fn preflight_index_read_checked_with_volume_report(
     )
 }
 
-fn preflight_index_write(path: &Path, worker: &str) -> Result<ScopedAccessGuard> {
-    preflight_index_write_checked(path, worker, || Ok(()))
-}
-
+#[cfg(test)]
 fn preflight_index_write_checked(
     path: &Path,
     worker: &str,
@@ -1242,16 +1253,6 @@ fn write_probe_path(path: &Path) -> Result<&Path> {
             format!("index write path metadata unavailable: {err}"),
         )),
     }
-}
-
-fn fail_first_index_retry_probe_attempt(
-    attempt_state: &Path,
-    worker: &str,
-    cancellation: &Cancellation,
-) -> Result<()> {
-    cancellation.check()?;
-    let _access = preflight_index_write_checked(attempt_state, worker, || cancellation.check())?;
-    fail_first_index_retry_probe_attempt_after_access(attempt_state, worker, cancellation)
 }
 
 fn fail_first_index_retry_probe_attempt_with_access(

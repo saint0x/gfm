@@ -19,6 +19,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const RUNTIME_RETRY_STATE_MAX_BYTES: usize = 64 * 1024;
@@ -139,12 +140,14 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "jobs-runtime-retry-probe requires an attempt state path",
             )?;
             let pressure = parse_optional_scheduling_pressure(args)?;
+            let retry_access = Arc::new(Mutex::new(None::<JobPathAccessReport>));
             let outcome = run_scheduled_volume_task_cancellable_with_volume(
                 Priority::Background,
                 "runtime retry probe",
                 pressure,
                 {
                     let state = state.clone();
+                    let retry_access = Arc::clone(&retry_access);
                     move || {
                         let access_report = JobPathAccessReport::write_target_checked(
                             &state,
@@ -152,16 +155,30 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                             || Ok(()),
                         )?;
                         access_report.preflight_volume("runtime retry probe")?;
-                        Ok(access_report.volume())
+                        let volume = access_report.volume();
+                        *retry_access.lock().map_err(|_| {
+                            GfmError::Format(
+                                "runtime retry probe access report lock poisoned".to_string(),
+                            )
+                        })? = Some(access_report);
+                        Ok(volume)
                     }
                 },
                 move |cancellation| {
                     cancellation.check()?;
-                    let access_report = JobPathAccessReport::write_target_checked(
-                        &state,
-                        "runtime retry probe",
-                        || cancellation.check(),
-                    )?;
+                    let access_report = retry_access
+                        .lock()
+                        .map_err(|_| {
+                            GfmError::Format(
+                                "runtime retry probe access report lock poisoned".to_string(),
+                            )
+                        })?
+                        .clone()
+                        .ok_or_else(|| {
+                            GfmError::Format(
+                                "runtime retry probe missing retained access report".to_string(),
+                            )
+                        })?;
                     cancellation.check()?;
                     let _access = access_report
                         .access_checked("runtime retry probe", || cancellation.check())?;

@@ -3915,6 +3915,65 @@ fn fsevents_repair_schedule_retries_transient_failure_from_binary() {
 }
 
 #[test]
+fn fsevents_repair_schedule_retry_probe_refuses_unreachable_state_before_scheduling_from_binary() {
+    let local = unique_temp_dir("gfm-cli-repair-retry-local");
+    let offline = unique_temp_dir("gfm-cli-repair-retry-offline");
+    let state = local.join("state.gfmstate");
+    let cursor = local.join("cursor.gfmcursor");
+    let journal = local.join("jobs.journal");
+    let catalog = local.join("jobs.gfmjobs");
+    let progress = local.join("jobs.gfmprogress");
+    let retry_probe = offline.join("repair-retry.state");
+    fs::write(
+        &state,
+        "state is not parsed after retry probe access denial\n",
+    )
+    .unwrap();
+    fs::write(
+        &cursor,
+        "cursor is not parsed after retry probe access denial\n",
+    )
+    .unwrap();
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &journal)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "fsevents-repair-schedule-retry-probe",
+            state.to_str().unwrap(),
+            cursor.to_str().unwrap(),
+            "201",
+            "kernel-dropped",
+            retry_probe.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("repair-schedule\t"), "{stdout}");
+    assert!(
+        stderr
+            .contains("fsevents repair schedule volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("index write path metadata unavailable"),
+        "{stderr}"
+    );
+    assert!(!retry_probe.exists());
+    assert!(!journal.exists());
+    assert!(!catalog.exists());
+    assert!(!progress.exists());
+
+    fs::remove_dir_all(local).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
 fn fsevents_repair_schedule_refuses_unreachable_dropped_root_before_reading_state_from_binary() {
     let local = unique_temp_dir("gfm-cli-fsevents-repair-local");
     let offline = unique_temp_dir("gfm-cli-fsevents-repair-dropped-unreachable");
@@ -17307,6 +17366,45 @@ fn scheduled_runtime_refuses_unreachable_job_journal_before_runtime_state_from_b
     assert!(!stdout.contains("runtime-retry-probe\t"), "{stdout}");
     assert!(
         stderr.contains("runtime retry probe volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(!state.exists());
+    assert!(!journal.exists());
+    assert!(!catalog.exists());
+    assert!(!progress.exists());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
+fn scheduled_runtime_retry_probe_refuses_unreachable_state_before_runtime_attempt_from_binary() {
+    let root = unique_temp_dir("gfm-cli-runtime-retry-state-root");
+    let offline = unique_temp_dir("gfm-cli-runtime-retry-state-offline");
+    let state = offline.join("retry.state");
+    let journal = root.join("jobs.journal");
+    let catalog = root.join("runtime.gfmjobs");
+    let progress = root.join("runtime.gfmprogress");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &journal)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args(["jobs-runtime-retry-probe", state.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("runtime-retry-probe\t"), "{stdout}");
+    assert!(
+        stderr.contains("runtime retry probe volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("jobs write path metadata unavailable"),
         "{stderr}"
     );
     assert!(!state.exists());
