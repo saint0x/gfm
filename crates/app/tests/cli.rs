@@ -177,6 +177,44 @@ fn index_retries_transient_failure_from_binary() {
 }
 
 #[test]
+fn index_retry_probe_refuses_unreachable_state_before_scanning_from_binary() {
+    let root = unique_temp_dir("gfm-cli-index-retry-probe-root");
+    let offline = unique_temp_dir("gfm-cli-index-retry-probe-offline");
+    let index = unique_temp_path("gfm-cli-index-retry-probe", "gfmidx");
+    let retry_probe = offline.join("index-retry.state");
+    fs::write(root.join("Visible.txt"), "must not be indexed").unwrap();
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-retry-probe",
+            root.to_str().unwrap(),
+            index.to_str().unwrap(),
+            retry_probe.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.contains("index volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("index write path metadata unavailable"),
+        "{stderr}"
+    );
+    assert!(!retry_probe.exists());
+    assert!(!index.exists());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
 fn search_index_retries_transient_archive_read_failure_from_binary() {
     let root = unique_temp_dir("gfm-cli-search-index-retry-root");
     let index = unique_temp_path("gfm-cli-search-index-retry", "gfmidx");

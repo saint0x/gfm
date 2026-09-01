@@ -80,8 +80,14 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 IndexBuildAccessReports::for_root_and_output_checked(&root, &output, || Ok(()))?;
             access_reports.preflight_volumes()?;
             let _output_access = access_reports.preflight_output_access_checked(|| Ok(()))?;
-            if let Some(retry_probe) = retry_probe.as_ref() {
-                preflight_index_write(retry_probe, "index")?;
+            let retry_probe_access_report = retry_probe
+                .as_ref()
+                .map(|retry_probe| {
+                    IndexPathAccessReport::write_probe_checked(retry_probe, "index", || Ok(()))
+                })
+                .transpose()?;
+            if let Some(report) = &retry_probe_access_report {
+                report.preflight_volume()?;
             }
             let volume = access_reports.first_volume();
             let (record_count, inaccessible_count) =
@@ -94,8 +100,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         let root = root.clone();
                         let output = output.clone();
                         let retry_probe = retry_probe.clone();
-                        if let Some(retry_probe) = retry_probe.as_ref() {
-                            fail_first_index_retry_probe_attempt(
+                        if let (Some(retry_probe), Some(retry_probe_access_report)) =
+                            (retry_probe.as_ref(), retry_probe_access_report.as_ref())
+                        {
+                            fail_first_index_retry_probe_attempt_with_access(
+                                retry_probe_access_report,
                                 retry_probe,
                                 "index",
                                 &cancellation,
@@ -1242,6 +1251,25 @@ fn fail_first_index_retry_probe_attempt(
 ) -> Result<()> {
     cancellation.check()?;
     let _access = preflight_index_write_checked(attempt_state, worker, || cancellation.check())?;
+    fail_first_index_retry_probe_attempt_after_access(attempt_state, worker, cancellation)
+}
+
+fn fail_first_index_retry_probe_attempt_with_access(
+    access_report: &IndexPathAccessReport,
+    attempt_state: &Path,
+    worker: &str,
+    cancellation: &Cancellation,
+) -> Result<()> {
+    cancellation.check()?;
+    let _access = access_report.access_checked(|| cancellation.check())?;
+    fail_first_index_retry_probe_attempt_after_access(attempt_state, worker, cancellation)
+}
+
+fn fail_first_index_retry_probe_attempt_after_access(
+    attempt_state: &Path,
+    worker: &str,
+    cancellation: &Cancellation,
+) -> Result<()> {
     cancellation.check()?;
     let attempts = read_index_retry_probe_attempt_checked(attempt_state, || cancellation.check())?;
     cancellation.check()?;
