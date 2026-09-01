@@ -5719,6 +5719,59 @@ fn searches_persisted_tags_from_binary() {
         "{sidecar_session_stderr}"
     );
 
+    let sidecar_provider_path = Path::new("/tmp/tagged.md");
+    let sidecar_provider_session_search = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "search-index-sidecars-session-provider-invalidation",
+            index.to_str().unwrap(),
+            columns.to_str().unwrap(),
+            metadata.to_str().unwrap(),
+            prefixes.to_str().unwrap(),
+            substrings.to_str().unwrap(),
+            fuzzy.to_str().unwrap(),
+            content.to_str().unwrap(),
+            "bodymarker",
+            sidecar_provider_path.to_str().unwrap(),
+            "downloaded",
+            "evicted",
+            "true",
+            "true",
+            "fileprovider-state-changed",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        sidecar_provider_session_search.status.success(),
+        "{}",
+        String::from_utf8_lossy(&sidecar_provider_session_search.stderr)
+    );
+    let sidecar_provider_session_stdout =
+        String::from_utf8(sidecar_provider_session_search.stdout).unwrap();
+    assert!(
+        sidecar_provider_session_stdout.contains("tagged.md"),
+        "{sidecar_provider_session_stdout}"
+    );
+    let sidecar_provider_session_stderr =
+        String::from_utf8(sidecar_provider_session_search.stderr).unwrap();
+    assert!(
+        sidecar_provider_session_stderr.contains("sidecar-session-provider-second")
+            && sidecar_provider_session_stderr.contains("\tcontent-keys=1")
+            && sidecar_provider_session_stderr.contains("\tresult-cache-hits=1")
+            && sidecar_provider_session_stderr.contains("provider-metadata-invalidation\t")
+            && sidecar_provider_session_stderr.contains(
+                "\treindex-metadata=true\tschedule-metadata-update=true\tinvalidate-query-cache=true\t"
+            )
+            && sidecar_provider_session_stderr.contains("sidecar-query-cache-invalidation\t")
+            && sidecar_provider_session_stderr.contains(
+                "\tinvalidated=true\tresult-entries-before=1\tresult-entries-after=0\t"
+            )
+            && sidecar_provider_session_stderr.contains("sidecar-session-provider-third")
+            && sidecar_provider_session_stderr.contains("\tcontent-cache-hits=1")
+            && sidecar_provider_session_stderr.contains("\tresult-cache-hits=0")
+            && sidecar_provider_session_stderr.contains("\tresult-cache-misses=1"),
+        "{sidecar_provider_session_stderr}"
+    );
+
     let sidecar_session_retry_search = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .env("GFM_JOB_JOURNAL", &session_retry_journal)
         .env("GFM_JOB_PAYLOAD_CATALOG", &session_retry_catalog)

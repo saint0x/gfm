@@ -614,6 +614,97 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 print_hit(&hit);
             }
         }
+        "search-index-sidecars-session-provider-invalidation" => {
+            let records = required_path(
+                args.next(),
+                "search-index-sidecars-session-provider-invalidation requires a records path",
+            )?;
+            let columns = required_path(
+                args.next(),
+                "search-index-sidecars-session-provider-invalidation requires a columns path",
+            )?;
+            let metadata = required_path(
+                args.next(),
+                "search-index-sidecars-session-provider-invalidation requires a metadata path",
+            )?;
+            let prefixes = required_path(
+                args.next(),
+                "search-index-sidecars-session-provider-invalidation requires a prefixes path",
+            )?;
+            let substrings = required_path(
+                args.next(),
+                "search-index-sidecars-session-provider-invalidation requires a substrings path",
+            )?;
+            let fuzzy = required_path(
+                args.next(),
+                "search-index-sidecars-session-provider-invalidation requires a fuzzy path",
+            )?;
+            let content = required_path(
+                args.next(),
+                "search-index-sidecars-session-provider-invalidation requires a content path",
+            )?;
+            let query = required_string(
+                args.next(),
+                "search-index-sidecars-session-provider-invalidation requires a query string",
+            )?;
+            let provider_path = required_path(
+                args.next(),
+                "search-index-sidecars-session-provider-invalidation requires a provider path",
+            )?;
+            let previous_state = required_string(
+                args.next(),
+                "search-index-sidecars-session-provider-invalidation requires a previous provider state",
+            )?;
+            let current_state = required_string(
+                args.next(),
+                "search-index-sidecars-session-provider-invalidation requires a current provider state",
+            )?;
+            let reindex_metadata = parse_search_bool(
+                &required_string(
+                    args.next(),
+                    "search-index-sidecars-session-provider-invalidation requires reindex metadata",
+                )?,
+                "reindex metadata",
+            )?;
+            let state_changed = parse_search_bool(
+                &required_string(
+                    args.next(),
+                    "search-index-sidecars-session-provider-invalidation requires state changed",
+                )?,
+                "state changed",
+            )?;
+            let provider_reason = required_string(
+                args.next(),
+                "search-index-sidecars-session-provider-invalidation requires a provider reason",
+            )?;
+            let sidecars = OwnedSidecarIndexAccessPaths {
+                records,
+                columns,
+                metadata,
+                prefixes,
+                substrings,
+                fuzzy,
+                content,
+            };
+            let output = run_sidecar_index_session_provider_invalidation(
+                sidecars,
+                query,
+                ProviderMetadataInvalidationReport::from_provider_transition(
+                    provider_path,
+                    previous_state,
+                    current_state,
+                    reindex_metadata,
+                    state_changed,
+                    provider_reason,
+                ),
+            )?;
+            for diagnostic in output.diagnostics {
+                eprintln!("{diagnostic}");
+            }
+            for hit in output.hits {
+                print_hit(&hit);
+            }
+        }
         "search-index-sidecars-budget" | "search-index-sidecars-budget-retry-probe" => {
             let records = required_path(
                 args.next(),
@@ -3096,6 +3187,91 @@ fn run_sidecar_index_session(
                 ],
                 hits: second.search.hits,
             })
+        },
+    )
+}
+
+fn run_sidecar_index_session_provider_invalidation(
+    paths: OwnedSidecarIndexAccessPaths,
+    query: String,
+    provider: ProviderMetadataInvalidationReport,
+) -> Result<SidecarSessionOutput> {
+    const WORKER: &str = "sidecar session provider invalidation";
+    let volume_reports = preflight_sidecar_index_volume_access(&paths, WORKER)?;
+    let volume = volume_reports.first_volume();
+    run_retriable_volume_task_cancellable_with_payload_path(
+        volume,
+        Priority::Visible,
+        WORKER,
+        paths.records.clone(),
+        move |cancellation| {
+            let paths = paths.clone();
+            let query = query.clone();
+            let provider = provider.clone();
+            let _access =
+                preflight_sidecar_index_search_access_checked(&volume_reports, WORKER, || {
+                    cancellation.check()
+                })?;
+            cancellation.check()?;
+            let session = open_sidecar_index_query_session(paths, &cancellation)?;
+            let budget = SearchLookupBudget::default();
+            let parsed = SearchQuery::parse_cancellable(&query, &cancellation)?;
+
+            let first = session.search_structured_with_volume_scope_budget_cancellable(
+                &parsed,
+                50,
+                &SearchVolumeScope::All,
+                budget,
+                &cancellation,
+            )?;
+            let mut diagnostics = vec![format_sidecar_session_report(
+                "sidecar-session-provider-first",
+                &session,
+                &first,
+                budget,
+            )];
+            let mut hits = first.search.hits;
+
+            cancellation.check()?;
+            let second = session.search_structured_with_volume_scope_budget_cancellable(
+                &parsed,
+                50,
+                &SearchVolumeScope::All,
+                budget,
+                &cancellation,
+            )?;
+            diagnostics.push(format_sidecar_session_report(
+                "sidecar-session-provider-second",
+                &session,
+                &second,
+                budget,
+            ));
+            hits.extend(second.search.hits);
+
+            cancellation.check()?;
+            diagnostics.push(provider.as_tsv());
+            diagnostics.push(
+                session
+                    .apply_provider_metadata_invalidation(&provider)
+                    .as_tsv(),
+            );
+
+            cancellation.check()?;
+            let third = session.search_structured_with_volume_scope_budget_cancellable(
+                &parsed,
+                50,
+                &SearchVolumeScope::All,
+                budget,
+                &cancellation,
+            )?;
+            diagnostics.push(format_sidecar_session_report(
+                "sidecar-session-provider-third",
+                &session,
+                &third,
+                budget,
+            ));
+            hits.extend(third.search.hits);
+            Ok(SidecarSessionOutput { diagnostics, hits })
         },
     )
 }
