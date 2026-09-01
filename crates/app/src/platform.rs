@@ -3092,6 +3092,7 @@ fn run_adaptive_quicklook_session(
 ) -> Result<crate::runtime::ScheduledTaskOutcome<QuickLookSessionContract>> {
     const WORKER: &str = "adaptive quicklook preview";
     let access_report = PreviewAccessReport::new_checked(path, || Ok(()))?;
+    preflight_preview_input_denial_before_runtime(&access_report, WORKER)?;
     let volume_access_report = access_report.clone();
     let payload_path = access_report.path.clone();
     run_preview_contract_adaptive_with_volume_and_payload_path(
