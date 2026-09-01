@@ -1,8 +1,8 @@
 use crate::access::{
     preflight_access_scope_checked, preflight_access_scope_checked_with_volume_report,
-    preflight_volume_access_scope_with_report, worker_admission_with_volume_gate_checked,
-    worker_admissions_with_shared_volume_report_checked, worker_admissions_with_volume_report,
-    ScopedAccessGuard, WorkerAdmissionRequest,
+    preflight_volume_access_scope_with_report, volume_api_status_context,
+    worker_admission_with_volume_gate_checked, worker_admissions_with_shared_volume_report_checked,
+    worker_admissions_with_volume_report, ScopedAccessGuard, WorkerAdmissionRequest,
 };
 use crate::volume::{resolve_volume_event_path, volume_event_invalidation_for_descriptor};
 use crate::{
@@ -2759,37 +2759,24 @@ fn run_volume_operation(
     cancel_after_access: bool,
 ) -> Result<VolumeOperationReport> {
     const WORKER: &str = "volume operation";
-    let path_probe = run_volume_task_cancellable(None, Priority::Visible, WORKER, {
-        let path = path.clone();
-        move |cancellation| {
-            if cancel_before_probe {
-                cancellation.cancel();
-            }
-            cancellation.check()?;
-            match path.try_exists() {
-                Ok(true) => Ok(None),
-                Ok(false) => Ok(Some(VolumeOperationReport::execute_checked(
-                    &path,
-                    operation,
-                    || cancellation.check(),
-                )?)),
-                Err(_) => Ok(Some(VolumeOperationReport::execute_checked(
-                    &path,
-                    operation,
-                    || cancellation.check(),
-                )?)),
-            }
-        }
-    })?;
-    if let Some(report) = path_probe {
-        return Ok(report);
+    if cancel_before_probe {
+        return Err(GfmError::Cancelled);
     }
     let access_report = PlatformAccessReport::new_checked(path, AccessIntent::Operate, || Ok(()))?;
-    access_report.preflight_volume(WORKER)?;
+    access_report.preflight_mounted_reachable(WORKER)?;
     let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
         let path = access_report.path.clone();
+        match path.try_exists() {
+            Ok(true) => {}
+            Ok(false) | Err(_) => {
+                return VolumeOperationReport::execute_checked(path, operation, || {
+                    cancellation.check()
+                })
+            }
+        }
+        access_report.preflight_volume(WORKER)?;
         let _access = access_report.access_checked(WORKER, || cancellation.check())?;
         cancellation.check()?;
         if cancel_after_access {
@@ -4178,6 +4165,50 @@ impl PlatformAccessReport {
             worker,
             &self.volume_report,
         )
+    }
+
+    fn preflight_mounted_reachable(&self, worker: &str) -> Result<()> {
+        let Some(volume) = self.volume_report.volume_for_path(&self.path) else {
+            return Ok(());
+        };
+        let message = if volume.mount_state != MountState::Mounted {
+            Some(format!(
+                "{worker} volume access blocked: unmounted volume {}; label={}; root={}; stable-id={}; mount={}",
+                volume.kind.as_str(),
+                volume.label,
+                volume.path.display(),
+                volume.stable_identity,
+                volume.mount_state.as_str()
+            ))
+        } else if volume.reachable == Some(false) {
+            Some(format!(
+                "{worker} volume access blocked: unreachable volume {}; label={}; root={}; stable-id={}; mount={}",
+                volume.kind.as_str(),
+                volume.label,
+                volume.path.display(),
+                volume.stable_identity,
+                volume.mount_state.as_str()
+            ))
+        } else if volume.platform_state_unavailable() {
+            Some(format!(
+                "{worker} volume access blocked: unavailable volume {}; label={}; root={}; stable-id={}; mount={}; {}",
+                volume.kind.as_str(),
+                volume.label,
+                volume.path.display(),
+                volume.stable_identity,
+                volume.mount_state.as_str(),
+                volume_api_status_context(volume)
+            ))
+        } else {
+            None
+        };
+        if let Some(message) = message {
+            return Err(GfmError::Permission {
+                path: self.path.clone(),
+                message,
+            });
+        }
+        Ok(())
     }
 
     fn access_checked(

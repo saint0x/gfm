@@ -7365,6 +7365,38 @@ fn volume_operation_refuses_unreachable_volume_before_descriptor_from_binary() {
 }
 
 #[test]
+fn volume_operation_refuses_missing_child_on_unreachable_volume_before_missing_report_from_binary()
+{
+    let root = std::env::temp_dir().join(format!(
+        "gfm-volume-operation-unreachable-missing-child-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let missing_child = root.join("Missing");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-operation")
+        .arg("eject")
+        .arg(&missing_child)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("volume-operation\t"), "{stdout}");
+    assert!(
+        stderr.contains("volume operation volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("volume-path-missing"), "{stderr}");
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn volume_operation_cancel_after_access_stops_before_native_execution_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-volume-operation-cancel-after-access-{}",
