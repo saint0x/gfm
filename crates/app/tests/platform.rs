@@ -4060,10 +4060,7 @@ fn fileprovider_invalidation_scan_skips_name_only_local_paths_from_binary() {
     assert!(stdout.starts_with("fileprovider-state-invalidation\tinitialized=true\tchanged=0\t"));
     assert!(stdout.contains("\ticon=false\tpreview-memory=false\tpreview-disk=false\t"));
     assert!(stdout.ends_with("sidebar=false\treindex-metadata=false\n"));
-    assert_eq!(
-        std::fs::read_to_string(&state).unwrap(),
-        "gfm-fileprovider-state-v1\n"
-    );
+    assert!(!state.exists());
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -4096,10 +4093,7 @@ fn fileprovider_invalidation_scan_skips_native_local_icloud_extension_from_binar
     assert!(stdout.starts_with("fileprovider-state-invalidation\tinitialized=true\tchanged=0\t"));
     assert!(stdout.contains("\ticon=false\tpreview-memory=false\tpreview-disk=false\t"));
     assert!(stdout.ends_with("sidebar=false\treindex-metadata=false\n"));
-    assert_eq!(
-        std::fs::read_to_string(&state).unwrap(),
-        "gfm-fileprovider-state-v1\n"
-    );
+    assert!(!state.exists());
 
     let _ = std::fs::remove_dir_all(root);
 }

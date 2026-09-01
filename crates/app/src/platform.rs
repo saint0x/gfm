@@ -3316,7 +3316,9 @@ fn evaluate_fileprovider_state_invalidation_checked(
         &mut check_control,
     )?;
     check_control()?;
-    snapshot.write_checked(state_path, &mut check_control)?;
+    if fileprovider_snapshot_changed(previous.as_ref(), &snapshot) {
+        snapshot.write_checked(state_path, &mut check_control)?;
+    }
     Ok(report)
 }
 
@@ -4550,6 +4552,31 @@ mod tests {
 
         assert_eq!(err, GfmError::Cancelled);
         assert_eq!(std::fs::read(&state_path).unwrap(), before);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fileprovider_scan_invalidation_skips_snapshot_publish_for_local_only_noop() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-platform-fileprovider-scan-noop-publish-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let state_path = root.join("state.tsv");
+        let local = root.join("Local.txt");
+        std::fs::write(&local, "local").unwrap();
+
+        let report = evaluate_fileprovider_state_invalidation_checked(
+            &state_path,
+            vec![local],
+            "fileprovider invalidation scan",
+            || Ok(()),
+        )
+        .expect("local-only scan should evaluate as a no-op");
+
+        assert!(report.changes.is_empty());
+        assert!(!state_path.exists());
         std::fs::remove_dir_all(root).unwrap();
     }
 
