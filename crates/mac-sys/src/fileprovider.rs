@@ -6,7 +6,7 @@ use core_foundation::string::{CFString, CFStringRef};
 use core_foundation_sys::base::{Boolean, CFGetTypeID, CFTypeRef};
 use core_foundation_sys::error::CFErrorRef;
 use core_foundation_sys::number::{
-    kCFNumberDoubleType, CFNumberGetTypeID, CFNumberGetValue, CFNumberRef,
+    kCFNumberDoubleType, kCFNumberSInt64Type, CFNumberGetTypeID, CFNumberGetValue, CFNumberRef,
 };
 use core_foundation_sys::url::CFURLRef;
 use libc::{c_char, c_void};
@@ -31,6 +31,9 @@ extern "C" {
     static NSURLUbiquitousItemDownloadingErrorKey: CFStringRef;
     static NSURLUbiquitousItemUploadingErrorKey: CFStringRef;
     static NSURLUbiquitousItemIsExcludedFromSyncKey: CFStringRef;
+    static NSURLFileSizeKey: CFStringRef;
+    static NSURLFileAllocatedSizeKey: CFStringRef;
+    static NSURLTotalFileAllocatedSizeKey: CFStringRef;
     static NSURLUbiquitousItemDownloadingStatusNotDownloaded: CFStringRef;
     static NSURLUbiquitousItemDownloadingStatusDownloaded: CFStringRef;
     static NSURLUbiquitousItemDownloadingStatusCurrent: CFStringRef;
@@ -71,6 +74,9 @@ pub struct NativeFileProviderResourceValues {
     pub downloading_error: Option<NativeUbiquitousError>,
     pub uploading_error: Option<NativeUbiquitousError>,
     pub is_excluded_from_sync: Option<bool>,
+    pub file_size_bytes: Option<u64>,
+    pub file_allocated_size_bytes: Option<u64>,
+    pub total_file_allocated_size_bytes: Option<u64>,
     pub status: NativeFileProviderStatus,
     pub reason: Option<String>,
 }
@@ -453,6 +459,24 @@ pub fn copy_fileprovider_resource_values(path: &Path) -> NativeFileProviderResou
         "NSURLUbiquitousItemIsExcludedFromSyncKey",
         &mut errors,
     );
+    let file_size_bytes = copy_unsigned_size(
+        url.as_concrete_TypeRef(),
+        unsafe { NSURLFileSizeKey },
+        "NSURLFileSizeKey",
+        &mut errors,
+    );
+    let file_allocated_size_bytes = copy_unsigned_size(
+        url.as_concrete_TypeRef(),
+        unsafe { NSURLFileAllocatedSizeKey },
+        "NSURLFileAllocatedSizeKey",
+        &mut errors,
+    );
+    let total_file_allocated_size_bytes = copy_unsigned_size(
+        url.as_concrete_TypeRef(),
+        unsafe { NSURLTotalFileAllocatedSizeKey },
+        "NSURLTotalFileAllocatedSizeKey",
+        &mut errors,
+    );
     let has_values = is_ubiquitous.is_some()
         || has_unresolved_conflicts.is_some()
         || is_downloaded.is_some()
@@ -465,7 +489,10 @@ pub fn copy_fileprovider_resource_values(path: &Path) -> NativeFileProviderResou
         || downloading_status.is_some()
         || downloading_error.is_some()
         || uploading_error.is_some()
-        || is_excluded_from_sync.is_some();
+        || is_excluded_from_sync.is_some()
+        || file_size_bytes.is_some()
+        || file_allocated_size_bytes.is_some()
+        || total_file_allocated_size_bytes.is_some();
     let status = resource_status_for_values(has_values, &errors);
     let reason = (status == NativeFileProviderStatus::Unavailable)
         .then(|| unavailable_resource_values_reason(path, &errors));
@@ -484,6 +511,9 @@ pub fn copy_fileprovider_resource_values(path: &Path) -> NativeFileProviderResou
         downloading_error,
         uploading_error,
         is_excluded_from_sync,
+        file_size_bytes,
+        file_allocated_size_bytes,
+        total_file_allocated_size_bytes,
         status,
         reason,
     }
@@ -665,6 +695,31 @@ fn copy_percent_milli(
     }
     let bounded = percent.clamp(0.0, 100.0);
     Some((bounded * 1_000.0).round() as u32)
+}
+
+fn copy_unsigned_size(
+    url: CFURLRef,
+    key: CFStringRef,
+    key_name: &'static str,
+    errors: &mut Vec<String>,
+) -> Option<u64> {
+    let value = copy_resource_value(url, key, key_name, errors)?;
+    if unsafe { CFGetTypeID(value.as_CFTypeRef()) } != unsafe { CFNumberGetTypeID() } {
+        return None;
+    }
+    let mut size = 0i64;
+    let copied = unsafe {
+        CFNumberGetValue(
+            value.as_CFTypeRef() as CFNumberRef,
+            kCFNumberSInt64Type,
+            &mut size as *mut i64 as *mut c_void,
+        )
+    };
+    if copied && size >= 0 {
+        Some(size as u64)
+    } else {
+        None
+    }
 }
 
 fn copy_error(
@@ -1009,6 +1064,9 @@ fn missing_values(reason: String) -> NativeFileProviderResourceValues {
         downloading_error: None,
         uploading_error: None,
         is_excluded_from_sync: None,
+        file_size_bytes: None,
+        file_allocated_size_bytes: None,
+        total_file_allocated_size_bytes: None,
         status: NativeFileProviderStatus::Missing,
         reason: Some(reason),
     }
@@ -1029,6 +1087,9 @@ fn unavailable_values(reason: String) -> NativeFileProviderResourceValues {
         downloading_error: None,
         uploading_error: None,
         is_excluded_from_sync: None,
+        file_size_bytes: None,
+        file_allocated_size_bytes: None,
+        total_file_allocated_size_bytes: None,
         status: NativeFileProviderStatus::Unavailable,
         reason: Some(reason),
     }
@@ -1049,6 +1110,9 @@ fn unsupported(reason: String) -> NativeFileProviderResourceValues {
         downloading_error: None,
         uploading_error: None,
         is_excluded_from_sync: None,
+        file_size_bytes: None,
+        file_allocated_size_bytes: None,
+        total_file_allocated_size_bytes: None,
         status: NativeFileProviderStatus::UnsupportedPath,
         reason: Some(reason),
     }

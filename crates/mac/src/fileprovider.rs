@@ -2541,6 +2541,16 @@ fn native_has_remote_placeholder_evidence(values: &NativeFileProviderResourceVal
         Some(NativeUbiquitousDownloadingStatus::NotDownloaded)
     ) || values.is_downloaded == Some(false)
         || values.percent_downloaded_milli == Some(0)
+        || native_has_unallocated_placeholder_evidence(values)
+}
+
+fn native_has_unallocated_placeholder_evidence(values: &NativeFileProviderResourceValues) -> bool {
+    let allocated = values
+        .total_file_allocated_size_bytes
+        .or(values.file_allocated_size_bytes);
+    values
+        .file_size_bytes
+        .is_some_and(|size| size > 0 && allocated == Some(0))
 }
 
 fn materialization_for_state(state: CloudStorageState) -> CloudMaterialization {
@@ -6529,6 +6539,107 @@ mod tests {
     }
 
     #[test]
+    fn native_unallocated_logical_size_marks_remote_placeholder() {
+        let path = PathBuf::from("/tmp/Remote.dat");
+        let mut native = native_values();
+        native.is_ubiquitous = Some(true);
+        native.has_unresolved_conflicts = Some(false);
+        native.is_downloading = Some(false);
+        native.is_uploading = Some(false);
+        native.file_size_bytes = Some(131_072);
+        native.file_allocated_size_bytes = Some(0);
+        let hints = CloudHints {
+            native,
+            native_identity: identity_not_queried(),
+            xattrs: Vec::new(),
+            xattr_values: Vec::new(),
+            provider_identifier: None,
+            source: "native-url-resource".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.domain, FileProviderDomain::ICloudDrive);
+        assert_eq!(report.storage_state, CloudStorageState::Evicted);
+        assert_eq!(
+            report.materialization,
+            CloudMaterialization::RemotePlaceholder
+        );
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::NativeUrlResource
+        );
+        assert_eq!(
+            report.materialization_reason.as_deref(),
+            Some("native-url-resource-remote-placeholder")
+        );
+    }
+
+    #[test]
+    fn native_total_unallocated_logical_size_marks_remote_placeholder() {
+        let path = PathBuf::from("/tmp/Remote.dat");
+        let mut native = native_values();
+        native.is_ubiquitous = Some(true);
+        native.has_unresolved_conflicts = Some(false);
+        native.is_downloading = Some(false);
+        native.is_uploading = Some(false);
+        native.file_size_bytes = Some(262_144);
+        native.total_file_allocated_size_bytes = Some(0);
+        let hints = CloudHints {
+            native,
+            native_identity: identity_not_queried(),
+            xattrs: Vec::new(),
+            xattr_values: Vec::new(),
+            provider_identifier: None,
+            source: "native-url-resource".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.domain, FileProviderDomain::ICloudDrive);
+        assert_eq!(report.storage_state, CloudStorageState::Evicted);
+        assert_eq!(
+            report.materialization,
+            CloudMaterialization::RemotePlaceholder
+        );
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::NativeUrlResource
+        );
+    }
+
+    #[test]
+    fn native_zero_byte_materialized_file_is_not_remote_placeholder() {
+        let path = PathBuf::from("/tmp/Empty.dat");
+        let mut native = native_values();
+        native.is_ubiquitous = Some(true);
+        native.has_unresolved_conflicts = Some(false);
+        native.is_downloading = Some(false);
+        native.is_uploading = Some(false);
+        native.file_size_bytes = Some(0);
+        native.file_allocated_size_bytes = Some(0);
+        native.downloading_status = Some(NativeUbiquitousDownloadingStatus::Current);
+        let hints = CloudHints {
+            native,
+            native_identity: identity_not_queried(),
+            xattrs: Vec::new(),
+            xattr_values: Vec::new(),
+            provider_identifier: None,
+            source: "native-url-resource".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.domain, FileProviderDomain::ICloudDrive);
+        assert_eq!(report.storage_state, CloudStorageState::Downloaded);
+        assert_eq!(report.materialization, CloudMaterialization::Materialized);
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::NativeUrlResource
+        );
+    }
+
+    #[test]
     fn native_partial_upload_percent_without_boolean_marks_uploading() {
         let path = PathBuf::from("/tmp/Local.dat");
         let mut native = native_values();
@@ -7503,6 +7614,9 @@ mod tests {
             downloading_error: None,
             uploading_error: None,
             is_excluded_from_sync: None,
+            file_size_bytes: None,
+            file_allocated_size_bytes: None,
+            total_file_allocated_size_bytes: None,
             status: NativeFileProviderStatus::Available,
             reason: None,
         }
