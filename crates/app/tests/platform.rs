@@ -4817,6 +4817,65 @@ fn observed_fileprovider_rename_deduplicates_repeated_event_path_admission_from_
 }
 
 #[test]
+fn fileprovider_invalidation_event_persists_renamed_tracked_provider_state_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-fileprovider-invalidation-rename-persist-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let state = root.join("fileprovider-state.tsv");
+    let old_dir = root.join("Old.icloud");
+    let new_dir = root.join("New.icloud");
+    let old_child = old_dir.join("Child.icloud-placeholder");
+    let new_child = new_dir.join("Child.icloud-placeholder");
+    std::fs::create_dir_all(&old_dir).unwrap();
+    std::fs::write(&old_child, "placeholder").unwrap();
+    mark_evicted_fixture(&old_child);
+    std::fs::write(
+        &state,
+        format!(
+            "gfm-fileprovider-state-v1\ndownloaded\t{}\n",
+            old_child.display()
+        ),
+    )
+    .unwrap();
+    std::fs::rename(&old_dir, &new_dir).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-invalidation-event")
+        .arg(&state)
+        .arg("rename")
+        .arg(&old_dir)
+        .arg(&new_dir)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with(
+        "fileprovider-observed-invalidation\tevents=1\tevent-kinds=rename\tpaths=3\n"
+    ));
+    assert!(stdout.contains(&format!(
+        "fileprovider-invalidation\t{}\tprevious=downloaded\tcurrent=removed\tchanged=true\t",
+        old_child.display()
+    )));
+    assert!(stdout.contains(&format!(
+        "fileprovider-invalidation\t{}\tprevious=local-only\tcurrent=evicted\tchanged=true\t",
+        new_child.display()
+    )));
+    let state_text = std::fs::read_to_string(&state).unwrap();
+    assert!(!state_text.contains(&old_child.display().to_string()));
+    assert!(state_text.contains(&format!("evicted\t{}\n", new_child.display())));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn observed_fileprovider_metadata_invalidation_preserves_noop_events_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-fileprovider-observed-metadata-noop-{}",
