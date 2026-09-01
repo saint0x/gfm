@@ -870,6 +870,15 @@ pub(crate) fn run_content_search(
     extractor: Extractor,
 ) -> Result<(usize, Vec<SearchHit>)> {
     let volume_report = VolumeDiscoveryReport::for_containing_path_checked(&root, || Ok(()))?;
+    run_content_search_with_volume_report(root, query, extractor, volume_report)
+}
+
+pub(crate) fn run_content_search_with_volume_report(
+    root: PathBuf,
+    query: String,
+    extractor: Extractor,
+    volume_report: VolumeDiscoveryReport,
+) -> Result<(usize, Vec<SearchHit>)> {
     preflight_volume_access_scope_with_report(
         &root,
         AccessIntent::Index,

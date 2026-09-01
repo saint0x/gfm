@@ -2,8 +2,10 @@ use crate::access::{
     preflight_access_scope_checked_with_volume_report, preflight_volume_access_scope_with_report,
     ScopedAccessGuard,
 };
-use crate::content::run_content_search;
-use crate::extract::extraction_budget_profile_checked;
+use crate::content::{run_content_search, run_content_search_with_volume_report};
+use crate::extract::{
+    extraction_budget_profile_checked, extraction_budget_profile_from_volume_report,
+};
 use crate::runtime::run_retriable_volume_task_cancellable_with_payload_path;
 use crate::{parse_required_scheduling_pressure, parse_usize_arg, required_path, required_string};
 use gfm_content::Extractor;
@@ -166,12 +168,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "search-content-adaptive requires a query string",
             )?;
             let pressure = parse_required_scheduling_pressure(args, "content search")?;
-            let extractor = Extractor::with_budget_profile(extraction_budget_profile_checked(
-                &root,
-                pressure,
-                || Ok(()),
-            )?);
-            let (indexed, hits) = run_content_search(root, query, extractor)?;
+            let volume_report =
+                VolumeDiscoveryReport::for_containing_path_checked(&root, || Ok(()))?;
+            let extractor = Extractor::with_budget_profile(
+                extraction_budget_profile_from_volume_report(&root, pressure, &volume_report),
+            );
+            let (indexed, hits) =
+                run_content_search_with_volume_report(root, query, extractor, volume_report)?;
             eprintln!("content-indexed {indexed} files");
             for hit in hits {
                 print_hit(&hit);
