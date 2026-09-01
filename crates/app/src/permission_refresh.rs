@@ -96,7 +96,7 @@ pub(crate) fn refresh_permission_state_at_path_with_report_checked(
     check_control()?;
     preflight_permission_state_volume_with_report(path, probe_path, report)?;
     check_control()?;
-    let previous = if permission_state_is_file(path)? {
+    let previous = if permission_state_is_file_checked(path, &mut check_control)? {
         Some(PermissionStateSnapshot::read_checked(
             path,
             &mut check_control,
@@ -208,7 +208,11 @@ fn read_only_root_allows_permission_state_write(
         )
 }
 
-fn permission_state_is_file(path: &Path) -> Result<bool> {
+fn permission_state_is_file_checked(
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<bool> {
+    check_control()?;
     match fs::metadata(path) {
         Ok(metadata) => Ok(metadata.is_file()),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
@@ -628,6 +632,41 @@ mod tests {
             refresh_permission_state_at_path_with_report_checked(&state, &root, &report, || {
                 checks += 1;
                 if checks >= 5 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert_eq!(fs::read(&state).unwrap(), before);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn refresh_state_honors_cancellation_before_previous_state_metadata() {
+        let root = unique_temp_dir("gfm-permission-refresh-state-metadata-cancel");
+        let state = root.join("permission-state.tsv");
+        let snapshot = PermissionStateSnapshot {
+            readiness: vec![PermissionReadiness {
+                scope: PermissionScope::Documents,
+                path: root.join("Documents"),
+                state: PermissionState::Granted,
+                reason: "previous readable snapshot".to_string(),
+            }],
+        };
+        snapshot.write(&state).unwrap();
+        let before = fs::read(&state).unwrap();
+        let report = VolumeDiscoveryReport {
+            volumes: Vec::new(),
+        };
+        let mut checks = 0usize;
+
+        let err =
+            refresh_permission_state_at_path_with_report_checked(&state, &root, &report, || {
+                checks += 1;
+                if checks >= 2 {
                     Err(GfmError::Cancelled)
                 } else {
                     Ok(())
