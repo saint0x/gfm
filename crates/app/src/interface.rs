@@ -1681,10 +1681,7 @@ fn permission_onboarding_contract(
 }
 
 fn permission_prompt_kind(plan: &gfm_mac::PermissionOnboardingPlan) -> PermissionPromptKind {
-    let full_disk_denied = plan
-        .denied_scopes()
-        .any(|item| item.scope == gfm_mac::PermissionScope::FullDiskAccess);
-    if full_disk_denied
+    if denied_scope_requires_full_disk_access_guidance(plan)
         || matches!(
             plan.action,
             gfm_mac::PermissionAction::ExplainFullDiskAccess
@@ -1711,6 +1708,19 @@ fn permission_prompt_kind(plan: &gfm_mac::PermissionOnboardingPlan) -> Permissio
             }
         }
     }
+}
+
+fn denied_scope_requires_full_disk_access_guidance(
+    plan: &gfm_mac::PermissionOnboardingPlan,
+) -> bool {
+    plan.denied_scopes().any(|item| {
+        matches!(
+            item.scope,
+            gfm_mac::PermissionScope::Mail
+                | gfm_mac::PermissionScope::Photos
+                | gfm_mac::PermissionScope::FullDiskAccess
+        )
+    })
 }
 
 fn permission_prompt_kind_for_admission(
@@ -2280,6 +2290,40 @@ mod tests {
         assert!(contract
             .as_tsv()
             .contains("\npermission-scope\tdocuments\tstate=denied\tpath=/Users/me/Documents\t"));
+    }
+
+    #[test]
+    fn permission_onboarding_contract_routes_mail_and_photos_denials_to_full_disk_access_guidance()
+    {
+        for scope in [
+            gfm_mac::PermissionScope::Mail,
+            gfm_mac::PermissionScope::Photos,
+        ] {
+            let plan = PermissionOnboardingPlan {
+                policy: gfm_mac::PermissionPolicy::default(),
+                readiness: vec![
+                    gfm_mac::PermissionReadiness {
+                        scope,
+                        path: PathBuf::from("/Users/me/Library/Protected"),
+                        state: gfm_mac::PermissionState::Denied,
+                        reason: "macOS denied read access".to_string(),
+                    },
+                    gfm_mac::PermissionReadiness {
+                        scope: gfm_mac::PermissionScope::FullDiskAccess,
+                        path: PathBuf::from("/Users/me/Library/Mail"),
+                        state: gfm_mac::PermissionState::Granted,
+                        reason: "read probe succeeded".to_string(),
+                    },
+                ],
+                action: gfm_mac::PermissionAction::ContinueDegraded,
+                finder_parity_default: true,
+            };
+
+            let contract = permission_onboarding_contract(&plan);
+
+            assert_eq!(contract.action, "continue-degraded");
+            assert_eq!(contract.prompt_kind, PermissionPromptKind::FullDiskAccess);
+        }
     }
 
     #[test]
