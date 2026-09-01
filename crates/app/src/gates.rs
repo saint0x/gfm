@@ -745,7 +745,8 @@ fn parity_review_access_reports_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<GateAccessReports> {
     check_control()?;
-    let output_probe = write_probe_path(output_dir)?.to_path_buf();
+    let output_probe =
+        checked_write_probe_path(output_dir, "parity review output", &mut check_control)?;
     check_control()?;
     Ok(GateAccessReports::new(vec![
         GateAccessReport::new_checked(
@@ -773,7 +774,7 @@ fn workspace_write_access_report_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<GateAccessReport> {
     check_control()?;
-    let workspace = write_probe_path(workspace)?.to_path_buf();
+    let workspace = checked_write_probe_path(workspace, worker, &mut check_control)?;
     check_control()?;
     GateAccessReport::new_checked(workspace, AccessIntent::Write, worker, &mut check_control)
 }
@@ -841,6 +842,37 @@ fn write_probe_path(path: &Path) -> Result<&Path> {
             format!("gate write path metadata unavailable: {err}"),
         )),
     }
+}
+
+fn checked_write_probe_path(
+    path: &Path,
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<PathBuf> {
+    check_control()?;
+    preflight_write_target_volume_checked(path, worker, &mut check_control)?;
+    check_control()?;
+    let probe = write_probe_path(path)?.to_path_buf();
+    check_control()?;
+    Ok(probe)
+}
+
+fn preflight_write_target_volume_checked(
+    path: &Path,
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    check_control()?;
+    let volume_path = crate::parent_or_cwd(path);
+    let volume_report =
+        VolumeDiscoveryReport::for_containing_path_checked(volume_path, &mut check_control)?;
+    check_control()?;
+    preflight_volume_access_scope_with_report(
+        volume_path,
+        AccessIntent::Write,
+        worker,
+        &volume_report,
+    )
 }
 
 fn macrobench_options(
@@ -978,6 +1010,36 @@ mod tests {
     }
 
     #[test]
+    fn parity_review_access_refuses_unreachable_output_before_write_probe() {
+        let root = unique_temp_dir("gfm-gates-parity-review-access-root");
+        let offline = unique_temp_dir("gfm-gates-parity-review-access-offline");
+        fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let manifest = root.join("manifest.tsv");
+        let output = offline.join("review-unavailable".repeat(16));
+
+        let err = match retain_parity_review_access_checked(&manifest, &output, || Ok(())) {
+            Ok(_) => {
+                panic!("unreachable parity review output was admitted before volume preflight")
+            }
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("parity review output volume access blocked: unreachable volume network"),
+            "{err}"
+        );
+        assert!(
+            !err.to_string()
+                .contains("gate write path metadata unavailable"),
+            "{err}"
+        );
+        assert!(!output.exists());
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(offline).unwrap();
+    }
+
+    #[test]
     fn workspace_write_access_checked_honors_pre_cancelled_control() {
         let root = unique_temp_dir("gfm-gates-workspace-write-access-pre-cancel");
         let workspace = root.join("fixture");
@@ -989,6 +1051,33 @@ mod tests {
         assert_eq!(result.err(), Some(GfmError::Cancelled));
         assert!(!workspace.exists());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn workspace_write_access_refuses_unreachable_target_before_write_probe() {
+        let offline = unique_temp_dir("gfm-gates-workspace-write-access-offline");
+        fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let workspace = offline.join("fixture-unavailable".repeat(16));
+
+        let err =
+            match retain_workspace_write_access_checked(&workspace, "fixture workspace", || Ok(()))
+            {
+                Ok(_) => panic!("unreachable workspace was admitted before volume preflight"),
+                Err(err) => err,
+            };
+
+        assert!(
+            err.to_string()
+                .contains("fixture workspace volume access blocked: unreachable volume network"),
+            "{err}"
+        );
+        assert!(
+            !err.to_string()
+                .contains("gate write path metadata unavailable"),
+            "{err}"
+        );
+        assert!(!workspace.exists());
+        fs::remove_dir_all(offline).unwrap();
     }
 
     fn unique_temp_dir(prefix: &str) -> PathBuf {

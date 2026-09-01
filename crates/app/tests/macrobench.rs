@@ -642,7 +642,7 @@ fn parity_routes_refuse_unreachable_paths_before_manifest_or_bundle_io_from_bina
 
     let local_manifest = root.join("gate.tsv");
     fs::write(&local_manifest, "not parsed").unwrap();
-    let review = offline.join("review");
+    let review = offline.join("review-unavailable".repeat(16));
     let review_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
             "parity-review",
@@ -664,6 +664,10 @@ fn parity_routes_refuse_unreachable_paths_before_manifest_or_bundle_io_from_bina
         "{review_stderr}"
     );
     assert!(
+        !review_stderr.contains("gate write path metadata unavailable"),
+        "{review_stderr}"
+    );
+    assert!(
         !review_stderr.contains("security-worker-admission\t"),
         "{review_stderr}"
     );
@@ -672,6 +676,31 @@ fn parity_routes_refuse_unreachable_paths_before_manifest_or_bundle_io_from_bina
         "{review_stderr}"
     );
     assert!(!review.exists());
+
+    let fixture = offline.join("macrobench-fixture-unavailable".repeat(16));
+    let fixture_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["macrobench-fixture", fixture.to_str().unwrap(), "smoke"])
+        .output()
+        .unwrap();
+    assert!(!fixture_output.status.success());
+    let fixture_stdout = String::from_utf8_lossy(&fixture_output.stdout);
+    let fixture_stderr = String::from_utf8_lossy(&fixture_output.stderr);
+    assert!(!fixture_stdout.contains("fixture\t"), "{fixture_stdout}");
+    assert!(
+        fixture_stderr.contains(
+            "macrobench fixture workspace volume access blocked: unreachable volume network"
+        ),
+        "{fixture_stderr}"
+    );
+    assert!(
+        !fixture_stderr.contains("gate write path metadata unavailable"),
+        "{fixture_stderr}"
+    );
+    assert!(
+        !fixture_stderr.contains("security-worker-admission\t"),
+        "{fixture_stderr}"
+    );
+    assert!(!fixture.exists());
 
     fs::remove_dir_all(root).unwrap();
     fs::remove_dir_all(offline).unwrap();
