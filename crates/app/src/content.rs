@@ -5,9 +5,8 @@ use crate::access::{
     worker_admission_with_volume_report, ScopedAccessGuard,
 };
 use crate::extract::{
-    extraction_budget_profile_checked, extraction_budget_profile_from_volume_report,
-    preflight_adaptive_extraction_worker_scratch, read_extraction_quarantine_cancellable,
-    run_adaptive_extraction_worker_cancellable,
+    extraction_budget_profile_from_volume_report, preflight_adaptive_extraction_worker_scratch,
+    read_extraction_quarantine_cancellable, run_adaptive_extraction_worker_cancellable,
     run_adaptive_extraction_worker_cancellable_with_volume_report,
     run_quarantined_adaptive_extraction_worker_cancellable, ADAPTIVE_WORKER_TIMEOUT,
 };
@@ -2722,6 +2721,12 @@ impl ContentJobAccessReports {
             .iter()
             .find_map(ForegroundContentIndexAccessReport::volume)
     }
+
+    fn root_report(&self) -> Result<&ForegroundContentIndexAccessReport> {
+        self.entries.first().ok_or_else(|| {
+            GfmError::Format("background content index root access report missing".to_string())
+        })
+    }
 }
 
 #[cfg(test)]
@@ -3021,11 +3026,13 @@ pub(crate) fn run_content_job(
                     Vec::new()
                 };
                 snapshot.save_checked(&job_spec.records_path, || cancellation.check())?;
-                let extractor = Extractor::with_budget_profile(extraction_budget_profile_checked(
-                    &job_spec.root,
-                    pressure,
-                    || cancellation.check(),
-                )?);
+                let root_access_report = access_reports.root_report()?;
+                let extractor =
+                    Extractor::with_budget_profile(extraction_budget_profile_from_volume_report(
+                        &root_access_report.path,
+                        pressure,
+                        &root_access_report.volume_report,
+                    ));
                 let worker = BackgroundContentIndexer::new(extractor, job_spec.options());
                 let quarantine_store = default_extraction_quarantine_path();
                 let mut extraction_quarantine =
