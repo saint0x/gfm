@@ -561,6 +561,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let mut spec = ContentIndexJobSpec::new(&root, segment_dir, records, content);
             let spec_path = default_content_job_path();
             if pressure.decide(Priority::Background, 1, 1).action == SchedulingAction::Defer {
+                let root_access_report = ForegroundContentIndexAccessReports::entry_checked(
+                    spec.root.clone(),
+                    AccessIntent::Index,
+                    || Ok(()),
+                )?;
+                preflight_content_input_denial_before_runtime(
+                    &root_access_report,
+                    "background content index",
+                )?;
                 let _access = ContentJobAccessReports::for_spec_path_write(&spec_path)?
                     .access_checked("background content index", || Ok(()))?;
             } else {

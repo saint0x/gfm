@@ -16484,6 +16484,66 @@ fn deferred_background_content_indexer_does_not_touch_unreachable_root_from_bina
 }
 
 #[test]
+fn deferred_background_content_indexer_refuses_missing_root_before_runtime_record_from_binary() {
+    let base = unique_temp_dir("gfm-cli-background-content-missing-root-base");
+    let root = base.join("missing-root");
+    let segments = base.join("segments");
+    let records = base.join("records.gfmidx");
+    let content = base.join("content.gfmcontent");
+    let journal = base.join("jobs.journal");
+    let spec = base.join("content.job");
+    let catalog = base.join("catalog.gfmjobs");
+    let progress = base.join("progress.gfmprogress");
+    fs::create_dir(&segments).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &journal)
+        .env("GFM_CONTENT_JOB", &spec)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "index-content-background",
+            root.to_str().unwrap(),
+            segments.to_str().unwrap(),
+            records.to_str().unwrap(),
+            content.to_str().unwrap(),
+            "saturated",
+            "nominal",
+            "ac",
+            "idle",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(!stderr.contains("background-content-deferred"), "{stderr}");
+    assert!(
+        stderr
+            .contains("background content index access blocked: path is not present on this host"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("security-worker-admission\tworker=background content index\tpath=")
+            && stderr.contains("missing-root\tintent=index")
+            && stderr.contains("probe=missing")
+            && stderr.contains("worker-action=deny"),
+        "{stderr}"
+    );
+    assert!(fs::read_dir(&segments).unwrap().next().is_none());
+    assert!(!records.exists());
+    assert!(!content.exists());
+    assert!(!journal.exists());
+    assert!(!spec.exists());
+    assert!(!catalog.exists());
+    assert!(!progress.exists());
+
+    fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
 fn background_content_indexer_refuses_unreachable_journal_before_job_state_from_binary() {
     let root = unique_temp_dir("gfm-cli-background-content-journal-root");
     let segments = unique_temp_dir("gfm-cli-background-content-journal-segments");
