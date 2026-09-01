@@ -3699,6 +3699,40 @@ fn reports_sidebar_fileprovider_observed_invalidation_from_binary() {
 }
 
 #[test]
+fn sidebar_fileprovider_observed_invalidation_skips_snapshot_publish_for_local_only_noop() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-sidebar-fileprovider-observed-noop-publish-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let state = root.join("fileprovider-state.tsv");
+    let local = root.join("Remote.icloud");
+    std::fs::write(&local, "ordinary local file with provider-shaped extension").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("ui-sidebar-fileprovider-observed-invalidation")
+        .arg(&state)
+        .arg("metadata")
+        .arg(&local)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with(
+        "fileprovider-observed-invalidation\tevents=1\tevent-kinds=metadata\tpaths=0"
+    ));
+    assert!(!stdout.contains("sidebar-cloud-invalidation\t"));
+    assert!(!state.exists());
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn sidebar_fileprovider_rename_deduplicates_repeated_event_path_admission_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-sidebar-fileprovider-rename-dedup-{}",

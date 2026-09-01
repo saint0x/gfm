@@ -1423,10 +1423,19 @@ fn run_ui_fileprovider_observed_invalidation(
             cancellation.check()?;
             let (observed, snapshot) =
                 FileProviderObservedInvalidation::evaluate(previous.as_ref(), [event])?;
-            snapshot.write_checked(&state_path, || cancellation.check())?;
+            if ui_fileprovider_snapshot_changed(previous.as_ref(), &snapshot) {
+                snapshot.write_checked(&state_path, || cancellation.check())?;
+            }
             Ok(observed)
         },
     )
+}
+
+fn ui_fileprovider_snapshot_changed(
+    previous: Option<&FileProviderStateSnapshot>,
+    snapshot: &FileProviderStateSnapshot,
+) -> bool {
+    previous != Some(snapshot) && (previous.is_some() || !snapshot.entries.is_empty())
 }
 
 fn read_ui_fileprovider_sidebar_state(path: PathBuf) -> Result<FileProviderStateReport> {
