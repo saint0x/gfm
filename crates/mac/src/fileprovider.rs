@@ -2306,7 +2306,7 @@ fn storage_state_for_path_with_probe(
         }
     }
 
-    if native_resource_state_unavailable_without_identity(hints) {
+    if native_resource_state_unavailable(hints) {
         return Ok(CloudStorageState::Unknown);
     }
 
@@ -2393,13 +2393,13 @@ fn storage_state_for_path_with_probe(
     Ok(storage_state)
 }
 
-fn native_resource_state_unavailable_without_identity(hints: &CloudHints) -> bool {
+fn native_resource_state_unavailable(hints: &CloudHints) -> bool {
     matches!(
         hints.native.status,
         gfm_mac_sys::NativeFileProviderStatus::Missing
             | gfm_mac_sys::NativeFileProviderStatus::Unavailable
             | gfm_mac_sys::NativeFileProviderStatus::UnsupportedPath
-    ) && hints.native_identity.status != NativeFileProviderIdentityStatus::Available
+    )
 }
 
 fn provider_state_name_hints_allowed(hints: &CloudHints) -> bool {
@@ -7176,6 +7176,41 @@ mod tests {
             assert_eq!(report.materialization_source, source);
             assert_eq!(report.materialization_reason.as_deref(), Some(reason));
         }
+    }
+
+    #[test]
+    fn native_url_failures_preserve_typed_unknown_before_identity_backed_xattrs() {
+        let path = PathBuf::from("/tmp/Remote.fileprovider");
+        let mut native = native_values();
+        native.status = NativeFileProviderStatus::Unavailable;
+        native.reason = Some("native FileProvider URL resource values unavailable".to_string());
+        let hints = CloudHints {
+            native,
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::Available,
+                item_identifier: Some("item".to_string()),
+                domain_identifier: Some("com.example.drive".to_string()),
+                reason: None,
+            },
+            xattrs: vec!["com.apple.fileprovider.state".to_string()],
+            xattr_values: vec!["isDownloaded=true; materialized=true".to_string()],
+            provider_identifier: Some("com.example.drive".to_string()),
+            source: "native-url-resource+nsfileprovidermanager+xattr".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.domain, FileProviderDomain::FileProvider);
+        assert_eq!(report.storage_state, CloudStorageState::Unknown);
+        assert_eq!(report.materialization, CloudMaterialization::Unknown);
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::NativeUrlResourceUnavailable
+        );
+        assert_eq!(
+            report.materialization_reason.as_deref(),
+            Some("native FileProvider URL resource values unavailable")
+        );
     }
 
     #[test]
