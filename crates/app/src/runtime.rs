@@ -415,11 +415,51 @@ fn runtime_progress_lock_error() -> GfmError {
     GfmError::Format("runtime job progress state lock poisoned".to_string())
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct RuntimeJobHandle {
     progress_store: Option<JobProgressStore>,
     last_progress: Arc<Mutex<JobProgressSnapshot>>,
     completion_detail: Arc<Mutex<Option<String>>>,
+}
+
+struct RuntimeJobBeginStores {
+    payload_catalog: Option<JobPayloadCatalog>,
+    progress_store: Option<JobProgressStore>,
+}
+
+struct RuntimeJobBeginRequest {
+    kind: JobPayloadKind,
+    label: String,
+    payload_path: PathBuf,
+    total_units: u64,
+    summary: String,
+}
+
+impl RuntimeJobBeginRequest {
+    fn new(
+        kind: JobPayloadKind,
+        label: &str,
+        payload_path: impl Into<PathBuf>,
+        total_units: u64,
+        summary: String,
+    ) -> Self {
+        Self {
+            kind,
+            label: label.to_string(),
+            payload_path: payload_path.into(),
+            total_units,
+            summary,
+        }
+    }
+}
+
+impl RuntimeJobBeginStores {
+    fn from_environment() -> Self {
+        Self {
+            payload_catalog: runtime_payload_catalog(),
+            progress_store: runtime_progress_store(),
+        }
+    }
 }
 
 impl RuntimeJobHandle {
@@ -431,34 +471,85 @@ impl RuntimeJobHandle {
         total_units: u64,
         summary: String,
     ) -> Result<Self> {
-        let payload_path = payload_path.into();
-        if let Some(catalog) = runtime_payload_catalog() {
-            let _access = preflight_runtime_write(catalog.path(), label)?;
-            catalog.append(&JobPayloadRecord::new(
-                job.id,
-                kind,
-                label,
-                payload_path,
-                job.volume,
-                summary.clone(),
-            ))?;
+        Self::begin_with_payload_path_checked(
+            job,
+            kind,
+            label,
+            payload_path,
+            total_units,
+            summary,
+            || Ok(()),
+        )
+    }
+
+    pub(crate) fn begin_with_payload_path_checked(
+        job: &Job,
+        kind: JobPayloadKind,
+        label: &str,
+        payload_path: impl Into<PathBuf>,
+        total_units: u64,
+        summary: String,
+        check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        let request = RuntimeJobBeginRequest::new(kind, label, payload_path, total_units, summary);
+        Self::begin_with_explicit_stores_checked(
+            job,
+            request,
+            RuntimeJobBeginStores::from_environment(),
+            check_control,
+        )
+    }
+
+    fn begin_with_explicit_stores_checked(
+        job: &Job,
+        request: RuntimeJobBeginRequest,
+        stores: RuntimeJobBeginStores,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check_control()?;
+        if let Some(catalog) = stores.payload_catalog {
+            let _access = preflight_runtime_write_checked(
+                catalog.path(),
+                &request.label,
+                &mut check_control,
+            )?;
+            check_control()?;
+            catalog.append_checked(
+                &JobPayloadRecord::new(
+                    job.id,
+                    request.kind,
+                    &request.label,
+                    request.payload_path.clone(),
+                    job.volume,
+                    request.summary.clone(),
+                ),
+                &mut check_control,
+            )?;
+            check_control()?;
         }
         let snapshot = JobProgressSnapshot::new(
             job.id,
             job.class,
             job.priority,
-            label,
+            &request.label,
             job.volume,
-            total_units.max(1),
+            request.total_units.max(1),
         )
-        .with_progress(JobProgressState::Planned, 0, summary, job_timestamp_ms());
-        let progress_store = runtime_progress_store();
-        if let Some(store) = &progress_store {
-            let _access = preflight_runtime_write(store.path(), label)?;
-            store.upsert(snapshot.clone())?;
+        .with_progress(
+            JobProgressState::Planned,
+            0,
+            request.summary,
+            job_timestamp_ms(),
+        );
+        if let Some(store) = &stores.progress_store {
+            let _access =
+                preflight_runtime_write_checked(store.path(), &request.label, &mut check_control)?;
+            check_control()?;
+            store.upsert_checked(snapshot.clone(), &mut check_control)?;
+            check_control()?;
         }
         Ok(Self {
-            progress_store,
+            progress_store: stores.progress_store,
             last_progress: Arc::new(Mutex::new(snapshot)),
             completion_detail: Arc::new(Mutex::new(None)),
         })
@@ -753,6 +844,101 @@ mod tests {
             JobProgressState::Planned
         );
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn runtime_begin_checked_honors_pre_cancelled_control_before_catalog_write() {
+        let catalog_path = temp_path("gfm-runtime-begin-catalog-pre-cancel", "gfmjobs");
+        let progress_path = temp_path("gfm-runtime-begin-progress-pre-cancel", "gfmprogress");
+        let job = sample_job(JobId::from_raw(21));
+
+        let err = match RuntimeJobHandle::begin_with_explicit_stores_checked(
+            &job,
+            RuntimeJobBeginRequest::new(
+                JobPayloadKind::Indexing,
+                "index restore",
+                "/tmp/index-root",
+                1,
+                "visible:index restore".to_string(),
+            ),
+            RuntimeJobBeginStores {
+                payload_catalog: Some(JobPayloadCatalog::new(&catalog_path)),
+                progress_store: Some(JobProgressStore::new(&progress_path)),
+            },
+            || Err(GfmError::Cancelled),
+        ) {
+            Ok(_) => panic!("pre-cancelled runtime begin should not create a handle"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert!(!catalog_path.exists());
+        assert!(!progress_path.exists());
+    }
+
+    #[test]
+    fn runtime_begin_checked_preserves_existing_stores_when_cancelled_before_progress_publish() {
+        let catalog_path = temp_path("gfm-runtime-begin-catalog-mid-cancel", "gfmjobs");
+        let progress_path = temp_path("gfm-runtime-begin-progress-mid-cancel", "gfmprogress");
+        let catalog = JobPayloadCatalog::new(&catalog_path);
+        let progress = JobProgressStore::new(&progress_path);
+        let existing_job = sample_job(JobId::from_raw(22));
+        let existing_payload = JobPayloadRecord::new(
+            existing_job.id,
+            JobPayloadKind::Repair,
+            "existing repair",
+            "/tmp/existing",
+            existing_job.volume,
+            "background:existing repair",
+        );
+        let existing_progress = sample_progress_snapshot(existing_job.id).with_progress(
+            JobProgressState::Running,
+            1,
+            "existing",
+            10,
+        );
+        catalog
+            .write_all_checked(std::slice::from_ref(&existing_payload), || Ok(()))
+            .unwrap();
+        progress
+            .write_all_checked(std::slice::from_ref(&existing_progress), || Ok(()))
+            .unwrap();
+        let catalog_before = std::fs::read(&catalog_path).unwrap();
+        let progress_before = std::fs::read(&progress_path).unwrap();
+        let job = sample_job(JobId::from_raw(23));
+        let mut checks = 0usize;
+
+        let err = match RuntimeJobHandle::begin_with_explicit_stores_checked(
+            &job,
+            RuntimeJobBeginRequest::new(
+                JobPayloadKind::Indexing,
+                "index restore",
+                "/tmp/index-root",
+                1,
+                "visible:index restore".to_string(),
+            ),
+            RuntimeJobBeginStores {
+                payload_catalog: Some(catalog),
+                progress_store: Some(progress),
+            },
+            || {
+                checks += 1;
+                if checks >= 8 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        ) {
+            Ok(_) => panic!("cancelled runtime begin should not create a handle"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert_eq!(std::fs::read(&catalog_path).unwrap(), catalog_before);
+        assert_eq!(std::fs::read(&progress_path).unwrap(), progress_before);
+        std::fs::remove_file(catalog_path).unwrap();
+        std::fs::remove_file(progress_path).unwrap();
     }
 
     #[test]
@@ -1166,6 +1352,13 @@ mod tests {
             Some(VolumeId(2)),
             10,
         )
+    }
+
+    fn sample_job(id: JobId) -> Job {
+        let mut scheduler = Scheduler::new();
+        let mut job = scheduler.schedule_on_volume(Priority::Visible, "index restore", VolumeId(7));
+        job.id = id;
+        job
     }
 
     fn temp_path(prefix: &str, extension: &str) -> PathBuf {
