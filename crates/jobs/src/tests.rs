@@ -1110,6 +1110,26 @@ fn structured_cancellation_propagates_to_nested_children() {
 }
 
 #[test]
+fn structured_cancellation_propagates_through_deep_child_chain_iteratively() {
+    let root = Cancellation::default();
+    let mut chain = Vec::new();
+    chain.push(root.child());
+    for _ in 0..20_000 {
+        let child = chain.last().expect("chain has an initial child").child();
+        chain.push(child);
+    }
+
+    root.cancel();
+
+    let leaf = chain.last().expect("deep chain has a leaf");
+    assert!(root.is_cancelled());
+    assert!(leaf.is_cancelled());
+    assert!(matches!(leaf.check(), Err(GfmError::Cancelled)));
+
+    while chain.pop().is_some() {}
+}
+
+#[test]
 fn cancellation_child_created_after_parent_cancel_is_immediately_cancelled() {
     let root = Cancellation::default();
     root.cancel();

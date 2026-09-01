@@ -9,24 +9,9 @@ pub struct Cancellation(Arc<CancellationInner>);
 
 impl Cancellation {
     pub fn cancel(&self) {
-        self.0.cancelled.store(true, AtomicOrdering::SeqCst);
-        let children = {
-            let mut children = self
-                .0
-                .children
-                .lock()
-                .expect("cancellation children poisoned");
-            let live = children
-                .links
-                .iter()
-                .filter_map(Weak::upgrade)
-                .collect::<Vec<_>>();
-            children.links.retain(|child| child.strong_count() > 0);
-            children.reset_prune_threshold();
-            live
-        };
-        for child in children {
-            Self(child).cancel();
+        let mut stack = cancellation_children_to_cancel(Arc::clone(&self.0));
+        while let Some(child) = stack.pop() {
+            stack.extend(cancellation_children_to_cancel(child));
         }
     }
 
@@ -50,14 +35,18 @@ impl Cancellation {
         if self.0.cancelled.load(AtomicOrdering::SeqCst) {
             return true;
         }
-        if self
-            .0
-            .parent
-            .as_ref()
-            .is_some_and(Cancellation::is_cancelled)
-        {
-            self.0.cancelled.store(true, AtomicOrdering::SeqCst);
-            return true;
+        let mut current = self.0.parent.clone();
+        let mut observed: Vec<Arc<CancellationInner>> = Vec::new();
+        while let Some(parent) = current {
+            if parent.0.cancelled.load(AtomicOrdering::SeqCst) {
+                self.0.cancelled.store(true, AtomicOrdering::SeqCst);
+                for token in observed {
+                    token.cancelled.store(true, AtomicOrdering::SeqCst);
+                }
+                return true;
+            }
+            current = parent.0.parent.clone();
+            observed.push(Arc::clone(&parent.0));
         }
         false
     }
@@ -79,6 +68,22 @@ impl Cancellation {
             .links
             .len()
     }
+}
+
+fn cancellation_children_to_cancel(inner: Arc<CancellationInner>) -> Vec<Arc<CancellationInner>> {
+    inner.cancelled.store(true, AtomicOrdering::SeqCst);
+    let mut children = inner
+        .children
+        .lock()
+        .expect("cancellation children poisoned");
+    let live = children
+        .links
+        .iter()
+        .filter_map(Weak::upgrade)
+        .collect::<Vec<_>>();
+    children.links.retain(|child| child.strong_count() > 0);
+    children.reset_prune_threshold();
+    live
 }
 
 impl Default for Cancellation {
