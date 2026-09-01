@@ -1101,6 +1101,11 @@ pub struct VolumeEventInvalidationReport {
     pub current_resource_reason: Option<String>,
     pub current_mount_table_status: Option<NativeVolumeStatus>,
     pub current_mount_table_reason: Option<String>,
+    pub stable_identity_changed: bool,
+    pub filesystem_identity_changed: bool,
+    pub apfs_metadata_changed: bool,
+    pub mount_table_changed: bool,
+    pub filesystem_traits_changed: bool,
     pub invalidate_sidebar: bool,
     pub invalidate_operation_policy: bool,
     pub invalidate_index_admission: bool,
@@ -1285,6 +1290,7 @@ impl VolumeEventInvalidationReport {
                     .map(|descriptor| descriptor.path.clone());
                 let event_visible =
                     path.is_some() || native_status != NativeVolumeStatus::Available;
+                let flags = VolumeEventIdentityFlags::from_descriptors(previous, current);
                 Self {
                     kind,
                     native_status,
@@ -1336,6 +1342,11 @@ impl VolumeEventInvalidationReport {
                     current_mount_table_reason: current.and_then(|descriptor| {
                         normalized_event_reason_option(descriptor.mount_table_reason.as_deref())
                     }),
+                    stable_identity_changed: flags.stable_identity_changed,
+                    filesystem_identity_changed: flags.filesystem_identity_changed,
+                    apfs_metadata_changed: flags.apfs_metadata_changed,
+                    mount_table_changed: flags.mount_table_changed,
+                    filesystem_traits_changed: flags.filesystem_traits_changed,
                     invalidate_sidebar: event_visible,
                     invalidate_operation_policy: event_visible,
                     invalidate_index_admission: event_visible,
@@ -1364,6 +1375,7 @@ impl VolumeEventInvalidationReport {
                 let previous_network = previous.map(|descriptor| descriptor.network);
                 let previous_reachable = previous.and_then(|descriptor| descriptor.reachable);
                 let previous_ejectable = previous.map(|descriptor| descriptor.ejectable);
+                let flags = VolumeEventIdentityFlags::from_descriptors(previous, current);
                 let topology_reason = previous
                     .zip(current)
                     .and_then(|(previous, current)| topology_change_reason(previous, current))
@@ -1431,6 +1443,11 @@ impl VolumeEventInvalidationReport {
                     current_mount_table_reason: current.and_then(|descriptor| {
                         normalized_event_reason_option(descriptor.mount_table_reason.as_deref())
                     }),
+                    stable_identity_changed: flags.stable_identity_changed,
+                    filesystem_identity_changed: flags.filesystem_identity_changed,
+                    apfs_metadata_changed: flags.apfs_metadata_changed,
+                    mount_table_changed: flags.mount_table_changed,
+                    filesystem_traits_changed: flags.filesystem_traits_changed,
                     invalidate_sidebar: visible,
                     invalidate_operation_policy: visible && heavy,
                     invalidate_index_admission: visible && heavy,
@@ -1470,6 +1487,14 @@ impl VolumeEventInvalidationReport {
                 normalized_event_reason(native_reason.as_deref(), "volume-event-unavailable")
             }
         };
+        let previous_descriptor = (kind == VolumeEventKind::Disappeared)
+            .then_some(descriptor)
+            .flatten();
+        let current_descriptor = (kind != VolumeEventKind::Disappeared)
+            .then_some(descriptor)
+            .flatten();
+        let flags =
+            VolumeEventIdentityFlags::from_descriptors(previous_descriptor, current_descriptor);
         Self {
             kind,
             native_status,
@@ -1584,6 +1609,11 @@ impl VolumeEventInvalidationReport {
                     })
                 })
                 .flatten(),
+            stable_identity_changed: flags.stable_identity_changed,
+            filesystem_identity_changed: flags.filesystem_identity_changed,
+            apfs_metadata_changed: flags.apfs_metadata_changed,
+            mount_table_changed: flags.mount_table_changed,
+            filesystem_traits_changed: flags.filesystem_traits_changed,
             invalidate_sidebar: invalidates,
             invalidate_operation_policy: invalidates,
             invalidate_index_admission: invalidates,
@@ -1594,7 +1624,7 @@ impl VolumeEventInvalidationReport {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume-event-invalidation\tkind={}\tnative-status={}\tpath={}\tprevious-kind={}\tprevious-mount={}\tprevious-read-only={}\tprevious-writable={}\tprevious-network={}\tprevious-reachable={}\tprevious-ejectable={}\tprevious-case-sensitive={}\tprevious-native-status={}\tprevious-native-reason={}\tprevious-resource-status={}\tprevious-resource-reason={}\tprevious-mount-status={}\tprevious-mount-reason={}\tcurrent-kind={}\tcurrent-mount={}\tcurrent-read-only={}\tcurrent-writable={}\tcurrent-network={}\tcurrent-reachable={}\tcurrent-ejectable={}\tcurrent-case-sensitive={}\tcurrent-native-status={}\tcurrent-native-reason={}\tcurrent-resource-status={}\tcurrent-resource-reason={}\tcurrent-mount-status={}\tcurrent-mount-reason={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\treason={}",
+            "volume-event-invalidation\tkind={}\tnative-status={}\tpath={}\tprevious-kind={}\tprevious-mount={}\tprevious-read-only={}\tprevious-writable={}\tprevious-network={}\tprevious-reachable={}\tprevious-ejectable={}\tprevious-case-sensitive={}\tprevious-native-status={}\tprevious-native-reason={}\tprevious-resource-status={}\tprevious-resource-reason={}\tprevious-mount-status={}\tprevious-mount-reason={}\tcurrent-kind={}\tcurrent-mount={}\tcurrent-read-only={}\tcurrent-writable={}\tcurrent-network={}\tcurrent-reachable={}\tcurrent-ejectable={}\tcurrent-case-sensitive={}\tcurrent-native-status={}\tcurrent-native-reason={}\tcurrent-resource-status={}\tcurrent-resource-reason={}\tcurrent-mount-status={}\tcurrent-mount-reason={}\tstable-identity-changed={}\tfilesystem-identity-changed={}\tapfs-metadata-changed={}\tmount-table-changed={}\tfilesystem-traits-changed={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\treason={}",
             self.kind.as_str(),
             self.native_status.as_str(),
             self.path
@@ -1645,6 +1675,11 @@ impl VolumeEventInvalidationReport {
                 .map(NativeVolumeStatus::as_str)
                 .unwrap_or("-"),
             format_optional_event_reason(self.current_mount_table_reason.as_deref()),
+            self.stable_identity_changed,
+            self.filesystem_identity_changed,
+            self.apfs_metadata_changed,
+            self.mount_table_changed,
+            self.filesystem_traits_changed,
             self.invalidate_sidebar,
             self.invalidate_operation_policy,
             self.invalidate_index_admission,
@@ -2712,6 +2747,92 @@ fn topology_change_reason(
     } else {
         None
     }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct VolumeEventIdentityFlags {
+    stable_identity_changed: bool,
+    filesystem_identity_changed: bool,
+    apfs_metadata_changed: bool,
+    mount_table_changed: bool,
+    filesystem_traits_changed: bool,
+}
+
+impl VolumeEventIdentityFlags {
+    fn from_descriptors(
+        previous: Option<&VolumeDescriptor>,
+        current: Option<&VolumeDescriptor>,
+    ) -> Self {
+        let Some((previous, current)) = previous.zip(current) else {
+            return Self::default();
+        };
+        Self {
+            stable_identity_changed: previous.stable_identity != current.stable_identity,
+            filesystem_identity_changed: volume_filesystem_identity_changed(previous, current),
+            apfs_metadata_changed: volume_apfs_metadata_changed(previous, current),
+            mount_table_changed: volume_mount_table_changed(previous, current),
+            filesystem_traits_changed: volume_filesystem_traits_changed(previous, current),
+        }
+    }
+}
+
+fn volume_filesystem_identity_changed(
+    previous: &VolumeDescriptor,
+    current: &VolumeDescriptor,
+) -> bool {
+    previous.filesystem != current.filesystem
+        || previous.volume_uuid != current.volume_uuid
+        || previous.media_uuid != current.media_uuid
+        || previous.resource_uuid != current.resource_uuid
+        || previous.bsd_name != current.bsd_name
+        || previous.bsd_major != current.bsd_major
+        || previous.bsd_minor != current.bsd_minor
+        || previous.bsd_unit != current.bsd_unit
+        || previous.mount_from != current.mount_from
+        || previous.media_content != current.media_content
+        || previous.media_name != current.media_name
+        || previous.media_path != current.media_path
+}
+
+fn volume_apfs_metadata_changed(previous: &VolumeDescriptor, current: &VolumeDescriptor) -> bool {
+    previous.apfs_container_uuid != current.apfs_container_uuid
+        || previous.apfs_role != current.apfs_role
+}
+
+fn volume_mount_table_changed(previous: &VolumeDescriptor, current: &VolumeDescriptor) -> bool {
+    previous.mount_filesystem != current.mount_filesystem
+        || previous.mount_flags != current.mount_flags
+        || previous.mount_local != current.mount_local
+        || previous.mount_read_only != current.mount_read_only
+}
+
+fn volume_filesystem_traits_changed(
+    previous: &VolumeDescriptor,
+    current: &VolumeDescriptor,
+) -> bool {
+    previous.volume_type != current.volume_type
+        || previous.media_kind != current.media_kind
+        || previous.media_type != current.media_type
+        || previous.media_leaf != current.media_leaf
+        || previous.media_whole != current.media_whole
+        || previous.media_encrypted != current.media_encrypted
+        || previous.media_block_size_bytes != current.media_block_size_bytes
+        || previous.media_size_bytes != current.media_size_bytes
+        || previous.case_preserving != current.case_preserving
+        || previous.resource_automounted != current.resource_automounted
+        || previous.resource_browsable != current.resource_browsable
+        || previous.resource_encrypted != current.resource_encrypted
+        || previous.resource_reachable != current.resource_reachable
+        || previous.resource_root_file_system != current.resource_root_file_system
+        || previous.resource_supports_file_cloning != current.resource_supports_file_cloning
+        || previous.resource_supports_hard_links != current.resource_supports_hard_links
+        || previous.resource_supports_sparse_files != current.resource_supports_sparse_files
+        || previous.resource_remount_url != current.resource_remount_url
+        || previous.device_protocol != current.device_protocol
+        || previous.device_path != current.device_path
+        || previous.device_model != current.device_model
+        || previous.device_vendor != current.device_vendor
+        || previous.internal != current.internal
 }
 
 fn apfs_container_uuid(
@@ -6516,6 +6637,82 @@ mod tests {
         assert!(tsv.contains("\tcurrent-reachable=false\t"));
         assert!(tsv.contains("\tcurrent-ejectable=true\t"));
         assert_eq!(state.report().volumes, vec![current]);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_event_transition_reports_apfs_identity_flags() {
+        let root = unique_temp_dir("gfm-volume-event-apfs-identity");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let mut previous = VolumeDescriptor::for_path(&root).unwrap();
+        previous.apfs_container_uuid = Some("APFS-CONTAINER-OLD".to_string());
+        previous.apfs_role = Some(ApfsVolumeRole::Data);
+        let mut current = previous.clone();
+        current.apfs_container_uuid = Some("APFS-CONTAINER-NEW".to_string());
+        current.apfs_role = Some(ApfsVolumeRole::System);
+
+        let report = VolumeEventInvalidationReport::from_transition(
+            VolumeEventKind::DescriptionChanged,
+            NativeVolumeStatus::Available,
+            Some(&previous),
+            Some(&current),
+            None,
+        );
+
+        assert_eq!(report.reason, "volume-apfs-metadata-changed");
+        assert!(!report.stable_identity_changed);
+        assert!(!report.filesystem_identity_changed);
+        assert!(report.apfs_metadata_changed);
+        assert!(!report.mount_table_changed);
+        assert!(!report.filesystem_traits_changed);
+        assert!(report.invalidate_operation_policy);
+        assert!(report.invalidate_index_admission);
+        assert!(report.rescan_index);
+        let tsv = report.as_tsv();
+        assert!(tsv.contains("\tapfs-metadata-changed=true\t"), "{tsv}");
+        assert!(
+            tsv.contains("\tfilesystem-identity-changed=false\t"),
+            "{tsv}"
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_event_transition_reports_structured_filesystem_identity_flags() {
+        let root = unique_temp_dir("gfm-volume-event-filesystem-identity");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let mut previous = VolumeDescriptor::for_path(&root).unwrap();
+        previous.volume_uuid = Some("VOLUME-OLD".to_string());
+        previous.resource_uuid = Some("RESOURCE-OLD".to_string());
+        let mut current = previous.clone();
+        current.volume_uuid = Some("VOLUME-NEW".to_string());
+        current.resource_uuid = Some("RESOURCE-NEW".to_string());
+
+        let report = VolumeEventInvalidationReport::from_transition(
+            VolumeEventKind::DescriptionChanged,
+            NativeVolumeStatus::Available,
+            Some(&previous),
+            Some(&current),
+            None,
+        );
+
+        assert_eq!(report.reason, "volume-identity-changed");
+        assert!(!report.stable_identity_changed);
+        assert!(report.filesystem_identity_changed);
+        assert!(!report.apfs_metadata_changed);
+        assert!(!report.mount_table_changed);
+        assert!(!report.filesystem_traits_changed);
+        assert!(report.invalidate_operation_policy);
+        assert!(report.invalidate_index_admission);
+        assert!(report.rescan_index);
+        let tsv = report.as_tsv();
+        assert!(
+            tsv.contains("\tfilesystem-identity-changed=true\t"),
+            "{tsv}"
+        );
+        assert!(tsv.contains("\tapfs-metadata-changed=false\t"), "{tsv}");
 
         fs::remove_dir_all(root).unwrap();
     }
