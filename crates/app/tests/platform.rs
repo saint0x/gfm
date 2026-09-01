@@ -1855,6 +1855,37 @@ fn preview_volume_check_uses_descriptor_remote_truth_from_binary() {
 }
 
 #[test]
+fn preview_volume_check_refuses_unreachable_volume_before_security_report_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-preview-volume-check-unreachable-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let path = root.join("Preview.pdf");
+    std::fs::write(&path, "%PDF-1.7\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("preview-volume-check")
+        .arg(&path)
+        .arg("quick-look")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("quick-look\t"), "{stdout}");
+    assert!(
+        stderr.contains("preview volume check volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn preview_volume_scheduling_throttles_network_prefetch_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-preview-volume-scheduling-network-prefetch-{}",

@@ -1902,6 +1902,13 @@ fn preview_security_input_with_volume_checked(
     let report =
         VolumeDiscoveryReport::for_containing_path_checked(&volume_path, &mut check_control)?;
     check_control()?;
+    preflight_volume_access_scope_with_report(
+        path,
+        AccessIntent::Preview,
+        "preview volume check",
+        &report,
+    )?;
+    check_control()?;
     Ok(security_input_for_path_on_volume(
         path,
         kind,
