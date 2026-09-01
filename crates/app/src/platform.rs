@@ -31,14 +31,14 @@ use gfm_mac::{
     FileProviderDomainReport, FileProviderInvalidationReport, FileProviderObservedInvalidation,
     FileProviderOperation, FileProviderOperationReport, FileProviderProgressReport,
     FileProviderStateInvalidationReport, FileProviderStateObserver, FileProviderStateReport,
-    FileProviderStateSnapshot, MacBridgeContract, NativeIconBridgeContract, NativeIconDescriptor,
-    NativeIconInvalidationReport, SecurityScopedAccessReport, SecurityScopedBookmarkStatus,
-    SecurityScopedBookmarkStore, SecurityWorkerAction, SecurityWorkerAdmissionReport,
-    SpotlightMetadataReader, SpotlightReconciliationReport, VolumeDescriptor,
-    VolumeDiscoveryReport, VolumeEventInvalidationReport, VolumeEventKind, VolumeEventReport,
-    VolumeEventState, VolumeEventStateBatchReport, VolumeEventStream, VolumeMountIdentityReport,
-    VolumeOperation, VolumeOperationReport, VolumeTopologyChangeKind, VolumeTopologyDiff,
-    WatchRoot,
+    FileProviderStateSnapshot, MacBridgeContract, MountState, NativeIconBridgeContract,
+    NativeIconDescriptor, NativeIconInvalidationReport, SecurityScopedAccessReport,
+    SecurityScopedBookmarkStatus, SecurityScopedBookmarkStore, SecurityWorkerAction,
+    SecurityWorkerAdmissionReport, SpotlightMetadataReader, SpotlightReconciliationReport,
+    VolumeDescriptor, VolumeDiscoveryReport, VolumeEventInvalidationReport, VolumeEventKind,
+    VolumeEventReport, VolumeEventState, VolumeEventStateBatchReport, VolumeEventStream,
+    VolumeMountIdentityReport, VolumeOperation, VolumeOperationReport, VolumeTopologyChangeKind,
+    VolumeTopologyDiff, WatchRoot,
 };
 use gfm_preview::{
     decide_invalidation, decide_preview_security, preview_invalidation_for_fileprovider,
@@ -2448,16 +2448,26 @@ fn current_index_volume_descriptor_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Option<IndexVolumeDescriptor>> {
     check_control()?;
+    let report = VolumeDiscoveryReport::for_containing_path_checked(path, &mut check_control)?;
+    check_control()?;
+    let descriptor = report.volume_for_path(path).cloned();
+    let parent_descriptor = report.volume_for_path(crate::parent_or_cwd(path));
+    if let Some(descriptor) = descriptor
+        .as_ref()
+        .or(parent_descriptor)
+        .filter(|descriptor| {
+            descriptor.mount_state != MountState::Mounted || descriptor.reachable == Some(false)
+        })
+    {
+        return Ok(Some(index_volume_descriptor(descriptor)));
+    }
+    check_control()?;
     match path.try_exists() {
         Ok(true) => {
-            let report =
-                VolumeDiscoveryReport::for_containing_path_checked(path, &mut check_control)?;
-            check_control()?;
-            let descriptor = report
-                .volume_for_path(path)
-                .cloned()
+            let descriptor = descriptor
                 .map(Ok)
-                .unwrap_or_else(|| VolumeDescriptor::for_path(path))?;
+                .unwrap_or_else(|| VolumeDescriptor::for_path_checked(path, &mut check_control))?;
+            check_control()?;
             Ok(Some(index_volume_descriptor(&descriptor)))
         }
         Ok(false) => {
@@ -4159,6 +4169,29 @@ mod tests {
 
         assert_eq!(result.err(), Some(GfmError::Cancelled));
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn current_index_volume_descriptor_reports_unreachable_volume_before_existence_probe() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-current-index-volume-descriptor-unreachable-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let path = root.join("Missing.md");
+
+        let descriptor = current_index_volume_descriptor_checked(&path, || Ok(()))
+            .expect("unreachable volume descriptor should be reported before path probing")
+            .expect("unreachable current volume should be represented");
+
+        assert_eq!(descriptor.class, IndexVolumeClass::Network);
+        assert_eq!(descriptor.mount_state, IndexMountState::Mounted);
+        assert_eq!(descriptor.reachable, Some(false));
+        assert_eq!(descriptor.path, root);
+        assert!(!path.exists());
+        std::fs::remove_dir_all(descriptor.path).unwrap();
     }
 
     #[test]

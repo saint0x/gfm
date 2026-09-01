@@ -5529,6 +5529,47 @@ fn volume_invalidation_surfaces_unavailable_current_path_from_binary() {
 }
 
 #[test]
+fn volume_invalidation_reports_unreachable_current_volume_before_existence_probe_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-volume-invalidation-unreachable-current-{}",
+        std::process::id()
+    ));
+    let offline = root.join("Offline Share");
+    let current = offline.join("Missing.md");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&offline).unwrap();
+    std::fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-invalidation")
+        .arg("network")
+        .arg("mounted")
+        .arg(&current)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.is_empty(), "{stderr}");
+    assert!(stdout.starts_with("volume-invalidation\tpath="), "{stdout}");
+    assert!(stdout.contains("\tprevious-class=network\tprevious-mount=mounted\t"));
+    assert!(stdout.contains("\tcurrent-class=network\tcurrent-mount=mounted\t"));
+    assert!(stdout.contains("\tcurrent-reachable=false\t"));
+    assert!(stdout.contains("\toperation-policy=true\tindex-admission=true\t"));
+    assert!(stdout.contains("\tcancel-index-jobs=true\tclear-fsevents-cursor=true\t"));
+    assert!(stdout.contains("\treason=volume-path-changed\n"));
+    assert!(!stdout.contains("volume invalidation current path existence unavailable"));
+    assert!(!current.exists());
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn volume_known_facts_lost_invalidates_index_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("volume-known-facts-lost-invalidation")
