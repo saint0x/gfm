@@ -100,6 +100,12 @@ impl ParityCaptureProvenance {
                 "parity manifest capture timestamp cannot be empty".to_string(),
             ));
         }
+        if !is_valid_utc_capture_timestamp(&self.captured_at) {
+            return Err(GfmError::Format(format!(
+                "parity manifest capture timestamp must use UTC second precision: {}",
+                self.captured_at
+            )));
+        }
         if self.capture_command.trim().is_empty() {
             return Err(GfmError::Format(
                 "parity manifest capture command cannot be empty".to_string(),
@@ -706,6 +712,13 @@ fn parse_manifest_profile(line_index: usize, fields: &[&str]) -> Result<Manifest
             line_index + 1
         )));
     }
+    if !is_valid_utc_capture_timestamp(&profile.captured_at) {
+        return Err(GfmError::Format(format!(
+            "parity gate manifest line {} has invalid captured-at `{}`; expected UTC second precision like 2026-08-27T00:00:00Z",
+            line_index + 1,
+            profile.captured_at
+        )));
+    }
     if profile.capture_command.trim().is_empty() {
         return Err(GfmError::Format(format!(
             "parity gate manifest line {} has empty capture-command",
@@ -731,6 +744,58 @@ fn parse_manifest_profile(line_index: usize, fields: &[&str]) -> Result<Manifest
         )));
     }
     Ok(profile)
+}
+
+fn is_valid_utc_capture_timestamp(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != 20
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || bytes[10] != b'T'
+        || bytes[13] != b':'
+        || bytes[16] != b':'
+        || bytes[19] != b'Z'
+    {
+        return false;
+    }
+    for (index, byte) in bytes.iter().enumerate() {
+        if !matches!(index, 4 | 7 | 10 | 13 | 16 | 19) && !byte.is_ascii_digit() {
+            return false;
+        }
+    }
+
+    let year = parse_fixed_u32(bytes, 0, 4);
+    let month = parse_fixed_u32(bytes, 5, 7);
+    let day = parse_fixed_u32(bytes, 8, 10);
+    let hour = parse_fixed_u32(bytes, 11, 13);
+    let minute = parse_fixed_u32(bytes, 14, 16);
+    let second = parse_fixed_u32(bytes, 17, 19);
+    if year == 0 || !(1..=12).contains(&month) || hour > 23 || minute > 59 || second > 59 {
+        return false;
+    }
+
+    let max_day = days_in_month(year, month);
+    (1..=max_day).contains(&day)
+}
+
+fn parse_fixed_u32(bytes: &[u8], start: usize, end: usize) -> u32 {
+    bytes[start..end]
+        .iter()
+        .fold(0, |value, byte| value * 10 + u32::from(byte - b'0'))
+}
+
+const fn days_in_month(year: u32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => 0,
+    }
+}
+
+const fn is_leap_year(year: u32) -> bool {
+    (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
 }
 
 fn render_review_markdown(report: &ParityGateReport) -> String {
@@ -1266,6 +1331,38 @@ mod tests {
         .unwrap_err();
 
         assert!(err.to_string().contains("missing fixture-manifest"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn versioned_parity_manifest_rejects_invalid_capture_timestamp() {
+        let root = unique_temp_dir("gfm-parity-gate-invalid-captured-at");
+        let err = parse_parity_gate_manifest(
+            "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=next-week\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\tfinder.png\tgfm.png\t1\t1\t\t1440\t900\tactive\ticon\tfixtures/icon\n",
+            &root,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("line 2"));
+        assert!(err.to_string().contains("invalid captured-at `next-week`"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn versioned_parity_manifest_accepts_leap_day_capture_timestamp() {
+        let root = unique_temp_dir("gfm-parity-gate-valid-captured-at");
+        let inputs = parse_parity_gate_manifest(
+            "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2028-02-29T23:59:59Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\tfinder.png\tgfm.png\t1\t1\t\t1440\t900\tactive\ticon\tfixtures/icon\n",
+            &root,
+        )
+        .unwrap();
+
+        assert_eq!(
+            inputs[0].provenance.as_ref().unwrap().captured_at,
+            "2028-02-29T23:59:59Z"
+        );
 
         fs::remove_dir_all(root).unwrap();
     }

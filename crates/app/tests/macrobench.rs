@@ -582,6 +582,36 @@ fn parity_gate_rejects_duplicate_capture_profile_keys_from_binary() {
 }
 
 #[test]
+fn parity_gate_rejects_invalid_capture_timestamp_from_binary() {
+    let root = unique_temp_dir("gfm-cli-parity-gate-invalid-captured-at");
+    let manifest = root.join("gate.tsv");
+    fs::write(root.join("expected.rgba"), [0, 0, 0, 255]).unwrap();
+    fs::write(root.join("actual.rgba"), [0, 0, 0, 255]).unwrap();
+    fs::write(
+        &manifest,
+        "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=not-a-timestamp\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\texpected.rgba\tactual.rgba\t1\t1\t\t1040\t720\tactive\ticon\tfixtures/toolbar\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["parity-gate", manifest.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("parity-gate\t"), "{stdout}");
+    assert!(
+        stderr.contains("invalid captured-at `not-a-timestamp`"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("line 2"), "{stderr}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn parity_gate_rejects_duplicate_capture_profile_rows_from_binary() {
     let root = unique_temp_dir("gfm-cli-parity-gate-duplicate-profile-row");
     let manifest = root.join("gate.tsv");
