@@ -17414,6 +17414,103 @@ fn deferred_adaptive_resume_content_index_job_skips_unreachable_recovery_paths_f
 }
 
 #[test]
+fn diagnostics_index_rebuild_adaptive_refuses_missing_root_before_runtime_record_from_binary() {
+    let root = unique_temp_path("gfm-cli-diagnostics-rebuild-missing-root", "missing");
+    let records = unique_temp_path("gfm-cli-diagnostics-rebuild-missing-root", "gfmidx");
+    let catalog = unique_temp_path("gfm-cli-diagnostics-rebuild-missing-root", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-diagnostics-rebuild-missing-root", "gfmprogress");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "diagnostics-index-rebuild-adaptive",
+            root.to_str().unwrap(),
+            records.to_str().unwrap(),
+            "saturated",
+            "nominal",
+            "ac",
+            "idle",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("index-rebuild\t"), "{stdout}");
+    assert!(!stderr.contains("index-rebuild-deferred"), "{stderr}");
+    assert!(
+        stderr.contains("index rebuild root access blocked: path is not present on this host"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!(
+            "security-worker-admission\tworker=index rebuild root\tpath={}",
+            root.display()
+        )),
+        "{stderr}"
+    );
+    assert!(!records.exists());
+    assert!(!catalog.exists());
+    assert!(!progress.exists());
+}
+
+#[test]
+fn diagnostics_index_recover_adaptive_refuses_missing_root_before_runtime_record_from_binary() {
+    let root = unique_temp_path("gfm-cli-diagnostics-recover-missing-root", "missing");
+    let records = unique_temp_path("gfm-cli-diagnostics-recover-missing-root", "gfmidx");
+    let state = unique_temp_path("gfm-cli-diagnostics-recover-missing-root", "gfmstate");
+    let quarantine = unique_temp_path("gfm-cli-diagnostics-recover-missing-root", "quarantine");
+    let catalog = unique_temp_path("gfm-cli-diagnostics-recover-missing-root", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-diagnostics-recover-missing-root", "gfmprogress");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "diagnostics-index-recover-adaptive",
+            root.to_str().unwrap(),
+            records.to_str().unwrap(),
+            state.to_str().unwrap(),
+            "saturated",
+            "nominal",
+            "ac",
+            "idle",
+            quarantine.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("persistent-index-recovery\t"), "{stdout}");
+    assert!(
+        !stderr.contains("persistent-index-recovery-deferred"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(
+            "persistent index repair root access blocked: path is not present on this host"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!(
+            "security-worker-admission\tworker=persistent index repair root\tpath={}",
+            root.display()
+        )),
+        "{stderr}"
+    );
+    assert!(!records.exists());
+    assert!(!state.exists());
+    assert!(!quarantine.exists());
+    assert!(!catalog.exists());
+    assert!(!progress.exists());
+}
+
+#[test]
 fn reports_recoverable_jobs_from_binary() {
     let journal = unique_temp_path("gfm-cli-recovery-jobs", "journal");
     fs::write(

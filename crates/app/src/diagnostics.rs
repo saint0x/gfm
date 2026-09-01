@@ -1,6 +1,6 @@
 use crate::access::{
     preflight_access_scope_checked_with_volume_report, preflight_volume_access_scope_with_report,
-    ScopedAccessGuard,
+    worker_admission_blocked_by_volume, worker_admission_with_volume_report, ScopedAccessGuard,
 };
 use crate::runtime::{
     run_scheduled_volume_task_cancellable_with_volume_and_payload_path,
@@ -70,6 +70,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 Some(content) => RebuildSpec::with_content(root, records, PathBuf::from(content)),
                 None => RebuildSpec::records(root, records),
             };
+            let root_access_report = DiagnosticsAccessReport::new_checked(
+                spec.root.clone(),
+                AccessIntent::Index,
+                || Ok(()),
+            )?;
+            preflight_diagnostics_input_denial_before_runtime(
+                &root_access_report,
+                "index rebuild root",
+            )?;
             let outcome =
                 if pressure.decide(Priority::Background, 1, 1).action == SchedulingAction::Defer {
                     run_scheduled_volume_task_cancellable_with_volume_and_payload_path(
@@ -187,6 +196,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .map(PathBuf::from)
                 .unwrap_or_else(|| records.with_extension("quarantine"));
             let spec = PersistentIndexRecoverySpec::new(root, records, state, quarantine);
+            let root_access_report = DiagnosticsAccessReport::new_checked(
+                spec.root.clone(),
+                AccessIntent::Index,
+                || Ok(()),
+            )?;
+            preflight_diagnostics_input_denial_before_runtime(
+                &root_access_report,
+                "persistent index repair root",
+            )?;
             let outcome =
                 if pressure.decide(Priority::Background, 1, 1).action == SchedulingAction::Defer {
                     run_scheduled_volume_task_cancellable_with_volume_and_payload_path(
@@ -437,6 +455,24 @@ impl DiagnosticsAccessReport {
             .volume_for_path(&self.path)
             .map(|volume| volume.id)
     }
+}
+
+fn preflight_diagnostics_input_denial_before_runtime(
+    access_report: &DiagnosticsAccessReport,
+    worker: &str,
+) -> Result<()> {
+    let admission = worker_admission_with_volume_report(
+        &access_report.path,
+        access_report.intent,
+        worker,
+        &access_report.volume_report,
+    );
+    if admission.can_touch_filesystem || worker_admission_blocked_by_volume(&admission) {
+        return Ok(());
+    }
+    access_report
+        .access_checked(worker, || Ok(()))
+        .map(|_access| ())
 }
 
 #[derive(Clone)]
