@@ -3,9 +3,9 @@ use crate::{
     runtime::default_security_bookmarks_path,
 };
 use gfm_mac::{
-    AccessIntent, SecurityDecisionAction, SecurityScopedAccessReport, SecurityScopedBookmarkAccess,
-    SecurityScopedBookmarkStore, SecurityWorkerAction, SecurityWorkerAdmissionReport,
-    VolumeDescriptor, VolumeDiscoveryReport,
+    AccessIntent, AccessProbeState, SecurityDecisionAction, SecurityScopedAccessReport,
+    SecurityScopedBookmarkAccess, SecurityScopedBookmarkStore, SecurityWorkerAction,
+    SecurityWorkerAdmissionReport, VolumeDescriptor, VolumeDiscoveryReport,
 };
 use gfm_types::{GfmError, Result};
 use std::path::Path;
@@ -47,11 +47,14 @@ pub(crate) fn worker_admission_with_volume_report(
 ) -> SecurityWorkerAdmissionReport {
     let worker = worker.into();
     let volume_path = absolute_volume_probe_path(path);
-    if let Some(reason) =
-        volume_access_block_reason_in_report(&volume_path, intent, &worker, volume_report)
+    if let Some(block) = volume_access_block_in_report(&volume_path, intent, &worker, volume_report)
     {
-        let access =
-            SecurityScopedAccessReport::blocked_before_filesystem_probe(path, intent, &reason);
+        let access = SecurityScopedAccessReport::blocked_before_filesystem_probe_with_state(
+            path,
+            intent,
+            block.probe,
+            &block.reason,
+        );
         return SecurityWorkerAdmissionReport {
             worker,
             access,
@@ -59,7 +62,7 @@ pub(crate) fn worker_admission_with_volume_report(
             can_touch_filesystem: false,
             needs_bookmark_access: false,
             refresh_on_permission_change: true,
-            reason,
+            reason: block.reason,
         };
     }
     let access = SecurityScopedAccessReport::evaluate(path, intent);
@@ -188,45 +191,56 @@ fn preflight_volume_access_in_report(
     worker: &str,
     report: &VolumeDiscoveryReport,
 ) -> Result<()> {
-    if let Some(reason) = volume_access_block_reason_in_report(volume_path, intent, worker, report)
-    {
+    if let Some(block) = volume_access_block_in_report(volume_path, intent, worker, report) {
         return Err(GfmError::Permission {
             path: user_path.to_path_buf(),
-            message: reason,
+            message: block.reason,
         });
     }
     Ok(())
 }
 
-fn volume_access_block_reason_in_report(
+struct VolumeAccessBlock {
+    reason: String,
+    probe: AccessProbeState,
+}
+
+fn volume_access_block_in_report(
     volume_path: &Path,
     intent: AccessIntent,
     worker: &str,
     report: &VolumeDiscoveryReport,
-) -> Option<String> {
+) -> Option<VolumeAccessBlock> {
     let volume = report.volume_for_path(volume_path)?;
     if volume.mount_state != gfm_mac::MountState::Mounted {
-        return Some(format!(
+        return Some(VolumeAccessBlock {
+            reason: format!(
             "{worker} volume access blocked: unmounted volume {}; label={}; root={}; stable-id={}; mount={}",
             volume.kind.as_str(),
             volume.label,
             volume.path.display(),
             volume.stable_identity,
             volume.mount_state.as_str()
-        ));
+        ),
+            probe: AccessProbeState::Unknown,
+        });
     }
     if volume.reachable == Some(false) {
-        return Some(format!(
+        return Some(VolumeAccessBlock {
+            reason: format!(
             "{worker} volume access blocked: unreachable volume {}; label={}; root={}; stable-id={}; mount={}",
             volume.kind.as_str(),
             volume.label,
             volume.path.display(),
             volume.stable_identity,
             volume.mount_state.as_str()
-        ));
+        ),
+            probe: AccessProbeState::Unknown,
+        });
     }
     if volume.platform_state_unavailable() {
-        return Some(format!(
+        return Some(VolumeAccessBlock {
+            reason: format!(
             "{worker} volume access blocked: unavailable volume {}; label={}; root={}; stable-id={}; mount={}; {}",
             volume.kind.as_str(),
             volume.label,
@@ -234,20 +248,25 @@ fn volume_access_block_reason_in_report(
             volume.stable_identity,
             volume.mount_state.as_str(),
             volume_api_status_context(volume)
-        ));
+        ),
+            probe: AccessProbeState::Unavailable,
+        });
     }
     if mutating_intent(intent)
         && volume.read_only
         && !broad_system_root_allows_path(volume, volume_path, intent)
     {
-        return Some(format!(
+        return Some(VolumeAccessBlock {
+            reason: format!(
             "{worker} volume access blocked: read-only volume {}; label={}; root={}; stable-id={}; mount={}",
             volume.kind.as_str(),
             volume.label,
             volume.path.display(),
             volume.stable_identity,
             volume.mount_state.as_str()
-        ));
+        ),
+            probe: AccessProbeState::Unknown,
+        });
     }
     None
 }
@@ -694,10 +713,14 @@ mod tests {
             assert_eq!(admission.worker_action, SecurityWorkerAction::Deny);
             assert!(!admission.can_touch_filesystem);
             assert!(admission.refresh_on_permission_change);
-            assert_eq!(admission.access.probe, gfm_mac::AccessProbeState::Unknown);
+            assert_eq!(
+                admission.access.probe,
+                gfm_mac::AccessProbeState::Unavailable
+            );
             assert!(admission.reason.contains("unavailable volume network"));
             assert!(admission.reason.contains("native-status=unavailable"));
-            assert!(!admission.as_tsv().contains("\tprobe=missing\t"));
+            assert!(admission.as_tsv().contains("\tprobe=unavailable\t"));
+            assert!(!admission.as_tsv().contains("\tprobe=unknown\t"));
         }
 
         fs::remove_dir_all(root).unwrap();
@@ -767,7 +790,10 @@ mod tests {
         assert!(!admission.can_touch_filesystem);
         assert!(!admission.needs_bookmark_access);
         assert!(admission.refresh_on_permission_change);
-        assert_eq!(admission.access.probe, gfm_mac::AccessProbeState::Unknown);
+        assert_eq!(
+            admission.access.probe,
+            gfm_mac::AccessProbeState::Unavailable
+        );
         assert_eq!(admission.access.action, SecurityDecisionAction::Deny);
         assert!(admission
             .reason
@@ -785,8 +811,8 @@ mod tests {
         assert!(admission
             .reason
             .contains("mount-reason=mount table unavailable"));
-        assert!(admission.as_tsv().contains("\tprobe=unknown\t"));
-        assert!(!admission.as_tsv().contains("\tprobe=missing\t"));
+        assert!(admission.as_tsv().contains("\tprobe=unavailable\t"));
+        assert!(!admission.as_tsv().contains("\tprobe=unknown\t"));
 
         fs::remove_dir_all(root).unwrap();
     }

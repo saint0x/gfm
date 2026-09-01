@@ -520,7 +520,7 @@ fn security_worker_admission_refuses_unavailable_volume_api_state_from_binary() 
     assert!(stdout.starts_with("security-worker-admission\tworker=preview worker\t"));
     assert!(stdout.contains(&format!("\tpath={}\t", path.display())));
     assert!(stdout.contains("\tintent=preview\t"));
-    assert!(stdout.contains("\tprobe=unknown\t"));
+    assert!(stdout.contains("\tprobe=unavailable\t"));
     assert!(stdout.contains("\taccess-action=deny\tworker-action=deny\t"));
     assert!(stdout.contains("\tcan-touch-filesystem=false\t"));
     assert!(stdout.contains("\trefresh-on-permission-change=true\t"));
@@ -889,7 +889,11 @@ fn security_worker_admission_fanout_refuses_unavailable_volume_api_from_binary()
     ));
     assert!(stdout.contains("\tcan-touch-filesystem=0\t"));
     assert!(stdout.contains("\trefresh-on-permission-change=3\n"));
-    assert_eq!(stdout.matches("\tprobe=unknown\t").count(), 3, "{stdout}");
+    assert_eq!(
+        stdout.matches("\tprobe=unavailable\t").count(),
+        3,
+        "{stdout}"
+    );
     assert_eq!(
         stdout.matches("\tworker-action=deny\t").count(),
         3,
@@ -915,6 +919,7 @@ fn security_worker_admission_fanout_refuses_unavailable_volume_api_from_binary()
         3,
         "{stdout}"
     );
+    assert!(!stdout.contains("\tprobe=unknown\t"), "{stdout}");
     assert!(!stdout.contains("\tprobe=missing\t"), "{stdout}");
 
     let _ = std::fs::remove_dir_all(root);

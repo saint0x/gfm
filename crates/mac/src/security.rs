@@ -217,13 +217,27 @@ impl SecurityScopedAccessReport {
         intent: AccessIntent,
         reason: impl Into<String>,
     ) -> Self {
+        Self::blocked_before_filesystem_probe_with_state(
+            path,
+            intent,
+            AccessProbeState::Unknown,
+            reason,
+        )
+    }
+
+    pub fn blocked_before_filesystem_probe_with_state(
+        path: impl AsRef<Path>,
+        intent: AccessIntent,
+        probe: AccessProbeState,
+        reason: impl Into<String>,
+    ) -> Self {
         let path = absolute_access_path_without_filesystem_probe(path.as_ref());
         let scope = protected_scope_without_filesystem_probe(&path);
         Self {
             path,
             intent,
             scope,
-            probe: AccessProbeState::Unknown,
+            probe,
             mode: SecurityAccessMode::Denied,
             action: SecurityDecisionAction::Deny,
             bookmark_required: false,
@@ -906,6 +920,27 @@ mod tests {
         assert!(report.least_privilege);
         assert!(report.as_tsv().contains("\tprobe=unknown\t"));
         assert!(!report.as_tsv().contains("\tprobe=missing\t"));
+    }
+
+    #[test]
+    fn blocked_before_probe_report_preserves_typed_unavailable_state() {
+        let path = PathBuf::from("/Volumes/Remote/Missing.pdf");
+
+        let report = SecurityScopedAccessReport::blocked_before_filesystem_probe_with_state(
+            &path,
+            AccessIntent::Preview,
+            AccessProbeState::Unavailable,
+            "preview worker volume access blocked: unavailable volume network",
+        );
+
+        assert_eq!(report.path, path);
+        assert_eq!(report.scope, ProtectedScope::ExternalVolume);
+        assert_eq!(report.probe, AccessProbeState::Unavailable);
+        assert_eq!(report.mode, SecurityAccessMode::Denied);
+        assert_eq!(report.action, SecurityDecisionAction::Deny);
+        assert!(!report.bookmark_required);
+        assert!(report.as_tsv().contains("\tprobe=unavailable\t"));
+        assert!(!report.as_tsv().contains("\tprobe=unknown\t"));
     }
 
     #[test]
