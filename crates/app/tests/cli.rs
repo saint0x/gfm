@@ -16761,6 +16761,10 @@ fn reports_job_fairness_plan_from_binary() {
         "{stdout}"
     );
     assert!(
+        stdout.contains("scheduler-ingest\tcompleted=1\tcancelled=0\tfailed=0\tcompleted-ids=4\tcancelled-ids=-\tfailed-ids=-"),
+        "{stdout}"
+    );
+    assert!(
         stdout.contains("ready\tafter-completion\t5\trepair\tvisible\trepair derived sidecar"),
         "{stdout}"
     );

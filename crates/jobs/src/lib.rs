@@ -153,6 +153,13 @@ pub struct VolumeCancellationReport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SchedulerReportIngestion {
+    pub completed: Vec<JobId>,
+    pub cancelled: Vec<JobId>,
+    pub failed: Vec<JobId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CancelledJob {
     pub id: JobId,
     pub label: String,
@@ -186,6 +193,20 @@ impl VolumeCancellationReport {
             .collect::<Vec<_>>()
             .join("\n");
         format!("{header}\n{jobs}")
+    }
+}
+
+impl SchedulerReportIngestion {
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "scheduler-ingest\tcompleted={}\tcancelled={}\tfailed={}\tcompleted-ids={}\tcancelled-ids={}\tfailed-ids={}",
+            self.completed.len(),
+            self.cancelled.len(),
+            self.failed.len(),
+            format_job_ids(&self.completed),
+            format_job_ids(&self.cancelled),
+            format_job_ids(&self.failed)
+        )
     }
 }
 
@@ -367,6 +388,80 @@ impl Scheduler {
         completed
     }
 
+    pub fn apply_worker_report(&mut self, report: &WorkerReport) -> SchedulerReportIngestion {
+        self.apply_worker_report_checked(report, || Ok(()))
+            .expect("infallible worker report ingestion failed")
+    }
+
+    pub fn apply_worker_report_checked(
+        &mut self,
+        report: &WorkerReport,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<SchedulerReportIngestion> {
+        check_control()?;
+        let mut staged_cancelled = self.cancelled.clone();
+        let mut staged_completed = self.completed.clone();
+        let mut staged_completed_order = self.completed_order.clone();
+        let mut seen = HashSet::new();
+        let mut completed = Vec::new();
+        let mut cancelled = Vec::new();
+        let mut failed = Vec::new();
+
+        for outcome in &report.outcomes {
+            check_control()?;
+            if outcome.status == TaskStatus::Started {
+                continue;
+            }
+            if !seen.insert(outcome.id) {
+                return Err(GfmError::Format(format!(
+                    "duplicate worker outcome for job {}",
+                    outcome.id.value()
+                )));
+            }
+            match &outcome.status {
+                TaskStatus::Started => {}
+                TaskStatus::Completed => {
+                    staged_cancelled.remove(&outcome.id);
+                    if staged_completed.insert(outcome.id) {
+                        staged_completed_order.push_back(outcome.id);
+                    }
+                    completed.push(outcome.id);
+                }
+                TaskStatus::Cancelled => {
+                    staged_completed.remove(&outcome.id);
+                    staged_completed_order.retain(|id| *id != outcome.id);
+                    staged_cancelled.insert(outcome.id);
+                    cancelled.push(outcome.id);
+                }
+                TaskStatus::Failed(_) => {
+                    staged_completed.remove(&outcome.id);
+                    staged_completed_order.retain(|id| *id != outcome.id);
+                    failed.push(outcome.id);
+                }
+            }
+            check_control()?;
+        }
+
+        prune_completed_ledger_parts(
+            &self.queue,
+            &mut staged_completed,
+            &mut staged_completed_order,
+        );
+        completed.sort_by_key(|id| id.value());
+        cancelled.sort_by_key(|id| id.value());
+        failed.sort_by_key(|id| id.value());
+        let ingestion = SchedulerReportIngestion {
+            completed,
+            cancelled,
+            failed,
+        };
+        check_control()?;
+        self.cancelled = staged_cancelled;
+        self.completed = staged_completed;
+        self.completed_order = staged_completed_order;
+        Ok(ingestion)
+    }
+
     pub fn bind_volume(&mut self, id: JobId, volume: VolumeId) -> Option<Job> {
         self.bind_volume_checked(id, volume, || Ok(()))
             .expect("infallible job volume binding failed")
@@ -519,28 +614,7 @@ impl Scheduler {
     }
 
     fn prune_completed_ledger(&mut self) {
-        let referenced = self
-            .queue
-            .iter()
-            .flat_map(|QueuedJob(job)| job.dependencies.iter().copied())
-            .collect::<HashSet<_>>();
-        self.completed_order
-            .retain(|id| self.completed.contains(id));
-        let mut rotated = 0usize;
-        while self.completed_order.len() > COMPLETED_DEPENDENCY_RETENTION
-            && rotated < self.completed_order.len()
-        {
-            let Some(id) = self.completed_order.pop_front() else {
-                break;
-            };
-            if referenced.contains(&id) {
-                self.completed_order.push_back(id);
-                rotated += 1;
-            } else {
-                self.completed.remove(&id);
-                rotated = 0;
-            }
-        }
+        prune_completed_ledger_parts(&self.queue, &mut self.completed, &mut self.completed_order);
     }
 
     fn stage_ready_drain_checked(
@@ -571,6 +645,42 @@ impl Scheduler {
             cancelled_jobs,
         })
     }
+}
+
+fn prune_completed_ledger_parts(
+    queue: &BinaryHeap<QueuedJob>,
+    completed: &mut HashSet<JobId>,
+    completed_order: &mut VecDeque<JobId>,
+) {
+    let referenced = queue
+        .iter()
+        .flat_map(|QueuedJob(job)| job.dependencies.iter().copied())
+        .collect::<HashSet<_>>();
+    completed_order.retain(|id| completed.contains(id));
+    let mut rotated = 0usize;
+    while completed_order.len() > COMPLETED_DEPENDENCY_RETENTION && rotated < completed_order.len()
+    {
+        let Some(id) = completed_order.pop_front() else {
+            break;
+        };
+        if referenced.contains(&id) {
+            completed_order.push_back(id);
+            rotated += 1;
+        } else {
+            completed.remove(&id);
+            rotated = 0;
+        }
+    }
+}
+
+fn format_job_ids(ids: &[JobId]) -> String {
+    if ids.is_empty() {
+        return "-".to_string();
+    }
+    ids.iter()
+        .map(|id| id.value().to_string())
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 struct StagedReadyDrain {

@@ -342,6 +342,241 @@ fn scheduler_completed_dependency_ledger_keeps_old_ids_referenced_by_queue() {
 }
 
 #[test]
+fn scheduler_worker_report_completion_releases_blocked_dependency() {
+    let mut scheduler = Scheduler::new();
+    let metadata = scheduler.schedule_in_class(
+        Priority::Background,
+        JobClass::Maintenance,
+        "rebuild metadata",
+    );
+    let repair = scheduler.schedule_in_class_with_dependencies(
+        Priority::Visible,
+        JobClass::Repair,
+        "repair derived sidecar",
+        [metadata.id],
+    );
+
+    let first = scheduler.drain_fair_ready(JobFairnessPolicy::default(), []);
+    assert_eq!(first.labels(), ["rebuild metadata"]);
+    assert_eq!(first.blocked[0].id, repair.id);
+
+    let ingestion = scheduler.apply_worker_report(&WorkerReport {
+        outcomes: vec![TaskOutcome {
+            id: metadata.id,
+            label: metadata.label,
+            status: TaskStatus::Completed,
+        }],
+    });
+    let released = scheduler.drain_fair_ready(JobFairnessPolicy::default(), []);
+
+    assert_eq!(ingestion.completed, [metadata.id]);
+    assert!(ingestion.cancelled.is_empty());
+    assert!(ingestion.failed.is_empty());
+    assert_eq!(
+        ingestion.as_tsv(),
+        format!(
+            "scheduler-ingest\tcompleted=1\tcancelled=0\tfailed=0\tcompleted-ids={}\tcancelled-ids=-\tfailed-ids=-",
+            metadata.id.value()
+        )
+    );
+    assert_eq!(released.labels(), ["repair derived sidecar"]);
+    assert!(released.blocked.is_empty());
+}
+
+#[test]
+fn scheduler_worker_report_cancelled_and_failed_do_not_release_dependencies() {
+    let mut scheduler = Scheduler::new();
+    let cancelled_metadata = scheduler.schedule_in_class(
+        Priority::Background,
+        JobClass::Maintenance,
+        "cancelled metadata",
+    );
+    let failed_metadata = scheduler.schedule_in_class(
+        Priority::Background,
+        JobClass::Maintenance,
+        "failed metadata",
+    );
+    let repair_cancelled = scheduler.schedule_in_class_with_dependencies(
+        Priority::Visible,
+        JobClass::Repair,
+        "repair cancelled sidecar",
+        [cancelled_metadata.id],
+    );
+    let repair_failed = scheduler.schedule_in_class_with_dependencies(
+        Priority::Visible,
+        JobClass::Repair,
+        "repair failed sidecar",
+        [failed_metadata.id],
+    );
+
+    let first = scheduler.drain_fair_ready(JobFairnessPolicy::default(), []);
+    assert_eq!(first.labels(), ["cancelled metadata", "failed metadata"]);
+
+    let ingestion = scheduler.apply_worker_report(&WorkerReport {
+        outcomes: vec![
+            TaskOutcome {
+                id: cancelled_metadata.id,
+                label: cancelled_metadata.label,
+                status: TaskStatus::Cancelled,
+            },
+            TaskOutcome {
+                id: failed_metadata.id,
+                label: failed_metadata.label,
+                status: TaskStatus::Failed("provider unavailable".to_string()),
+            },
+        ],
+    });
+    let blocked = scheduler.drain_fair_ready(JobFairnessPolicy::default(), []);
+
+    assert!(ingestion.completed.is_empty());
+    assert_eq!(ingestion.cancelled, [cancelled_metadata.id]);
+    assert_eq!(ingestion.failed, [failed_metadata.id]);
+    assert!(blocked.ready.is_empty());
+    assert_eq!(blocked.blocked.len(), 2);
+    assert_eq!(blocked.blocked[0].id, repair_cancelled.id);
+    assert_eq!(
+        blocked.blocked[0].missing_dependencies,
+        [cancelled_metadata.id]
+    );
+    assert_eq!(blocked.blocked[1].id, repair_failed.id);
+    assert_eq!(
+        blocked.blocked[1].missing_dependencies,
+        [failed_metadata.id]
+    );
+}
+
+#[test]
+fn scheduler_worker_report_duplicate_outcomes_are_rejected_without_mutation() {
+    let mut scheduler = Scheduler::new();
+    let metadata = scheduler.schedule_in_class(
+        Priority::Background,
+        JobClass::Maintenance,
+        "rebuild metadata",
+    );
+    let repair = scheduler.schedule_in_class_with_dependencies(
+        Priority::Visible,
+        JobClass::Repair,
+        "repair derived sidecar",
+        [metadata.id],
+    );
+    let first = scheduler.drain_fair_ready(JobFairnessPolicy::default(), []);
+    assert_eq!(first.labels(), ["rebuild metadata"]);
+
+    let result = scheduler.apply_worker_report_checked(
+        &WorkerReport {
+            outcomes: vec![
+                TaskOutcome {
+                    id: metadata.id,
+                    label: "first".to_string(),
+                    status: TaskStatus::Completed,
+                },
+                TaskOutcome {
+                    id: metadata.id,
+                    label: "second".to_string(),
+                    status: TaskStatus::Cancelled,
+                },
+            ],
+        },
+        || Ok(()),
+    );
+    let plan = scheduler.drain_fair_ready(JobFairnessPolicy::default(), []);
+
+    assert_eq!(
+        result,
+        Err(GfmError::Format(format!(
+            "duplicate worker outcome for job {}",
+            metadata.id.value()
+        )))
+    );
+    assert!(scheduler.completed_jobs().is_empty());
+    assert!(plan.ready.is_empty());
+    assert_eq!(plan.blocked[0].id, repair.id);
+    assert_eq!(plan.blocked[0].missing_dependencies, [metadata.id]);
+}
+
+#[test]
+fn scheduler_worker_report_started_rows_do_not_conflict_with_terminal_outcomes() {
+    let mut scheduler = Scheduler::new();
+    let metadata = scheduler.schedule_in_class(
+        Priority::Background,
+        JobClass::Maintenance,
+        "rebuild metadata",
+    );
+    let repair = scheduler.schedule_in_class_with_dependencies(
+        Priority::Visible,
+        JobClass::Repair,
+        "repair derived sidecar",
+        [metadata.id],
+    );
+    let first = scheduler.drain_fair_ready(JobFairnessPolicy::default(), []);
+    assert_eq!(first.labels(), ["rebuild metadata"]);
+
+    let ingestion = scheduler.apply_worker_report(&WorkerReport {
+        outcomes: vec![
+            TaskOutcome {
+                id: metadata.id,
+                label: "start".to_string(),
+                status: TaskStatus::Started,
+            },
+            TaskOutcome {
+                id: metadata.id,
+                label: "done".to_string(),
+                status: TaskStatus::Completed,
+            },
+        ],
+    });
+    let plan = scheduler.drain_fair_ready(JobFairnessPolicy::default(), []);
+
+    assert_eq!(ingestion.completed, [metadata.id]);
+    assert_eq!(plan.ready[0].id, repair.id);
+    assert!(plan.blocked.is_empty());
+}
+
+#[test]
+fn scheduler_worker_report_checked_preserves_state_when_cancelled_before_commit() {
+    let mut scheduler = Scheduler::new();
+    let metadata = scheduler.schedule_in_class(
+        Priority::Background,
+        JobClass::Maintenance,
+        "rebuild metadata",
+    );
+    let repair = scheduler.schedule_in_class_with_dependencies(
+        Priority::Visible,
+        JobClass::Repair,
+        "repair derived sidecar",
+        [metadata.id],
+    );
+    let first = scheduler.drain_fair_ready(JobFairnessPolicy::default(), []);
+    assert_eq!(first.labels(), ["rebuild metadata"]);
+    let mut checks = 0usize;
+
+    let result = scheduler.apply_worker_report_checked(
+        &WorkerReport {
+            outcomes: vec![TaskOutcome {
+                id: metadata.id,
+                label: metadata.label,
+                status: TaskStatus::Completed,
+            }],
+        },
+        || {
+            checks += 1;
+            if checks == 4 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        },
+    );
+    let plan = scheduler.drain_fair_ready(JobFairnessPolicy::default(), []);
+
+    assert_eq!(result, Err(GfmError::Cancelled));
+    assert!(scheduler.completed_jobs().is_empty());
+    assert!(plan.ready.is_empty());
+    assert_eq!(plan.blocked[0].id, repair.id);
+    assert_eq!(plan.blocked[0].missing_dependencies, [metadata.id]);
+}
+
+#[test]
 fn scheduler_fair_drain_does_not_release_same_batch_dependencies() {
     let mut scheduler = Scheduler::new();
     let metadata = scheduler.schedule_in_class(

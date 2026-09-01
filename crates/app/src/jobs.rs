@@ -9,7 +9,8 @@ use crate::{parse_optional_scheduling_pressure, parse_u64_arg, parse_usize_arg, 
 use gfm_jobs::{
     Cancellation, FailureClass, JobClass, JobFairnessPolicy, JobJournal, JobPayloadCatalog,
     JobPayloadKind, JobPayloadRecord, JobProgressCommand, JobProgressSnapshot, JobProgressState,
-    JobProgressStore, Priority, RecoveryReason, RetryPolicy, Scheduler,
+    JobProgressStore, Priority, RecoveryReason, RetryPolicy, Scheduler, TaskOutcome, TaskStatus,
+    WorkerReport,
 };
 use gfm_mac::{AccessIntent, VolumeDiscoveryReport};
 use gfm_types::{GfmError, Result, VolumeId};
@@ -617,7 +618,13 @@ fn sample_fairness_plan() -> Vec<String> {
             .with_quota(JobClass::Repair, 1),
         [],
     );
-    scheduler.mark_completed(compact.id);
+    let ingestion = scheduler.apply_worker_report(&WorkerReport {
+        outcomes: vec![TaskOutcome {
+            id: compact.id,
+            label: compact.label,
+            status: TaskStatus::Completed,
+        }],
+    });
     let second = scheduler.drain_fair_ready(
         JobFairnessPolicy::new()
             .with_quota(JobClass::Foreground, 1)
@@ -628,6 +635,7 @@ fn sample_fairness_plan() -> Vec<String> {
         [],
     );
     let mut lines = format_fairness_plan("first", first);
+    lines.push(ingestion.as_tsv());
     lines.extend(format_fairness_plan("after-completion", second));
     lines
 }
