@@ -332,7 +332,7 @@ fn recover_operations_from_journal(
     policy: OperationRecoveryPolicy,
 ) -> Result<gfm_ops::OperationRecoveryReport> {
     const WORKER: &str = "operation journal";
-    let journal_probe = write_probe_path(&journal)?.to_path_buf();
+    let journal_probe = write_probe_path_checked(&journal, WORKER, || Ok(()))?;
     let access_report =
         OperationPathAccessReport::new_checked(journal_probe, AccessIntent::Write, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
@@ -398,7 +398,7 @@ fn resolve_operation_conflicts(
     conflict: ConflictPolicy,
 ) -> Result<Vec<RuntimeOperationConflict>> {
     const WORKER: &str = "operation conflict store";
-    let store_probe = write_probe_path(store.path())?.to_path_buf();
+    let store_probe = write_probe_path_checked(store.path(), WORKER, || Ok(()))?;
     let access_report =
         OperationPathAccessReport::new_checked(store_probe, AccessIntent::Write, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
@@ -775,12 +775,16 @@ fn preflight_operation_volume_policy_access(operation: &Operation) -> Result<()>
                 AccessIntent::Read,
                 || Ok(()),
             )?;
+            source.preflight_volume("operation volume copy policy source")?;
             let destination = OperationPathAccessReport::new_checked(
-                write_probe_path(to)?.to_path_buf(),
+                write_probe_path_checked(
+                    to,
+                    "operation volume copy policy destination",
+                    || Ok(()),
+                )?,
                 AccessIntent::Write,
                 || Ok(()),
             )?;
-            source.preflight_volume("operation volume copy policy source")?;
             destination.preflight_volume("operation volume copy policy destination")
         }
         _ => Ok(()),
@@ -813,7 +817,7 @@ fn preflight_operation_journal_write_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<ScopedAccessGuard> {
     check_control()?;
-    let probe = write_probe_path(path)?.to_path_buf();
+    let probe = write_probe_path_checked(path, "operation journal", &mut check_control)?;
     check_control()?;
     OperationPathAccessReport::new_checked(probe, AccessIntent::Write, &mut check_control)?
         .access_checked("operation journal", check_control)
@@ -836,7 +840,7 @@ fn preflight_trash_metadata_write_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<ScopedAccessGuard> {
     check_control()?;
-    let probe = write_probe_path(path)?.to_path_buf();
+    let probe = write_probe_path_checked(path, "trash metadata", &mut check_control)?;
     check_control()?;
     OperationPathAccessReport::new_checked(probe, AccessIntent::Write, &mut check_control)?
         .access_checked("trash metadata", check_control)
@@ -870,6 +874,37 @@ fn write_probe_path(path: &Path) -> Result<&Path> {
             format!("operation write path metadata unavailable: {err}"),
         )),
     }
+}
+
+fn write_probe_path_checked(
+    path: &Path,
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<PathBuf> {
+    check_control()?;
+    preflight_write_target_volume_checked(path, worker, &mut check_control)?;
+    check_control()?;
+    let probe = write_probe_path(path)?.to_path_buf();
+    check_control()?;
+    Ok(probe)
+}
+
+fn preflight_write_target_volume_checked(
+    path: &Path,
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    check_control()?;
+    let volume_path = crate::parent_or_cwd(path);
+    let volume_report =
+        VolumeDiscoveryReport::for_containing_path_checked(volume_path, &mut check_control)?;
+    check_control()?;
+    preflight_volume_access_scope_with_report(
+        volume_path,
+        AccessIntent::Write,
+        worker,
+        &volume_report,
+    )
 }
 
 fn operation_access_gate_checked(
@@ -2391,6 +2426,112 @@ mod tests {
     }
 
     #[test]
+    fn operation_journal_write_refuses_unreachable_volume_before_write_probe() {
+        let root = unique_temp_dir("gfm-app-op-journal-unreachable-before-probe");
+        fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let journal = root.join(format!(
+            "{}.journal",
+            "operation-journal-unavailable".repeat(16)
+        ));
+
+        let err = match preflight_operation_journal_write_checked(&journal, || Ok(())) {
+            Ok(_) => panic!("unreachable operation journal was admitted before volume preflight"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("operation journal volume access blocked: unreachable volume network"),
+            "{err}"
+        );
+        assert!(
+            !err.to_string()
+                .contains("operation write path metadata unavailable"),
+            "{err}"
+        );
+        assert!(!journal.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operation_conflict_store_write_refuses_unreachable_volume_before_write_probe() {
+        let root = unique_temp_dir("gfm-app-op-conflict-store-unreachable-before-probe");
+        fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let store = OperationConflictStore::new(root.join(format!(
+            "{}.tsv",
+            "operation-conflicts-unavailable".repeat(16)
+        )));
+
+        let err = match resolve_operation_conflicts(
+            &store,
+            vec!["target.txt".into()],
+            ConflictPolicy::Skip,
+        ) {
+            Ok(_) => {
+                panic!("unreachable operation conflict store was admitted before volume preflight")
+            }
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains(
+                "operation conflict store volume access blocked: unreachable volume network"
+            ),
+            "{err}"
+        );
+        assert!(
+            !err.to_string()
+                .contains("operation write path metadata unavailable"),
+            "{err}"
+        );
+        assert!(!store.path().exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operation_volume_policy_write_refuses_unreachable_destination_before_write_probe() {
+        let root = unique_temp_dir("gfm-app-op-copy-policy-unreachable-before-probe");
+        let source_root = root.join("Source");
+        let offline = root.join("Offline");
+        fs::create_dir_all(&source_root).unwrap();
+        fs::create_dir_all(&offline).unwrap();
+        fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let source = source_root.join("source.bin");
+        fs::write(&source, "policy only").unwrap();
+        let destination = offline.join(format!(
+            "{}.bin",
+            "operation-copy-policy-destination-unavailable".repeat(8)
+        ));
+        let operation = Operation::Copy {
+            from: source,
+            to: destination.clone(),
+        };
+
+        let err = match preflight_operation_volume_policy_access(&operation) {
+            Ok(_) => {
+                panic!(
+                    "unreachable operation policy destination was admitted before volume preflight"
+                )
+            }
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains(
+                "operation volume copy policy destination volume access blocked: unreachable volume network"
+            ),
+            "{err}"
+        );
+        assert!(
+            !err.to_string()
+                .contains("operation write path metadata unavailable"),
+            "{err}"
+        );
+        assert!(!destination.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn operation_path_access_report_checked_honors_pre_cancelled_control_before_volume_discovery() {
         let path = std::env::temp_dir()
             .join(format!(
@@ -2454,6 +2595,38 @@ mod tests {
 
         assert_eq!(result.err(), Some(GfmError::Cancelled));
         assert!(checks >= 2);
+        assert!(!metadata.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operation_trash_metadata_write_refuses_unreachable_volume_before_write_probe() {
+        let root = unique_temp_dir("gfm-app-trash-metadata-unreachable-before-probe");
+        fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let metadata = root.join(format!("{}.tsv", "trash-metadata-unavailable".repeat(16)));
+        let operation = Operation::Trash {
+            path: root.join("File.txt"),
+        };
+
+        let err = match retain_operation_trash_metadata_access_checked(
+            &operation,
+            &metadata,
+            || Ok(()),
+        ) {
+            Ok(_) => panic!("unreachable trash metadata was admitted before volume preflight"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("trash metadata volume access blocked: unreachable volume network"),
+            "{err}"
+        );
+        assert!(
+            !err.to_string()
+                .contains("operation write path metadata unavailable"),
+            "{err}"
+        );
         assert!(!metadata.exists());
         fs::remove_dir_all(root).unwrap();
     }

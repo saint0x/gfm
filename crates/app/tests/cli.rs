@@ -7372,7 +7372,10 @@ fn live_copy_operation_retries_transient_failure_from_binary() {
 fn operation_refuses_unreachable_journal_before_mutating_from_binary() {
     let root = unique_temp_dir("gfm-cli-ops-journal-preflight-root");
     let offline = unique_temp_dir("gfm-cli-ops-journal-preflight-offline");
-    let journal = offline.join("ops.journal");
+    let journal = offline.join(format!(
+        "{}.journal",
+        "operation-journal-unavailable".repeat(16)
+    ));
     let source = root.join("source.txt");
     let destination = root.join("destination.txt");
     fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
@@ -7394,6 +7397,10 @@ fn operation_refuses_unreachable_journal_before_mutating_from_binary() {
     assert!(!stdout.contains("\tcompleted"), "{stdout}");
     assert!(
         stderr.contains("operation journal volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("operation write path metadata unavailable"),
         "{stderr}"
     );
     assert_eq!(
@@ -7644,7 +7651,10 @@ fn operation_volume_copy_policy_refuses_unreachable_destination_from_binary() {
     fs::create_dir_all(&offline).unwrap();
     fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
     let source = source_root.join("source.bin");
-    let destination = offline.join("destination.bin");
+    let destination = offline.join(format!(
+        "{}.bin",
+        "operation-copy-policy-destination-unavailable".repeat(8)
+    ));
     fs::write(&source, "policy only").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -7667,6 +7677,10 @@ fn operation_volume_copy_policy_refuses_unreachable_destination_from_binary() {
         stderr.contains(
             "operation volume copy policy destination volume access blocked: unreachable volume network"
         ),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("operation write path metadata unavailable"),
         "{stderr}"
     );
     assert!(!destination.exists());
@@ -8142,7 +8156,10 @@ fn operation_conflict_store_refuses_unreachable_writes_before_recording_from_bin
     let root = unique_temp_dir("gfm-cli-operation-conflict-store-root");
     let offline = unique_temp_dir("gfm-cli-operation-conflict-store-unreachable");
     let journal = root.join("ops.journal");
-    let conflicts = offline.join("operation-conflicts.tsv");
+    let conflicts = offline.join(format!(
+        "{}.tsv",
+        "operation-conflicts-unavailable".repeat(16)
+    ));
     let source = root.join("report.md");
     let destination = root.join("destination.md");
     fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
@@ -8165,6 +8182,10 @@ fn operation_conflict_store_refuses_unreachable_writes_before_recording_from_bin
     assert!(
         stderr
             .contains("operation conflict store volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("operation write path metadata unavailable"),
         "{stderr}"
     );
     assert!(!conflicts.exists());
@@ -8836,7 +8857,7 @@ fn trash_refuses_unreachable_metadata_before_mutating_from_binary() {
     let root = unique_temp_dir("gfm-cli-ops-trash-metadata-preflight-root");
     let offline = unique_temp_dir("gfm-cli-ops-trash-metadata-preflight-offline");
     let journal = root.join("ops.journal");
-    let metadata = offline.join("trash.tsv");
+    let metadata = offline.join(format!("{}.tsv", "trash-metadata-unavailable".repeat(16)));
     let file = root.join("report.md");
     fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
     fs::write(&file, "do not trash without metadata access").unwrap();
@@ -8854,6 +8875,10 @@ fn trash_refuses_unreachable_metadata_before_mutating_from_binary() {
     assert!(!stdout.contains("\tcompleted"), "{stdout}");
     assert!(
         stderr.contains("trash metadata volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("operation write path metadata unavailable"),
         "{stderr}"
     );
     assert_eq!(

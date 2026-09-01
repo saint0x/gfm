@@ -1,11 +1,13 @@
-use crate::access::{preflight_access_scope_checked, ScopedAccessGuard};
+use crate::access::{
+    preflight_access_scope_checked, preflight_volume_access_scope_with_report, ScopedAccessGuard,
+};
 use gfm_jobs::{
     Cancellation, Job, JobFairnessPolicy, JobJournal, JobPayloadCatalog, JobPayloadKind,
     JobPayloadRecord, JobProgressSnapshot, JobProgressState, JobProgressStore, Priority,
     RetriableTask, RetryPolicy, Scheduler, SchedulingAction, SchedulingPressure, Task, TaskStatus,
     VolumeConcurrencyPolicy, WorkerPool,
 };
-use gfm_mac::AccessIntent;
+use gfm_mac::{AccessIntent, VolumeDiscoveryReport};
 use gfm_ops::OperationConflictReport;
 use gfm_types::{GfmError, Result, VolumeId};
 use std::collections::BTreeSet;
@@ -1012,6 +1014,56 @@ mod tests {
     }
 
     #[test]
+    fn operation_conflict_store_checked_append_refuses_unreachable_volume_before_write_probe() {
+        let root = temp_path(
+            "gfm-operation-conflict-append-unreachable-before-probe",
+            "dir",
+        );
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let path = root.join(format!(
+            "{}.tsv",
+            "operation-conflicts-unavailable".repeat(16)
+        ));
+        let store = OperationConflictStore::new(&path);
+        let report = OperationConflictReport {
+            operation: "copy",
+            source: Some(PathBuf::from("/tmp/source.md")),
+            target: Some(PathBuf::from("/tmp/target.md")),
+            target_exists: true,
+            target_kind: gfm_ops::OperationConflictKind::File,
+            selected_policy: gfm_ops::ConflictPolicy::Fail,
+            available_policies: vec![
+                gfm_ops::ConflictPolicy::Replace,
+                gfm_ops::ConflictPolicy::KeepBoth,
+            ],
+            blocks_operation: true,
+            reason: "destination-conflict-requires-user-resolution".to_string(),
+        };
+
+        let err = match store.append_checked(&report, || Ok(())) {
+            Ok(_) => {
+                panic!("unreachable operation conflict store was admitted before volume preflight")
+            }
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains(
+                "operation conflict store volume access blocked: unreachable volume network"
+            ),
+            "{err}"
+        );
+        assert!(
+            !err.to_string()
+                .contains("runtime write path metadata unavailable"),
+            "{err}"
+        );
+        assert!(!path.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn operation_conflict_store_checked_append_preserves_existing_state_on_cancel() {
         let path = temp_path("gfm-operation-conflict-append-publish-cancel", "tsv");
         let store = OperationConflictStore::new(&path);
@@ -1152,7 +1204,7 @@ fn preflight_runtime_write_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<ScopedAccessGuard> {
     check_control()?;
-    let probe = write_probe_path(path)?.to_path_buf();
+    let probe = runtime_write_probe_path_checked(path, worker, &mut check_control)?;
     check_control()?;
     preflight_access_scope_checked(&probe, AccessIntent::Write, worker, check_control)
 }
@@ -1413,13 +1465,45 @@ fn preflight_operation_conflict_write_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<ScopedAccessGuard> {
     check_control()?;
-    let probe = write_probe_path(path)?.to_path_buf();
+    let probe =
+        runtime_write_probe_path_checked(path, "operation conflict store", &mut check_control)?;
     check_control()?;
     preflight_access_scope_checked(
         &probe,
         AccessIntent::Write,
         "operation conflict store",
         check_control,
+    )
+}
+
+fn runtime_write_probe_path_checked(
+    path: &Path,
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<PathBuf> {
+    check_control()?;
+    preflight_runtime_write_target_volume_checked(path, worker, &mut check_control)?;
+    check_control()?;
+    let probe = write_probe_path(path)?.to_path_buf();
+    check_control()?;
+    Ok(probe)
+}
+
+fn preflight_runtime_write_target_volume_checked(
+    path: &Path,
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    check_control()?;
+    let volume_path = crate::parent_or_cwd(path);
+    let volume_report =
+        VolumeDiscoveryReport::for_containing_path_checked(volume_path, &mut check_control)?;
+    check_control()?;
+    preflight_volume_access_scope_with_report(
+        volume_path,
+        AccessIntent::Write,
+        worker,
+        &volume_report,
     )
 }
 
