@@ -1445,6 +1445,8 @@ impl SearchWriteAccessReport {
         mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<Self> {
         check_control()?;
+        preflight_write_target_volume_checked(path, "search retry probe", &mut check_control)?;
+        check_control()?;
         let path = write_probe_path(path)?.to_path_buf();
         check_control()?;
         let volume_report =
@@ -1739,6 +1741,24 @@ fn write_probe_path(path: &Path) -> Result<&Path> {
             format!("search retry probe metadata unavailable: {err}"),
         )),
     }
+}
+
+fn preflight_write_target_volume_checked(
+    path: &Path,
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    check_control()?;
+    let volume_path = crate::parent_or_cwd(path);
+    let volume_report =
+        VolumeDiscoveryReport::for_containing_path_checked(volume_path, &mut check_control)?;
+    check_control()?;
+    preflight_volume_access_scope_with_report(
+        volume_path,
+        AccessIntent::Write,
+        worker,
+        &volume_report,
+    )
 }
 
 fn fail_first_search_retry_probe_attempt(
@@ -3555,6 +3575,35 @@ mod tests {
 
         assert_eq!(result.err(), Some(GfmError::Cancelled));
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn search_retry_probe_report_refuses_unreachable_state_before_write_probe() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-search-retry-report-unreachable-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let path = root.join("retry-state-unavailable".repeat(16));
+
+        let err = match search_retry_probe_access_report_checked(Some(&path), || Ok(())) {
+            Ok(_) => panic!("unreachable search retry probe was admitted before volume preflight"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("search retry probe volume access blocked: unreachable volume network"),
+            "{err}"
+        );
+        assert!(
+            !err.to_string()
+                .contains("search retry probe metadata unavailable"),
+            "{err}"
+        );
+        assert!(!path.exists());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

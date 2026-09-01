@@ -249,6 +249,47 @@ fn search_index_retries_transient_archive_read_failure_from_binary() {
 }
 
 #[test]
+fn search_retry_probe_refuses_unreachable_state_before_archive_read_from_binary() {
+    let root = unique_temp_dir("gfm-cli-search-retry-unreachable-root");
+    let offline = unique_temp_dir("gfm-cli-search-retry-unreachable-state");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let index = root.join("records.gfmidx");
+    let retry_probe = offline.join("search-retry-state-unavailable".repeat(16));
+    fs::write(
+        &index,
+        "gfm-store-v2\n1\t1\t0\tf\t5\t0\t0\t0\t0\t\t/tmp/search-retry.md\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "search-index-retry-probe",
+            index.to_str().unwrap(),
+            "search",
+            retry_probe.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("/tmp/search-retry.md"), "{stdout}");
+    assert!(
+        stderr.contains("search retry probe volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("search retry probe metadata unavailable"),
+        "{stderr}"
+    );
+    assert!(!retry_probe.exists());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
 fn search_index_mmap_retries_transient_archive_read_failure_from_binary() {
     let root = unique_temp_dir("gfm-cli-search-index-mmap-retry-root");
     let index = unique_temp_path("gfm-cli-search-index-mmap-retry", "gfmidx");
