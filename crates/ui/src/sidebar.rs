@@ -943,7 +943,7 @@ fn location_rows(volumes: &[SidebarVolumeSpec], current_path: &Path) -> Vec<Side
     .state(RowState::virtual_item(true, false)))];
 
     rows.extend(volumes.iter().map(|volume| {
-        let state = path_state(&volume.path);
+        let state = sidebar_volume_path_state(volume);
         let enabled = volume.mount_state == SidebarVolumeMountState::Mounted
             && volume.reachable != Some(false)
             && state.enables_row();
@@ -960,7 +960,7 @@ fn location_rows(volumes: &[SidebarVolumeSpec], current_path: &Path) -> Vec<Side
         .state(RowState {
             path_state: state,
             enabled,
-            selected: enabled && same_path(&volume.path, current_path),
+            selected: enabled && volume.path == current_path,
             ejectable: volume.ejectable,
             virtual_item: false,
         }))
@@ -988,6 +988,14 @@ fn tag_rows() -> Vec<SidebarItemSpec> {
         )
     })
     .collect()
+}
+
+fn sidebar_volume_path_state(volume: &SidebarVolumeSpec) -> SidebarPathState {
+    if volume.mount_state != SidebarVolumeMountState::Mounted || volume.reachable == Some(false) {
+        SidebarPathState::Unavailable
+    } else {
+        SidebarPathState::Available
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1366,10 +1374,48 @@ mod tests {
         assert_eq!(row.volume_read_only, Some(true));
         assert_eq!(row.volume_network, Some(true));
         assert_eq!(row.volume_reachable, Some(false));
+        assert_eq!(row.path_state, SidebarPathState::Unavailable);
         assert!(!row.enabled);
         assert!(contract.as_tsv().contains(
             "\tvolume-kind=network\tvolume-mount=stale\tvolume-read-only=true\tvolume-network=true\tvolume-reachable=false"
         ));
+    }
+
+    #[test]
+    fn volume_rows_use_typed_descriptor_state_without_path_probe() {
+        let unprobeable_path =
+            PathBuf::from("/Volumes").join("sidebar-volume-unprobeable".repeat(64));
+        let contract = SidebarContract::from_environment(
+            &unprobeable_path,
+            SidebarEnvironment {
+                home: PathBuf::from("/Users/tester"),
+                icloud_drive: None,
+                icloud_state: SidebarCloudState::None,
+                icloud_progress_milli: None,
+                volumes: vec![SidebarVolumeSpec::from_native_seed(
+                    "diskarbitration:uuid:External",
+                    "External",
+                    unprobeable_path.clone(),
+                    true,
+                )
+                .with_volume_state(
+                    SidebarVolumeKind::External,
+                    SidebarVolumeMountState::Mounted,
+                    false,
+                    false,
+                    Some(true),
+                )],
+            },
+        );
+
+        let row = contract
+            .rows
+            .iter()
+            .find(|row| row.id == "volume-diskarbitration-uuid-external")
+            .unwrap();
+        assert_eq!(row.path_state, SidebarPathState::Available);
+        assert!(row.enabled);
+        assert!(row.selected);
     }
 
     #[test]

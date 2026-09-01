@@ -925,6 +925,8 @@ impl IndexPathAccessReport {
         mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<Self> {
         check_control()?;
+        preflight_write_target_volume_checked(path, worker, &mut check_control)?;
+        check_control()?;
         let probe_path = write_probe_path(path)?.to_path_buf();
         check_control()?;
         Self::new_checked(probe_path, AccessIntent::Write, worker, check_control)
@@ -1105,6 +1107,8 @@ impl IndexBuildAccessReports {
         mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<Self> {
         check_control()?;
+        preflight_write_target_volume_checked(output, "index records", &mut check_control)?;
+        check_control()?;
         let output_probe = write_probe_path(output)?.to_path_buf();
         check_control()?;
         Ok(Self {
@@ -1194,9 +1198,29 @@ fn preflight_index_write_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<ScopedAccessGuard> {
     check_control()?;
+    preflight_write_target_volume_checked(path, worker, &mut check_control)?;
+    check_control()?;
     let probe_path = write_probe_path(path)?;
     check_control()?;
     preflight_access_scope_checked(probe_path, AccessIntent::Write, worker, check_control)
+}
+
+fn preflight_write_target_volume_checked(
+    path: &Path,
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    check_control()?;
+    let volume_path = crate::parent_or_cwd(path);
+    let volume_report =
+        VolumeDiscoveryReport::for_containing_path_checked(volume_path, &mut check_control)?;
+    check_control()?;
+    preflight_volume_access_scope_with_report(
+        volume_path,
+        AccessIntent::Write,
+        worker,
+        &volume_report,
+    )
 }
 
 fn write_probe_path(path: &Path) -> Result<&Path> {
@@ -1499,6 +1523,31 @@ mod tests {
 
         assert_eq!(result.err(), Some(GfmError::Cancelled));
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn preflight_index_write_refuses_unreachable_volume_before_write_probe() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-index-write-unreachable-before-probe-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let path = root.join(format!("{}.gfmidx", "records-unavailable".repeat(16)));
+
+        let err = match preflight_index_write_checked(&path, "index records", || Ok(())) {
+            Ok(_) => panic!("unreachable write target was admitted before volume preflight"),
+            Err(err) => err,
+        };
+
+        assert!(err
+            .to_string()
+            .contains("index records volume access blocked: unreachable volume network"));
+        assert!(!err
+            .to_string()
+            .contains("index write path metadata unavailable"));
+        assert!(!path.exists());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
