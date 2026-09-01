@@ -524,6 +524,17 @@ fn index_preflight_refreshes_permission_state_from_binary() {
         stderr.contains("permission-refresh\taudience=workers\tsubject=index records\t"),
         "{stderr}"
     );
+    assert!(
+        stderr.contains("permission-refresh-change\taudience=workers\tsubject=index records\t"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("\tkind=")
+            && stderr.contains("\tprevious=")
+            && stderr.contains("\tcurrent=")
+            && stderr.contains("\treason="),
+        "{stderr}"
+    );
     assert!(stderr.contains("refresh-workers=true"), "{stderr}");
     assert_worker_admitted(&stderr, "index", &root);
     assert!(stderr.contains("security-scope\t"), "{stderr}");
@@ -963,6 +974,17 @@ fn operation_preflight_refreshes_permission_state_from_binary() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("permission-refresh\taudience=operations\tsubject=copy\t"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("permission-refresh-change\taudience=operations\tsubject=copy\t"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("\tkind=")
+            && stderr.contains("\tprevious=")
+            && stderr.contains("\tcurrent=")
+            && stderr.contains("\treason="),
         "{stderr}"
     );
     assert!(

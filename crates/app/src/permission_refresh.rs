@@ -1,6 +1,6 @@
 use crate::{access::volume_api_status_context, runtime::default_permission_state_path};
 use gfm_mac::{
-    current_permission_onboarding_checked, AccessIntent, MountState,
+    current_permission_onboarding_checked, AccessIntent, MountState, PermissionScopeChange,
     PermissionStateInvalidationReport, PermissionStateSnapshot, SecurityDecisionAction,
     SecurityScopedAccessReport, VolumeDiscoveryReport,
 };
@@ -57,6 +57,9 @@ pub(crate) fn refresh_permission_state(
         report.refresh_workers,
         report.refresh_operations
     );
+    for line in permission_refresh_change_lines(audience, subject, &report.changed) {
+        eprintln!("{line}");
+    }
     Ok(Some(report))
 }
 
@@ -282,11 +285,35 @@ fn escape_field(value: &str) -> String {
         .replace('\n', "\\n")
 }
 
+fn permission_refresh_change_lines(
+    audience: PermissionRefreshAudience,
+    subject: &str,
+    changed: &[PermissionScopeChange],
+) -> Vec<String> {
+    changed
+        .iter()
+        .map(|change| {
+            format!(
+                "permission-refresh-change\taudience={}\tsubject={}\tscope={}\tkind={}\tprevious={}\tcurrent={}\tpath={}\treason={}",
+                audience.as_str(),
+                escape_field(subject),
+                change.scope.as_str(),
+                change.kind.as_str(),
+                change.previous.map(|state| state.as_str()).unwrap_or("-"),
+                change.current.as_str(),
+                escape_field(&change.path.to_string_lossy()),
+                escape_field(&change.reason)
+            )
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use gfm_mac::{
-        PermissionReadiness, PermissionScope, PermissionState, VolumeDescriptor, VolumeKind,
+        PermissionReadiness, PermissionScope, PermissionScopeChange, PermissionScopeChangeKind,
+        PermissionState, VolumeDescriptor, VolumeKind,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -308,6 +335,28 @@ mod tests {
 
         assert!(PermissionRefreshAudience::Workers.selected(&report));
         assert!(PermissionRefreshAudience::Operations.selected(&report));
+    }
+
+    #[test]
+    fn permission_refresh_change_lines_preserve_scope_evidence_for_worker_streams() {
+        let lines = permission_refresh_change_lines(
+            PermissionRefreshAudience::Workers,
+            "index\trecords",
+            &[PermissionScopeChange {
+                scope: PermissionScope::Documents,
+                kind: PermissionScopeChangeKind::Revoked,
+                path: PathBuf::from("/Users/me/Documents/reports\t2026"),
+                previous: Some(PermissionState::Granted),
+                current: PermissionState::Denied,
+                reason: "macOS denied\nread access".to_string(),
+            }],
+        );
+
+        assert_eq!(lines.len(), 1);
+        assert_eq!(
+            lines[0],
+            "permission-refresh-change\taudience=workers\tsubject=index\\trecords\tscope=documents\tkind=revoked\tprevious=granted\tcurrent=denied\tpath=/Users/me/Documents/reports\\t2026\treason=macOS denied\\nread access"
+        );
     }
 
     #[test]
