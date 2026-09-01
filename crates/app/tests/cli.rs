@@ -7316,6 +7316,62 @@ fn deferred_sidecar_recover_adaptive_does_not_touch_unreachable_records_from_bin
 }
 
 #[test]
+fn adaptive_sidecar_recover_refuses_missing_records_before_runtime_record_from_binary() {
+    let root = unique_temp_dir("gfm-cli-sidecar-recovery-missing-records-root");
+    let records = root.join("missing.gfmidx");
+    let prefixes = root.join("prefixes.gfmprefix");
+    let dictionary = root.join("dictionary.gfmdict");
+    let quarantine = root.join("quarantine");
+    let catalog = unique_temp_path("gfm-cli-sidecar-recovery-missing-records", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-sidecar-recovery-missing-records", "gfmprogress");
+    fs::create_dir_all(&quarantine).unwrap();
+    fs::write(&dictionary, "dictionary").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "sidecar-recover-adaptive",
+            records.to_str().unwrap(),
+            quarantine.to_str().unwrap(),
+            "saturated",
+            "critical",
+            "low",
+            "active",
+            "-",
+            "-",
+            prefixes.to_str().unwrap(),
+            "-",
+            "-",
+            dictionary.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("sidecar-recovery\t"), "{stdout}");
+    assert!(
+        stderr.contains("sidecar repair records access blocked: path is not present on this host"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!(
+            "security-worker-admission\tworker=sidecar repair records\tpath={}",
+            records.display()
+        )),
+        "{stderr}"
+    );
+    assert!(!prefixes.exists());
+    assert!(fs::read_dir(&quarantine).unwrap().next().is_none());
+    assert!(!catalog.exists());
+    assert!(!progress.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn adaptive_sidecar_recover_refuses_unreachable_outputs_before_worker_from_binary() {
     let root = unique_temp_dir("gfm-cli-sidecar-recovery-output-root");
     let offline = unique_temp_dir("gfm-cli-sidecar-recovery-output-unreachable");
@@ -18762,6 +18818,50 @@ fn visible_adaptive_quicklook_persists_runtime_payload_and_progress_under_pressu
 
     fs::remove_file(catalog).unwrap();
     fs::remove_file(progress).unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn adaptive_quicklook_refuses_missing_target_before_runtime_record_from_binary() {
+    let root = unique_temp_dir("gfm-cli-runtime-missing-quicklook-root");
+    let document = root.join("Missing.pdf");
+    let catalog = unique_temp_path("gfm-cli-runtime-missing-quicklook", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-runtime-missing-quicklook", "gfmprogress");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "quicklook-session-adaptive",
+            document.to_str().unwrap(),
+            "saturated",
+            "critical",
+            "low",
+            "active",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("quicklook-session\t"), "{stdout}");
+    assert!(
+        stderr.contains(
+            "adaptive quicklook preview access blocked: path is not present on this host"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!(
+            "security-worker-admission\tworker=adaptive quicklook preview\tpath={}",
+            document.display()
+        )),
+        "{stderr}"
+    );
+    assert!(!catalog.exists());
+    assert!(!progress.exists());
+
     fs::remove_dir_all(root).unwrap();
 }
 

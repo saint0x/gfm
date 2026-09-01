@@ -1,6 +1,6 @@
 use crate::access::{
     preflight_access_scope_checked_with_volume_report, preflight_volume_access_scope_with_report,
-    ScopedAccessGuard,
+    worker_admission_blocked_by_volume, worker_admission_with_volume_report, ScopedAccessGuard,
 };
 use crate::runtime::{
     run_retriable_volume_task_cancellable_with_payload_path,
@@ -567,6 +567,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             let pressure = parse_required_scheduling_pressure(args, "sidecar repair")?;
             let sidecars = parse_sidecar_paths(args, "sidecar-recover-adaptive")?;
+            let records_access_report =
+                ArchiveAccessReport::new_checked(records.clone(), AccessIntent::Read, || Ok(()))?;
+            preflight_archive_input_denial_before_runtime(
+                &records_access_report,
+                "sidecar repair records",
+            )?;
             let volume_records = records.clone();
             let volume_quarantine = quarantine.clone();
             let volume_sidecars = sidecars.clone();
@@ -629,6 +635,24 @@ where
         cancellation.check()?;
         read(path, &cancellation)
     })
+}
+
+fn preflight_archive_input_denial_before_runtime(
+    access_report: &ArchiveAccessReport,
+    worker: &str,
+) -> Result<()> {
+    let admission = worker_admission_with_volume_report(
+        &access_report.path,
+        access_report.intent,
+        worker,
+        &access_report.volume_report,
+    );
+    if admission.can_touch_filesystem || worker_admission_blocked_by_volume(&admission) {
+        return Ok(());
+    }
+    access_report
+        .access_checked(worker, || Ok(()))
+        .map(|_access| ())
 }
 
 #[derive(Clone)]
