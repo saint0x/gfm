@@ -18,7 +18,7 @@ impl Cancellation {
     pub fn child(&self) -> Self {
         let child = Self(Arc::new(CancellationInner {
             cancelled: AtomicBool::new(self.is_cancelled()),
-            parent: Some(self.clone()),
+            parent: Some(Arc::downgrade(&self.0)),
             children: Mutex::new(CancellationChildren::default()),
         }));
         let mut children = self
@@ -35,18 +35,18 @@ impl Cancellation {
         if self.0.cancelled.load(AtomicOrdering::SeqCst) {
             return true;
         }
-        let mut current = self.0.parent.clone();
+        let mut current = self.0.parent.as_ref().and_then(Weak::upgrade);
         let mut observed: Vec<Arc<CancellationInner>> = Vec::new();
         while let Some(parent) = current {
-            if parent.0.cancelled.load(AtomicOrdering::SeqCst) {
+            if parent.cancelled.load(AtomicOrdering::SeqCst) {
                 self.0.cancelled.store(true, AtomicOrdering::SeqCst);
                 for token in observed {
                     token.cancelled.store(true, AtomicOrdering::SeqCst);
                 }
                 return true;
             }
-            current = parent.0.parent.clone();
-            observed.push(Arc::clone(&parent.0));
+            current = parent.parent.as_ref().and_then(Weak::upgrade);
+            observed.push(parent);
         }
         false
     }
@@ -99,7 +99,7 @@ impl Default for Cancellation {
 #[derive(Debug)]
 struct CancellationInner {
     cancelled: AtomicBool,
-    parent: Option<Cancellation>,
+    parent: Option<Weak<CancellationInner>>,
     children: Mutex<CancellationChildren>,
 }
 

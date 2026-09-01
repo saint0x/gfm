@@ -1126,7 +1126,7 @@ fn structured_cancellation_propagates_through_deep_child_chain_iteratively() {
     assert!(leaf.is_cancelled());
     assert!(matches!(leaf.check(), Err(GfmError::Cancelled)));
 
-    while chain.pop().is_some() {}
+    drop(chain);
 }
 
 #[test]
