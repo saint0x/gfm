@@ -991,6 +991,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 absolute_preview_path(&path),
                 || Ok(()),
             )?;
+            preflight_volume_access_scope_with_report(
+                &path,
+                AccessIntent::Preview,
+                "preview volume scheduling",
+                &report,
+            )?;
             let policy =
                 preview_scheduling_policy_from_volume_report(&path, base, pressure, &report);
             let (volume_kind, remote, slow) = preview_volume_scheduling_facts(&path, &report);

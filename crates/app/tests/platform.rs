@@ -1923,6 +1923,40 @@ fn preview_volume_scheduling_throttles_network_prefetch_from_binary() {
 }
 
 #[test]
+fn preview_volume_scheduling_refuses_unreachable_volume_before_policy_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-preview-volume-scheduling-unreachable-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let path = root.join("Preview.pdf");
+    std::fs::write(&path, "%PDF-1.7\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("preview-volume-scheduling")
+        .arg(&path)
+        .arg("quick-look")
+        .args(["nominal", "nominal", "ac", "idle"])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("preview-volume-scheduling\t"), "{stdout}");
+    assert!(
+        stderr.contains(
+            "preview volume scheduling volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn quicklook_and_thumbnail_generation_deny_descriptor_remote_untrusted_preview_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-preview-generation-network-security-{}",
