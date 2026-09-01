@@ -20,6 +20,7 @@ use std::fs;
 use std::fs::File;
 use std::io::{self, Seek, SeekFrom, Write};
 use std::path::PathBuf;
+use std::time::Duration;
 
 #[test]
 fn copies_directories_and_records_journal() {
@@ -2579,6 +2580,51 @@ fn recovery_retries_classified_failed_operation_when_policy_allows_it() {
     assert_eq!(entries.len(), 4);
     assert_eq!(entries[2].status, OperationStatus::Started);
     assert_eq!(entries[3].status, OperationStatus::Completed);
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn retry_backoff_cancellation_stops_before_retry_start() {
+    let root = unique_temp_dir("gfm-ops-retry-backoff-cancel");
+    let journal = root.join("journal.log");
+    let source = root.join("source.txt");
+    let destination = root.join("destination.txt");
+    let retry_probe = root.join("retry.state");
+    fs::write(&source, "retry candidate").unwrap();
+    let cancellation = OperationCancellation::default();
+    let cancellation_thread = cancellation.clone();
+    let handle = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(1));
+        cancellation_thread.cancel();
+    });
+
+    let err = Operator::new(
+        OperationContext::new(&journal)
+            .with_retry_probe_path(&retry_probe)
+            .with_cancellation(cancellation),
+    )
+    .execute_with_retry_policy_and_progress(
+        Operation::Copy {
+            from: source.clone(),
+            to: destination.clone(),
+        },
+        OperationRecoveryPolicy {
+            retry_failed: true,
+            max_attempts: 2,
+        },
+        |_| {},
+    )
+    .expect_err("cancelled retry backoff must stop before retrying");
+    handle.join().unwrap();
+
+    assert!(matches!(err, GfmError::Cancelled));
+    assert!(!destination.exists());
+    let entries = read_journal(&journal).unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].status, OperationStatus::Started);
+    assert_eq!(entries[1].status, OperationStatus::Failed);
+    assert_eq!(fs::read_to_string(&retry_probe).unwrap(), "1");
 
     fs::remove_dir_all(root).unwrap();
 }

@@ -18,6 +18,8 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::time::Duration;
 
+const RETRY_BACKOFF_CANCEL_GRANULARITY: Duration = Duration::from_millis(5);
+
 pub struct Operator {
     context: OperationContext,
 }
@@ -185,7 +187,7 @@ impl Operator {
             return Ok(None);
         }
         if let Some(delay) = retry_delay_for_failed_operation(&entries, id, policy) {
-            std::thread::sleep(delay);
+            sleep_retry_backoff_checked(delay, &self.context.cancellation)?;
         }
         let operation = plan.entry.operation;
         if plan.append_started {
@@ -321,6 +323,21 @@ fn retry_delay_for_failed_operation(
     .retry_decision(attempts, message)
     .next_delay_ms;
     (delay_ms > 0).then(|| Duration::from_millis(delay_ms))
+}
+
+fn sleep_retry_backoff_checked(
+    delay: Duration,
+    cancellation: &crate::OperationCancellation,
+) -> Result<()> {
+    let mut remaining = delay;
+    cancellation.check()?;
+    while remaining > Duration::ZERO {
+        let chunk = remaining.min(RETRY_BACKOFF_CANCEL_GRANULARITY);
+        std::thread::sleep(chunk);
+        cancellation.check()?;
+        remaining = remaining.saturating_sub(chunk);
+    }
+    Ok(())
 }
 
 fn fail_first_operation_retry_probe_attempt(path: &Path) -> Result<()> {
