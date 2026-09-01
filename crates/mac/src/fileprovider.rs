@@ -2420,6 +2420,15 @@ fn native_storage_state(values: &NativeFileProviderResourceValues) -> Option<Clo
                 .is_some_and(|percent| percent < 100_000))
     {
         Some(CloudStorageState::Uploading)
+    } else if values
+        .percent_downloaded_milli
+        .is_some_and(|percent| percent > 0 && percent < 100_000)
+    {
+        Some(CloudStorageState::Downloading)
+    } else if values.download_requested == Some(true) {
+        Some(CloudStorageState::Waiting)
+    } else if native_has_remote_placeholder_evidence(values) {
+        Some(CloudStorageState::Evicted)
     } else if values.is_downloaded == Some(true)
         || matches!(
             values.downloading_status,
@@ -2431,21 +2440,6 @@ fn native_storage_state(values: &NativeFileProviderResourceValues) -> Option<Clo
         || values.percent_downloaded_milli == Some(100_000)
     {
         Some(CloudStorageState::Downloaded)
-    } else if values
-        .percent_downloaded_milli
-        .is_some_and(|percent| percent > 0 && percent < 100_000)
-    {
-        Some(CloudStorageState::Downloading)
-    } else if values.download_requested == Some(true) {
-        Some(CloudStorageState::Waiting)
-    } else if values.is_downloaded == Some(false)
-        || matches!(
-            values.downloading_status,
-            Some(NativeUbiquitousDownloadingStatus::NotDownloaded)
-        )
-        || values.percent_downloaded_milli == Some(0)
-    {
-        Some(CloudStorageState::Evicted)
     } else if matches!(
         values.downloading_status,
         Some(NativeUbiquitousDownloadingStatus::Other)
@@ -2458,6 +2452,14 @@ fn native_storage_state(values: &NativeFileProviderResourceValues) -> Option<Clo
     } else {
         None
     }
+}
+
+fn native_has_remote_placeholder_evidence(values: &NativeFileProviderResourceValues) -> bool {
+    matches!(
+        values.downloading_status,
+        Some(NativeUbiquitousDownloadingStatus::NotDownloaded)
+    ) || values.is_downloaded == Some(false)
+        || values.percent_downloaded_milli == Some(0)
 }
 
 fn materialization_for_state(state: CloudStorageState) -> CloudMaterialization {
@@ -6146,6 +6148,78 @@ mod tests {
         assert_eq!(report.progress.percent_milli, Some(0));
         assert_eq!(report.commands.download, CloudCommandState::Enabled);
         assert_eq!(report.commands.evict, CloudCommandState::Disabled);
+    }
+
+    #[test]
+    fn native_not_downloaded_status_overrides_stale_downloaded_boolean() {
+        let path = PathBuf::from("/tmp/Document.pdf");
+        let mut native = native_values();
+        native.is_ubiquitous = Some(true);
+        native.has_unresolved_conflicts = Some(false);
+        native.is_downloaded = Some(true);
+        native.is_downloading = Some(false);
+        native.is_uploading = Some(false);
+        native.is_uploaded = Some(true);
+        native.percent_downloaded_milli = Some(100_000);
+        native.downloading_status = Some(NativeUbiquitousDownloadingStatus::NotDownloaded);
+        let hints = CloudHints {
+            native,
+            native_identity: identity_not_queried(),
+            xattrs: Vec::new(),
+            xattr_values: Vec::new(),
+            provider_identifier: None,
+            source: "native-url-resource".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.domain, FileProviderDomain::ICloudDrive);
+        assert_eq!(report.storage_state, CloudStorageState::Evicted);
+        assert_eq!(
+            report.materialization,
+            CloudMaterialization::RemotePlaceholder
+        );
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::NativeUrlResource
+        );
+        assert_eq!(
+            report.materialization_reason.as_deref(),
+            Some("native-url-resource-remote-placeholder")
+        );
+    }
+
+    #[test]
+    fn native_zero_download_percent_overrides_stale_current_status() {
+        let path = PathBuf::from("/tmp/Document.pdf");
+        let mut native = native_values();
+        native.is_ubiquitous = Some(true);
+        native.has_unresolved_conflicts = Some(false);
+        native.is_downloading = Some(false);
+        native.is_uploading = Some(false);
+        native.percent_downloaded_milli = Some(0);
+        native.downloading_status = Some(NativeUbiquitousDownloadingStatus::Current);
+        let hints = CloudHints {
+            native,
+            native_identity: identity_not_queried(),
+            xattrs: Vec::new(),
+            xattr_values: Vec::new(),
+            provider_identifier: None,
+            source: "native-url-resource".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.storage_state, CloudStorageState::Evicted);
+        assert_eq!(
+            report.materialization,
+            CloudMaterialization::RemotePlaceholder
+        );
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::NativeUrlResource
+        );
+        assert_eq!(report.progress.percent_milli, Some(0));
     }
 
     #[test]
