@@ -3376,7 +3376,7 @@ fn run_preview_cache_fileprovider_invalidation(
         let mut cache =
             PreviewCache::new_cancellable(PreviewCacheConfig::new(cache_root), &cancellation)?;
         let invalidation_keys =
-            cache.invalidation_keys_for_path_kind_checked(&key.path, key.clone(), || {
+            cache.invalidation_keys_for_path_checked(&key.path, key.clone(), || {
                 cancellation.check()
             })?;
         cancellation.check()?;
@@ -3792,7 +3792,7 @@ fn observed_preview_cache_invalidation_tsv(
         cancellation.check()?;
         let key = preview_cache_key_for_path_kind(&cache, &report.path, kind, cancellation)?;
         let invalidation_keys =
-            cache.invalidation_keys_for_path_kind_checked(&key.path, key.clone(), || {
+            cache.invalidation_keys_for_path_checked(&key.path, key.clone(), || {
                 cancellation.check()
             })?;
         cancellation.check()?;

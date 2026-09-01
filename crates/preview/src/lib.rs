@@ -1,6 +1,6 @@
 use gfm_jobs::Cancellation;
 use gfm_types::{FileId, GfmError, Result, VolumeId};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{hash_map::Entry, HashMap, HashSet, VecDeque};
 use std::ffi::OsString;
 use std::fs;
 use std::hash::{Hash, Hasher};
@@ -34,6 +34,8 @@ pub enum PreviewKind {
 }
 
 impl PreviewKind {
+    pub const ALL: [Self; 4] = [Self::Icon, Self::Thumbnail, Self::QuickLook, Self::Text];
+
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Icon => "icon",
@@ -132,6 +134,7 @@ impl PreviewCacheConfig {
 pub struct PreviewCache {
     config: PreviewCacheConfig,
     memory: HashMap<PreviewRequestKey, PreviewEntry>,
+    memory_path_index: HashMap<PathBuf, HashSet<PreviewRequestKey>>,
     order: VecDeque<PreviewRequestKey>,
     disk_index: HashMap<(PathBuf, PreviewKind), PreviewRequestKey>,
     memory_bytes: usize,
@@ -172,6 +175,7 @@ impl PreviewCache {
         Ok(Self {
             config,
             memory: HashMap::new(),
+            memory_path_index: HashMap::new(),
             order: VecDeque::new(),
             disk_index,
             memory_bytes: 0,
@@ -241,10 +245,7 @@ impl PreviewCache {
         cancellation: &Cancellation,
     ) -> Result<()> {
         cancellation.check()?;
-        if let Some(entry) = self.memory.remove(key) {
-            self.memory_bytes = self.memory_bytes.saturating_sub(entry.byte_len());
-        }
-        self.order.retain(|candidate| candidate != key);
+        self.remove_memory(key);
         if self.config.disk_enabled {
             cancellation.check()?;
             let path = self.disk_path(key);
@@ -314,7 +315,7 @@ impl PreviewCache {
         Ok(self.disk_index.get(&(path.to_path_buf(), kind)).cloned())
     }
 
-    pub fn invalidation_keys_for_path_kind_checked(
+    pub fn invalidation_keys_for_path_checked(
         &self,
         path: &Path,
         fallback: PreviewRequestKey,
@@ -323,16 +324,21 @@ impl PreviewCache {
         check_control()?;
         let mut seen = HashSet::new();
         let mut keys = Vec::new();
-        for key in self.memory.keys() {
+        if let Some(memory_keys) = self.memory_path_index.get(path) {
             check_control()?;
-            if key.path == path && seen.insert(key.clone()) {
-                keys.push(key.clone());
+            for key in memory_keys {
+                check_control()?;
+                if seen.insert(key.clone()) {
+                    keys.push(key.clone());
+                }
             }
         }
-        for key in self.disk_index.values() {
+        for kind in PreviewKind::ALL {
             check_control()?;
-            if key.path == path && seen.insert(key.clone()) {
-                keys.push(key.clone());
+            if let Some(key) = self.disk_index.get(&(path.to_path_buf(), kind)) {
+                if seen.insert(key.clone()) {
+                    keys.push(key.clone());
+                }
             }
         }
         if keys.is_empty() {
@@ -354,6 +360,7 @@ impl PreviewCache {
         };
         self.memory_bytes = self.memory_bytes.saturating_sub(entry.byte_len());
         self.order.retain(|candidate| candidate != key);
+        self.remove_memory_path_index(key);
         true
     }
 
@@ -383,11 +390,28 @@ impl PreviewCache {
         if let Some(previous) = self.memory.remove(&entry.key) {
             self.memory_bytes = self.memory_bytes.saturating_sub(previous.byte_len());
             self.order.retain(|key| key != &entry.key);
+            self.remove_memory_path_index(&entry.key);
         }
         self.memory_bytes += entry.byte_len();
         self.order.push_back(entry.key.clone());
+        self.memory_path_index
+            .entry(entry.key.path.clone())
+            .or_default()
+            .insert(entry.key.clone());
         self.memory.insert(entry.key.clone(), entry);
         self.evict_over_budget();
+    }
+
+    fn remove_memory_path_index(&mut self, key: &PreviewRequestKey) {
+        match self.memory_path_index.entry(key.path.clone()) {
+            Entry::Occupied(mut entry) => {
+                entry.get_mut().remove(key);
+                if entry.get().is_empty() {
+                    entry.remove();
+                }
+            }
+            Entry::Vacant(_) => {}
+        }
     }
 
     fn touch(&mut self, key: &PreviewRequestKey) {
@@ -402,6 +426,7 @@ impl PreviewCache {
             };
             if let Some(entry) = self.memory.remove(&key) {
                 self.memory_bytes = self.memory_bytes.saturating_sub(entry.byte_len());
+                self.remove_memory_path_index(&key);
             }
         }
     }
@@ -1197,7 +1222,7 @@ mod tests {
             .unwrap();
 
         let keys = cache
-            .invalidation_keys_for_path_kind_checked(
+            .invalidation_keys_for_path_checked(
                 Path::new("remote.icloud"),
                 thumbnail.clone(),
                 || Ok(()),
@@ -1207,6 +1232,59 @@ mod tests {
         assert_eq!(keys.len(), 2);
         assert!(keys.contains(&thumbnail));
         assert!(keys.contains(&quicklook));
+    }
+
+    #[test]
+    fn invalidation_key_lookup_does_not_scan_unrelated_memory_entries() {
+        let root = temp_root("path-kind-invalidation-indexed");
+        let mut cache = PreviewCache::new(PreviewCacheConfig {
+            memory_budget_bytes: 4096,
+            max_entry_bytes: 16,
+            disk_root: root,
+            disk_enabled: true,
+        })
+        .unwrap();
+        for node in 0..128 {
+            cache
+                .insert(PreviewEntry::new(
+                    key(&format!("unrelated-{node}.png"), PreviewKind::Thumbnail),
+                    b"x".to_vec(),
+                ))
+                .unwrap();
+        }
+        let thumbnail = key("remote.icloud", PreviewKind::Thumbnail);
+        let quicklook = PreviewRequestKey::new(
+            FileId::new(VolumeId(1), 99),
+            "remote.icloud",
+            PreviewKind::QuickLook,
+        );
+        cache
+            .insert(PreviewEntry::new(thumbnail.clone(), b"thumb".to_vec()))
+            .unwrap();
+        cache
+            .insert(PreviewEntry::new(quicklook.clone(), b"quick".to_vec()))
+            .unwrap();
+        let calls = Cell::new(0usize);
+
+        let keys = cache
+            .invalidation_keys_for_path_checked(
+                Path::new("remote.icloud"),
+                thumbnail.clone(),
+                || {
+                    calls.set(calls.get() + 1);
+                    Ok(())
+                },
+            )
+            .unwrap();
+
+        assert_eq!(keys.len(), 2);
+        assert!(keys.contains(&thumbnail));
+        assert!(keys.contains(&quicklook));
+        assert!(
+            calls.get() <= 10,
+            "lookup should scale with matched preview keys and fixed preview kinds, not full cache size; calls={}",
+            calls.get()
+        );
     }
 
     #[test]
@@ -1222,7 +1300,7 @@ mod tests {
         let fallback = key("missing.icloud", PreviewKind::Thumbnail);
 
         let keys = cache
-            .invalidation_keys_for_path_kind_checked(
+            .invalidation_keys_for_path_checked(
                 Path::new("missing.icloud"),
                 fallback.clone(),
                 || Ok(()),
