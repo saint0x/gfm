@@ -8,11 +8,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 #[cfg(unix)]
 use std::os::unix::fs::MetadataExt;
 
 const VOLUME_MARKER: &str = ".gfm-volume-kind";
+const VOLUME_MARKER_OPT_IN_ENV: &str = "GFM_ENABLE_VOLUME_FIXTURE_MARKERS";
 const VOLUME_MARKER_LINE_LIMIT: u64 = 4096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3227,6 +3229,9 @@ fn marker_kind(path: &Path) -> Option<String> {
 }
 
 fn marker_fixture_path_allowed(path: &Path) -> bool {
+    if !volume_fixture_markers_enabled() {
+        return false;
+    }
     let Ok(temp_dir) = std::env::temp_dir().canonicalize() else {
         return false;
     };
@@ -3237,6 +3242,35 @@ fn marker_fixture_path_allowed(path: &Path) -> bool {
         && path
             .components()
             .any(|component| component.as_os_str().to_string_lossy().starts_with("gfm-"))
+}
+
+fn volume_fixture_markers_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        volume_fixture_marker_policy_enabled(
+            cfg!(test),
+            std::env::var_os(VOLUME_MARKER_OPT_IN_ENV)
+                .as_deref()
+                .and_then(|value| value.to_str()),
+            debug_harness_volume_fixture_markers_enabled(),
+        )
+    })
+}
+
+fn volume_fixture_marker_policy_enabled(
+    test_build: bool,
+    env_value: Option<&str>,
+    debug_harness: bool,
+) -> bool {
+    test_build || env_value == Some("1") || debug_harness
+}
+
+fn debug_harness_volume_fixture_markers_enabled() -> bool {
+    cfg!(debug_assertions)
+        && std::env::current_exe().ok().is_some_and(|path| {
+            path.components()
+                .any(|component| component.as_os_str() == "debug")
+        })
 }
 
 fn marker_removable(marker: Option<&str>) -> Option<bool> {
@@ -5041,6 +5075,23 @@ mod tests {
         );
 
         assert_eq!(path, None);
+    }
+
+    #[test]
+    fn production_volume_marker_fixtures_require_explicit_opt_in() {
+        assert!(!volume_fixture_marker_policy_enabled(false, None, false));
+        assert!(!volume_fixture_marker_policy_enabled(
+            false,
+            Some("0"),
+            false
+        ));
+        assert!(volume_fixture_marker_policy_enabled(
+            false,
+            Some("1"),
+            false
+        ));
+        assert!(volume_fixture_marker_policy_enabled(false, None, true));
+        assert!(volume_fixture_marker_policy_enabled(true, None, false));
     }
 
     #[test]
