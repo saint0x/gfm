@@ -3543,6 +3543,7 @@ pub(crate) fn run_fileprovider_observer_probe(
                 None
             };
             cancellation.check()?;
+            let previous_for_publish = previous.clone();
             let mut observer =
                 FileProviderStateObserver::watch(&[WatchRoot::tree(&root)], previous)?;
             cancellation.check()?;
@@ -3550,9 +3551,11 @@ pub(crate) fn run_fileprovider_observer_probe(
             cancellation.check()?;
             let observed = drain_fileprovider_observer_probe(&mut observer, &cancellation)?;
             cancellation.check()?;
-            observer
-                .snapshot()
-                .write_checked(&state_path, || cancellation.check())?;
+            if fileprovider_snapshot_changed(previous_for_publish.as_ref(), observer.snapshot()) {
+                observer
+                    .snapshot()
+                    .write_checked(&state_path, || cancellation.check())?;
+            }
             Ok(observed)
         },
     )

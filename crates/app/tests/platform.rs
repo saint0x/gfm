@@ -4706,6 +4706,44 @@ fn reports_fileprovider_observer_probe_from_binary() {
 }
 
 #[test]
+fn fileprovider_observer_probe_skips_snapshot_publish_for_unchanged_state_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-fileprovider-observer-noop-publish-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let state = root.join("fileprovider-state.tsv");
+    let item = root.join("Remote.icloud-placeholder");
+    std::fs::write(&item, "placeholder").unwrap();
+    mark_evicted_fixture(&item);
+    let state_text = format!("gfm-fileprovider-state-v1\nevicted\t{}\n", item.display());
+    std::fs::write(&state, &state_text).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-observer-probe")
+        .arg(&state)
+        .arg(&root)
+        .arg(&item)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("fileprovider-observed-invalidation\t"));
+    assert!(stdout.contains("\tpaths=1\n"));
+    assert!(stdout.contains(
+        "fileprovider-state-invalidation\tinitialized=false\tchanged=0\ticon=false\tpreview-memory=false\tpreview-disk=false\tsidebar=false\treindex-metadata=false"
+    ));
+    assert_eq!(std::fs::read_to_string(&state).unwrap(), state_text);
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_native_icon_fileprovider_observer_probe_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-native-icon-fileprovider-observer-probe-{}",
