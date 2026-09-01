@@ -4409,9 +4409,123 @@ fn persistent_index_state_tracks_volume_mount_and_epoch() {
     assert_eq!(reloaded, second);
     assert_eq!(snapshot.search("needle", 5).len(), 1);
     assert!(second.as_tsv().starts_with("index-state\t"));
+    assert!(second.as_tsv().contains("\tindex-action=-\t"));
 
     fs::remove_dir_all(root).unwrap();
     fs::remove_file(records).unwrap();
+    fs::remove_file(state_path).unwrap();
+}
+
+#[test]
+fn persistent_index_state_round_trips_api_unavailable_admission_decision() {
+    let records = unique_temp_path("gfm-index-state-api-records", "gfmidx");
+    let state_path = unique_temp_path("gfm-index-state-api", "gfmstate");
+    let descriptor = IndexVolumeDescriptor::new(
+        "API Suspended",
+        "/Volumes/API Suspended",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(VolumeId(91))
+    .with_native_status("unavailable")
+    .with_native_reason("DiskArbitration unavailable\nuntil session resumes")
+    .with_resource_status("available")
+    .with_mount_status("available");
+    let decision = VolumeIndexPolicy::new(
+        gfm_config::VolumeIndexingPolicy::Enabled,
+        gfm_config::VolumeIndexingPolicy::Enabled,
+    )
+    .decide(&descriptor);
+
+    let state = IndexVolumeState::from_decision(&decision, &records, None).unwrap();
+    state.write(&state_path).unwrap();
+    let reloaded = IndexVolumeState::read(&state_path).unwrap();
+    let tsv = reloaded.as_tsv();
+
+    assert_eq!(decision.action, VolumeIndexAction::ApiUnavailable);
+    assert_eq!(state.record_count, 0);
+    assert_eq!(state.inaccessible_count, 0);
+    assert_eq!(reloaded, state);
+    assert_eq!(reloaded.index_action.as_deref(), Some("api-unavailable"));
+    assert_eq!(
+        reloaded.index_reason.as_deref(),
+        Some("native-volume-api-unavailable")
+    );
+    assert_eq!(reloaded.native_status.as_deref(), Some("unavailable"));
+    assert_eq!(
+        reloaded.native_reason.as_deref(),
+        Some("DiskArbitration unavailable\nuntil session resumes")
+    );
+    assert_eq!(reloaded.resource_status.as_deref(), Some("available"));
+    assert_eq!(reloaded.mount_status.as_deref(), Some("available"));
+    assert!(tsv.contains("\tindex-action=api-unavailable\t"));
+    assert!(tsv.contains("\tindex-reason=native-volume-api-unavailable\t"));
+    assert!(tsv.contains("\tnative-reason=DiskArbitration unavailable\\nuntil session resumes\t"));
+
+    fs::remove_file(state_path).unwrap();
+}
+
+#[test]
+fn persistent_index_decision_state_writer_updates_epoch_without_crawling_records() {
+    let records = unique_temp_path("gfm-index-state-api-writer-records", "gfmidx");
+    let state_path = unique_temp_path("gfm-index-state-api-writer", "gfmstate");
+    let descriptor = IndexVolumeDescriptor::new(
+        "API Suspended",
+        "/Volumes/API Suspended",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(VolumeId(92))
+    .with_native_status("unavailable")
+    .with_native_reason("DiskArbitration unavailable")
+    .with_resource_status("available")
+    .with_mount_status("available");
+    let decision = VolumeIndexPolicy::new(
+        gfm_config::VolumeIndexingPolicy::Enabled,
+        gfm_config::VolumeIndexingPolicy::Enabled,
+    )
+    .decide(&descriptor);
+    let indexer = Indexer::default();
+
+    let first = indexer
+        .write_volume_decision_state(&decision, &records, &state_path)
+        .unwrap();
+    let second = indexer
+        .write_volume_decision_state(&decision, &records, &state_path)
+        .unwrap();
+    let reloaded = IndexVolumeState::read(&state_path).unwrap();
+
+    assert_eq!(first.scan_epoch, 1);
+    assert_eq!(second.scan_epoch, 2);
+    assert_eq!(reloaded, second);
+    assert_eq!(reloaded.record_count, 0);
+    assert_eq!(reloaded.inaccessible_count, 0);
+    assert_eq!(reloaded.index_action.as_deref(), Some("api-unavailable"));
+    assert!(!records.exists());
+
+    fs::remove_file(state_path).unwrap();
+}
+
+#[test]
+fn persistent_index_state_reads_legacy_state_without_api_context() {
+    let state_path = unique_temp_path("gfm-index-state-legacy-api", "gfmstate");
+    fs::write(
+        &state_path,
+        "gfm-index-state-v1\nschema_version\t1\nroot\t/tmp/root\nrecords_path\t/tmp/index.gfmidx\nvolume_id\t1\nmount_id\tdev:1:root:/tmp/root\nscan_epoch\t1\nrecord_count\t1\ninaccessible_count\t0\n",
+    )
+    .unwrap();
+
+    let state = IndexVolumeState::read(&state_path).unwrap();
+
+    assert_eq!(state.index_action, None);
+    assert_eq!(state.index_reason, None);
+    assert_eq!(state.native_status, None);
+    assert_eq!(state.native_reason, None);
+    assert_eq!(state.resource_status, None);
+    assert_eq!(state.resource_reason, None);
+    assert_eq!(state.mount_status, None);
+    assert_eq!(state.mount_reason, None);
+
     fs::remove_file(state_path).unwrap();
 }
 

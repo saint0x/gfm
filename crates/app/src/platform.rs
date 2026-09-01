@@ -2285,6 +2285,14 @@ fn sidebar_volume_spec(volume: &VolumeDescriptor) -> SidebarVolumeSpec {
         volume.network,
         volume.reachable,
     )
+    .with_platform_api_context(
+        volume_status_string(volume.native_status),
+        volume.native_reason.clone(),
+        volume_status_string(volume.resource_status),
+        volume.resource_reason.clone(),
+        volume_status_string(volume.mount_table_status),
+        volume.mount_table_reason.clone(),
+    )
 }
 
 fn sidebar_volume_kind(kind: gfm_mac::VolumeKind) -> SidebarVolumeKind {

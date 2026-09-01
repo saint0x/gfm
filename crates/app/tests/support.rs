@@ -1826,15 +1826,18 @@ fn reports_volume_invalidation_in_ui_sidebar_contract_from_binary() {
     assert!(changed_stdout.contains(&format!("\tpath={}\t", root.display())));
     assert!(changed_stdout.contains("\tprevious-kind=-\tprevious-mount=-\t"));
     assert!(changed_stdout.contains(
-        "\tprevious-native-status=-\tprevious-resource-status=-\tprevious-mount-status=-\t"
+        "\tprevious-native-status=-\tprevious-native-reason=-\tprevious-resource-status=-\tprevious-resource-reason=-\tprevious-mount-status=-\tprevious-mount-reason=-\t"
     ));
     assert!(changed_stdout.contains("\tkind=description-changed\t"));
     assert!(changed_stdout.contains("\tcurrent-kind=network\t"));
     assert!(changed_stdout
         .contains("\tcurrent-mount=mounted\tread-only=false\tnetwork=true\treachable=true\t"));
     assert!(changed_stdout.contains("\tcurrent-native-status="));
+    assert!(changed_stdout.contains("\tcurrent-native-reason="));
     assert!(changed_stdout.contains("\tcurrent-resource-status="));
+    assert!(changed_stdout.contains("\tcurrent-resource-reason="));
     assert!(changed_stdout.contains("\tcurrent-mount-status="));
+    assert!(changed_stdout.contains("\tcurrent-mount-reason="));
     if changed_stdout.contains("\tcurrent-native-status=unavailable\t")
         || changed_stdout.contains("\tcurrent-resource-status=unavailable\t")
         || changed_stdout.contains("\tcurrent-mount-status=unavailable\t")
@@ -1877,11 +1880,14 @@ fn reports_volume_invalidation_in_ui_sidebar_contract_from_binary() {
     );
     assert!(disappeared_stdout.contains("\tprevious-read-only=false\tprevious-network=true\t"));
     assert!(disappeared_stdout.contains("\tprevious-reachable=true\tprevious-native-status="));
+    assert!(disappeared_stdout.contains("\tprevious-native-reason="));
     assert!(disappeared_stdout.contains("\tprevious-resource-status="));
+    assert!(disappeared_stdout.contains("\tprevious-resource-reason="));
     assert!(disappeared_stdout.contains("\tprevious-mount-status="));
+    assert!(disappeared_stdout.contains("\tprevious-mount-reason="));
     assert!(disappeared_stdout.contains("\tcurrent-kind=-\t"));
     assert!(disappeared_stdout.contains(
-        "\tcurrent-native-status=-\tcurrent-resource-status=-\tcurrent-mount-status=-\t"
+        "\tcurrent-native-status=-\tcurrent-native-reason=-\tcurrent-resource-status=-\tcurrent-resource-reason=-\tcurrent-mount-status=-\tcurrent-mount-reason=-\t"
     ));
     assert!(disappeared_stdout.contains("\tremove-row=true\tdisable-row=false\t"));
     assert!(disappeared_stdout.ends_with("reason=sidebar-volume-disappeared\n"));
@@ -1952,10 +1958,10 @@ fn reports_missing_volume_disappearance_in_ui_sidebar_contract_from_binary() {
     assert!(stdout.contains(&format!("\tpath={}\t", root.display())));
     assert!(stdout.contains("\tkind=disappeared\tprevious-kind=-\tprevious-mount=-\t"));
     assert!(stdout.contains(
-        "\tprevious-native-status=-\tprevious-resource-status=-\tprevious-mount-status=-\tcurrent-kind=-\t"
+        "\tprevious-native-status=-\tprevious-native-reason=-\tprevious-resource-status=-\tprevious-resource-reason=-\tprevious-mount-status=-\tprevious-mount-reason=-\tcurrent-kind=-\t"
     ));
     assert!(stdout.contains(
-        "\tcurrent-mount=-\tread-only=-\tnetwork=-\treachable=-\tcurrent-native-status=-\tcurrent-resource-status=-\tcurrent-mount-status=-\t"
+        "\tcurrent-mount=-\tread-only=-\tnetwork=-\treachable=-\tcurrent-native-status=-\tcurrent-native-reason=-\tcurrent-resource-status=-\tcurrent-resource-reason=-\tcurrent-mount-status=-\tcurrent-mount-reason=-\t"
     ));
     assert!(stdout.contains("\tremove-row=true\tdisable-row=false\t"));
     assert!(stdout.ends_with("reason=sidebar-volume-disappeared\n"));

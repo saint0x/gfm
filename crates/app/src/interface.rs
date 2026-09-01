@@ -401,8 +401,14 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             descriptor.path = PathBuf::from("/Volumes/UI API Description");
             descriptor.kind = VolumeKind::External;
             descriptor.native_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+            descriptor.native_reason =
+                Some("DiskArbitration unavailable during refresh".to_string());
             descriptor.resource_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+            descriptor.resource_reason =
+                Some("URL resource values unavailable during refresh".to_string());
             descriptor.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+            descriptor.mount_table_reason =
+                Some("mount table unavailable during refresh".to_string());
             let platform = volume_event_invalidation_for_descriptor(
                 VolumeEventKind::DescriptionChanged,
                 descriptor.path.clone(),
@@ -900,6 +906,14 @@ fn sidebar_volume_spec(volume: &VolumeDescriptor) -> SidebarVolumeSpec {
         volume.read_only,
         volume.network,
         volume.reachable,
+    )
+    .with_platform_api_context(
+        volume_status_string(volume.native_status),
+        volume.native_reason.clone(),
+        volume_status_string(volume.resource_status),
+        volume.resource_reason.clone(),
+        volume_status_string(volume.mount_table_status),
+        volume.mount_table_reason.clone(),
     )
 }
 

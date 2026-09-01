@@ -5917,11 +5917,15 @@ fn sidebar_volume_description_event_api_status_reason_from_binary() {
     assert!(stdout.contains("\tkind=description-changed\t"));
     assert!(stdout.contains("\tcurrent-kind=external\tcurrent-mount=mounted\t"));
     assert!(stdout.contains("\tcurrent-native-status=unavailable\t"));
+    assert!(stdout.contains("\tcurrent-native-reason=DiskArbitration unavailable during refresh\t"));
     assert!(stdout.contains("\tcurrent-resource-status=unavailable\t"));
+    assert!(stdout
+        .contains("\tcurrent-resource-reason=URL resource values unavailable during refresh\t"));
     assert!(stdout.contains("\tcurrent-mount-status=unavailable\t"));
+    assert!(stdout.contains("\tcurrent-mount-reason=mount table unavailable during refresh\t"));
     assert!(stdout.contains("\tinvalidate-row=true\t"));
     assert!(stdout.contains("\tinvalidate-section=true\t"));
-    assert!(stdout.ends_with("reason=diskarbitration-volume-unavailable\n"));
+    assert!(stdout.ends_with("reason=DiskArbitration unavailable during refresh\n"));
 }
 
 #[test]

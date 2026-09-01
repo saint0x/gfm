@@ -570,6 +570,52 @@ impl Indexer {
         Ok(state)
     }
 
+    pub fn write_volume_decision_state(
+        &self,
+        decision: &VolumeIndexDecision,
+        records_path: impl AsRef<Path>,
+        state_path: impl AsRef<Path>,
+    ) -> Result<IndexVolumeState> {
+        self.write_volume_decision_state_cancellable(
+            decision,
+            records_path,
+            state_path,
+            &Cancellation::default(),
+        )
+    }
+
+    pub fn write_volume_decision_state_cancellable(
+        &self,
+        decision: &VolumeIndexDecision,
+        records_path: impl AsRef<Path>,
+        state_path: impl AsRef<Path>,
+        cancellation: &Cancellation,
+    ) -> Result<IndexVolumeState> {
+        let records_path = records_path.as_ref();
+        let state_path = state_path.as_ref();
+        cancellation.check()?;
+        let previous = if state_path.try_exists().map_err(|err| {
+            GfmError::io(
+                state_path,
+                format!("index state existence unavailable: {err}"),
+            )
+        })? {
+            Some(IndexVolumeState::read_checked(state_path, || {
+                cancellation.check()
+            })?)
+        } else {
+            None
+        };
+        let state = IndexVolumeState::from_decision(
+            decision,
+            records_path.to_path_buf(),
+            previous.as_ref(),
+        )?;
+        cancellation.check()?;
+        state.write_checked(state_path, || cancellation.check())?;
+        Ok(state)
+    }
+
     pub fn plan_persistent_recovery(
         &self,
         root: impl AsRef<Path>,

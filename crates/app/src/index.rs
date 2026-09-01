@@ -3,15 +3,15 @@ use crate::{
         preflight_access_scope_checked, preflight_access_scope_checked_with_volume_report,
         preflight_volume_access_scope_with_report, ScopedAccessGuard,
     },
-    parse_u64_arg, parse_usize_arg, required_path,
+    index_volume_descriptor, parse_u64_arg, parse_usize_arg, required_path, required_string,
     runtime::{
         run_retriable_volume_task_cancellable_with_payload_path, run_volume_task_cancellable,
     },
 };
 use gfm_fs::read_directory_checked;
 use gfm_index::{
-    EventBackpressureQueue, EventPriority, FseventsCursor, FseventsCursorHealth, IndexVolumeState,
-    Indexer, LiveIndex,
+    parse_volume_indexing_policy, EventBackpressureQueue, EventPriority, FseventsCursor,
+    FseventsCursorHealth, IndexVolumeState, Indexer, LiveIndex, VolumeIndexPolicy,
 };
 use gfm_jobs::{Cancellation, Priority};
 use gfm_mac::{AccessIntent, FileEventStream, VolumeDiscoveryReport, WatchRoot};
@@ -155,6 +155,65 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "index-state-inspect requires an index state path",
             )?;
             println!("{}", run_index_state_inspect(state)?.as_tsv());
+        }
+        "index-admission-state" => {
+            let external = parse_volume_indexing_policy(&required_string(
+                args.next(),
+                "index-admission-state requires an external policy",
+            )?)?;
+            let network = parse_volume_indexing_policy(&required_string(
+                args.next(),
+                "index-admission-state requires a network policy",
+            )?)?;
+            let root = required_path(args.next(), "index-admission-state requires a root path")?;
+            let records =
+                required_path(args.next(), "index-admission-state requires a records path")?;
+            let state = required_path(args.next(), "index-admission-state requires a state path")?;
+            let opted_in = args
+                .map(|arg| {
+                    arg.strip_prefix("opt-in:")
+                        .map(PathBuf::from)
+                        .ok_or_else(|| {
+                            GfmError::Format(format!(
+                                "index-admission-state unsupported argument `{arg}`; expected opt-in:<path>"
+                            ))
+                        })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let state_access = IndexPathAccessReport::write_probe_checked(
+                &state,
+                "index admission state",
+                || Ok(()),
+            )?;
+            state_access.preflight_volume()?;
+            let root_report = VolumeDiscoveryReport::for_containing_path_checked(&root, || Ok(()))?;
+            let volume = root_report.volume_for_path(&root).cloned().ok_or_else(|| {
+                GfmError::Format(format!(
+                    "index-admission-state could not resolve containing volume for {}",
+                    root.display()
+                ))
+            })?;
+            let descriptor = index_volume_descriptor(&volume);
+            let policy = VolumeIndexPolicy::new(external, network).with_opted_in_roots(opted_in);
+            let decision = policy.decide(&descriptor);
+            let volume_id = Some(volume.id).or_else(|| state_access.volume());
+            let persisted = run_volume_task_cancellable(
+                volume_id,
+                Priority::Visible,
+                "index admission state",
+                move |cancellation| {
+                    cancellation.check()?;
+                    let _state_access = state_access.access_checked(|| cancellation.check())?;
+                    cancellation.check()?;
+                    Indexer::default().write_volume_decision_state_cancellable(
+                        &decision,
+                        records,
+                        state,
+                        &cancellation,
+                    )
+                },
+            )?;
+            println!("{}", persisted.as_tsv());
         }
         "scan-progress" => {
             let root = required_path(args.next(), "scan-progress requires a root path")?;

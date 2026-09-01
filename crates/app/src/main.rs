@@ -749,6 +749,7 @@ fn print_usage() {
   gfm index <root> <output.gfmidx>
   gfm index-state <root> <records.gfmidx> <state.gfmstate>
   gfm index-state-inspect <state.gfmstate>
+  gfm index-admission-state <external-policy> <network-policy> <root> <records.gfmidx> <state.gfmstate> [opt-in:<path>...]
   gfm scan-progress <root> <records.gfmidx> <progress.gfmprogress>
   gfm scan-progress-inspect <progress.gfmprogress>
   gfm fair-scan <root> <visible-burst> [visible-root...]

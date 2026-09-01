@@ -2929,6 +2929,53 @@ fn persists_volume_index_state_from_binary() {
 }
 
 #[test]
+fn writes_index_admission_state_from_binary_without_records_crawl() {
+    let root = unique_temp_dir("gfm-cli-index-admission-root");
+    let index = unique_temp_path("gfm-cli-index-admission-records", "gfmidx");
+    let state = unique_temp_path("gfm-cli-index-admission-state", "gfmstate");
+    fs::write(root.join("Admission.md"), "stateful admission").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-admission-state",
+            "enabled",
+            "enabled",
+            root.to_str().unwrap(),
+            index.to_str().unwrap(),
+            state.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(!index.exists());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("index-state\t"), "{stdout}");
+    assert!(stdout.contains("\trecord-count=0\t"), "{stdout}");
+    assert!(stdout.contains("\tinaccessible-count=0\t"), "{stdout}");
+    assert!(stdout.contains("\tindex-action="), "{stdout}");
+    assert!(stdout.contains("\tnative-status="), "{stdout}");
+
+    let inspect = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["index-state-inspect", state.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        inspect.status.success(),
+        "{}",
+        String::from_utf8_lossy(&inspect.stderr)
+    );
+    assert_eq!(String::from_utf8(inspect.stdout).unwrap(), stdout);
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(state).unwrap();
+}
+
+#[test]
 fn index_state_inspect_rejects_duplicate_state_fields_from_binary() {
     let state = unique_temp_path("gfm-cli-index-state-duplicate-field", "gfmstate");
     fs::write(

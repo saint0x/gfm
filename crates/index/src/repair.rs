@@ -225,6 +225,14 @@ mod tests {
             scan_epoch: 1,
             record_count: 20,
             inaccessible_count: 0,
+            index_action: None,
+            index_reason: None,
+            native_status: None,
+            native_reason: None,
+            resource_status: None,
+            resource_reason: None,
+            mount_status: None,
+            mount_reason: None,
         }
     }
 

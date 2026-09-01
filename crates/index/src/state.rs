@@ -1,3 +1,4 @@
+use crate::volume::VolumeIndexDecision;
 use gfm_types::{DirectoryPage, GfmError, Result, VolumeId};
 use std::collections::BTreeSet;
 use std::fs;
@@ -18,6 +19,14 @@ pub struct IndexVolumeState {
     pub scan_epoch: u64,
     pub record_count: usize,
     pub inaccessible_count: usize,
+    pub index_action: Option<String>,
+    pub index_reason: Option<String>,
+    pub native_status: Option<String>,
+    pub native_reason: Option<String>,
+    pub resource_status: Option<String>,
+    pub resource_reason: Option<String>,
+    pub mount_status: Option<String>,
+    pub mount_reason: Option<String>,
 }
 
 impl IndexVolumeState {
@@ -55,6 +64,55 @@ impl IndexVolumeState {
             scan_epoch,
             record_count: page.entries.len(),
             inaccessible_count: page.inaccessible.len(),
+            index_action: None,
+            index_reason: None,
+            native_status: None,
+            native_reason: None,
+            resource_status: None,
+            resource_reason: None,
+            mount_status: None,
+            mount_reason: None,
+        })
+    }
+
+    pub fn from_decision(
+        decision: &VolumeIndexDecision,
+        records_path: impl Into<PathBuf>,
+        previous: Option<&Self>,
+    ) -> Result<Self> {
+        let volume_id = decision.id.ok_or_else(|| {
+            GfmError::Format(format!(
+                "cannot persist index state for {} without a native volume id",
+                decision.path.display()
+            ))
+        })?;
+        let mount_id = mount_identity(&decision.path, volume_id);
+        let scan_epoch = previous
+            .filter(|state| {
+                state.schema_version == INDEX_STATE_SCHEMA_VERSION
+                    && state.volume_id == volume_id
+                    && state.mount_id == mount_id
+            })
+            .map(|state| state.scan_epoch.saturating_add(1))
+            .unwrap_or(1);
+
+        Ok(Self {
+            schema_version: INDEX_STATE_SCHEMA_VERSION,
+            root: decision.path.clone(),
+            records_path: records_path.into(),
+            volume_id,
+            mount_id,
+            scan_epoch,
+            record_count: 0,
+            inaccessible_count: 0,
+            index_action: Some(decision.action.as_str().to_string()),
+            index_reason: normalize_optional_string(Some(&decision.reason)),
+            native_status: decision.native_status.clone(),
+            native_reason: decision.native_reason.clone(),
+            resource_status: decision.resource_status.clone(),
+            resource_reason: decision.resource_reason.clone(),
+            mount_status: decision.mount_status.clone(),
+            mount_reason: decision.mount_reason.clone(),
         })
     }
 
@@ -86,6 +144,46 @@ impl IndexVolumeState {
             line!(writer, "scan_epoch\t{}", self.scan_epoch);
             line!(writer, "record_count\t{}", self.record_count);
             line!(writer, "inaccessible_count\t{}", self.inaccessible_count);
+            line!(
+                writer,
+                "index_action\t{}",
+                optional_field(&self.index_action)
+            );
+            line!(
+                writer,
+                "index_reason\t{}",
+                optional_field(&self.index_reason)
+            );
+            line!(
+                writer,
+                "native_status\t{}",
+                optional_field(&self.native_status)
+            );
+            line!(
+                writer,
+                "native_reason\t{}",
+                optional_field(&self.native_reason)
+            );
+            line!(
+                writer,
+                "resource_status\t{}",
+                optional_field(&self.resource_status)
+            );
+            line!(
+                writer,
+                "resource_reason\t{}",
+                optional_field(&self.resource_reason)
+            );
+            line!(
+                writer,
+                "mount_status\t{}",
+                optional_field(&self.mount_status)
+            );
+            line!(
+                writer,
+                "mount_reason\t{}",
+                optional_field(&self.mount_reason)
+            );
             check_control()?;
             writer.flush().map_err(|err| GfmError::io(path, err))
         })
@@ -131,6 +229,14 @@ impl IndexVolumeState {
         let mut scan_epoch = None;
         let mut record_count = None;
         let mut inaccessible_count = None;
+        let mut index_action = None;
+        let mut index_reason = None;
+        let mut native_status = None;
+        let mut native_reason = None;
+        let mut resource_status = None;
+        let mut resource_reason = None;
+        let mut mount_status = None;
+        let mut mount_reason = None;
         let mut seen_fields = BTreeSet::new();
 
         for (line_index, line) in lines.enumerate() {
@@ -164,6 +270,14 @@ impl IndexVolumeState {
                 "inaccessible_count" => {
                     inaccessible_count = Some(parse_usize(value, "inaccessible_count", path)?)
                 }
+                "index_action" => index_action = parse_optional_string(value)?,
+                "index_reason" => index_reason = parse_optional_string(value)?,
+                "native_status" => native_status = parse_optional_string(value)?,
+                "native_reason" => native_reason = parse_optional_string(value)?,
+                "resource_status" => resource_status = parse_optional_string(value)?,
+                "resource_reason" => resource_reason = parse_optional_string(value)?,
+                "mount_status" => mount_status = parse_optional_string(value)?,
+                "mount_reason" => mount_reason = parse_optional_string(value)?,
                 other => {
                     return Err(GfmError::Format(format!(
                         "{}: unknown index state field `{other}`",
@@ -183,6 +297,14 @@ impl IndexVolumeState {
             scan_epoch: required(scan_epoch, "scan_epoch", path)?,
             record_count: required(record_count, "record_count", path)?,
             inaccessible_count: required(inaccessible_count, "inaccessible_count", path)?,
+            index_action,
+            index_reason,
+            native_status,
+            native_reason,
+            resource_status,
+            resource_reason,
+            mount_status,
+            mount_reason,
         };
         if state.schema_version != INDEX_STATE_SCHEMA_VERSION {
             return Err(GfmError::Format(format!(
@@ -197,7 +319,7 @@ impl IndexVolumeState {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "index-state\troot={}\trecords-path={}\tschema={}\tvolume={}\tmount={}\tscan-epoch={}\trecord-count={}\tinaccessible-count={}",
+            "index-state\troot={}\trecords-path={}\tschema={}\tvolume={}\tmount={}\tscan-epoch={}\trecord-count={}\tinaccessible-count={}\tindex-action={}\tindex-reason={}\tnative-status={}\tnative-reason={}\tresource-status={}\tresource-reason={}\tmount-status={}\tmount-reason={}",
             self.root.display(),
             self.records_path.display(),
             self.schema_version,
@@ -205,7 +327,15 @@ impl IndexVolumeState {
             self.mount_id,
             self.scan_epoch,
             self.record_count,
-            self.inaccessible_count
+            self.inaccessible_count,
+            optional_field(&self.index_action),
+            optional_field(&self.index_reason),
+            optional_field(&self.native_status),
+            optional_field(&self.native_reason),
+            optional_field(&self.resource_status),
+            optional_field(&self.resource_reason),
+            optional_field(&self.mount_status),
+            optional_field(&self.mount_reason)
         )
     }
 }
@@ -249,6 +379,29 @@ fn parse_usize(value: &str, field: &str, path: &Path) -> Result<usize> {
             path.display()
         ))
     })
+}
+
+fn parse_optional_string(value: &str) -> Result<Option<String>> {
+    if value == "-" {
+        Ok(None)
+    } else {
+        let value = unescape(value)?;
+        Ok(normalize_optional_string(Some(&value)))
+    }
+}
+
+fn optional_field(value: &Option<String>) -> String {
+    value
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .map(escape)
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn normalize_optional_string(value: Option<&str>) -> Option<String> {
+    value
+        .filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
 }
 
 fn escape_path(path: &Path) -> String {
