@@ -227,12 +227,11 @@ impl PreviewScheduler {
         tasks: impl IntoIterator<Item = PreviewTask>,
         mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<Vec<PreviewTaskDecision>> {
-        let original_inflight = self.inflight.clone();
         let mut staged = self.clone();
         let decisions =
             staged.schedule_mutating_checked(viewport, tasks, false, &mut check_control)?;
         check_control()?;
-        cancel_removed_original_tokens(&original_inflight, &decisions);
+        cancel_removed_original_tokens(&self.inflight, &decisions);
         *self = staged;
         Ok(decisions)
     }
@@ -376,12 +375,11 @@ impl PreviewScheduler {
         pressure: SchedulingPressure,
         mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<Vec<PreviewTaskDecision>> {
-        let original_inflight = self.inflight.clone();
         let mut staged = self.clone();
         let decisions =
             staged.adapt_to_pressure_mutating_checked(pressure, false, &mut check_control)?;
         check_control()?;
-        cancel_removed_original_tokens(&original_inflight, &decisions);
+        cancel_removed_original_tokens(&self.inflight, &decisions);
         *self = staged;
         Ok(decisions)
     }
