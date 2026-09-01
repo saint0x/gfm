@@ -800,6 +800,22 @@ pub struct VolumeTopologyChange {
     pub current_case_sensitive: Option<bool>,
     pub previous_case_preserving: Option<bool>,
     pub current_case_preserving: Option<bool>,
+    pub previous_filesystem: Option<String>,
+    pub current_filesystem: Option<String>,
+    pub previous_apfs_container_uuid: Option<String>,
+    pub current_apfs_container_uuid: Option<String>,
+    pub previous_apfs_role: Option<ApfsVolumeRole>,
+    pub current_apfs_role: Option<ApfsVolumeRole>,
+    pub previous_mount_from: Option<String>,
+    pub current_mount_from: Option<String>,
+    pub previous_mount_filesystem: Option<String>,
+    pub current_mount_filesystem: Option<String>,
+    pub previous_mount_flags: Option<u32>,
+    pub current_mount_flags: Option<u32>,
+    pub previous_mount_read_only: Option<bool>,
+    pub current_mount_read_only: Option<bool>,
+    pub previous_mount_local: Option<bool>,
+    pub current_mount_local: Option<bool>,
     pub previous_native_status: Option<NativeVolumeStatus>,
     pub previous_native_reason: Option<String>,
     pub current_native_status: Option<NativeVolumeStatus>,
@@ -846,6 +862,22 @@ impl VolumeTopologyChange {
             current_case_sensitive: volume.case_sensitive,
             previous_case_preserving: None,
             current_case_preserving: volume.case_preserving,
+            previous_filesystem: None,
+            current_filesystem: volume.filesystem.clone(),
+            previous_apfs_container_uuid: None,
+            current_apfs_container_uuid: volume.apfs_container_uuid.clone(),
+            previous_apfs_role: None,
+            current_apfs_role: volume.apfs_role,
+            previous_mount_from: None,
+            current_mount_from: volume.mount_from.clone(),
+            previous_mount_filesystem: None,
+            current_mount_filesystem: volume.mount_filesystem.clone(),
+            previous_mount_flags: None,
+            current_mount_flags: volume.mount_flags,
+            previous_mount_read_only: None,
+            current_mount_read_only: volume.mount_read_only,
+            previous_mount_local: None,
+            current_mount_local: volume.mount_local,
             previous_native_status: None,
             previous_native_reason: None,
             current_native_status: volume.native_status,
@@ -896,6 +928,22 @@ impl VolumeTopologyChange {
             current_case_sensitive: None,
             previous_case_preserving: volume.case_preserving,
             current_case_preserving: None,
+            previous_filesystem: volume.filesystem.clone(),
+            current_filesystem: None,
+            previous_apfs_container_uuid: volume.apfs_container_uuid.clone(),
+            current_apfs_container_uuid: None,
+            previous_apfs_role: volume.apfs_role,
+            current_apfs_role: None,
+            previous_mount_from: volume.mount_from.clone(),
+            current_mount_from: None,
+            previous_mount_filesystem: volume.mount_filesystem.clone(),
+            current_mount_filesystem: None,
+            previous_mount_flags: volume.mount_flags,
+            current_mount_flags: None,
+            previous_mount_read_only: volume.mount_read_only,
+            current_mount_read_only: None,
+            previous_mount_local: volume.mount_local,
+            current_mount_local: None,
             previous_native_status: volume.native_status,
             previous_native_reason: normalized_event_reason_option(volume.native_reason.as_deref()),
             current_native_status: None,
@@ -979,6 +1027,22 @@ impl VolumeTopologyChange {
             current_case_sensitive: current.case_sensitive,
             previous_case_preserving: previous.case_preserving,
             current_case_preserving: current.case_preserving,
+            previous_filesystem: previous.filesystem.clone(),
+            current_filesystem: current.filesystem.clone(),
+            previous_apfs_container_uuid: previous.apfs_container_uuid.clone(),
+            current_apfs_container_uuid: current.apfs_container_uuid.clone(),
+            previous_apfs_role: previous.apfs_role,
+            current_apfs_role: current.apfs_role,
+            previous_mount_from: previous.mount_from.clone(),
+            current_mount_from: current.mount_from.clone(),
+            previous_mount_filesystem: previous.mount_filesystem.clone(),
+            current_mount_filesystem: current.mount_filesystem.clone(),
+            previous_mount_flags: previous.mount_flags,
+            current_mount_flags: current.mount_flags,
+            previous_mount_read_only: previous.mount_read_only,
+            current_mount_read_only: current.mount_read_only,
+            previous_mount_local: previous.mount_local,
+            current_mount_local: current.mount_local,
             previous_native_status: previous.native_status,
             previous_native_reason: normalized_event_reason_option(
                 previous.native_reason.as_deref(),
@@ -1011,7 +1075,7 @@ impl VolumeTopologyChange {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume-topology\t{}\tstable-id={}\tlabel={}\tpath={}\tprevious-kind={}\tcurrent-kind={}\tprevious-mount={}\tcurrent-mount={}\tprevious-read-only={}\tcurrent-read-only={}\tprevious-writable={}\tcurrent-writable={}\tprevious-network={}\tcurrent-network={}\tprevious-reachable={}\tcurrent-reachable={}\tprevious-ejectable={}\tcurrent-ejectable={}\tprevious-removable={}\tcurrent-removable={}\tprevious-case-sensitive={}\tcurrent-case-sensitive={}\tprevious-case-preserving={}\tcurrent-case-preserving={}\tprevious-native-status={}\tprevious-native-reason={}\tcurrent-native-status={}\tcurrent-native-reason={}\tprevious-resource-status={}\tprevious-resource-reason={}\tcurrent-resource-status={}\tcurrent-resource-reason={}\tprevious-mount-status={}\tprevious-mount-reason={}\tcurrent-mount-status={}\tcurrent-mount-reason={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\treason={}",
+            "volume-topology\t{}\tstable-id={}\tlabel={}\tpath={}\tprevious-kind={}\tcurrent-kind={}\tprevious-mount={}\tcurrent-mount={}\tprevious-read-only={}\tcurrent-read-only={}\tprevious-writable={}\tcurrent-writable={}\tprevious-network={}\tcurrent-network={}\tprevious-reachable={}\tcurrent-reachable={}\tprevious-ejectable={}\tcurrent-ejectable={}\tprevious-removable={}\tcurrent-removable={}\tprevious-case-sensitive={}\tcurrent-case-sensitive={}\tprevious-case-preserving={}\tcurrent-case-preserving={}\tprevious-fs={}\tcurrent-fs={}\tprevious-apfs-container-uuid={}\tcurrent-apfs-container-uuid={}\tprevious-apfs-role={}\tcurrent-apfs-role={}\tprevious-mount-from={}\tcurrent-mount-from={}\tprevious-mount-fs={}\tcurrent-mount-fs={}\tprevious-mount-flags={}\tcurrent-mount-flags={}\tprevious-mount-read-only={}\tcurrent-mount-read-only={}\tprevious-mount-local={}\tcurrent-mount-local={}\tprevious-native-status={}\tprevious-native-reason={}\tcurrent-native-status={}\tcurrent-native-reason={}\tprevious-resource-status={}\tprevious-resource-reason={}\tcurrent-resource-status={}\tcurrent-resource-reason={}\tprevious-mount-status={}\tprevious-mount-reason={}\tcurrent-mount-status={}\tcurrent-mount-reason={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\treason={}",
             self.kind.as_str(),
             escape_field(&self.stable_identity),
             escape_field(&self.label),
@@ -1042,6 +1106,30 @@ impl VolumeTopologyChange {
                 .unwrap_or_else(|| "-".to_string()),
             optional_bool(self.previous_case_preserving),
             optional_bool(self.current_case_preserving),
+            optional_string(self.previous_filesystem.as_deref()),
+            optional_string(self.current_filesystem.as_deref()),
+            optional_string(self.previous_apfs_container_uuid.as_deref()),
+            optional_string(self.current_apfs_container_uuid.as_deref()),
+            self.previous_apfs_role
+                .map(ApfsVolumeRole::as_str)
+                .unwrap_or("-"),
+            self.current_apfs_role
+                .map(ApfsVolumeRole::as_str)
+                .unwrap_or("-"),
+            optional_string(self.previous_mount_from.as_deref()),
+            optional_string(self.current_mount_from.as_deref()),
+            optional_string(self.previous_mount_filesystem.as_deref()),
+            optional_string(self.current_mount_filesystem.as_deref()),
+            self.previous_mount_flags
+                .map(|flags| flags.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.current_mount_flags
+                .map(|flags| flags.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            optional_bool(self.previous_mount_read_only),
+            optional_bool(self.current_mount_read_only),
+            optional_bool(self.previous_mount_local),
+            optional_bool(self.current_mount_local),
             self.previous_native_status
                 .map(NativeVolumeStatus::as_str)
                 .unwrap_or("-"),
@@ -1780,6 +1868,10 @@ fn optional_bool(value: Option<bool>) -> String {
     value
         .map(|value| value.to_string())
         .unwrap_or_else(|| "-".to_string())
+}
+
+fn optional_string(value: Option<&str>) -> String {
+    value.map(escape_field).unwrap_or_else(|| "-".to_string())
 }
 
 fn description_change_invalidates_policy(reason: &str) -> bool {
@@ -5332,11 +5424,27 @@ mod tests {
         let diff = VolumeTopologyDiff::evaluate(&previous, &current);
 
         assert_eq!(diff.changes.len(), 1);
-        assert_eq!(diff.changes[0].reason, "volume-apfs-metadata-changed");
-        assert!(diff.changes[0].invalidate_sidebar);
-        assert!(diff.changes[0].invalidate_operation_policy);
-        assert!(diff.changes[0].invalidate_index_admission);
-        assert!(diff.changes[0].rescan_index);
+        let change = &diff.changes[0];
+        assert_eq!(change.reason, "volume-apfs-metadata-changed");
+        assert_eq!(
+            change.previous_apfs_container_uuid.as_deref(),
+            Some("APFS-CONTAINER-OLD")
+        );
+        assert_eq!(
+            change.current_apfs_container_uuid.as_deref(),
+            Some("APFS-CONTAINER-NEW")
+        );
+        assert_eq!(change.previous_apfs_role, Some(ApfsVolumeRole::Data));
+        assert_eq!(change.current_apfs_role, Some(ApfsVolumeRole::System));
+        assert!(change.invalidate_sidebar);
+        assert!(change.invalidate_operation_policy);
+        assert!(change.invalidate_index_admission);
+        assert!(change.rescan_index);
+        let tsv = diff.as_tsv();
+        assert!(tsv.contains(
+            "\tprevious-apfs-container-uuid=APFS-CONTAINER-OLD\tcurrent-apfs-container-uuid=APFS-CONTAINER-NEW\t"
+        ));
+        assert!(tsv.contains("\tprevious-apfs-role=data\tcurrent-apfs-role=system\t"));
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -5399,11 +5507,25 @@ mod tests {
         let diff = VolumeTopologyDiff::evaluate(&previous, &current);
 
         assert_eq!(diff.changes.len(), 1);
-        assert_eq!(diff.changes[0].reason, "volume-mount-table-changed");
-        assert!(diff.changes[0].invalidate_sidebar);
-        assert!(diff.changes[0].invalidate_operation_policy);
-        assert!(diff.changes[0].invalidate_index_admission);
-        assert!(diff.changes[0].rescan_index);
+        let change = &diff.changes[0];
+        assert_eq!(change.reason, "volume-mount-table-changed");
+        assert_eq!(change.previous_mount_filesystem.as_deref(), Some("apfs"));
+        assert_eq!(change.current_mount_filesystem.as_deref(), Some("apfs"));
+        assert_eq!(change.previous_mount_flags, Some(0));
+        assert_eq!(change.current_mount_flags, Some(0x0000_1000));
+        assert_eq!(change.previous_mount_read_only, Some(false));
+        assert_eq!(change.current_mount_read_only, Some(true));
+        assert_eq!(change.previous_mount_local, Some(true));
+        assert_eq!(change.current_mount_local, Some(true));
+        assert!(change.invalidate_sidebar);
+        assert!(change.invalidate_operation_policy);
+        assert!(change.invalidate_index_admission);
+        assert!(change.rescan_index);
+        let tsv = diff.as_tsv();
+        assert!(tsv.contains("\tprevious-mount-fs=apfs\tcurrent-mount-fs=apfs\t"));
+        assert!(tsv.contains("\tprevious-mount-flags=0\tcurrent-mount-flags=4096\t"));
+        assert!(tsv.contains("\tprevious-mount-read-only=false\tcurrent-mount-read-only=true\t"));
+        assert!(tsv.contains("\tprevious-mount-local=true\tcurrent-mount-local=true\t"));
 
         fs::remove_dir_all(root).unwrap();
     }
