@@ -5197,22 +5197,20 @@ fn reports_volume_index_policy_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.starts_with("volume-index-plan\tcount=3\tincluded=2\n"));
-    assert!(stdout.contains("\tWork Drive\t"));
+    assert!(stdout.starts_with("volume-index-plan\tcount="));
     assert!(stdout.contains("\tid="));
     assert!(!stdout.contains("\tid=-\tpath="));
-    assert!(stdout.contains("\tclass=external\tmount=mounted\treachable=true\taction=include\t"));
-    assert!(stdout.contains("\tthrottle=external\tmax-jobs=2\t"));
-    assert!(stdout.contains("\treason=opted-in"));
-    assert!(stdout.contains("\tInstaller\t"));
-    assert!(stdout.contains("\tclass=slow\tmount=mounted\treachable=true\taction=include\t"));
-    assert!(stdout.contains("\tthrottle=slow\tmax-jobs=1\tcrawl-delay-ms=8\t"));
-    assert!(stdout.contains("\tTeam Share\t"));
-    assert!(
-        stdout.contains("\tclass=network\tmount=mounted\treachable=true\taction=deferred-opt-in\t")
-    );
+    assert!(stdout.contains("\tincluded=0\n"), "{stdout}");
+    assert!(stdout.contains("\tmount=mounted\treachable=true\taction=api-unavailable\t"));
     assert!(stdout.contains("\tthrottle=suspended\tmax-jobs=0\t"));
-    assert!(stdout.contains("\treason=requires-opt-in"));
+    assert!(stdout.contains("\tnative-status=unavailable\t"), "{stdout}");
+    assert!(
+        stdout.contains("\tnative-reason=DiskArbitration"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tresource-status=available\t"), "{stdout}");
+    assert!(stdout.contains("\tmount-status=available\t"), "{stdout}");
+    assert!(stdout.contains("\treason=native-volume-api-unavailable"));
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -5586,6 +5584,42 @@ fn reports_volume_topology_api_status_diff_from_binary() {
     assert!(stdout.contains("\tprevious-mount-status=unavailable\t"));
     assert!(stdout.contains("\tcurrent-mount-status=available\t"));
     assert!(stdout.contains("\tsidebar=true\toperation-policy=true\tindex-admission=true\t"));
+    assert!(stdout.ends_with("reason=volume-api-status-changed\n"));
+}
+
+#[test]
+fn reports_api_status_volume_invalidation_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-api-status-invalidation")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout
+        .starts_with("volume-invalidation\tpath=/Volumes/API Status\tprevious-class=external\t"));
+    assert!(stdout.contains("\tcurrent-class=external\tcurrent-mount=mounted\t"));
+    assert!(stdout.contains("\tprevious-native-status=unavailable\t"));
+    assert!(stdout.contains(
+        "\tprevious-native-reason=DiskArbitration unavailable for volume invalidation\t"
+    ));
+    assert!(stdout.contains("\tprevious-resource-status=unavailable\t"));
+    assert!(stdout.contains(
+        "\tprevious-resource-reason=URL resource values unavailable for volume invalidation\t"
+    ));
+    assert!(stdout.contains("\tprevious-mount-status=unavailable\t"));
+    assert!(stdout
+        .contains("\tprevious-mount-reason=mount table unavailable for volume invalidation\t"));
+    assert!(stdout.contains("\tcurrent-native-status=available\t"));
+    assert!(stdout.contains("\tcurrent-resource-status=available\t"));
+    assert!(stdout.contains("\tcurrent-mount-status=available\t"));
+    assert!(stdout.contains("\tapi-status-changed=true\t"));
+    assert!(stdout.contains("\tindex-admission=true\trescan-index=true\t"));
+    assert!(stdout.contains("\tcancel-index-jobs=true\tclear-fsevents-cursor=true\t"));
     assert!(stdout.ends_with("reason=volume-api-status-changed\n"));
 }
 

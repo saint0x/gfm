@@ -85,6 +85,7 @@ pub enum VolumeIndexAction {
     Disabled,
     Disconnected,
     Unreachable,
+    ApiUnavailable,
 }
 
 impl VolumeIndexAction {
@@ -95,6 +96,7 @@ impl VolumeIndexAction {
             Self::Disabled => "disabled",
             Self::Disconnected => "disconnected",
             Self::Unreachable => "unreachable",
+            Self::ApiUnavailable => "api-unavailable",
         }
     }
 }
@@ -392,6 +394,14 @@ impl VolumeIndexPolicy {
                 "volume-unreachable",
             );
         }
+        if let Some(reason) = volume_api_gate_reason(volume) {
+            return VolumeIndexDecision::new(
+                volume,
+                VolumeIndexAction::ApiUnavailable,
+                VolumeIndexThrottle::suspended(),
+                reason,
+            );
+        }
 
         match volume.class.policy_family() {
             VolumePolicyFamily::Local => VolumeIndexDecision::new(
@@ -468,6 +478,12 @@ pub struct VolumeIndexDecision {
     pub class: IndexVolumeClass,
     pub mount_state: IndexMountState,
     pub reachable: Option<bool>,
+    pub native_status: Option<String>,
+    pub native_reason: Option<String>,
+    pub resource_status: Option<String>,
+    pub resource_reason: Option<String>,
+    pub mount_status: Option<String>,
+    pub mount_reason: Option<String>,
     pub action: VolumeIndexAction,
     pub throttle: VolumeIndexThrottle,
     pub reason: String,
@@ -487,6 +503,12 @@ impl VolumeIndexDecision {
             class: volume.class,
             mount_state: volume.mount_state,
             reachable: volume.reachable,
+            native_status: volume.native_status.clone(),
+            native_reason: volume.native_reason.clone(),
+            resource_status: volume.resource_status.clone(),
+            resource_reason: volume.resource_reason.clone(),
+            mount_status: volume.mount_status.clone(),
+            mount_reason: volume.mount_reason.clone(),
             action,
             throttle,
             reason: reason.into(),
@@ -499,7 +521,7 @@ impl VolumeIndexDecision {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume-index\t{}\tid={}\tpath={}\tclass={}\tmount={}\treachable={}\taction={}\t{}\treason={}",
+            "volume-index\t{}\tid={}\tpath={}\tclass={}\tmount={}\treachable={}\taction={}\t{}\tnative-status={}\tnative-reason={}\tresource-status={}\tresource-reason={}\tmount-status={}\tmount-reason={}\treason={}",
             escape_field(&self.label),
             self.id
                 .map(|id| id.0.to_string())
@@ -512,6 +534,12 @@ impl VolumeIndexDecision {
                 .unwrap_or_else(|| "-".to_string()),
             self.action.as_str(),
             self.throttle.as_tsv_fields(),
+            format_optional_string(self.native_status.as_deref()),
+            format_optional_string(self.native_reason.as_deref()),
+            format_optional_string(self.resource_status.as_deref()),
+            format_optional_string(self.resource_reason.as_deref()),
+            format_optional_string(self.mount_status.as_deref()),
+            format_optional_string(self.mount_reason.as_deref()),
             escape_field(&self.reason)
         )
     }
@@ -533,6 +561,12 @@ pub struct VolumeInvalidationReport {
     pub previous_ejectable: Option<bool>,
     pub previous_mountable: Option<bool>,
     pub previous_case_sensitive: Option<bool>,
+    pub previous_native_status: Option<String>,
+    pub previous_native_reason: Option<String>,
+    pub previous_resource_status: Option<String>,
+    pub previous_resource_reason: Option<String>,
+    pub previous_mount_status: Option<String>,
+    pub previous_mount_reason: Option<String>,
     pub current_class: Option<IndexVolumeClass>,
     pub current_mount_state: Option<IndexMountState>,
     pub current_reachable: Option<bool>,
@@ -541,6 +575,13 @@ pub struct VolumeInvalidationReport {
     pub current_ejectable: Option<bool>,
     pub current_mountable: Option<bool>,
     pub current_case_sensitive: Option<bool>,
+    pub current_native_status: Option<String>,
+    pub current_native_reason: Option<String>,
+    pub current_resource_status: Option<String>,
+    pub current_resource_reason: Option<String>,
+    pub current_mount_status: Option<String>,
+    pub current_mount_reason: Option<String>,
+    pub api_status_changed: bool,
     pub invalidate_sidebar: bool,
     pub invalidate_operation_policy: bool,
     pub invalidate_index_admission: bool,
@@ -616,6 +657,12 @@ impl VolumeInvalidationReport {
         let previous_ejectable = previous.and_then(|volume| volume.ejectable);
         let previous_mountable = previous.and_then(|volume| volume.mountable);
         let previous_case_sensitive = previous.and_then(|volume| volume.case_sensitive);
+        let previous_native_status = previous.and_then(|volume| volume.native_status.clone());
+        let previous_native_reason = previous.and_then(|volume| volume.native_reason.clone());
+        let previous_resource_status = previous.and_then(|volume| volume.resource_status.clone());
+        let previous_resource_reason = previous.and_then(|volume| volume.resource_reason.clone());
+        let previous_mount_status = previous.and_then(|volume| volume.mount_status.clone());
+        let previous_mount_reason = previous.and_then(|volume| volume.mount_reason.clone());
         let current_class = current.map(|volume| volume.class);
         let current_mount_state = current.map(|volume| volume.mount_state);
         let current_reachable = current.and_then(|volume| volume.reachable);
@@ -624,6 +671,22 @@ impl VolumeInvalidationReport {
         let current_ejectable = current.and_then(|volume| volume.ejectable);
         let current_mountable = current.and_then(|volume| volume.mountable);
         let current_case_sensitive = current.and_then(|volume| volume.case_sensitive);
+        let current_native_status = current.and_then(|volume| volume.native_status.clone());
+        let current_native_reason = current.and_then(|volume| volume.native_reason.clone());
+        let current_resource_status = current.and_then(|volume| volume.resource_status.clone());
+        let current_resource_reason = current.and_then(|volume| volume.resource_reason.clone());
+        let current_mount_status = current.and_then(|volume| volume.mount_status.clone());
+        let current_mount_reason = current.and_then(|volume| volume.mount_reason.clone());
+        let api_status_changed =
+            known_optional_value_lost_or_changed(&previous_native_status, &current_native_status)
+                || known_optional_value_lost_or_changed(
+                    &previous_resource_status,
+                    &current_resource_status,
+                )
+                || known_optional_value_lost_or_changed(
+                    &previous_mount_status,
+                    &current_mount_status,
+                );
 
         let (
             invalidate_sidebar,
@@ -769,6 +832,15 @@ impl VolumeInvalidationReport {
                     "volume-identity-changed",
                 )
             }
+            (Some(previous), Some(_)) if api_status_changed => (
+                true,
+                true,
+                true,
+                true,
+                previous.mount_state == IndexMountState::Mounted,
+                true,
+                "volume-api-status-changed",
+            ),
             (Some(previous), Some(current))
                 if known_optional_value_lost_or_changed(
                     &previous.filesystem_signature,
@@ -807,6 +879,12 @@ impl VolumeInvalidationReport {
             previous_ejectable,
             previous_mountable,
             previous_case_sensitive,
+            previous_native_status,
+            previous_native_reason,
+            previous_resource_status,
+            previous_resource_reason,
+            previous_mount_status,
+            previous_mount_reason,
             current_class,
             current_mount_state,
             current_reachable,
@@ -815,6 +893,13 @@ impl VolumeInvalidationReport {
             current_ejectable,
             current_mountable,
             current_case_sensitive,
+            current_native_status,
+            current_native_reason,
+            current_resource_status,
+            current_resource_reason,
+            current_mount_status,
+            current_mount_reason,
+            api_status_changed,
             invalidate_sidebar,
             invalidate_operation_policy,
             invalidate_index_admission,
@@ -827,7 +912,7 @@ impl VolumeInvalidationReport {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume-invalidation\tpath={}\tprevious-class={}\tprevious-mount={}\tprevious-reachable={}\tprevious-read-only={}\tcurrent-class={}\tcurrent-mount={}\tcurrent-reachable={}\tcurrent-read-only={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\tprevious-writable={}\tprevious-ejectable={}\tprevious-mountable={}\tprevious-case-sensitive={}\tcurrent-writable={}\tcurrent-ejectable={}\tcurrent-mountable={}\tcurrent-case-sensitive={}\treason={}",
+            "volume-invalidation\tpath={}\tprevious-class={}\tprevious-mount={}\tprevious-reachable={}\tprevious-read-only={}\tcurrent-class={}\tcurrent-mount={}\tcurrent-reachable={}\tcurrent-read-only={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\tprevious-writable={}\tprevious-ejectable={}\tprevious-mountable={}\tprevious-case-sensitive={}\tcurrent-writable={}\tcurrent-ejectable={}\tcurrent-mountable={}\tcurrent-case-sensitive={}\tprevious-native-status={}\tprevious-native-reason={}\tprevious-resource-status={}\tprevious-resource-reason={}\tprevious-mount-status={}\tprevious-mount-reason={}\tcurrent-native-status={}\tcurrent-native-reason={}\tcurrent-resource-status={}\tcurrent-resource-reason={}\tcurrent-mount-status={}\tcurrent-mount-reason={}\tapi-status-changed={}\treason={}",
             self.path.display(),
             self.previous_class
                 .map(IndexVolumeClass::as_str)
@@ -865,6 +950,19 @@ impl VolumeInvalidationReport {
             format_optional_bool(self.current_ejectable),
             format_optional_bool(self.current_mountable),
             format_optional_bool(self.current_case_sensitive),
+            format_optional_string(self.previous_native_status.as_deref()),
+            format_optional_string(self.previous_native_reason.as_deref()),
+            format_optional_string(self.previous_resource_status.as_deref()),
+            format_optional_string(self.previous_resource_reason.as_deref()),
+            format_optional_string(self.previous_mount_status.as_deref()),
+            format_optional_string(self.previous_mount_reason.as_deref()),
+            format_optional_string(self.current_native_status.as_deref()),
+            format_optional_string(self.current_native_reason.as_deref()),
+            format_optional_string(self.current_resource_status.as_deref()),
+            format_optional_string(self.current_resource_reason.as_deref()),
+            format_optional_string(self.current_mount_status.as_deref()),
+            format_optional_string(self.current_mount_reason.as_deref()),
+            self.api_status_changed,
             escape_field(&self.reason)
         )
     }
@@ -1118,6 +1216,24 @@ fn format_optional_bool(value: Option<bool>) -> String {
     value
         .map(|value| value.to_string())
         .unwrap_or_else(|| "-".to_string())
+}
+
+fn volume_api_gate_reason(volume: &IndexVolumeDescriptor) -> Option<String> {
+    [
+        ("native", volume.native_status.as_deref()),
+        ("resource", volume.resource_status.as_deref()),
+        ("mount-table", volume.mount_status.as_deref()),
+    ]
+    .into_iter()
+    .find_map(|(source, status)| {
+        let status = status?.trim();
+        (!status.eq_ignore_ascii_case("available")).then(|| {
+            format!(
+                "{source}-volume-api-{}",
+                status.to_ascii_lowercase().replace(' ', "-")
+            )
+        })
+    })
 }
 
 fn format_optional_string(value: Option<&str>) -> String {

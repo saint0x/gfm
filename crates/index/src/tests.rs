@@ -2054,6 +2054,62 @@ fn volume_index_policy_suspends_unreachable_remote_volumes_before_policy_admissi
 }
 
 #[test]
+fn volume_index_policy_suspends_local_volume_when_native_api_is_unavailable() {
+    let policy = VolumeIndexPolicy::default();
+    let local = IndexVolumeDescriptor::new(
+        "Macintosh HD",
+        "/",
+        IndexVolumeClass::System,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(VolumeId(10))
+    .with_native_status("unavailable")
+    .with_native_reason("DiskArbitration session unavailable");
+
+    let decision = policy.decide(&local);
+    let tsv = decision.as_tsv();
+
+    assert_eq!(decision.action, VolumeIndexAction::ApiUnavailable);
+    assert_eq!(decision.throttle.class, VolumeThrottleClass::Suspended);
+    assert_eq!(decision.reason, "native-volume-api-unavailable");
+    assert!(!decision.should_index());
+    assert!(tsv.contains("\taction=api-unavailable\t"));
+    assert!(tsv.contains("\tnative-status=unavailable\t"));
+    assert!(tsv.contains("\tnative-reason=DiskArbitration session unavailable\t"));
+}
+
+#[test]
+fn volume_index_policy_suspends_remote_volume_when_secondary_api_state_is_not_available() {
+    let policy = VolumeIndexPolicy::new(
+        gfm_config::VolumeIndexingPolicy::Enabled,
+        gfm_config::VolumeIndexingPolicy::Enabled,
+    )
+    .with_opted_in_roots(vec![PathBuf::from("/Volumes/Team")]);
+    let network = IndexVolumeDescriptor::new(
+        "Team Share",
+        "/Volumes/Team",
+        IndexVolumeClass::Network,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(VolumeId(11))
+    .with_native_status("available")
+    .with_resource_status("missing")
+    .with_resource_reason("URL resource values missing")
+    .with_mount_status("available");
+
+    let decision = policy.decide(&network);
+    let tsv = decision.as_tsv();
+
+    assert_eq!(decision.action, VolumeIndexAction::ApiUnavailable);
+    assert_eq!(decision.throttle.class, VolumeThrottleClass::Suspended);
+    assert_eq!(decision.reason, "resource-volume-api-missing");
+    assert!(!decision.should_index());
+    assert!(tsv.contains("\tresource-status=missing\t"));
+    assert!(tsv.contains("\tresource-reason=URL resource values missing\t"));
+    assert!(tsv.contains("\tmount-status=available\t"));
+}
+
+#[test]
 fn volume_invalidation_rescans_admission_when_mount_state_changes() {
     let previous = IndexVolumeDescriptor::new(
         "Work Drive",
@@ -2315,6 +2371,56 @@ fn volume_event_index_invalidation_rescans_when_native_api_status_changes() {
         "\tprevious-native-reason=DiskArbitration unavailable\\tuntil callback resumes\t"
     ));
     assert!(tsv.contains("\tcurrent-native-status=available\t"));
+    assert!(tsv.contains("\tcurrent-native-reason=-\t"));
+    assert!(tsv.contains("\tapi-status-changed=true\t"));
+}
+
+#[test]
+fn volume_invalidation_rescans_policy_when_native_api_status_changes() {
+    let previous = IndexVolumeDescriptor::new(
+        "API Status",
+        "/Volumes/API Status",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_native_status("unavailable")
+    .with_native_reason("DiskArbitration unavailable\nuntil callback resumes")
+    .with_resource_status("unavailable")
+    .with_resource_reason("URL resource values unavailable")
+    .with_mount_status("unavailable")
+    .with_mount_reason("mount table unavailable");
+    let current = IndexVolumeDescriptor::new(
+        "API Status",
+        "/Volumes/API Status",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_native_status("available")
+    .with_native_reason(" ")
+    .with_resource_status("available")
+    .with_mount_status("available");
+
+    let report = VolumeInvalidationReport::evaluate(Some(&previous), Some(&current));
+    let tsv = report.as_tsv();
+
+    assert!(report.api_status_changed);
+    assert!(report.invalidate_sidebar);
+    assert!(report.invalidate_operation_policy);
+    assert!(report.invalidate_index_admission);
+    assert!(report.rescan_index);
+    assert!(report.cancel_index_jobs);
+    assert!(report.clear_fsevents_cursor);
+    assert_eq!(report.reason, "volume-api-status-changed");
+    assert_eq!(report.current_native_reason, None);
+    assert!(tsv.contains("\tprevious-native-status=unavailable\t"));
+    assert!(tsv.contains(
+        "\tprevious-native-reason=DiskArbitration unavailable\\nuntil callback resumes\t"
+    ));
+    assert!(tsv.contains("\tprevious-resource-status=unavailable\t"));
+    assert!(tsv.contains("\tprevious-mount-status=unavailable\t"));
+    assert!(tsv.contains("\tcurrent-native-status=available\t"));
+    assert!(tsv.contains("\tcurrent-resource-status=available\t"));
+    assert!(tsv.contains("\tcurrent-mount-status=available\t"));
     assert!(tsv.contains("\tcurrent-native-reason=-\t"));
     assert!(tsv.contains("\tapi-status-changed=true\t"));
 }
