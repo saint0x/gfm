@@ -12700,6 +12700,65 @@ fn adaptive_persisted_content_search_applies_snippet_pressure_budget_from_binary
 }
 
 #[test]
+fn adaptive_persisted_content_search_refuses_missing_archives_before_search_from_binary() {
+    for missing in ["records", "content"] {
+        let root = unique_temp_dir(&format!("gfm-cli-durable-adaptive-missing-{missing}-root"));
+        let records = unique_temp_path(
+            &format!("gfm-cli-durable-adaptive-missing-{missing}-records"),
+            "gfmidx",
+        );
+        let content = unique_temp_path(
+            &format!("gfm-cli-durable-adaptive-missing-{missing}-content"),
+            "gfmcontent",
+        );
+        if missing != "records" {
+            fs::write(&records, b"not-a-record-archive").unwrap();
+        }
+        if missing != "content" {
+            fs::write(&content, b"not-a-content-archive").unwrap();
+        }
+
+        let search_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+            .args([
+                "search-content-index-adaptive",
+                records.to_str().unwrap(),
+                content.to_str().unwrap(),
+                "needle",
+                "nominal",
+                "nominal",
+                "ac",
+                "idle",
+            ])
+            .output()
+            .unwrap();
+
+        assert!(!search_output.status.success(), "{missing}");
+        let stdout = String::from_utf8_lossy(&search_output.stdout);
+        let stderr = String::from_utf8_lossy(&search_output.stderr);
+        assert!(stdout.is_empty(), "{missing}: {stdout}");
+        assert!(
+            stderr.contains("adaptive content index search")
+                && stderr.contains("access blocked: path is not present on this host"),
+            "{missing}: {stderr}"
+        );
+        assert!(
+            stderr.contains("security-worker-admission\tworker=adaptive content index search")
+                && stderr.contains("probe=missing")
+                && stderr.contains("worker-action=deny"),
+            "{missing}: {stderr}"
+        );
+
+        if missing != "records" {
+            fs::remove_file(records).unwrap();
+        }
+        if missing != "content" {
+            fs::remove_file(content).unwrap();
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
 fn searches_persisted_content_phrases_from_binary() {
     let root = unique_temp_dir("gfm-cli-durable-phrase-root");
     let records = unique_temp_path("gfm-cli-durable-phrase-records", "gfmidx");
