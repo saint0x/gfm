@@ -14,14 +14,14 @@ use gfm_jobs::{JobProgressState, Priority};
 use gfm_mac::{
     AccessIntent, MountState, SecurityDecisionAction, SecurityScopedAccessReport,
     SecurityScopedBookmarkAccess, SecurityScopedBookmarkStatus, SecurityScopedBookmarkStore,
-    SecurityWorkerAction, VolumeDiscoveryReport, VolumeKind,
+    SecurityWorkerAction, SecurityWorkerAdmissionReport, VolumeDiscoveryReport, VolumeKind,
 };
 use gfm_ops::{
     read_trash_metadata, ConflictPolicy, Operation, OperationAccessDecision, OperationAccessGate,
-    OperationAccessRole, OperationConflictReport, OperationContext, OperationMetadataDegradation,
-    OperationMetadataDegradationKind, OperationProgress, OperationProgressEvent,
-    OperationProgressPhase, OperationRecoveryPolicy, OperationThroughputClass,
-    OperationVolumeClass, OperationVolumeCopyPolicy, Operator,
+    OperationAccessRequirement, OperationAccessRole, OperationConflictReport, OperationContext,
+    OperationMetadataDegradation, OperationMetadataDegradationKind, OperationProgress,
+    OperationProgressEvent, OperationProgressPhase, OperationRecoveryPolicy,
+    OperationThroughputClass, OperationVolumeClass, OperationVolumeCopyPolicy, Operator,
 };
 use gfm_types::{GfmError, Result, VolumeId};
 use std::fs;
@@ -971,7 +971,177 @@ fn operation_access_gate_with_bookmark_store_checked(
 ) -> Result<OperationAccessGate> {
     let mut gate = OperationAccessGate::new();
     check_control()?;
-    for requirement in operation.access_requirements() {
+    let probes = operation_access_probes_checked(operation, volume_report, &mut check_control)?;
+    for probe in &probes {
+        check_control()?;
+        let report = &probe.admission.access;
+        eprintln!("{}", probe.admission.as_tsv());
+        if matches!(probe.admission.worker_action, SecurityWorkerAction::Deny)
+            && !probe.admission.can_touch_filesystem
+            && !matches!(
+                (report.action, report.probe),
+                (
+                    SecurityDecisionAction::Deny,
+                    gfm_mac::AccessProbeState::Missing
+                )
+            )
+        {
+            let reason = format!(
+                "{}; scope={}; mode={}; worker-action={}; role={}; probe={}; probe-path={}",
+                probe.admission.reason,
+                report.scope.as_str(),
+                report.mode.as_str(),
+                probe.admission.worker_action.as_str(),
+                probe.requirement.role.as_str(),
+                report.probe.as_str(),
+                probe.probe_path.display()
+            );
+            gate = gate.with_decision(
+                probe.requirement.path.clone(),
+                OperationAccessDecision::deny(reason).with_refresh_on_permission_change(
+                    probe.admission.refresh_on_permission_change,
+                ),
+            );
+            continue;
+        }
+        if matches!(report.action, SecurityDecisionAction::Deny)
+            && matches!(report.probe, gfm_mac::AccessProbeState::Missing)
+            && !matches!(
+                probe.requirement.role,
+                OperationAccessRole::DestinationParent
+            )
+        {
+            continue;
+        }
+        let reason = format!(
+            "{}; scope={}; mode={}; worker-action={}; role={}; probe={}; probe-path={}",
+            report.reason,
+            report.scope.as_str(),
+            report.mode.as_str(),
+            probe.admission.worker_action.as_str(),
+            probe.requirement.role.as_str(),
+            report.probe.as_str(),
+            probe.probe_path.display()
+        );
+        let decision = if probe.admission.needs_bookmark_access {
+            check_control()?;
+            Some(stored_bookmark_decision_with_refresh_checked(
+                bookmark_store,
+                &probe.probe_path,
+                &reason,
+                probe.admission.refresh_on_permission_change
+                    || probe.admission.needs_bookmark_access,
+                &mut check_control,
+            )?)
+        } else {
+            None
+        };
+        check_control()?;
+        let decision = decision.unwrap_or_else(|| match probe.admission.worker_action {
+            SecurityWorkerAction::Start => OperationAccessDecision::allow(reason)
+                .with_refresh_on_permission_change(probe.admission.refresh_on_permission_change),
+            SecurityWorkerAction::Prompt => OperationAccessDecision::prompt(reason)
+                .with_refresh_on_permission_change(probe.admission.refresh_on_permission_change),
+            SecurityWorkerAction::MetadataOnly | SecurityWorkerAction::Deny => {
+                OperationAccessDecision::deny(reason)
+                    .with_refresh_on_permission_change(probe.admission.refresh_on_permission_change)
+            }
+        });
+        gate = gate.with_decision(probe.requirement.path.clone(), decision);
+        check_control()?;
+    }
+    for probe in &probes {
+        check_control()?;
+        let Some(volume) = unavailable_mount_volume_for_path(volume_report, &probe.probe_path)
+        else {
+            continue;
+        };
+        let reason = format!(
+            "unmounted volume {}; label={}; root={}; stable-id={}; mount={}; reachable={}; role={}",
+            volume.kind.as_str(),
+            volume.label,
+            volume.path.display(),
+            volume.stable_identity,
+            volume.mount_state.as_str(),
+            volume
+                .reachable
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+            probe.requirement.role.as_str()
+        );
+        gate = gate.with_decision(
+            probe.requirement.path.clone(),
+            OperationAccessDecision::deny(reason).with_refresh_on_permission_change(true),
+        );
+        check_control()?;
+    }
+    for probe in &probes {
+        check_control()?;
+        let Some(volume) = unreachable_volume_for_path(volume_report, &probe.probe_path) else {
+            continue;
+        };
+        let reason = format!(
+            "unreachable volume {}; label={}; root={}; stable-id={}; mount={}; reachable={}; role={}",
+            volume.kind.as_str(),
+            volume.label,
+            volume.path.display(),
+            volume.stable_identity,
+            volume.mount_state.as_str(),
+            volume
+                .reachable
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "unknown".to_string()),
+            probe.requirement.role.as_str()
+        );
+        gate = gate.with_decision(
+            probe.requirement.path.clone(),
+            OperationAccessDecision::deny(reason).with_refresh_on_permission_change(true),
+        );
+        check_control()?;
+    }
+    for probe in &probes {
+        check_control()?;
+        if !requirement_mutates_volume(operation, probe.requirement.role) {
+            continue;
+        }
+        let Some(volume) = read_only_volume_for_path(volume_report, &probe.probe_path) else {
+            continue;
+        };
+        if broad_read_only_root_allows_path(volume, &probe.probe_path, probe.requirement.role) {
+            continue;
+        }
+        let reason = format!(
+            "read-only volume {}; label={}; root={}; stable-id={}; role={}",
+            volume.kind.as_str(),
+            volume.label,
+            volume.path.display(),
+            volume.stable_identity,
+            probe.requirement.role.as_str()
+        );
+        gate = gate.with_decision(
+            probe.requirement.path.clone(),
+            OperationAccessDecision::deny(reason).with_refresh_on_permission_change(true),
+        );
+        check_control()?;
+    }
+    check_control()?;
+    Ok(gate)
+}
+
+struct OperationAccessProbe {
+    requirement: OperationAccessRequirement,
+    probe_path: PathBuf,
+    admission: SecurityWorkerAdmissionReport,
+}
+
+fn operation_access_probes_checked(
+    operation: &Operation,
+    volume_report: &VolumeDiscoveryReport,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Vec<OperationAccessProbe>> {
+    let requirements = operation.access_requirements();
+    let mut probes = Vec::with_capacity(requirements.len());
+    for requirement in requirements {
         check_control()?;
         let probe_path = operation_access_probe_path_checked(
             &requirement.path,
@@ -991,170 +1161,13 @@ fn operation_access_gate_with_bookmark_store_checked(
             volume_report,
         );
         check_control()?;
-        let report = &admission.access;
-        eprintln!("{}", admission.as_tsv());
-        if matches!(admission.worker_action, SecurityWorkerAction::Deny)
-            && !admission.can_touch_filesystem
-            && !matches!(
-                (report.action, report.probe),
-                (
-                    SecurityDecisionAction::Deny,
-                    gfm_mac::AccessProbeState::Missing
-                )
-            )
-        {
-            let reason = format!(
-                "{}; scope={}; mode={}; worker-action={}; role={}; probe={}; probe-path={}",
-                admission.reason,
-                report.scope.as_str(),
-                report.mode.as_str(),
-                admission.worker_action.as_str(),
-                requirement.role.as_str(),
-                report.probe.as_str(),
-                probe_path.display()
-            );
-            gate = gate.with_decision(
-                requirement.path,
-                OperationAccessDecision::deny(reason)
-                    .with_refresh_on_permission_change(admission.refresh_on_permission_change),
-            );
-            continue;
-        }
-        if matches!(report.action, SecurityDecisionAction::Deny)
-            && matches!(report.probe, gfm_mac::AccessProbeState::Missing)
-            && !matches!(requirement.role, OperationAccessRole::DestinationParent)
-        {
-            continue;
-        }
-        let reason = format!(
-            "{}; scope={}; mode={}; worker-action={}; role={}; probe={}; probe-path={}",
-            report.reason,
-            report.scope.as_str(),
-            report.mode.as_str(),
-            admission.worker_action.as_str(),
-            requirement.role.as_str(),
-            report.probe.as_str(),
-            probe_path.display()
-        );
-        let decision = if admission.needs_bookmark_access {
-            check_control()?;
-            Some(stored_bookmark_decision_with_refresh_checked(
-                bookmark_store,
-                &probe_path,
-                &reason,
-                admission.refresh_on_permission_change || admission.needs_bookmark_access,
-                &mut check_control,
-            )?)
-        } else {
-            None
-        };
-        check_control()?;
-        let decision = decision.unwrap_or_else(|| match admission.worker_action {
-            SecurityWorkerAction::Start => OperationAccessDecision::allow(reason)
-                .with_refresh_on_permission_change(admission.refresh_on_permission_change),
-            SecurityWorkerAction::Prompt => OperationAccessDecision::prompt(reason)
-                .with_refresh_on_permission_change(admission.refresh_on_permission_change),
-            SecurityWorkerAction::MetadataOnly | SecurityWorkerAction::Deny => {
-                OperationAccessDecision::deny(reason)
-                    .with_refresh_on_permission_change(admission.refresh_on_permission_change)
-            }
+        probes.push(OperationAccessProbe {
+            requirement,
+            probe_path,
+            admission,
         });
-        gate = gate.with_decision(requirement.path, decision);
-        check_control()?;
     }
-    for requirement in operation.access_requirements() {
-        check_control()?;
-        let probe_path = operation_access_probe_path_checked(
-            &requirement.path,
-            requirement.role,
-            volume_report,
-            &mut check_control,
-        )?;
-        let Some(volume) = unavailable_mount_volume_for_path(volume_report, &probe_path) else {
-            continue;
-        };
-        let reason = format!(
-            "unmounted volume {}; label={}; root={}; stable-id={}; mount={}; reachable={}; role={}",
-            volume.kind.as_str(),
-            volume.label,
-            volume.path.display(),
-            volume.stable_identity,
-            volume.mount_state.as_str(),
-            volume
-                .reachable
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "unknown".to_string()),
-            requirement.role.as_str()
-        );
-        gate = gate.with_decision(
-            requirement.path,
-            OperationAccessDecision::deny(reason).with_refresh_on_permission_change(true),
-        );
-        check_control()?;
-    }
-    for requirement in operation.access_requirements() {
-        check_control()?;
-        let probe_path = operation_access_probe_path_checked(
-            &requirement.path,
-            requirement.role,
-            volume_report,
-            &mut check_control,
-        )?;
-        let Some(volume) = unreachable_volume_for_path(volume_report, &probe_path) else {
-            continue;
-        };
-        let reason = format!(
-            "unreachable volume {}; label={}; root={}; stable-id={}; mount={}; reachable={}; role={}",
-            volume.kind.as_str(),
-            volume.label,
-            volume.path.display(),
-            volume.stable_identity,
-            volume.mount_state.as_str(),
-            volume
-                .reachable
-                .map(|value| value.to_string())
-                .unwrap_or_else(|| "unknown".to_string()),
-            requirement.role.as_str()
-        );
-        gate = gate.with_decision(
-            requirement.path,
-            OperationAccessDecision::deny(reason).with_refresh_on_permission_change(true),
-        );
-        check_control()?;
-    }
-    for requirement in operation.access_requirements() {
-        check_control()?;
-        if !requirement_mutates_volume(operation, requirement.role) {
-            continue;
-        }
-        let probe_path = operation_access_probe_path_checked(
-            &requirement.path,
-            requirement.role,
-            volume_report,
-            &mut check_control,
-        )?;
-        let Some(volume) = read_only_volume_for_path(volume_report, &probe_path) else {
-            continue;
-        };
-        if broad_read_only_root_allows_path(volume, &probe_path, requirement.role) {
-            continue;
-        }
-        let reason = format!(
-            "read-only volume {}; label={}; root={}; stable-id={}; role={}",
-            volume.kind.as_str(),
-            volume.label,
-            volume.path.display(),
-            volume.stable_identity,
-            requirement.role.as_str()
-        );
-        gate = gate.with_decision(
-            requirement.path,
-            OperationAccessDecision::deny(reason).with_refresh_on_permission_change(true),
-        );
-        check_control()?;
-    }
-    check_control()?;
-    Ok(gate)
+    Ok(probes)
 }
 
 fn unavailable_volume_api_report(root: &Path) -> Result<VolumeDiscoveryReport> {
@@ -1265,46 +1278,36 @@ fn operation_security_accesses_from_store_checked(
 ) -> Result<Vec<SecurityScopedBookmarkAccess>> {
     let mut accesses = Vec::new();
     check_control()?;
-    for requirement in operation.access_requirements() {
+    let probes = operation_access_probes_checked(operation, volume_report, &mut check_control)?;
+    for probe in probes {
         check_control()?;
-        let probe_path = operation_access_probe_path_checked(
-            &requirement.path,
-            requirement.role,
-            volume_report,
-            &mut check_control,
-        )?;
-        check_control()?;
-        let admission = worker_admission_with_volume_report(
-            &probe_path,
-            AccessIntent::Operate,
-            format!(
-                "{} {}",
-                operation_kind(operation),
-                requirement.role.as_str()
-            ),
-            volume_report,
-        );
-        check_control()?;
-        let report = &admission.access;
-        if !admission.needs_bookmark_access {
+        let report = &probe.admission.access;
+        if !probe.admission.needs_bookmark_access {
             continue;
         }
         if matches!(report.action, SecurityDecisionAction::Deny)
             && matches!(report.probe, gfm_mac::AccessProbeState::Missing)
-            && !matches!(requirement.role, OperationAccessRole::DestinationParent)
+            && !matches!(
+                probe.requirement.role,
+                OperationAccessRole::DestinationParent
+            )
         {
             continue;
         }
         check_control()?;
-        let lookup =
-            store.start_access_for_path_checked(&probe_path, false, true, &mut check_control)?;
+        let lookup = store.start_access_for_path_checked(
+            &probe.probe_path,
+            false,
+            true,
+            &mut check_control,
+        )?;
         check_control()?;
         let Some(access) = lookup.access else {
             return Err(GfmError::Permission {
-                path: probe_path,
+                path: probe.probe_path,
                 message: format!(
                     "{} requires stored security-scoped access before mutation",
-                    requirement.role.as_str()
+                    probe.requirement.role.as_str()
                 ),
             });
         };
@@ -2406,6 +2409,44 @@ mod tests {
     }
 
     #[test]
+    fn operation_access_gate_reuses_probe_admission_for_blocked_destination_volume() {
+        let root = unique_temp_dir("gfm-app-op-access-probe-reuse");
+        let source_root = root.join("Source");
+        let volume = root.join("TeamShare");
+        fs::create_dir_all(&source_root).unwrap();
+        fs::create_dir_all(&volume).unwrap();
+        fs::write(volume.join(".gfm-volume-kind"), "network-smb\n").unwrap();
+        let source = source_root.join("source.txt");
+        let destination = volume
+            .join("destination-parent-unavailable".repeat(16))
+            .join("copy.txt");
+        fs::write(&source, "content").unwrap();
+        let operation = Operation::Copy {
+            from: source,
+            to: destination,
+        };
+        let mut report = VolumeDiscoveryReport::from_paths(vec![volume.clone()]);
+        report.volumes[0].reachable = Some(false);
+        let mut checks = 0usize;
+
+        let gate = operation_access_gate_checked(&operation, &report, || {
+            checks += 1;
+            Ok(())
+        })
+        .unwrap();
+        let err = gate
+            .check(&operation)
+            .expect_err("unreachable destination volume should deny the operation");
+
+        assert!(err.to_string().contains("unreachable volume network"));
+        assert!(
+            checks <= 30,
+            "blocked destination preflight repeated access probes instead of reusing admission reports; checks={checks}"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn operation_access_gate_refuses_stale_volume_source_before_planning() {
         let root = unique_temp_dir("gfm-app-op-stale-source");
         let volume = root.join("TeamShare");
@@ -2593,6 +2634,33 @@ mod tests {
             operation_access_gate_checked(&operation, &report, || Err(GfmError::Cancelled));
 
         assert_eq!(result.err(), Some(GfmError::Cancelled));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operation_access_gate_reuses_probe_results_across_policy_passes() {
+        let root = unique_temp_dir("gfm-app-op-access-gate-probe-reuse");
+        let source = root.join("source.txt");
+        let destination = root.join("missing").join("deep").join("destination.txt");
+        fs::write(&source, "content").unwrap();
+        let operation = Operation::Copy {
+            from: source,
+            to: destination,
+        };
+        let report = VolumeDiscoveryReport::from_paths(vec![root.clone()]);
+        let mut checks = 0usize;
+
+        let gate = operation_access_gate_checked(&operation, &report, || {
+            checks += 1;
+            Ok(())
+        })
+        .unwrap();
+
+        gate.check(&operation).unwrap();
+        assert!(
+            checks <= 25,
+            "operation admission should reuse probe records instead of repeating full policy probes; checks={checks}"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
