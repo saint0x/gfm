@@ -19,6 +19,7 @@ pub enum PersistentIndexAction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PersistentIndexReason {
     Healthy,
+    SuspendedAdmission,
     MissingRecords,
     MissingState,
     UnreadableRecords,
@@ -85,6 +86,7 @@ pub fn persistent_index_action_name(action: PersistentIndexAction) -> &'static s
 pub fn persistent_index_reason_name(reason: PersistentIndexReason) -> &'static str {
     match reason {
         PersistentIndexReason::Healthy => "healthy",
+        PersistentIndexReason::SuspendedAdmission => "suspended-admission",
         PersistentIndexReason::MissingRecords => "missing-records",
         PersistentIndexReason::MissingState => "missing-state",
         PersistentIndexReason::UnreadableRecords => "unreadable-records",
@@ -143,6 +145,11 @@ fn plan_persistent_index_recovery_checked(
     };
     check_control()?;
     if !records_exist {
+        if let Some(plan) =
+            suspended_admission_plan(&root, &records_path, &state_path, None, &mut check_control)?
+        {
+            return Ok(plan);
+        }
         return Ok(PersistentIndexPlan {
             action: PersistentIndexAction::RebuildRecordsAndState,
             reason: PersistentIndexReason::MissingRecords,
@@ -154,6 +161,12 @@ fn plan_persistent_index_recovery_checked(
             state_schema_version: None,
             detail: None,
         });
+    }
+
+    if let Some(plan) =
+        suspended_admission_plan(&root, &records_path, &state_path, None, &mut check_control)?
+    {
+        return Ok(plan);
     }
 
     check_control()?;
@@ -237,6 +250,16 @@ fn plan_persistent_index_recovery_checked(
         }
     };
 
+    if let Some(plan) = suspended_admission_plan_from_state(
+        &root,
+        &records_path,
+        &state_path,
+        Some(records.len()),
+        &state,
+    ) {
+        return Ok(plan);
+    }
+
     check_control()?;
     if state.root != root {
         let detail = format!(
@@ -298,6 +321,57 @@ fn plan_persistent_index_recovery_checked(
         state_record_count: Some(state.record_count),
         state_schema_version: Some(state.schema_version),
         detail: None,
+    })
+}
+
+fn suspended_admission_plan(
+    root: &Path,
+    records_path: &Path,
+    state_path: &Path,
+    record_count: Option<usize>,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Option<PersistentIndexPlan>> {
+    check_control()?;
+    if !matches!(state_path.try_exists(), Ok(true)) {
+        return Ok(None);
+    }
+    check_control()?;
+    let Ok(state) = IndexVolumeState::read_checked(state_path, &mut check_control) else {
+        return Ok(None);
+    };
+    Ok(suspended_admission_plan_from_state(
+        root,
+        records_path,
+        state_path,
+        record_count,
+        &state,
+    ))
+}
+
+fn suspended_admission_plan_from_state(
+    root: &Path,
+    records_path: &Path,
+    state_path: &Path,
+    record_count: Option<usize>,
+    state: &IndexVolumeState,
+) -> Option<PersistentIndexPlan> {
+    if state.root != root || state.records_path != records_path || !state.is_suspended_admission() {
+        return None;
+    }
+    Some(PersistentIndexPlan {
+        action: PersistentIndexAction::Ready,
+        reason: PersistentIndexReason::SuspendedAdmission,
+        root: root.to_path_buf(),
+        records_path: records_path.to_path_buf(),
+        state_path: state_path.to_path_buf(),
+        record_count,
+        state_record_count: Some(state.record_count),
+        state_schema_version: Some(state.schema_version),
+        detail: Some(format!(
+            "index action {}; reason {}",
+            state.index_action.as_deref().unwrap_or("-"),
+            state.index_reason.as_deref().unwrap_or("-")
+        )),
     })
 }
 

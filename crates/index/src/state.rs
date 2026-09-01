@@ -338,6 +338,18 @@ impl IndexVolumeState {
             optional_field(&self.mount_reason)
         )
     }
+
+    pub fn is_suspended_admission(&self) -> bool {
+        self.record_count == 0
+            && matches!(
+                self.index_action.as_deref(),
+                Some("api-unavailable")
+                    | Some("disabled")
+                    | Some("disconnected")
+                    | Some("unreachable")
+                    | Some("deferred-opt-in")
+            )
+    }
 }
 
 fn mount_identity(root: &Path, volume_id: VolumeId) -> String {

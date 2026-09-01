@@ -4611,6 +4611,103 @@ fn persistent_index_recovery_rebuilds_missing_or_stale_state() {
 }
 
 #[test]
+fn persistent_index_recovery_treats_suspended_admission_state_as_ready_without_records() {
+    let records = unique_temp_path("gfm-index-recovery-suspended-records", "gfmidx");
+    let state_path = unique_temp_path("gfm-index-recovery-suspended-state", "gfmstate");
+    let quarantine = unique_temp_dir("gfm-index-recovery-suspended-quarantine");
+    let descriptor = IndexVolumeDescriptor::new(
+        "Offline",
+        "/Volumes/Offline",
+        IndexVolumeClass::Network,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(VolumeId(93))
+    .with_reachable(Some(false));
+    let decision = VolumeIndexPolicy::new(
+        gfm_config::VolumeIndexingPolicy::Enabled,
+        gfm_config::VolumeIndexingPolicy::Enabled,
+    )
+    .decide(&descriptor);
+    let indexer = Indexer::default();
+    indexer
+        .write_volume_decision_state(&decision, &records, &state_path)
+        .unwrap();
+
+    let plan = indexer.plan_persistent_recovery("/Volumes/Offline", &records, &state_path);
+
+    assert!(plan.ready());
+    assert_eq!(plan.reason, PersistentIndexReason::SuspendedAdmission);
+    assert_eq!(plan.record_count, None);
+    assert_eq!(plan.state_record_count, Some(0));
+
+    let recovery = indexer
+        .recover_persistent("/Volumes/Offline", &records, &state_path, &quarantine)
+        .unwrap();
+
+    assert!(recovery.before.ready());
+    assert!(recovery.after.ready());
+    assert!(!recovery.rebuilt_records);
+    assert!(!recovery.rebuilt_state);
+    assert!(!records.exists());
+
+    fs::remove_file(state_path).unwrap();
+    fs::remove_dir_all(quarantine).unwrap();
+}
+
+#[test]
+fn persistent_index_recovery_prefers_suspended_admission_state_over_stale_records() {
+    let root = unique_temp_dir("gfm-index-recovery-suspended-stale-root");
+    let records = unique_temp_path("gfm-index-recovery-suspended-stale-records", "gfmidx");
+    let state_path = unique_temp_path("gfm-index-recovery-suspended-stale-state", "gfmstate");
+    let quarantine = unique_temp_dir("gfm-index-recovery-suspended-stale-quarantine");
+    fs::write(root.join("Old.md"), "state").unwrap();
+    let indexer = Indexer::default();
+    indexer.build(&root).unwrap().save(&records).unwrap();
+    let descriptor = IndexVolumeDescriptor::new(
+        "Offline",
+        root.clone(),
+        IndexVolumeClass::Network,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(VolumeId(94))
+    .with_reachable(Some(false));
+    let decision = VolumeIndexPolicy::new(
+        gfm_config::VolumeIndexingPolicy::Enabled,
+        gfm_config::VolumeIndexingPolicy::Enabled,
+    )
+    .decide(&descriptor);
+    indexer
+        .write_volume_decision_state(&decision, &records, &state_path)
+        .unwrap();
+
+    let plan = indexer.plan_persistent_recovery(&root, &records, &state_path);
+
+    assert!(plan.ready());
+    assert_eq!(plan.reason, PersistentIndexReason::SuspendedAdmission);
+    assert_eq!(plan.state_record_count, Some(0));
+
+    let recovery = indexer
+        .recover_persistent(&root, &records, &state_path, &quarantine)
+        .unwrap();
+
+    assert!(!recovery.rebuilt_records);
+    assert!(!recovery.rebuilt_state);
+    assert!(recovery.after.ready());
+    assert_eq!(
+        IndexVolumeState::read(&state_path)
+            .unwrap()
+            .index_action
+            .as_deref(),
+        Some("unreachable")
+    );
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(state_path).unwrap();
+    fs::remove_dir_all(quarantine).unwrap();
+}
+
+#[test]
 fn persistent_index_recovery_checked_state_write_preserves_existing_state_on_cancel() {
     let root = unique_temp_dir("gfm-index-recovery-state-write-cancel-root");
     let records = unique_temp_path("gfm-index-recovery-state-write-cancel-records", "gfmidx");
