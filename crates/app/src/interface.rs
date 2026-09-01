@@ -1952,6 +1952,18 @@ fn read_trash_restore_metadata(path: &Path) -> Result<BTreeMap<String, TrashEntr
 }
 
 fn read_finder_metadata(path: PathBuf) -> Result<FinderMetadataReport> {
+    read_finder_metadata_with_cancel_after_access(path, false)
+}
+
+#[cfg(test)]
+fn read_finder_metadata_cancel_after_access(path: PathBuf) -> Result<FinderMetadataReport> {
+    read_finder_metadata_with_cancel_after_access(path, true)
+}
+
+fn read_finder_metadata_with_cancel_after_access(
+    path: PathBuf,
+    cancel_after_access: bool,
+) -> Result<FinderMetadataReport> {
     const WORKER: &str = "finder metadata";
     let access_report =
         InterfaceAccessReport::new_checked(path.clone(), AccessIntent::Read, || Ok(()))?;
@@ -1965,7 +1977,10 @@ fn read_finder_metadata(path: PathBuf) -> Result<FinderMetadataReport> {
             cancellation.check()?;
             let _access = access_report.access_checked(WORKER, || cancellation.check())?;
             cancellation.check()?;
-            FinderMetadataReport::read_path(path)
+            if cancel_after_access {
+                cancellation.cancel();
+            }
+            FinderMetadataReport::read_path_checked(path, || cancellation.check())
         },
     )
 }
@@ -2364,6 +2379,23 @@ mod tests {
         fs::write(&path, "remote").unwrap();
 
         let result = read_ui_fileprovider_sidebar_state_cancel_after_access(path);
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn finder_metadata_can_cancel_after_access_before_metadata_read() {
+        let root = env::temp_dir().join(format!(
+            "gfm-interface-finder-metadata-cancel-after-access-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("Report.md");
+        fs::write(&path, "report").unwrap();
+
+        let result = read_finder_metadata_cancel_after_access(path);
 
         assert_eq!(result.err(), Some(GfmError::Cancelled));
         let _ = fs::remove_dir_all(root);

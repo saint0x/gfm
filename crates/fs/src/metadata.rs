@@ -126,13 +126,32 @@ pub struct FinderMetadataReport {
 
 impl FinderMetadataReport {
     pub fn read_path(path: impl AsRef<Path>) -> Result<Self> {
+        Self::read_path_checked(path, || Ok(()))
+    }
+
+    pub fn read_path_checked(
+        path: impl AsRef<Path>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check_control()?;
         let record = record_for_path(path.as_ref(), None, false)?;
-        Ok(Self::from_record(record))
+        check_control()?;
+        Self::from_record_checked(record, check_control)
     }
 
     pub fn from_record(record: FileRecord) -> Self {
+        Self::from_record_checked(record, || Ok(())).expect("infallible finder metadata read")
+    }
+
+    pub fn from_record_checked(
+        record: FileRecord,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check_control()?;
         let finder_info = FinderInfo::read(&record.path);
+        check_control()?;
         let tags = finder_tag_entries(&record.path);
+        check_control()?;
         let label = tags
             .iter()
             .find(|tag| tag.color != FinderLabelColor::None)
@@ -140,17 +159,22 @@ impl FinderMetadataReport {
             .unwrap_or_else(|| finder_info.label);
         let link_role = link_role(&record, &finder_info);
         let type_role = type_role(&record, link_role);
+        check_control()?;
         let localized_name = localized_name(&record.path);
+        check_control()?;
         let comment = finder_comment(&record.path);
+        check_control()?;
         let kind_string = kind_string(&record, type_role);
         let hidden = record.hidden || extension_hidden_by_finder_policy(&record.name);
         let extension_hidden =
             finder_info.extension_hidden || extension_hidden_by_name_policy(&record.name);
+        check_control()?;
         let display_name = bundle_display_name(&record, type_role)
             .or_else(|| localized_name.clone())
             .unwrap_or_else(|| display_name(&record.name, extension_hidden));
+        check_control()?;
 
-        Self {
+        Ok(Self {
             record,
             display_name,
             localized_name,
@@ -162,7 +186,7 @@ impl FinderMetadataReport {
             type_role,
             kind_string,
             link_role,
-        }
+        })
     }
 
     pub fn as_tsv(&self) -> String {
@@ -470,11 +494,39 @@ fn escape_field(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gfm_types::GfmError;
     use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    #[test]
+    fn finder_metadata_read_path_checked_honors_pre_cancelled_control() {
+        let path = std::env::temp_dir().join(format!(
+            "gfm-finder-metadata-pre-cancelled-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_file(&path);
+
+        let result = FinderMetadataReport::read_path_checked(&path, || Err(GfmError::Cancelled));
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn finder_metadata_from_record_checked_can_cancel_before_sidecar_probes() {
+        let root = unique_temp_dir();
+        let path = root.join("Report.md");
+        fs::write(&path, "report").unwrap();
+        let record = record_for_path(&path, None, false).unwrap();
+
+        let result = FinderMetadataReport::from_record_checked(record, || Err(GfmError::Cancelled));
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn reports_tags_comments_labels_and_hidden_extension() {
