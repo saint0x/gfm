@@ -13444,6 +13444,46 @@ fn content_manifest_write_reports_manifest_probe_failure_before_publishing_from_
 }
 
 #[test]
+fn content_manifest_write_refuses_unreachable_manifest_before_probe_from_binary() {
+    let root = unique_temp_dir("gfm-cli-content-manifest-write-unreachable-root");
+    let offline = unique_temp_dir("gfm-cli-content-manifest-write-unreachable-output");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let manifest = offline.join(format!("{}.gfmmanifest", "manifest-unavailable".repeat(16)));
+    let content = root.join("content.gfmcontent");
+    fs::write(&content, b"archive bytes").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-manifest-write",
+            manifest.to_str().unwrap(),
+            &format!("hot:{}", content.display()),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(
+        stderr.contains("content manifest write volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("manifest write path metadata unavailable"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("security-worker-admission\tworker=content manifest write archive\t"),
+        "{stderr}"
+    );
+    assert!(!manifest.exists());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
 fn content_manifest_write_reports_manifest_probe_failure_before_archive_admission_from_binary() {
     let root = unique_temp_dir("gfm-cli-content-manifest-write-admission-probe");
     let content = root.join("content.gfmcontent");
@@ -14084,6 +14124,82 @@ fn content_manifest_cleanup_reports_candidate_probe_failure_before_removing_from
 }
 
 #[test]
+fn content_manifest_cleanup_refuses_unreachable_candidate_before_probe_from_binary() {
+    let root = unique_temp_dir("gfm-cli-content-manifest-cleanup-unreachable-root");
+    let offline = unique_temp_dir("gfm-cli-content-manifest-cleanup-unreachable-candidate");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let manifest = root.join("content.gfmmanifest");
+    let active = root.join("active.gfmcontent");
+    let retired = root.join("retired.gfmcontent");
+    let unavailable = offline.join(format!("{}.gfmcontent", "cleanup-unavailable".repeat(16)));
+    write_content_postings(
+        &active,
+        &[ContentPosting {
+            term: "activeneedle".to_string(),
+            ids: vec![FileId::new(VolumeId(1), 1)],
+            positions: vec![],
+        }],
+    )
+    .unwrap();
+    write_content_postings(
+        &retired,
+        &[ContentPosting {
+            term: "retiredneedle".to_string(),
+            ids: vec![FileId::new(VolumeId(1), 2)],
+            positions: vec![],
+        }],
+    )
+    .unwrap();
+    ContentArchiveManifest::new(vec![
+        ContentArchiveManifestEntry {
+            tier: ContentMergeTier::Hot,
+            path: active.clone(),
+        },
+        ContentArchiveManifestEntry {
+            tier: ContentMergeTier::Cold,
+            path: retired.clone(),
+        },
+    ])
+    .unwrap()
+    .write(&manifest)
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-manifest-cleanup",
+            manifest.to_str().unwrap(),
+            unavailable.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("removed\t"), "{stdout}");
+    assert!(
+        stderr.contains(
+            "content manifest cleanup candidate volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("manifest write path metadata unavailable"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("security-worker-admission\tworker=content manifest cleanup candidate\t"),
+        "{stderr}"
+    );
+    assert!(active.exists());
+    assert!(retired.exists());
+    assert!(!unavailable.exists());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
 fn recovers_corrupt_content_manifest_from_binary() {
     let manifest = unique_temp_path("gfm-cli-content-manifest-recovery", "gfmmanifest");
     let content = unique_temp_path("gfm-cli-content-manifest-recovery", "gfmcontent");
@@ -14382,8 +14498,7 @@ fn content_manifest_recover_refuses_unreachable_quarantine_before_writing_from_b
     fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
     let manifest = local.join("content.gfmmanifest");
     let content = local.join("content.gfmcontent");
-    let quarantine = offline.join("quarantine");
-    fs::create_dir_all(&quarantine).unwrap();
+    let quarantine = offline.join("quarantine-unavailable".repeat(16));
     write_content_postings(
         &content,
         &[ContentPosting {
@@ -14417,6 +14532,10 @@ fn content_manifest_recover_refuses_unreachable_quarantine_before_writing_from_b
         "{stderr}"
     );
     assert!(
+        !stderr.contains("manifest write path metadata unavailable"),
+        "{stderr}"
+    );
+    assert!(
         !stderr.contains(&format!(
             "security-worker-admission\tworker=content manifest recovery manifest\tpath={}",
             manifest.parent().unwrap().display()
@@ -14424,7 +14543,7 @@ fn content_manifest_recover_refuses_unreachable_quarantine_before_writing_from_b
         "{stderr}"
     );
     assert_eq!(fs::read_to_string(&manifest).unwrap(), original_manifest);
-    assert!(fs::read_dir(&quarantine).unwrap().next().is_none());
+    assert!(!quarantine.exists());
 
     fs::remove_dir_all(root).unwrap();
 }

@@ -384,13 +384,23 @@ impl ManifestAccessReports {
         check_control()?;
         let path = resolve_manifest_path(manifest_path, candidate);
         let (path, intent) = if removes_candidates {
-            (write_probe_path(&path)?, AccessIntent::Write)
+            (
+                checked_write_probe_path(
+                    &path,
+                    "content manifest cleanup candidate",
+                    &mut check_control,
+                )?,
+                AccessIntent::Write,
+            )
         } else {
-            (existing_read_probe_path(&path)?, AccessIntent::Read)
+            (
+                existing_read_probe_path(&path)?.to_path_buf(),
+                AccessIntent::Read,
+            )
         };
         check_control()?;
         ManifestAccessReport::new_checked(
-            path.to_path_buf(),
+            path,
             intent,
             "content manifest cleanup candidate",
             &mut check_control,
@@ -403,7 +413,7 @@ impl ManifestAccessReports {
     ) -> Result<Self> {
         let mut entries = Vec::with_capacity(archives.len() + 1);
         entries.push(ManifestAccessReport::new_checked(
-            write_probe_path(manifest_path)?.to_path_buf(),
+            checked_write_probe_path(manifest_path, "content manifest write", || Ok(()))?,
             AccessIntent::Write,
             "content manifest write",
             || Ok(()),
@@ -442,20 +452,22 @@ impl ManifestAccessReports {
         Ok(Self::new(entries))
     }
 
-    fn recovery_for_paths(
-        manifest_path: &Path,
-        quarantine: &Path,
-        discovered: &[ContentArchiveManifestEntry],
-    ) -> Result<Self> {
-        let mut entries = Self::recovery_plan_for_paths(manifest_path, discovered)?.entries;
+    fn recovery_write_for_paths(manifest_path: &Path, quarantine: &Path) -> Result<Self> {
+        let mut entries = Vec::with_capacity(2);
         entries.push(ManifestAccessReport::new_checked(
-            write_probe_path(manifest_path)?.to_path_buf(),
+            checked_write_probe_path(manifest_path, "content manifest recovery manifest", || {
+                Ok(())
+            })?,
             AccessIntent::Write,
             "content manifest recovery manifest",
             || Ok(()),
         )?);
         entries.push(ManifestAccessReport::new_checked(
-            write_probe_path(quarantine)?.to_path_buf(),
+            checked_write_probe_path(
+                quarantine,
+                "content manifest recovery quarantine",
+                || Ok(()),
+            )?,
             AccessIntent::Write,
             "content manifest recovery quarantine",
             || Ok(()),
@@ -476,7 +488,9 @@ impl ManifestAccessReports {
             || Ok(()),
         )?);
         entries.push(ManifestAccessReport::new_checked(
-            write_probe_path(manifest_path)?.to_path_buf(),
+            checked_write_probe_path(manifest_path, "content manifest promotion manifest", || {
+                Ok(())
+            })?,
             AccessIntent::Write,
             "content manifest promotion manifest",
             || Ok(()),
@@ -527,7 +541,11 @@ impl ManifestAccessReports {
                 || Ok(()),
             )?,
             ManifestAccessReport::new_checked(
-                write_probe_path(manifest_path)?.to_path_buf(),
+                checked_write_probe_path(
+                    manifest_path,
+                    "content manifest promotion recovery",
+                    || Ok(()),
+                )?,
                 AccessIntent::Write,
                 "content manifest promotion recovery",
                 || Ok(()),
@@ -539,7 +557,11 @@ impl ManifestAccessReports {
                 || Ok(()),
             )?,
             ManifestAccessReport::new_checked(
-                write_probe_path(&journal_path)?.to_path_buf(),
+                checked_write_probe_path(
+                    &journal_path,
+                    "content manifest promotion recovery journal",
+                    || Ok(()),
+                )?,
                 AccessIntent::Write,
                 "content manifest promotion recovery journal",
                 || Ok(()),
@@ -599,7 +621,7 @@ fn retain_manifest_write_access_checked(
 ) -> Result<Vec<ScopedAccessGuard>> {
     check_control()?;
     let mut guards = vec![preflight_access_scope_checked(
-        write_probe_path(manifest_path)?,
+        &checked_write_probe_path(manifest_path, "content manifest write", &mut check_control)?,
         AccessIntent::Write,
         "content manifest write",
         &mut check_control,
@@ -721,9 +743,13 @@ fn run_manifest_recover(
     quarantine: PathBuf,
     discovered: Vec<ContentArchiveManifestEntry>,
 ) -> Result<Vec<String>> {
-    let access_reports =
-        ManifestAccessReports::recovery_for_paths(&manifest_path, &quarantine, &discovered)?;
+    let mut access_reports =
+        ManifestAccessReports::recovery_plan_for_paths(&manifest_path, &discovered)?;
     access_reports.preflight_volumes()?;
+    let write_reports =
+        ManifestAccessReports::recovery_write_for_paths(&manifest_path, &quarantine)?;
+    write_reports.preflight_volumes()?;
+    access_reports.entries.extend(write_reports.entries);
     let volume = access_reports.first_volume();
     run_volume_task_cancellable(
         volume,
@@ -936,6 +962,37 @@ fn write_probe_path(path: &Path) -> Result<&Path> {
     }
 }
 
+fn checked_write_probe_path(
+    path: &Path,
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<PathBuf> {
+    check_control()?;
+    preflight_write_target_volume_checked(path, worker, &mut check_control)?;
+    check_control()?;
+    let probe = write_probe_path(path)?.to_path_buf();
+    check_control()?;
+    Ok(probe)
+}
+
+fn preflight_write_target_volume_checked(
+    path: &Path,
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    check_control()?;
+    let volume_path = crate::parent_or_cwd(path);
+    let volume_report =
+        VolumeDiscoveryReport::for_containing_path_checked(volume_path, &mut check_control)?;
+    check_control()?;
+    preflight_volume_access_scope_with_report(
+        volume_path,
+        AccessIntent::Write,
+        worker,
+        &volume_report,
+    )
+}
+
 fn manifest_path_exists(path: &Path, label: &str) -> Result<bool> {
     path.try_exists().map_err(|err| {
         GfmError::io(
@@ -1031,6 +1088,35 @@ mod tests {
     }
 
     #[test]
+    fn manifest_write_access_refuses_unreachable_manifest_before_write_probe() {
+        let root = unique_temp_dir("gfm-manifest-write-access-unreachable-root");
+        let offline = unique_temp_dir("gfm-manifest-write-access-unreachable-output");
+        fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let manifest_path = offline.join("manifest-unavailable".repeat(16));
+        let archives = vec![manifest_entry(root.join("content.gfmcontent"))];
+
+        let err = match retain_manifest_write_access_checked(&manifest_path, &archives, || Ok(())) {
+            Ok(_) => panic!("unreachable manifest was admitted before volume preflight"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains(
+                "content manifest write volume access blocked: unreachable volume network"
+            ),
+            "{err}"
+        );
+        assert!(
+            !err.to_string()
+                .contains("manifest write path metadata unavailable"),
+            "{err}"
+        );
+        assert!(!manifest_path.exists());
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(offline);
+    }
+
+    #[test]
     fn manifest_access_report_checked_honors_pre_cancelled_control_before_volume_discovery() {
         let path = std::env::temp_dir()
             .join(format!(
@@ -1106,6 +1192,42 @@ mod tests {
         assert_eq!(result.err(), Some(GfmError::Cancelled));
         assert!(calls.load(Ordering::SeqCst) > 4);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn manifest_cleanup_access_refuses_unreachable_candidate_before_write_probe() {
+        let root = unique_temp_dir("gfm-manifest-cleanup-access-root");
+        let offline = unique_temp_dir("gfm-manifest-cleanup-access-offline");
+        fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let manifest_path = root.join("content-manifest.tsv");
+        fs::write(&manifest_path, b"manifest").expect("write manifest");
+        let candidate = offline.join("cleanup-unavailable".repeat(16));
+
+        let err = match retain_manifest_cleanup_access_checked(
+            &manifest_path,
+            std::slice::from_ref(&candidate),
+            true,
+            "content manifest cleanup",
+            || Ok(()),
+        ) {
+            Ok(_) => panic!("unreachable cleanup candidate was admitted before volume preflight"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains(
+                "content manifest cleanup candidate volume access blocked: unreachable volume network"
+            ),
+            "{err}"
+        );
+        assert!(
+            !err.to_string()
+                .contains("manifest write path metadata unavailable"),
+            "{err}"
+        );
+        assert!(!candidate.exists());
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(offline);
     }
 
     #[test]
