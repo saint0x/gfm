@@ -4534,6 +4534,41 @@ fn search_content_adaptive_refuses_unreachable_network_volume_before_extracting_
 }
 
 #[test]
+fn search_content_adaptive_refuses_missing_root_before_extracting_from_binary() {
+    let root = unique_temp_path("gfm-cli-search-content-adaptive-missing-root", "missing");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "search-content-adaptive",
+            root.to_str().unwrap(),
+            "needle",
+            "nominal",
+            "nominal",
+            "ac",
+            "idle",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.is_empty(), "{stdout}");
+    assert!(!stderr.contains("content-indexed"), "{stderr}");
+    assert!(
+        stderr.contains("content search access blocked: path is not present on this host"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!(
+            "security-worker-admission\tworker=content search\tpath={}",
+            root.display()
+        )),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn reports_package_traversal_policy_from_binary() {
     let root = unique_temp_dir("gfm-cli-package-root");
     fs::create_dir_all(root.join("GFMFixture.app").join("Contents")).unwrap();
@@ -16138,6 +16173,78 @@ fn deferred_content_maintenance_does_not_touch_unreachable_inputs_from_binary() 
     assert!(!output.exists());
 
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn deferred_content_maintenance_refuses_missing_inputs_before_runtime_record_from_binary() {
+    for target in ["manifest", "segment"] {
+        let base = unique_temp_dir(&format!(
+            "gfm-cli-segment-maintenance-missing-{target}-base"
+        ));
+        let manifest = base.join("manifest.gfmmanifest");
+        let segment = base.join("content.gfmseg");
+        let output = base.join("output.gfmcontent");
+        let catalog = base.join("catalog.gfmjobs");
+        let progress = base.join("progress.gfmprogress");
+        if target != "manifest" {
+            fs::write(&manifest, "not-a-content-manifest").unwrap();
+        }
+        if target != "segment" {
+            fs::write(&segment, "not-a-content-segment").unwrap();
+        }
+
+        let output_result = Command::new(env!("CARGO_BIN_EXE_gfm"))
+            .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+            .env("GFM_JOB_PROGRESS_STORE", &progress)
+            .args([
+                "content-maintain-segments-adaptive",
+                manifest.to_str().unwrap(),
+                output.to_str().unwrap(),
+                "saturated",
+                "nominal",
+                "ac",
+                "idle",
+                segment.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+
+        assert!(!output_result.status.success(), "{target}");
+        let stdout = String::from_utf8_lossy(&output_result.stdout);
+        let stderr = String::from_utf8_lossy(&output_result.stderr);
+        assert!(stdout.is_empty(), "{target}: {stdout}");
+        assert!(
+            !stderr.contains("content-maintenance-deferred"),
+            "{target}: {stderr}"
+        );
+        assert!(
+            stderr.contains("content maintenance access blocked: path is not present on this host"),
+            "{target}: {stderr}"
+        );
+        assert!(
+            stderr.contains("security-worker-admission\tworker=content maintenance\tpath=")
+                && stderr.contains("probe=missing")
+                && stderr.contains("worker-action=deny"),
+            "{target}: {stderr}"
+        );
+        assert!(!output.exists(), "{target}");
+        assert!(!catalog.exists(), "{target}");
+        assert!(!progress.exists(), "{target}");
+        if target != "manifest" {
+            assert_eq!(
+                fs::read_to_string(&manifest).unwrap(),
+                "not-a-content-manifest"
+            );
+        }
+        if target != "segment" {
+            assert_eq!(
+                fs::read_to_string(&segment).unwrap(),
+                "not-a-content-segment"
+            );
+        }
+
+        fs::remove_dir_all(base).unwrap();
+    }
 }
 
 #[test]

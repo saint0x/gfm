@@ -487,6 +487,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     "content-maintain-segments-adaptive requires at least one segment".to_string(),
                 ));
             }
+            preflight_content_maintenance_inputs_denial_before_runtime(
+                Some(&manifest_path),
+                &segments,
+                "content maintenance",
+            )?;
             let schedule_manifest_path = manifest_path.clone();
             let schedule_output_archive = output_archive.clone();
             let schedule_segments = segments.clone();
@@ -1037,6 +1042,30 @@ fn preflight_content_input_denial_before_runtime(
     access_report
         .access_checked(worker, || Ok(()))
         .map(|_access| ())
+}
+
+fn preflight_content_maintenance_inputs_denial_before_runtime(
+    manifest_path: Option<&Path>,
+    segments: &[PathBuf],
+    worker: &str,
+) -> Result<()> {
+    if let Some(manifest_path) = manifest_path {
+        let manifest_access_report = ForegroundContentIndexAccessReports::entry_checked(
+            manifest_path.to_path_buf(),
+            AccessIntent::Read,
+            || Ok(()),
+        )?;
+        preflight_content_input_denial_before_runtime(&manifest_access_report, worker)?;
+    }
+    for segment in segments {
+        let segment_access_report = ForegroundContentIndexAccessReports::entry_checked(
+            segment.clone(),
+            AccessIntent::Read,
+            || Ok(()),
+        )?;
+        preflight_content_input_denial_before_runtime(&segment_access_report, worker)?;
+    }
+    Ok(())
 }
 
 fn run_extraction_cache(path: PathBuf) -> Result<String> {
