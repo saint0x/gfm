@@ -33,34 +33,48 @@ pub(crate) fn extraction_budget_profile_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<ExtractionBudgetProfile> {
     check_control()?;
-    Ok(ExtractionBudgetProfile {
-        volume: extraction_volume_class_for_path_checked(root, &mut check_control)?,
-        thermal: match pressure.thermal {
-            JobThermalState::Nominal => ExtractionThermalState::Nominal,
-            JobThermalState::Fair => ExtractionThermalState::Fair,
-            JobThermalState::Serious => ExtractionThermalState::Serious,
-            JobThermalState::Critical => ExtractionThermalState::Critical,
-        },
-        battery: match pressure.battery {
-            JobBatteryState::AcPower => ExtractionBatteryState::AcPower,
-            JobBatteryState::Battery => ExtractionBatteryState::Battery,
-            JobBatteryState::LowPower => ExtractionBatteryState::LowPower,
-        },
-        user_activity: match pressure.user_activity {
-            JobUserActivity::Idle => ExtractionUserActivity::Idle,
-            JobUserActivity::Active => ExtractionUserActivity::Active,
-        },
-    })
+    let report = VolumeDiscoveryReport::for_containing_path_checked(root, &mut check_control)?;
+    check_control()?;
+    Ok(extraction_budget_profile_from_volume_report(
+        root, pressure, &report,
+    ))
 }
 
-fn extraction_volume_class_for_path_checked(
-    path: &Path,
-    mut check_control: impl FnMut() -> Result<()>,
-) -> Result<ExtractionVolumeClass> {
-    check_control()?;
-    let report = VolumeDiscoveryReport::for_containing_path_checked(path, &mut check_control)?;
-    check_control()?;
-    Ok(extraction_volume_class_from_report(path, &report))
+pub(crate) fn extraction_budget_profile_from_volume_report(
+    root: &Path,
+    pressure: SchedulingPressure,
+    report: &VolumeDiscoveryReport,
+) -> ExtractionBudgetProfile {
+    ExtractionBudgetProfile {
+        volume: extraction_volume_class_from_report(root, report),
+        thermal: extraction_thermal_state(pressure.thermal),
+        battery: extraction_battery_state(pressure.battery),
+        user_activity: extraction_user_activity(pressure.user_activity),
+    }
+}
+
+const fn extraction_thermal_state(state: JobThermalState) -> ExtractionThermalState {
+    match state {
+        JobThermalState::Nominal => ExtractionThermalState::Nominal,
+        JobThermalState::Fair => ExtractionThermalState::Fair,
+        JobThermalState::Serious => ExtractionThermalState::Serious,
+        JobThermalState::Critical => ExtractionThermalState::Critical,
+    }
+}
+
+const fn extraction_battery_state(state: JobBatteryState) -> ExtractionBatteryState {
+    match state {
+        JobBatteryState::AcPower => ExtractionBatteryState::AcPower,
+        JobBatteryState::Battery => ExtractionBatteryState::Battery,
+        JobBatteryState::LowPower => ExtractionBatteryState::LowPower,
+    }
+}
+
+const fn extraction_user_activity(state: JobUserActivity) -> ExtractionUserActivity {
+    match state {
+        JobUserActivity::Idle => ExtractionUserActivity::Idle,
+        JobUserActivity::Active => ExtractionUserActivity::Active,
+    }
 }
 
 fn extraction_volume_class_from_report(
@@ -1068,15 +1082,17 @@ mod tests {
     }
 
     #[test]
-    fn extraction_volume_class_for_path_checked_uses_discovered_descriptor() {
+    fn extraction_budget_profile_checked_uses_discovered_descriptor() {
         let root = unique_temp_dir("gfm-extract-volume-checked-descriptor");
         fs::write(root.join(".gfm-volume-kind"), "network-smb\n").unwrap();
         let input = root.join("Project.md");
         fs::write(&input, "network").unwrap();
 
-        let class = extraction_volume_class_for_path_checked(&input, || Ok(())).unwrap();
+        let profile =
+            extraction_budget_profile_checked(&input, SchedulingPressure::default(), || Ok(()))
+                .unwrap();
 
-        assert_eq!(class, ExtractionVolumeClass::Network);
+        assert_eq!(profile.volume, ExtractionVolumeClass::Network);
         fs::remove_dir_all(root).unwrap();
     }
 

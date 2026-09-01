@@ -5,8 +5,9 @@ use crate::access::{
     worker_admission_with_volume_report, ScopedAccessGuard,
 };
 use crate::extract::{
-    extraction_budget_profile_checked, preflight_adaptive_extraction_worker_scratch,
-    read_extraction_quarantine_cancellable, run_adaptive_extraction_worker_cancellable,
+    extraction_budget_profile_checked, extraction_budget_profile_from_volume_report,
+    preflight_adaptive_extraction_worker_scratch, read_extraction_quarantine_cancellable,
+    run_adaptive_extraction_worker_cancellable,
     run_quarantined_adaptive_extraction_worker_cancellable, ADAPTIVE_WORKER_TIMEOUT,
 };
 use crate::runtime::{
@@ -147,18 +148,32 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "extract-report-adaptive" => {
             let path = required_path(args.next(), "extract-report-adaptive requires a path")?;
             let pressure = parse_required_scheduling_pressure(args, "extract report")?;
-            let root = path
-                .parent()
-                .map(Path::to_path_buf)
-                .unwrap_or_else(|| PathBuf::from("."));
-            let extractor = Extractor::with_budget_profile(extraction_budget_profile_checked(
-                &root,
-                pressure,
+            let access_report = ForegroundContentIndexAccessReports::entry_checked(
+                path.clone(),
+                AccessIntent::Read,
                 || Ok(()),
-            )?);
+            )?;
+            access_report.preflight_volume("adaptive content extraction")?;
+            preflight_content_input_admission_before_runtime(
+                &access_report,
+                "adaptive content extraction",
+            )?;
+            let extractor =
+                Extractor::with_budget_profile(extraction_budget_profile_from_volume_report(
+                    &access_report.path,
+                    pressure,
+                    &access_report.volume_report,
+                ));
             print!(
                 "{}",
-                run_extraction_report(path, "adaptive content extraction", extractor, None,)?
+                run_extraction_report_after_preflight(
+                    path,
+                    "adaptive content extraction",
+                    extractor,
+                    None,
+                    access_report,
+                    None,
+                )?
             );
         }
         "extract-worker-adaptive" => {
@@ -902,6 +917,24 @@ fn run_extraction_report(
     if let Some(report) = retry_probe_access_report.as_ref() {
         report.preflight_volume(worker)?;
     }
+    run_extraction_report_after_preflight(
+        path,
+        worker,
+        extractor,
+        retry_probe,
+        access_report,
+        retry_probe_access_report,
+    )
+}
+
+fn run_extraction_report_after_preflight(
+    path: PathBuf,
+    worker: &'static str,
+    extractor: Extractor,
+    retry_probe: Option<PathBuf>,
+    access_report: ForegroundContentIndexAccessReport,
+    retry_probe_access_report: Option<ForegroundContentIndexAccessReport>,
+) -> Result<String> {
     let volume = access_report.volume().or_else(|| {
         retry_probe_access_report
             .as_ref()

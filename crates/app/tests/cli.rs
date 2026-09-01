@@ -10111,6 +10111,46 @@ fn extract_report_refuses_unreachable_volume_before_extraction_from_binary() {
 }
 
 #[test]
+fn adaptive_extract_report_refuses_unreachable_volume_before_budgeted_extraction_from_binary() {
+    let root = unique_temp_dir("gfm-cli-extract-report-adaptive-unreachable");
+    fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let path = root.join("Offline.pdf");
+    fs::write(&path, minimal_pdf("offline adaptive extraction")).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "extract-report-adaptive",
+            path.to_str().unwrap(),
+            "nominal",
+            "nominal",
+            "ac",
+            "idle",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("extract\t"), "{stdout}");
+    assert!(
+        stderr.contains(
+            "adaptive content extraction volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains(&format!(
+            "security-worker-admission\tworker=adaptive content extraction\tpath={}",
+            path.display()
+        )),
+        "{stderr}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn extract_report_refuses_missing_path_before_extraction_from_binary() {
     let path = unique_temp_path("gfm-cli-extract-missing-path", "txt");
 
