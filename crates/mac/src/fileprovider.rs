@@ -1774,7 +1774,7 @@ impl FileProviderStateReport {
         check()?;
         let hints = CloudHints::read_checked(&path, &mut check)?;
         check()?;
-        Ok(Self::from_hints(path, hints))
+        Self::from_hints_checked(path, hints)
     }
 
     pub fn from_path_with_native_identity(path: PathBuf) -> Result<Self> {
@@ -1789,12 +1789,32 @@ impl FileProviderStateReport {
         check()?;
         let hints = CloudHints::read_with_identity_checked(&path, &mut check)?;
         check()?;
-        Ok(Self::from_hints(path, hints))
+        Self::from_hints_checked(path, hints)
     }
 
     fn from_hints(path: PathBuf, hints: CloudHints) -> Self {
         let domain = domain_for_path(&path, &hints);
         let storage_state = storage_state_for_path(&path, domain, &hints);
+        Self::from_classified_hints(path, domain, storage_state, hints)
+    }
+
+    fn from_hints_checked(path: PathBuf, hints: CloudHints) -> Result<Self> {
+        let domain = domain_for_path(&path, &hints);
+        let storage_state = storage_state_for_path_checked(&path, domain, &hints)?;
+        Ok(Self::from_classified_hints(
+            path,
+            domain,
+            storage_state,
+            hints,
+        ))
+    }
+
+    fn from_classified_hints(
+        path: PathBuf,
+        domain: FileProviderDomain,
+        storage_state: CloudStorageState,
+        hints: CloudHints,
+    ) -> Self {
         let materialization = materialization_for_state(storage_state);
         let materialization_source = materialization_source_for_state(storage_state, &hints);
         let materialization_confidence =
@@ -2180,32 +2200,50 @@ fn storage_state_for_path(
     domain: FileProviderDomain,
     hints: &CloudHints,
 ) -> CloudStorageState {
+    storage_state_for_path_with_probe(path, domain, hints, false)
+        .unwrap_or(CloudStorageState::Unknown)
+}
+
+fn storage_state_for_path_checked(
+    path: &Path,
+    domain: FileProviderDomain,
+    hints: &CloudHints,
+) -> Result<CloudStorageState> {
+    storage_state_for_path_with_probe(path, domain, hints, true)
+}
+
+fn storage_state_for_path_with_probe(
+    path: &Path,
+    domain: FileProviderDomain,
+    hints: &CloudHints,
+    report_probe_errors: bool,
+) -> Result<CloudStorageState> {
     if domain == FileProviderDomain::Local {
-        return CloudStorageState::LocalOnly;
+        return Ok(CloudStorageState::LocalOnly);
     }
 
     if hints.native.is_ubiquitous == Some(true)
         || native_has_ubiquitous_materialization_evidence(&hints.native)
     {
         if native_has_offline_error(&hints.native) {
-            return CloudStorageState::Offline;
+            return Ok(CloudStorageState::Offline);
         }
         if let Some(state) = native_storage_state(&hints.native) {
-            return state;
+            return Ok(state);
         }
         if hints.native.is_ubiquitous == Some(true) {
-            return CloudStorageState::Unknown;
+            return Ok(CloudStorageState::Unknown);
         }
     }
 
     if let Some(state) = xattr_storage_state(hints) {
-        return state;
+        return Ok(state);
     }
 
     let name = file_name_lower(path);
     let allow_name_state_hints = provider_state_name_hints_allowed(hints);
     let attr_blob = xattr_signal_blob(hints);
-    if (allow_name_state_hints && name.contains("conflict"))
+    let storage_state = if (allow_name_state_hints && name.contains("conflict"))
         || contains_state_phrase_without_false_marker(
             &attr_blob,
             &["unresolved-conflict", "unresolved conflict", "conflict"],
@@ -2215,8 +2253,7 @@ fn storage_state_for_path(
                 "unresolved-conflicts",
                 "hasunresolvedconflicts",
             ],
-        )
-    {
+        ) {
         CloudStorageState::Conflict
     } else if (allow_name_state_hints && name.contains("offline"))
         || contains_state_phrase_without_false_marker(
@@ -2266,11 +2303,20 @@ fn storage_state_for_path(
         || (path_only_provider_hint(&hints.source) && hints.xattrs.is_empty())
     {
         CloudStorageState::Unknown
-    } else if path.try_exists().ok() == Some(true) {
-        CloudStorageState::Downloaded
     } else {
-        CloudStorageState::Unknown
-    }
+        match path.try_exists() {
+            Ok(true) => CloudStorageState::Downloaded,
+            Ok(false) => CloudStorageState::Unknown,
+            Err(err) if report_probe_errors => {
+                return Err(GfmError::io(
+                    path,
+                    format!("materialization fallback path existence unavailable: {err}"),
+                ));
+            }
+            Err(_) => CloudStorageState::Unknown,
+        }
+    };
+    Ok(storage_state)
 }
 
 fn provider_state_name_hints_allowed(hints: &CloudHints) -> bool {
@@ -4943,7 +4989,7 @@ mod tests {
     }
 
     #[test]
-    fn storage_state_fallback_keeps_unavailable_path_unknown() {
+    fn synthetic_storage_state_fallback_keeps_unavailable_path_unknown() {
         let root = unique_temp_dir();
         let path = root.join(format!(
             "{}.icloud.md",
@@ -4961,6 +5007,32 @@ mod tests {
         let state = storage_state_for_path(&path, FileProviderDomain::ICloudDrive, &hints);
 
         assert_eq!(state, CloudStorageState::Unknown);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn checked_storage_state_fallback_reports_unavailable_path_probe() {
+        let root = unique_temp_dir();
+        let path = root.join(format!(
+            "{}.icloud.md",
+            "downloaded-path-unavailable".repeat(16)
+        ));
+        let hints = CloudHints {
+            native: native_values(),
+            native_identity: identity_not_queried(),
+            xattrs: Vec::new(),
+            xattr_values: Vec::new(),
+            provider_identifier: None,
+            source: "filesystem".to_string(),
+        };
+
+        let err = storage_state_for_path_checked(&path, FileProviderDomain::ICloudDrive, &hints)
+            .unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("materialization fallback path existence unavailable"));
 
         fs::remove_dir_all(root).unwrap();
     }
