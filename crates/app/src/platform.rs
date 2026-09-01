@@ -3927,8 +3927,18 @@ fn worker_admission_fanout_summary(admissions: &[SecurityWorkerAdmissionReport])
         .iter()
         .filter(|admission| admission.refresh_on_permission_change)
         .count();
+    let any_blocked = admissions
+        .iter()
+        .any(|admission| !admission.can_touch_filesystem);
+    let all_blocked = !admissions.is_empty()
+        && admissions
+            .iter()
+            .all(|admission| !admission.can_touch_filesystem);
+    let refresh_required = admissions
+        .iter()
+        .any(|admission| admission.refresh_on_permission_change);
     format!(
-        "security-worker-admission-fanout\tworkers={}\tstart={}\tprompt={}\tmetadata-only={}\tdeny={}\tcan-touch-filesystem={}\tbookmark-access={}\trefresh-on-permission-change={}",
+        "security-worker-admission-fanout\tworkers={}\tstart={}\tprompt={}\tmetadata-only={}\tdeny={}\tcan-touch-filesystem={}\tbookmark-access={}\trefresh-on-permission-change={}\tany-blocked={}\tall-blocked={}\trefresh-required={}",
         admissions.len(),
         starts,
         prompts,
@@ -3936,7 +3946,10 @@ fn worker_admission_fanout_summary(admissions: &[SecurityWorkerAdmissionReport])
         denied,
         can_touch_filesystem,
         bookmark_access,
-        refresh_on_permission_change
+        refresh_on_permission_change,
+        any_blocked,
+        all_blocked,
+        refresh_required
     )
 }
 

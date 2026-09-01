@@ -880,7 +880,10 @@ fn reports_security_worker_admission_fanout_from_binary() {
     ));
     assert!(stdout.contains("\tcan-touch-filesystem=0\t"));
     assert!(stdout.contains("\tbookmark-access=0\t"));
-    assert!(stdout.contains("\trefresh-on-permission-change=4\n"));
+    assert!(stdout.contains("\trefresh-on-permission-change=4\t"));
+    assert!(stdout.contains("\tany-blocked=true\t"));
+    assert!(stdout.contains("\tall-blocked=true\t"));
+    assert!(stdout.contains("\trefresh-required=true\n"));
     for (worker, intent) in [
         ("index worker", "index"),
         ("preview worker", "preview"),
@@ -950,7 +953,10 @@ fn security_worker_admission_fanout_refuses_unavailable_volume_api_from_binary()
         "security-worker-admission-fanout\tworkers=3\tstart=0\tprompt=0\tmetadata-only=0\tdeny=3\t"
     ));
     assert!(stdout.contains("\tcan-touch-filesystem=0\t"));
-    assert!(stdout.contains("\trefresh-on-permission-change=3\n"));
+    assert!(stdout.contains("\trefresh-on-permission-change=3\t"));
+    assert!(stdout.contains("\tany-blocked=true\t"));
+    assert!(stdout.contains("\tall-blocked=true\t"));
+    assert!(stdout.contains("\trefresh-required=true\n"));
     assert_eq!(
         stdout.matches("\tprobe=unavailable\t").count(),
         3,
