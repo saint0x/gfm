@@ -146,7 +146,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             print_permission_access_contract(
                 &admission,
                 refresh.as_ref().map(permission_refresh_contract),
-            );
+            )?;
         }
         "ui-permission-refresh-compare-contract" => {
             let previous_path = required_path(
@@ -724,18 +724,25 @@ fn print_permission_onboarding_contract(
 fn print_permission_access_contract(
     admission: &SecurityWorkerAdmissionReport,
     refresh: Option<PermissionRefreshContract>,
-) {
+) -> Result<()> {
     let access = permission_access_contract(admission);
-    println!(
-        "{}",
-        DialogContract::permission_prompt_for_action(access.prompt_kind, &access.prompt_action)
-            .as_tsv()
-    );
+    let dialog = validated_permission_access_dialog(&access)?;
+    println!("{}", dialog.as_tsv());
     if let Some(refresh) = refresh {
         println!("{}", refresh.as_tsv());
     }
     println!("{}", access.as_tsv());
     println!("{}", admission.as_tsv());
+    Ok(())
+}
+
+fn validated_permission_access_dialog(access: &PermissionAccessContract) -> Result<DialogContract> {
+    let spec = AppLaunchSpec::new(&access.path).with_permission_access(access.clone());
+    spec.validate()?;
+    Ok(DialogContract::permission_prompt_for_action(
+        access.prompt_kind,
+        &access.prompt_action,
+    ))
 }
 
 fn permission_access_contract(
@@ -2174,6 +2181,60 @@ mod tests {
         access.prompt_source = "missing-path".to_string();
 
         assert!(permission_access_requires_surface(&access));
+    }
+
+    #[test]
+    fn permission_access_dialog_rejects_mismatched_prompt_kind_and_action() {
+        let mut access = allowed_permission_access();
+        access.scope = "full-disk-access".to_string();
+        access.probe = "denied".to_string();
+        access.mode = "full-disk-access".to_string();
+        access.access_action = "prompt".to_string();
+        access.worker_action = "prompt".to_string();
+        access.can_touch_filesystem = false;
+        access.refresh_on_permission_change = true;
+        access.prompt_kind = PermissionPromptKind::FullDiskAccess;
+        access.prompt_action = "choose-location".to_string();
+        access.promptable = true;
+        access.prompt_source = "full-disk-access".to_string();
+
+        let err = validated_permission_access_dialog(&access).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("pairs a prompt action with the wrong prompt kind"));
+    }
+
+    #[test]
+    fn permission_access_routes_mail_and_photos_denials_to_full_disk_access_guidance() {
+        for scope in [
+            gfm_mac::ProtectedScope::Mail,
+            gfm_mac::ProtectedScope::Photos,
+        ] {
+            let admission = SecurityWorkerAdmissionReport::from_access_report(
+                "index worker",
+                gfm_mac::SecurityScopedAccessReport {
+                    path: PathBuf::from("/Users/me/Library/Group Containers/group.com.apple.mail"),
+                    intent: gfm_mac::AccessIntent::Index,
+                    scope,
+                    probe: gfm_mac::AccessProbeState::Denied,
+                    mode: SecurityAccessMode::FullDiskAccess,
+                    action: gfm_mac::SecurityDecisionAction::Prompt,
+                    bookmark_required: false,
+                    can_read: false,
+                    can_write: false,
+                    least_privilege: false,
+                    reason: "protected root requires Full Disk Access guidance".to_string(),
+                },
+            );
+
+            let access = permission_access_contract(&admission);
+
+            assert_eq!(access.prompt_kind, PermissionPromptKind::FullDiskAccess);
+            assert_eq!(access.prompt_action, "open-settings");
+            assert!(access.promptable);
+            assert_eq!(access.prompt_source, "full-disk-access");
+            assert!(permission_access_requires_surface(&access));
+        }
     }
 
     #[test]

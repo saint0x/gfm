@@ -369,7 +369,7 @@ fn decide(
             SecurityDecisionAction::Deny,
             "path is not present on this host".to_string(),
         ),
-        AccessProbeState::Denied if scope == ProtectedScope::FullDiskAccess => (
+        AccessProbeState::Denied if requires_full_disk_access(scope) => (
             SecurityAccessMode::FullDiskAccess,
             SecurityDecisionAction::Prompt,
             "protected root requires Full Disk Access guidance".to_string(),
@@ -639,6 +639,13 @@ fn requires_bookmark(scope: ProtectedScope, intent: AccessIntent) -> bool {
             | AccessIntent::Index
             | AccessIntent::Preview
             | AccessIntent::Operate
+    )
+}
+
+fn requires_full_disk_access(scope: ProtectedScope) -> bool {
+    matches!(
+        scope,
+        ProtectedScope::Mail | ProtectedScope::Photos | ProtectedScope::FullDiskAccess
     )
 }
 
@@ -997,6 +1004,18 @@ mod tests {
         assert_eq!(report.mode, SecurityAccessMode::FullDiskAccess);
         assert!(!report.least_privilege);
         assert!(report.as_tsv().contains("scope=full-disk-access"));
+    }
+
+    #[test]
+    fn denied_mail_and_photos_scopes_require_full_disk_access_guidance_before_degradation() {
+        for scope in [ProtectedScope::Mail, ProtectedScope::Photos] {
+            let (mode, action, reason) =
+                decide(scope, AccessProbeState::Denied, AccessIntent::Index, false);
+
+            assert_eq!(mode, SecurityAccessMode::FullDiskAccess);
+            assert_eq!(action, SecurityDecisionAction::Prompt);
+            assert_eq!(reason, "protected root requires Full Disk Access guidance");
+        }
     }
 
     #[test]
