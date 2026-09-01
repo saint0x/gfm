@@ -3369,8 +3369,17 @@ fn evaluate_fileprovider_observed_invalidation_checked(
         &mut check_control,
     )?;
     check_control()?;
-    snapshot.write_checked(state_path, &mut check_control)?;
+    if fileprovider_snapshot_changed(previous.as_ref(), &snapshot) {
+        snapshot.write_checked(state_path, &mut check_control)?;
+    }
     Ok(observed)
+}
+
+fn fileprovider_snapshot_changed(
+    previous: Option<&FileProviderStateSnapshot>,
+    snapshot: &FileProviderStateSnapshot,
+) -> bool {
+    previous != Some(snapshot) && (previous.is_some() || !snapshot.entries.is_empty())
 }
 
 fn fileprovider_snapshot_access_reports(
@@ -4287,6 +4296,52 @@ mod tests {
         assert_eq!(err, GfmError::Cancelled);
         assert_eq!(std::fs::read(&state_path).unwrap(), before);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fileprovider_observed_invalidation_skips_snapshot_publish_for_untracked_event() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-platform-fileprovider-observed-noop-publish-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let state_path = root.join("state.tsv");
+        let local = root.join("Local.txt");
+        std::fs::write(&local, "local").unwrap();
+        let event = FileEvent::new(local, FileEventKind::Modify);
+
+        let observed = evaluate_fileprovider_observed_invalidation_checked(
+            &state_path,
+            event,
+            "fileprovider observed invalidation",
+            || Ok(()),
+        )
+        .expect("untracked event should evaluate as a no-op");
+
+        assert!(observed.paths.is_empty());
+        assert!(observed.report.changes.is_empty());
+        assert!(!state_path.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fileprovider_snapshot_publish_gate_accepts_only_real_snapshot_changes() {
+        let tracked = std::env::temp_dir().join("gfm-platform-fileprovider-snapshot-gate");
+        let previous = FileProviderStateSnapshot {
+            entries: vec![FileProviderStateSnapshotEntry {
+                path: tracked,
+                state: CloudStorageState::Evicted,
+            }],
+        };
+        let empty = FileProviderStateSnapshot {
+            entries: Vec::new(),
+        };
+
+        assert!(!fileprovider_snapshot_changed(None, &empty));
+        assert!(!fileprovider_snapshot_changed(Some(&previous), &previous));
+        assert!(fileprovider_snapshot_changed(None, &previous));
+        assert!(fileprovider_snapshot_changed(Some(&previous), &empty));
     }
 
     #[test]
