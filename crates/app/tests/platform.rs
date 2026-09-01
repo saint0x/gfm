@@ -4244,6 +4244,56 @@ fn persists_fileprovider_invalidation_scan_from_binary() {
 }
 
 #[test]
+fn fileprovider_invalidation_scan_preserves_unscanned_snapshot_entries_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-fileprovider-invalidation-scan-preserve-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let state = root.join("fileprovider-state.tsv");
+    let unchanged = root.join("Unchanged.icloud-placeholder");
+    let changed = root.join("Changed.icloud-placeholder");
+    std::fs::write(&unchanged, "unchanged").unwrap();
+    std::fs::write(&changed, "changed").unwrap();
+    mark_evicted_fixture(&unchanged);
+    mark_evicted_fixture(&changed);
+    std::fs::write(
+        &state,
+        format!(
+            "gfm-fileprovider-state-v1\nevicted\t{}\ndownloaded\t{}\n",
+            unchanged.display(),
+            changed.display()
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-invalidation-scan")
+        .arg(&state)
+        .arg(&changed)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("fileprovider-state-invalidation\tinitialized=false\tchanged=1\t"));
+    assert!(stdout.contains(&format!(
+        "fileprovider-invalidation\t{}\tprevious=downloaded\tcurrent=evicted\tchanged=true\t",
+        changed.display()
+    )));
+    let state_text = std::fs::read_to_string(&state).unwrap();
+    assert!(state_text.contains(&format!("evicted\t{}\n", unchanged.display())));
+    assert!(state_text.contains(&format!("evicted\t{}\n", changed.display())));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn fileprovider_invalidation_scan_refuses_invalid_persisted_state_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-fileprovider-invalidation-scan-corrupt-state-{}",
