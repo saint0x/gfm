@@ -3118,8 +3118,7 @@ fn run_adaptive_quicklook_session(
                 cancellation.cancel();
             }
             cancellation.check()?;
-            let record =
-                record_for_path_checked(&access_report.path, None, false, || cancellation.check())?;
+            let record = access_report.record_checked(WORKER, &cancellation)?;
             cancellation.check()?;
             let cloud =
                 fileprovider_materialization_for_preview(&access_report.path, &cancellation)?;
@@ -3178,8 +3177,7 @@ fn run_adaptive_thumbnail_generation(
                 cancellation.cancel();
             }
             cancellation.check()?;
-            let record =
-                record_for_path_checked(&access_report.path, None, false, || cancellation.check())?;
+            let record = access_report.record_checked(WORKER, &cancellation)?;
             cancellation.check()?;
             let cloud =
                 fileprovider_materialization_for_preview(&access_report.path, &cancellation)?;
