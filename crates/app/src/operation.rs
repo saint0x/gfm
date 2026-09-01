@@ -922,12 +922,13 @@ fn operation_access_gate_with_bookmark_store_checked(
             )
         {
             let reason = format!(
-                "{}; scope={}; mode={}; worker-action={}; role={}; probe={}",
+                "{}; scope={}; mode={}; worker-action={}; role={}; probe={}; probe-path={}",
                 admission.reason,
                 report.scope.as_str(),
                 report.mode.as_str(),
                 admission.worker_action.as_str(),
                 requirement.role.as_str(),
+                report.probe.as_str(),
                 probe_path.display()
             );
             gate = gate.with_decision(
@@ -944,12 +945,13 @@ fn operation_access_gate_with_bookmark_store_checked(
             continue;
         }
         let reason = format!(
-            "{}; scope={}; mode={}; worker-action={}; role={}; probe={}",
+            "{}; scope={}; mode={}; worker-action={}; role={}; probe={}; probe-path={}",
             report.reason,
             report.scope.as_str(),
             report.mode.as_str(),
             admission.worker_action.as_str(),
             requirement.role.as_str(),
+            report.probe.as_str(),
             probe_path.display()
         );
         let decision = if admission.needs_bookmark_access {

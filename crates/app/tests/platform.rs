@@ -6924,6 +6924,8 @@ fn operation_access_refuses_unavailable_volume_api_state_from_binary() {
         stdout.contains("refresh-on-permission-change=true"),
         "{stdout}"
     );
+    assert!(stdout.contains("probe=unavailable"), "{stdout}");
+    assert!(stdout.contains("probe-path="), "{stdout}");
     assert!(!destination.exists());
 
     let _ = std::fs::remove_dir_all(root);
