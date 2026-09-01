@@ -300,7 +300,18 @@ impl PreviewCache {
         path: &Path,
         kind: PreviewKind,
     ) -> Option<PreviewRequestKey> {
-        self.disk_index.get(&(path.to_path_buf(), kind)).cloned()
+        self.disk_key_for_path_kind_checked(path, kind, || Ok(()))
+            .expect("infallible preview cache key lookup")
+    }
+
+    pub fn disk_key_for_path_kind_checked(
+        &self,
+        path: &Path,
+        kind: PreviewKind,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Option<PreviewRequestKey>> {
+        check_control()?;
+        Ok(self.disk_index.get(&(path.to_path_buf(), kind)).cloned())
     }
 
     pub fn memory_bytes(&self) -> usize {
@@ -1711,6 +1722,26 @@ mod tests {
             cache.disk_key_for_path_kind(Path::new("missing.png"), PreviewKind::Thumbnail),
             None
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cache_disk_key_lookup_checked_honors_pre_cancelled_control() {
+        let root = temp_root("disk-key-lookup-cancelled");
+        let cache = PreviewCache::new(PreviewCacheConfig {
+            memory_budget_bytes: 16,
+            max_entry_bytes: 16,
+            disk_root: root.clone(),
+            disk_enabled: true,
+        })
+        .unwrap();
+        let path = Path::new("missing.png");
+
+        let result = cache.disk_key_for_path_kind_checked(path, PreviewKind::Thumbnail, || {
+            Err(GfmError::Cancelled)
+        });
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
         fs::remove_dir_all(root).unwrap();
     }
 

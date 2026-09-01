@@ -3233,7 +3233,7 @@ fn run_preview_cache_fileprovider_invalidation(
         let mut cache =
             PreviewCache::new_cancellable(PreviewCacheConfig::new(cache_root), &cancellation)?;
         let invalidation_key = cache
-            .disk_key_for_path_kind(&key.path, key.kind)
+            .disk_key_for_path_kind_checked(&key.path, key.kind, || cancellation.check())?
             .unwrap_or_else(|| key.clone());
         cancellation.check()?;
         Ok(cache
@@ -3589,7 +3589,7 @@ fn observed_preview_cache_invalidation_tsv(
         cancellation.check()?;
         let key = preview_cache_key_for_path_kind(&cache, &report.path, kind, cancellation)?;
         let invalidation_key = cache
-            .disk_key_for_path_kind(&key.path, key.kind)
+            .disk_key_for_path_kind_checked(&key.path, key.kind, || cancellation.check())?
             .unwrap_or_else(|| key.clone());
         cancellation.check()?;
         lines.push(
@@ -3612,7 +3612,7 @@ fn preview_cache_key_for_path_kind(
     cancellation: &Cancellation,
 ) -> Result<PreviewRequestKey> {
     cancellation.check()?;
-    if let Some(key) = cache.disk_key_for_path_kind(path, kind) {
+    if let Some(key) = cache.disk_key_for_path_kind_checked(path, kind, || cancellation.check())? {
         return Ok(key);
     }
     cancellation.check()?;
