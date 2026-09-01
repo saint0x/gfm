@@ -110,8 +110,27 @@ pub(crate) fn refresh_permission_state_at_path_with_report_checked(
     )?);
     let report = PermissionStateInvalidationReport::evaluate(previous.as_ref(), &current);
     check_control()?;
-    current.write_checked(path, &mut check_control)?;
+    publish_permission_state_snapshot_checked(path, previous.as_ref(), &current, check_control)?;
     Ok(report)
+}
+
+fn permission_state_snapshot_changed(
+    previous: Option<&PermissionStateSnapshot>,
+    current: &PermissionStateSnapshot,
+) -> bool {
+    previous != Some(current)
+}
+
+fn publish_permission_state_snapshot_checked(
+    path: &Path,
+    previous: Option<&PermissionStateSnapshot>,
+    current: &PermissionStateSnapshot,
+    check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    if permission_state_snapshot_changed(previous, current) {
+        current.write_checked(path, check_control)?;
+    }
+    Ok(())
 }
 
 fn preflight_permission_state_volume_with_report(
@@ -432,6 +451,81 @@ mod tests {
             })
             .count();
         assert_eq!(leftovers, 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn permission_state_snapshot_publish_gate_accepts_only_real_changes() {
+        let previous = PermissionStateSnapshot {
+            readiness: vec![PermissionReadiness {
+                scope: PermissionScope::Documents,
+                path: PathBuf::from("/Users/me/Documents"),
+                state: PermissionState::Granted,
+                reason: "readable".to_string(),
+            }],
+        };
+        let mut changed = previous.clone();
+        changed.readiness[0].state = PermissionState::Denied;
+        changed.readiness[0].reason = "macOS denied read access".to_string();
+
+        assert!(permission_state_snapshot_changed(None, &previous));
+        assert!(!permission_state_snapshot_changed(
+            Some(&previous),
+            &previous
+        ));
+        assert!(permission_state_snapshot_changed(Some(&previous), &changed));
+    }
+
+    #[test]
+    fn unchanged_permission_state_snapshot_publish_skips_checked_write() {
+        let root = unique_temp_dir("gfm-permission-refresh-noop-publish");
+        let state = root.join("permission-state.tsv");
+        let previous = PermissionStateSnapshot {
+            readiness: vec![PermissionReadiness {
+                scope: PermissionScope::Documents,
+                path: root.join("Documents"),
+                state: PermissionState::Granted,
+                reason: "readable".to_string(),
+            }],
+        };
+        previous.write(&state).unwrap();
+        let before = fs::read(&state).unwrap();
+
+        publish_permission_state_snapshot_checked(&state, Some(&previous), &previous, || {
+            Err(GfmError::Cancelled)
+        })
+        .expect("unchanged permission snapshot should skip checked write entirely");
+
+        assert_eq!(fs::read(&state).unwrap(), before);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn changed_permission_state_snapshot_publish_honors_checked_write_cancellation() {
+        let root = unique_temp_dir("gfm-permission-refresh-changed-publish-cancel");
+        let state = root.join("permission-state.tsv");
+        let previous = PermissionStateSnapshot {
+            readiness: vec![PermissionReadiness {
+                scope: PermissionScope::Documents,
+                path: root.join("Documents"),
+                state: PermissionState::Granted,
+                reason: "readable".to_string(),
+            }],
+        };
+        let mut changed = previous.clone();
+        changed.readiness[0].state = PermissionState::Denied;
+        changed.readiness[0].reason = "macOS denied read access".to_string();
+        previous.write(&state).unwrap();
+        let before = fs::read(&state).unwrap();
+
+        let err =
+            publish_permission_state_snapshot_checked(&state, Some(&previous), &changed, || {
+                Err(GfmError::Cancelled)
+            })
+            .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert_eq!(fs::read(&state).unwrap(), before);
         fs::remove_dir_all(root).unwrap();
     }
 
