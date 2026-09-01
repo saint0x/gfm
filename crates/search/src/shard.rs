@@ -489,6 +489,7 @@ impl ShardedSearchIndex {
         if shards.is_empty() {
             return Ok(Vec::new());
         }
+        cancellation.check()?;
         if let [(_, shard)] = shards.as_slice() {
             return shard.stream_structured_cancellable(query, limit, cancellation);
         }
@@ -531,6 +532,7 @@ impl ShardedSearchIndex {
                 hits: hot,
             });
         }
+        cancellation.check()?;
 
         let mut deep = deep.into_sorted_hits();
         deep.retain(|hit| match seen.get(&hit.record.id) {

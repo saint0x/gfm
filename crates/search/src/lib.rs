@@ -250,6 +250,7 @@ impl SearchIndex {
                 cancellation,
             )?
             .hits;
+        cancellation.check()?;
         let full = self
             .query_pass(
                 query,
