@@ -700,7 +700,11 @@ impl VolumeDiscoveryReport {
     ) -> Result<Self> {
         let path = path.as_ref();
         check()?;
-        let mut paths = containing_mounted_volume_paths_checked(path, &mut check)?;
+        let mut paths = direct_containing_mounted_volume_paths_checked(path, &mut check)?;
+        check()?;
+        if paths.is_empty() {
+            paths = containing_mounted_volume_paths_checked(path, &mut check)?;
+        }
         check()?;
         paths.extend(marker_ancestor_volume_paths_checked(path, &mut check)?);
         check()?;
@@ -3108,6 +3112,32 @@ fn mounted_volume_paths_for_existing_path_checked(
     Ok(paths)
 }
 
+fn direct_containing_mounted_volume_paths_checked(
+    path: &Path,
+    mut check: impl FnMut() -> Result<()>,
+) -> Result<Vec<PathBuf>> {
+    check()?;
+    let entry = gfm_mac_sys::copy_volume_mount_table_entry(path);
+    check()?;
+    Ok(finder_visible_containing_mount_path(path, &entry)
+        .into_iter()
+        .collect())
+}
+
+fn finder_visible_containing_mount_path(
+    path: &Path,
+    entry: &NativeVolumeMountTableEntry,
+) -> Option<PathBuf> {
+    if entry.status != NativeVolumeStatus::Available {
+        return None;
+    }
+    let mount_point = entry.mount_point.as_deref()?;
+    if finder_visible_mount_path(mount_point) {
+        return Some(mount_point.to_path_buf());
+    }
+    path.is_absolute().then(|| PathBuf::from("/"))
+}
+
 fn fallback_volume_paths_checked(mut check: impl FnMut() -> Result<()>) -> Result<Vec<PathBuf>> {
     check()?;
     let mut paths = vec![PathBuf::from("/")];
@@ -4969,6 +4999,48 @@ mod tests {
 
         assert!(paths.iter().any(|path| path == Path::new("/")));
         assert!(paths.iter().all(|path| finder_visible_mount_path(path)));
+    }
+
+    #[test]
+    fn direct_containing_mount_path_accepts_finder_visible_volume_roots() {
+        let entry = mount_table_entry(|entry| {
+            entry.mount_point = Some(PathBuf::from("/Volumes/External SSD"));
+        });
+
+        let path = finder_visible_containing_mount_path(
+            Path::new("/Volumes/External SSD/Project/Plan.md"),
+            &entry,
+        );
+
+        assert_eq!(path.as_deref(), Some(Path::new("/Volumes/External SSD")));
+    }
+
+    #[test]
+    fn direct_containing_mount_path_maps_hidden_apfs_mounts_to_system_root() {
+        let entry = mount_table_entry(|entry| {
+            entry.mount_point = Some(PathBuf::from("/System/Volumes/Data"));
+        });
+
+        let path =
+            finder_visible_containing_mount_path(Path::new("/Users/me/Documents/Plan.md"), &entry);
+
+        assert_eq!(path.as_deref(), Some(Path::new("/")));
+    }
+
+    #[test]
+    fn direct_containing_mount_path_ignores_unavailable_native_entry() {
+        let entry = mount_table_entry(|entry| {
+            entry.status = NativeVolumeStatus::Unavailable;
+            entry.mount_point = Some(PathBuf::from("/Volumes/External SSD"));
+            entry.reason = Some("statfs unavailable".to_string());
+        });
+
+        let path = finder_visible_containing_mount_path(
+            Path::new("/Volumes/External SSD/Project/Plan.md"),
+            &entry,
+        );
+
+        assert_eq!(path, None);
     }
 
     #[test]
