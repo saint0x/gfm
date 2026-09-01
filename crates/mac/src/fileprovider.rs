@@ -4,8 +4,8 @@ use gfm_mac_sys::{
     evict_ubiquitous_item, start_downloading_ubiquitous_item, NativeFileProviderDomain,
     NativeFileProviderDomainEnumeration, NativeFileProviderDomainStatus,
     NativeFileProviderIdentity, NativeFileProviderIdentityStatus,
-    NativeFileProviderOperationStatus, NativeFileProviderResourceValues,
-    NativeUbiquitousDownloadingStatus,
+    NativeFileProviderOperationResult, NativeFileProviderOperationStatus,
+    NativeFileProviderResourceValues, NativeUbiquitousDownloadingStatus,
 };
 use gfm_types::{FileEvent, FileEventKind, GfmError, Result};
 use std::collections::{BTreeMap, BTreeSet};
@@ -1596,10 +1596,28 @@ impl FileProviderOperationReport {
             FileProviderOperation::Download => start_downloading_ubiquitous_item(&path),
             FileProviderOperation::Evict => evict_ubiquitous_item(&path),
         };
+        Self::from_native_result_checked(path, operation, before, result, check_control)
+    }
+
+    fn from_native_result_checked(
+        path: PathBuf,
+        operation: FileProviderOperation,
+        before: FileProviderStateReport,
+        result: NativeFileProviderOperationResult,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check_control()?;
         match result.status {
             NativeFileProviderOperationStatus::Completed => {
                 let after =
-                    FileProviderStateReport::read_path_checked(&path, &mut check_control).ok();
+                    match FileProviderStateReport::read_path_checked(&path, &mut check_control) {
+                        Ok(after) => {
+                            check_control()?;
+                            Some(after)
+                        }
+                        Err(GfmError::Cancelled) => return Err(GfmError::Cancelled),
+                        Err(_) => None,
+                    };
                 Ok(Self {
                     path,
                     operation,
@@ -5001,6 +5019,27 @@ mod tests {
             || Err(GfmError::Cancelled),
         )
         .expect_err("pre-cancelled FileProvider operation must stop before probing path");
+
+        assert_eq!(err, GfmError::Cancelled);
+    }
+
+    #[test]
+    fn checked_operation_cancels_after_native_completion_before_publish() {
+        let path = PathBuf::from("/tmp/gfm-fileprovider-operation-completed-cancel.icloud");
+        let before = FileProviderStateReport::removed(path.clone());
+        let result = NativeFileProviderOperationResult {
+            status: NativeFileProviderOperationStatus::Completed,
+            reason: None,
+        };
+
+        let err = FileProviderOperationReport::from_native_result_checked(
+            path,
+            FileProviderOperation::Download,
+            before,
+            result,
+            || Err(GfmError::Cancelled),
+        )
+        .expect_err("completed native FileProvider operation must still honor cancelled publish");
 
         assert_eq!(err, GfmError::Cancelled);
     }
