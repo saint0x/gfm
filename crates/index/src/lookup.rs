@@ -120,6 +120,28 @@ pub struct SidecarQuerySessionReport {
     pub result_cache_misses: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SidecarQueryCacheInvalidationReport {
+    pub path: std::path::PathBuf,
+    pub invalidated: bool,
+    pub result_entries_before: usize,
+    pub result_entries_after: usize,
+    pub reason: String,
+}
+
+impl SidecarQueryCacheInvalidationReport {
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "sidecar-query-cache-invalidation\t{}\tinvalidated={}\tresult-entries-before={}\tresult-entries-after={}\treason={}",
+            self.path.display(),
+            self.invalidated,
+            self.result_entries_before,
+            self.result_entries_after,
+            self.reason
+        )
+    }
+}
+
 #[derive(Debug)]
 pub struct SidecarIndexQuerySession {
     records: MmapRecordArchive,
@@ -245,6 +267,25 @@ impl SidecarIndexQuerySession {
             self.result_cache_hits.load(Ordering::Relaxed),
             self.result_cache_misses.load(Ordering::Relaxed),
         )
+    }
+
+    pub fn apply_provider_metadata_invalidation(
+        &self,
+        report: &crate::ProviderMetadataInvalidationReport,
+    ) -> SidecarQueryCacheInvalidationReport {
+        let mut cache = self.result_cache_lock();
+        let result_entries_before = cache.len();
+        if report.invalidate_query_cache {
+            cache.clear();
+        }
+        let result_entries_after = cache.len();
+        SidecarQueryCacheInvalidationReport {
+            path: report.path.clone(),
+            invalidated: report.invalidate_query_cache,
+            result_entries_before,
+            result_entries_after,
+            reason: report.reason.clone(),
+        }
     }
 
     pub fn search(&self, query: &str, limit: usize) -> Result<SidecarQuerySessionReport> {
@@ -1872,6 +1913,67 @@ mod tests {
     }
 
     #[test]
+    fn provider_metadata_invalidation_clears_sidecar_query_results() {
+        let fixture = SidecarFixture::new("provider-result-cache-clear");
+        let session = fixture.session();
+        let first = session.search("finderlatency", 5).unwrap();
+        let cached = session.search("finderlatency", 5).unwrap();
+        assert_eq!(first.search.hits, cached.search.hits);
+        assert_eq!(cached.result_cache_hits, 1);
+
+        let provider = crate::ProviderMetadataInvalidationReport::from_provider_transition(
+            fixture.record.path.clone(),
+            "downloaded",
+            "evicted",
+            true,
+            true,
+            "fileprovider-state-changed",
+        );
+        let invalidation = session.apply_provider_metadata_invalidation(&provider);
+        let after = session.search("finderlatency", 5).unwrap();
+
+        assert!(invalidation.invalidated);
+        assert_eq!(invalidation.result_entries_before, 1);
+        assert_eq!(invalidation.result_entries_after, 0);
+        assert_eq!(invalidation.reason, "provider-metadata-state-changed");
+        assert_eq!(
+            invalidation.as_tsv(),
+            "sidecar-query-cache-invalidation\t/tmp/FinderLatency.md\tinvalidated=true\tresult-entries-before=1\tresult-entries-after=0\treason=provider-metadata-state-changed"
+        );
+        assert_eq!(after.result_cache_hits, 0);
+        assert_eq!(after.result_cache_misses, 1);
+        assert_eq!(after.content_cache_hits, 1);
+    }
+
+    #[test]
+    fn provider_metadata_noop_preserves_sidecar_query_results() {
+        let fixture = SidecarFixture::new("provider-result-cache-noop");
+        let session = fixture.session();
+        let first = session.search("finderlatency", 5).unwrap();
+        let cached = session.search("finderlatency", 5).unwrap();
+        assert_eq!(first.search.hits, cached.search.hits);
+        assert_eq!(cached.result_cache_hits, 1);
+
+        let provider = crate::ProviderMetadataInvalidationReport::from_provider_transition(
+            fixture.record.path.clone(),
+            "downloaded",
+            "downloaded",
+            true,
+            false,
+            "fileprovider-state-unchanged",
+        );
+        let invalidation = session.apply_provider_metadata_invalidation(&provider);
+        let after = session.search("finderlatency", 5).unwrap();
+
+        assert!(!invalidation.invalidated);
+        assert_eq!(invalidation.result_entries_before, 1);
+        assert_eq!(invalidation.result_entries_after, 1);
+        assert_eq!(invalidation.reason, "provider-state-unchanged");
+        assert_eq!(after.result_cache_hits, 1);
+        assert_eq!(after.result_cache_misses, 0);
+    }
+
+    #[test]
     fn lookup_cache_refreshes_recency_on_hit() {
         let mut cache = LookupCache::new(2);
         cache.insert("first".to_string(), vec![1]);
@@ -2341,7 +2443,11 @@ impl<V: Clone> LookupCache<V> {
         }
     }
 
-    #[cfg(test)]
+    fn clear(&mut self) {
+        self.order.clear();
+        self.values.clear();
+    }
+
     fn len(&self) -> usize {
         self.values.len()
     }
