@@ -3,9 +3,7 @@ use crate::access::{
     ScopedAccessGuard,
 };
 use crate::content::{run_content_search, run_content_search_with_volume_report};
-use crate::extract::{
-    extraction_budget_profile_checked, extraction_budget_profile_from_volume_report,
-};
+use crate::extract::extraction_budget_profile_from_volume_report;
 use crate::runtime::run_retriable_volume_task_cancellable_with_payload_path;
 use crate::{parse_required_scheduling_pressure, parse_usize_arg, required_path, required_string};
 use gfm_content::Extractor;
@@ -222,22 +220,27 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "search-content-index-adaptive requires a query string",
             )?;
             let pressure = parse_required_scheduling_pressure(args, "content index search")?;
-            let root = records
-                .parent()
-                .map(Path::to_path_buf)
-                .unwrap_or_else(|| PathBuf::from("."));
-            let extractor = Extractor::with_budget_profile(extraction_budget_profile_checked(
-                &root,
-                pressure,
-                || Ok(()),
-            )?);
-            let output = run_content_index_search(
+            let worker = "adaptive content index search";
+            let volume_reports = preflight_content_index_set_volume_access(
+                &records,
+                std::slice::from_ref(&content),
+                worker,
+            )?;
+            let records_report = volume_reports.records_report()?;
+            let extractor =
+                Extractor::with_budget_profile(extraction_budget_profile_from_volume_report(
+                    &records_report.path,
+                    pressure,
+                    &records_report.volume_report,
+                ));
+            let output = run_content_index_search_with_volume_reports(
                 records,
                 content,
                 query,
                 extractor,
-                "adaptive content index search",
+                worker,
                 None,
+                volume_reports,
             )?;
             eprintln!("{}", output.diagnostics);
             for hit in output.hits {
@@ -2178,6 +2181,26 @@ fn run_content_index_search(
         std::slice::from_ref(&content),
         worker,
     )?;
+    run_content_index_search_with_volume_reports(
+        records,
+        content,
+        query,
+        extractor,
+        worker,
+        retry_probe,
+        volume_reports,
+    )
+}
+
+fn run_content_index_search_with_volume_reports(
+    records: PathBuf,
+    content: PathBuf,
+    query: String,
+    extractor: Extractor,
+    worker: &'static str,
+    retry_probe: Option<PathBuf>,
+    volume_reports: ContentIndexVolumeAccessReports,
+) -> Result<ContentIndexSearchOutput> {
     let retry_access = search_retry_probe_access_report(retry_probe.as_deref())?;
     if let Some(retry_access) = retry_access.as_ref() {
         retry_access.preflight_volume(worker)?;
@@ -2720,6 +2743,12 @@ impl ContentIndexVolumeAccessReports {
                 .volume_report
                 .volume_for_path(&entry.path)
                 .map(|volume| volume.id)
+        })
+    }
+
+    fn records_report(&self) -> Result<&ContentIndexVolumeAccessReport> {
+        self.entries.first().ok_or_else(|| {
+            GfmError::Format("content index search records access report missing".to_string())
         })
     }
 }

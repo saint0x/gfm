@@ -27,19 +27,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub(crate) const ADAPTIVE_WORKER_TIMEOUT: Duration = Duration::from_secs(10);
 
-pub(crate) fn extraction_budget_profile_checked(
-    root: &Path,
-    pressure: SchedulingPressure,
-    mut check_control: impl FnMut() -> Result<()>,
-) -> Result<ExtractionBudgetProfile> {
-    check_control()?;
-    let report = VolumeDiscoveryReport::for_containing_path_checked(root, &mut check_control)?;
-    check_control()?;
-    Ok(extraction_budget_profile_from_volume_report(
-        root, pressure, &report,
-    ))
-}
-
 pub(crate) fn extraction_budget_profile_from_volume_report(
     root: &Path,
     pressure: SchedulingPressure,
@@ -1113,6 +1100,19 @@ mod tests {
 
         assert_eq!(profile.volume, ExtractionVolumeClass::Network);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    fn extraction_budget_profile_checked(
+        root: &Path,
+        pressure: SchedulingPressure,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<ExtractionBudgetProfile> {
+        check_control()?;
+        let report = VolumeDiscoveryReport::for_containing_path_checked(root, &mut check_control)?;
+        check_control()?;
+        Ok(extraction_budget_profile_from_volume_report(
+            root, pressure, &report,
+        ))
     }
 
     #[test]
