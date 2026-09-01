@@ -1624,21 +1624,24 @@ impl VolumeEventState {
         mut check: impl FnMut() -> Result<()>,
     ) -> Result<VolumeEventStateBatchReport> {
         check()?;
+        let mut staged = self.clone();
         let mut input_events = 0usize;
         let mut transitions = Vec::new();
         for event in events {
             check()?;
             input_events += 1;
-            let transition = self.apply_event_transition(&event);
+            let transition = staged.apply_event_transition(&event);
             transitions.push(transition);
             check()?;
         }
         check()?;
-        Ok(VolumeEventStateBatchReport::from_transitions(
+        let report = VolumeEventStateBatchReport::from_transitions(
             input_events,
-            self.report.volumes.len(),
+            staged.report.volumes.len(),
             transitions,
-        ))
+        );
+        *self = staged;
+        Ok(report)
     }
 
     pub fn apply_parts(
@@ -5247,7 +5250,7 @@ mod tests {
     }
 
     #[test]
-    fn volume_event_state_batch_cancellation_preserves_applied_prefix() {
+    fn volume_event_state_batch_cancellation_preserves_original_snapshot() {
         let first_root = unique_temp_dir("gfm-volume-event-state-batch-first");
         let second_root = unique_temp_dir("gfm-volume-event-state-batch-second");
         fs::write(first_root.join(VOLUME_MARKER), "external-removable\n").unwrap();
@@ -5289,7 +5292,7 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(err, GfmError::Cancelled);
-        assert_eq!(state.report().volumes, vec![first]);
+        assert!(state.report().volumes.is_empty());
         fs::remove_dir_all(first_root).unwrap();
         fs::remove_dir_all(second_root).unwrap();
     }
