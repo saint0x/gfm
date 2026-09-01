@@ -3375,17 +3375,22 @@ fn run_preview_cache_fileprovider_invalidation(
         cancellation.check()?;
         let mut cache =
             PreviewCache::new_cancellable(PreviewCacheConfig::new(cache_root), &cancellation)?;
-        let invalidation_key = cache
-            .disk_key_for_path_kind_checked(&key.path, key.kind, || cancellation.check())?
-            .unwrap_or_else(|| key.clone());
+        let invalidation_keys =
+            cache.invalidation_keys_for_path_kind_checked(&key.path, key.clone(), || {
+                cancellation.check()
+            })?;
         cancellation.check()?;
-        Ok(cache
-            .apply_invalidation_cancellable(
-                &invalidation_key,
-                preview_invalidation_for_fileprovider(&report),
-                &cancellation,
-            )?
-            .as_tsv())
+        let event = preview_invalidation_for_fileprovider(&report);
+        let mut reports = Vec::with_capacity(invalidation_keys.len());
+        for invalidation_key in invalidation_keys {
+            cancellation.check()?;
+            reports.push(
+                cache
+                    .apply_invalidation_cancellable(&invalidation_key, event, &cancellation)?
+                    .as_tsv(),
+            );
+        }
+        Ok(reports.join("\n"))
     })
 }
 
@@ -3786,19 +3791,20 @@ fn observed_preview_cache_invalidation_tsv(
     for report in &observed.report.changes {
         cancellation.check()?;
         let key = preview_cache_key_for_path_kind(&cache, &report.path, kind, cancellation)?;
-        let invalidation_key = cache
-            .disk_key_for_path_kind_checked(&key.path, key.kind, || cancellation.check())?
-            .unwrap_or_else(|| key.clone());
+        let invalidation_keys =
+            cache.invalidation_keys_for_path_kind_checked(&key.path, key.clone(), || {
+                cancellation.check()
+            })?;
         cancellation.check()?;
-        lines.push(
-            cache
-                .apply_invalidation_cancellable(
-                    &invalidation_key,
-                    preview_invalidation_for_fileprovider(report),
-                    cancellation,
-                )?
-                .as_tsv(),
-        );
+        let event = preview_invalidation_for_fileprovider(report);
+        for invalidation_key in invalidation_keys {
+            cancellation.check()?;
+            lines.push(
+                cache
+                    .apply_invalidation_cancellable(&invalidation_key, event, cancellation)?
+                    .as_tsv(),
+            );
+        }
     }
     Ok(lines.join("\n"))
 }
@@ -4585,6 +4591,89 @@ mod tests {
 
         assert_eq!(output, observed.as_tsv());
         assert!(!root.exists());
+    }
+
+    #[test]
+    fn observed_preview_cache_invalidation_removes_all_cached_kinds_for_path() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-platform-preview-cache-observed-all-kinds-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let cache_root = root.join("preview-cache");
+        let state_path = root.join("state.tsv");
+        let item = root.join("Remote.icloud-placeholder");
+        std::fs::write(&item, "placeholder").unwrap();
+        xattr::set(&item, "com.apple.icloud.placeholder", b"1").unwrap();
+        FileProviderStateSnapshot {
+            entries: vec![FileProviderStateSnapshotEntry {
+                path: item.clone(),
+                state: CloudStorageState::Downloaded,
+            }],
+        }
+        .write(&state_path)
+        .unwrap();
+
+        let thumbnail_key = PreviewRequestKey::new(
+            FileId::new(VolumeId(7), 11),
+            item.clone(),
+            PreviewKind::Thumbnail,
+        );
+        let quicklook_key = PreviewRequestKey::new(
+            FileId::new(VolumeId(7), 12),
+            item.clone(),
+            PreviewKind::QuickLook,
+        );
+        let mut cache = PreviewCache::new(PreviewCacheConfig {
+            memory_budget_bytes: 128,
+            max_entry_bytes: 64,
+            disk_root: cache_root.clone(),
+            disk_enabled: true,
+        })
+        .unwrap();
+        cache
+            .insert(gfm_preview::PreviewEntry::new(
+                thumbnail_key.clone(),
+                b"thumbnail".to_vec(),
+            ))
+            .unwrap();
+        cache
+            .insert(gfm_preview::PreviewEntry::new(
+                quicklook_key.clone(),
+                b"quicklook".to_vec(),
+            ))
+            .unwrap();
+        drop(cache);
+
+        let output = observed_preview_cache_invalidation_tsv(
+            &evaluate_fileprovider_observed_invalidation(
+                &state_path,
+                FileEvent::new(item.clone(), FileEventKind::Metadata),
+                "preview cache fileprovider observed invalidation",
+                &Cancellation::default(),
+            )
+            .unwrap(),
+            &cache_root,
+            PreviewKind::Thumbnail,
+            &Cancellation::default(),
+        )
+        .expect("observed FileProvider invalidation should flush all cached kinds for the path");
+
+        assert!(output.contains("\tkind=quick-look\t"), "{output}");
+        assert!(output.contains("\tkind=thumbnail\t"), "{output}");
+        assert!(
+            output.matches("preview-cache-invalidation\t").count() == 2,
+            "{output}"
+        );
+        assert!(
+            output.matches("\tremoved-disk=true").count() == 2,
+            "{output}"
+        );
+        let mut reloaded = PreviewCache::new(PreviewCacheConfig::new(&cache_root)).unwrap();
+        assert_eq!(reloaded.get(&thumbnail_key).unwrap(), None);
+        assert_eq!(reloaded.get(&quicklook_key).unwrap(), None);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

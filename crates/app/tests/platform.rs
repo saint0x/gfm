@@ -3062,8 +3062,19 @@ fn reports_preview_cache_fileprovider_invalidation_from_binary() {
         evicted.clone(),
         PreviewKind::Thumbnail,
     );
+    let seeded_quicklook_key = PreviewRequestKey::new(
+        FileId::new(VolumeId(42), 9002),
+        evicted.clone(),
+        PreviewKind::QuickLook,
+    );
     seeded_cache
         .insert(PreviewEntry::new(seeded_key, b"cached thumbnail".to_vec()))
+        .unwrap();
+    seeded_cache
+        .insert(PreviewEntry::new(
+            seeded_quicklook_key,
+            b"cached quicklook".to_vec(),
+        ))
         .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -3085,8 +3096,20 @@ fn reports_preview_cache_fileprovider_invalidation_from_binary() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.starts_with("preview-cache-invalidation\t"));
     assert!(stdout.contains("\tkind=thumbnail\treason=content-or-icloud\t"));
+    assert!(stdout.contains("\tkind=quick-look\treason=content-or-icloud\t"));
+    assert_eq!(
+        stdout.matches("preview-cache-invalidation\t").count(),
+        2,
+        "{stdout}"
+    );
     assert!(stdout.contains("\tinvalidate-memory=true\tinvalidate-disk=true\t"));
-    assert!(stdout.contains("\tremoved-memory=false\tremoved-disk=true\n"));
+    assert_eq!(
+        stdout
+            .matches("\tremoved-memory=false\tremoved-disk=true")
+            .count(),
+        2,
+        "{stdout}"
+    );
 
     let _ = std::fs::remove_dir_all(root);
 }

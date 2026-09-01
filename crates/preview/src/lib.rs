@@ -314,6 +314,36 @@ impl PreviewCache {
         Ok(self.disk_index.get(&(path.to_path_buf(), kind)).cloned())
     }
 
+    pub fn invalidation_keys_for_path_kind_checked(
+        &self,
+        path: &Path,
+        fallback: PreviewRequestKey,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<PreviewRequestKey>> {
+        check_control()?;
+        let mut seen = HashSet::new();
+        let mut keys = Vec::new();
+        for key in self.memory.keys() {
+            check_control()?;
+            if key.path == path && seen.insert(key.clone()) {
+                keys.push(key.clone());
+            }
+        }
+        for key in self.disk_index.values() {
+            check_control()?;
+            if key.path == path && seen.insert(key.clone()) {
+                keys.push(key.clone());
+            }
+        }
+        if keys.is_empty() {
+            keys.push(fallback);
+        } else {
+            keys.sort_by_key(format_disk_index_line);
+        }
+        check_control()?;
+        Ok(keys)
+    }
+
     pub fn memory_bytes(&self) -> usize {
         self.memory_bytes
     }
@@ -1137,6 +1167,69 @@ mod tests {
             cache.get(&first).unwrap(),
             Some(CacheHit::Disk(_))
         ));
+    }
+
+    #[test]
+    fn invalidation_keys_include_all_cached_kinds_for_path() {
+        let root = temp_root("path-kind-invalidation");
+        let mut cache = PreviewCache::new(PreviewCacheConfig {
+            memory_budget_bytes: 64,
+            max_entry_bytes: 16,
+            disk_root: root,
+            disk_enabled: true,
+        })
+        .unwrap();
+        let thumbnail = key("remote.icloud", PreviewKind::Thumbnail);
+        let quicklook = PreviewRequestKey::new(
+            FileId::new(VolumeId(1), 99),
+            "remote.icloud",
+            PreviewKind::QuickLook,
+        );
+        let other = key("other.icloud", PreviewKind::Thumbnail);
+        cache
+            .insert(PreviewEntry::new(thumbnail.clone(), b"thumb".to_vec()))
+            .unwrap();
+        cache
+            .insert(PreviewEntry::new(quicklook.clone(), b"quick".to_vec()))
+            .unwrap();
+        cache
+            .insert(PreviewEntry::new(other, b"other".to_vec()))
+            .unwrap();
+
+        let keys = cache
+            .invalidation_keys_for_path_kind_checked(
+                Path::new("remote.icloud"),
+                thumbnail.clone(),
+                || Ok(()),
+            )
+            .unwrap();
+
+        assert_eq!(keys.len(), 2);
+        assert!(keys.contains(&thumbnail));
+        assert!(keys.contains(&quicklook));
+    }
+
+    #[test]
+    fn invalidation_keys_fallback_when_path_is_not_cached() {
+        let root = temp_root("path-kind-invalidation-fallback");
+        let cache = PreviewCache::new(PreviewCacheConfig {
+            memory_budget_bytes: 16,
+            max_entry_bytes: 16,
+            disk_root: root,
+            disk_enabled: true,
+        })
+        .unwrap();
+        let fallback = key("missing.icloud", PreviewKind::Thumbnail);
+
+        let keys = cache
+            .invalidation_keys_for_path_kind_checked(
+                Path::new("missing.icloud"),
+                fallback.clone(),
+                || Ok(()),
+            )
+            .unwrap();
+
+        assert_eq!(keys, vec![fallback]);
     }
 
     #[test]
