@@ -2416,7 +2416,10 @@ fn record_sidecar_build_routes_refuse_unreachable_output_before_mapping_from_bin
     ];
 
     for (route, output_name, worker) in cases {
-        let output_path = offline.join(output_name);
+        let output_path = offline.join(format!(
+            "{}-{output_name}",
+            "record-sidecar-output-unavailable".repeat(8)
+        ));
         let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
             .args([
                 route,
@@ -2434,6 +2437,10 @@ fn record_sidecar_build_routes_refuse_unreachable_output_before_mapping_from_bin
             stderr.contains(&format!(
                 "{worker} output volume access blocked: unreachable volume network"
             )),
+            "{route}: {stderr}"
+        );
+        assert!(
+            !stderr.contains("archive write path metadata unavailable"),
             "{route}: {stderr}"
         );
         assert!(
@@ -3273,7 +3280,7 @@ fn metadata_update_refuses_unreachable_write_before_appending_from_binary() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stdout.contains("metadata-update\t"), "{stdout}");
     assert!(
-        stderr.contains("index volume access blocked: unreachable volume network"),
+        stderr.contains("metadata update volume access blocked: unreachable volume network"),
         "{stderr}"
     );
     assert!(
@@ -6934,7 +6941,7 @@ fn adaptive_sidecar_recover_refuses_unreachable_quarantine_before_worker_from_bi
     let records = root.join("records.gfmidx");
     let prefixes = root.join("prefixes.gfmprefix");
     let dictionary = root.join("dictionary.gfmdict");
-    let quarantine = offline.join("quarantine");
+    let quarantine = offline.join("sidecar-quarantine-unavailable".repeat(16));
     fs::write(root.join("ProjectPlan.md"), "sidecar quarantine").unwrap();
     fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
     fs::write(&dictionary, "not-a-dictionary").unwrap();
@@ -6976,6 +6983,10 @@ fn adaptive_sidecar_recover_refuses_unreachable_quarantine_before_worker_from_bi
         stderr.contains(
             "sidecar repair quarantine volume access blocked: unreachable volume network"
         ),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("archive write path metadata unavailable"),
         "{stderr}"
     );
     assert!(

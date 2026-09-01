@@ -279,7 +279,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let volume = access_reports.first_volume();
             if let Some(retry_probe) = retry_probe.as_ref() {
                 ArchiveAccessReport::new_checked(
-                    write_probe_path(retry_probe)?.to_path_buf(),
+                    write_probe_path_checked(retry_probe, "derived sidecar rebuild", || Ok(()))?,
                     AccessIntent::Write,
                     || Ok(()),
                 )?
@@ -510,7 +510,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let volume = access_reports.first_volume();
             if let Some(retry_probe) = retry_probe.as_ref() {
                 ArchiveAccessReport::new_checked(
-                    write_probe_path(retry_probe)?.to_path_buf(),
+                    write_probe_path_checked(retry_probe, "sidecar repair", || Ok(()))?,
                     AccessIntent::Write,
                     || Ok(()),
                 )?
@@ -734,27 +734,32 @@ struct RecordSidecarBuildAccessReports {
 }
 
 impl RecordSidecarBuildAccessReports {
-    fn for_paths(records: &Path, output: &Path) -> Result<Self> {
-        Self::for_paths_checked(records, output, || Ok(()))
+    fn for_paths(records: &Path, output: &Path, worker: &str) -> Result<Self> {
+        Self::for_paths_checked(records, output, worker, || Ok(()))
     }
 
     fn for_paths_checked(
         records: &Path,
         output: &Path,
+        worker: &str,
         mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<Self> {
         check_control()?;
-        let output_probe = write_probe_path(output)?.to_path_buf();
+        let records_report = ArchiveAccessReport::new_checked(
+            records.to_path_buf(),
+            AccessIntent::Read,
+            &mut check_control,
+        )?;
+        records_report.preflight_volume(&format!("{worker} records"))?;
+        check_control()?;
+        let output_probe =
+            write_probe_path_checked(output, &format!("{worker} output"), &mut check_control)?;
         check_control()?;
         Ok(Self {
             entries: [
                 LabeledArchiveAccessReport {
                     worker: "records".to_string(),
-                    report: ArchiveAccessReport::new_checked(
-                        records.to_path_buf(),
-                        AccessIntent::Read,
-                        &mut check_control,
-                    )?,
+                    report: records_report,
                 },
                 LabeledArchiveAccessReport {
                     worker: "output".to_string(),
@@ -822,8 +827,12 @@ fn retain_record_sidecar_build_access_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
     check_control()?;
-    let access_reports =
-        RecordSidecarBuildAccessReports::for_paths_checked(records, output, &mut check_control)?;
+    let access_reports = RecordSidecarBuildAccessReports::for_paths_checked(
+        records,
+        output,
+        worker,
+        &mut check_control,
+    )?;
     access_reports.access_checked(worker, &mut check_control)
 }
 
@@ -932,7 +941,7 @@ fn build_record_sidecar<T>(
 where
     T: Send + 'static,
 {
-    let access_reports = RecordSidecarBuildAccessReports::for_paths(&records, &output)?;
+    let access_reports = RecordSidecarBuildAccessReports::for_paths(&records, &output, worker)?;
     access_reports.preflight_volumes(worker)?;
     let volume = access_reports.first_volume();
     run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
@@ -952,6 +961,8 @@ fn archive_migration_access_reports(
     backup_dir: &Path,
     worker: &str,
 ) -> Result<ArchiveAccessReports> {
+    ArchiveAccessReport::new_checked(archive.to_path_buf(), AccessIntent::Read, || Ok(()))?
+        .preflight_volume(&format!("{worker} archive"))?;
     ArchiveAccessReports::new_checked(
         vec![
             (
@@ -960,12 +971,12 @@ fn archive_migration_access_reports(
                 format!("{worker} archive"),
             ),
             (
-                write_probe_path(archive)?.to_path_buf(),
+                write_probe_path_checked(archive, &format!("{worker} archive"), || Ok(()))?,
                 AccessIntent::Write,
                 format!("{worker} archive"),
             ),
             (
-                write_probe_path(backup_dir)?.to_path_buf(),
+                write_probe_path_checked(backup_dir, &format!("{worker} backup"), || Ok(()))?,
                 AccessIntent::Write,
                 format!("{worker} backup"),
             ),
@@ -1000,6 +1011,14 @@ fn columns_rebuild_access_reports(
     columns: &Path,
     backup_dir: &Path,
 ) -> Result<ArchiveAccessReports> {
+    ArchiveAccessReport::new_checked(records.to_path_buf(), AccessIntent::Read, || Ok(()))?
+        .preflight_volume("columns rebuild records")?;
+    ArchiveAccessReport::new_checked(
+        archive_probe_path(columns).to_path_buf(),
+        AccessIntent::Read,
+        || Ok(()),
+    )?
+    .preflight_volume("columns rebuild columns")?;
     ArchiveAccessReports::new_checked(
         vec![
             (
@@ -1013,12 +1032,12 @@ fn columns_rebuild_access_reports(
                 "columns rebuild columns".to_string(),
             ),
             (
-                write_probe_path(columns)?.to_path_buf(),
+                write_probe_path_checked(columns, "columns rebuild output", || Ok(()))?,
                 AccessIntent::Write,
                 "columns rebuild output".to_string(),
             ),
             (
-                write_probe_path(backup_dir)?.to_path_buf(),
+                write_probe_path_checked(backup_dir, "columns rebuild backup", || Ok(()))?,
                 AccessIntent::Write,
                 "columns rebuild backup".to_string(),
             ),
@@ -1121,6 +1140,8 @@ fn derived_sidecar_rebuild_access_reports(
     sidecar: &Path,
     backup_dir: &Path,
 ) -> Result<ArchiveAccessReports> {
+    ArchiveAccessReport::new_checked(records.to_path_buf(), AccessIntent::Read, || Ok(()))?
+        .preflight_volume("derived sidecar rebuild records")?;
     ArchiveAccessReports::new_checked(
         vec![
             (
@@ -1129,12 +1150,12 @@ fn derived_sidecar_rebuild_access_reports(
                 "derived sidecar rebuild records".to_string(),
             ),
             (
-                write_probe_path(sidecar)?.to_path_buf(),
+                write_probe_path_checked(sidecar, "derived sidecar rebuild output", || Ok(()))?,
                 AccessIntent::Write,
                 "derived sidecar rebuild output".to_string(),
             ),
             (
-                write_probe_path(backup_dir)?.to_path_buf(),
+                write_probe_path_checked(backup_dir, "derived sidecar rebuild backup", || Ok(()))?,
                 AccessIntent::Write,
                 "derived sidecar rebuild backup".to_string(),
             ),
@@ -1186,6 +1207,8 @@ fn sidecar_recovery_access_reports(
     sidecars: &SidecarPaths,
     quarantine: &Path,
 ) -> Result<ArchiveAccessReports> {
+    ArchiveAccessReport::new_checked(records.to_path_buf(), AccessIntent::Read, || Ok(()))?
+        .preflight_volume("sidecar repair records")?;
     let mut entries = vec![
         (
             records.to_path_buf(),
@@ -1193,14 +1216,14 @@ fn sidecar_recovery_access_reports(
             "sidecar repair records".to_string(),
         ),
         (
-            write_probe_path(quarantine)?.to_path_buf(),
+            write_probe_path_checked(quarantine, "sidecar repair quarantine", || Ok(()))?,
             AccessIntent::Write,
             "sidecar repair quarantine".to_string(),
         ),
     ];
     for path in sidecar_paths(sidecars) {
         entries.push((
-            write_probe_path(path)?.to_path_buf(),
+            write_probe_path_checked(path, "sidecar repair output", || Ok(()))?,
             AccessIntent::Write,
             "sidecar repair output".to_string(),
         ));
@@ -1233,13 +1256,44 @@ fn write_probe_path(path: &Path) -> Result<&Path> {
     }
 }
 
+fn write_probe_path_checked(
+    path: &Path,
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<PathBuf> {
+    check_control()?;
+    preflight_write_target_volume_checked(path, worker, &mut check_control)?;
+    check_control()?;
+    let probe_path = write_probe_path(path)?.to_path_buf();
+    check_control()?;
+    Ok(probe_path)
+}
+
+fn preflight_write_target_volume_checked(
+    path: &Path,
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    check_control()?;
+    let volume_path = crate::parent_or_cwd(path);
+    let volume_report =
+        VolumeDiscoveryReport::for_containing_path_checked(volume_path, &mut check_control)?;
+    check_control()?;
+    preflight_volume_access_scope_with_report(
+        volume_path,
+        AccessIntent::Write,
+        worker,
+        &volume_report,
+    )
+}
+
 fn fail_first_archive_retry_probe_attempt(
     attempt_state: &Path,
     worker: &str,
     cancellation: &Cancellation,
 ) -> Result<()> {
     cancellation.check()?;
-    let probe = write_probe_path(attempt_state)?.to_path_buf();
+    let probe = write_probe_path_checked(attempt_state, worker, || cancellation.check())?;
     let _access = preflight_access_scope_checked(&probe, AccessIntent::Write, worker, || {
         cancellation.check()
     })?;
@@ -1479,6 +1533,39 @@ mod tests {
     }
 
     #[test]
+    fn record_sidecar_build_access_refuses_unreachable_output_before_write_probe() {
+        let root = unique_temp_dir("gfm-record-sidecar-build-output-root");
+        let offline = unique_temp_dir("gfm-record-sidecar-build-output-offline");
+        let records = root.join("records.gfmidx");
+        let output = offline.join(format!(
+            "{}.gfmcols",
+            "record-sidecar-output-unavailable".repeat(16)
+        ));
+        fs::write(&records, b"records").unwrap();
+        fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+
+        let err = match retain_record_sidecar_build_access_checked(
+            &records,
+            &output,
+            "index columns",
+            || Ok(()),
+        ) {
+            Ok(_) => panic!("unreachable sidecar output was admitted before volume preflight"),
+            Err(err) => err,
+        };
+
+        assert!(err
+            .to_string()
+            .contains("index columns output volume access blocked: unreachable volume network"));
+        assert!(!err
+            .to_string()
+            .contains("archive write path metadata unavailable"));
+        assert!(!output.exists());
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(offline).unwrap();
+    }
+
+    #[test]
     fn archive_rebuild_plan_access_checked_rechecks_control_across_inputs() {
         let root = unique_temp_dir("gfm-archive-rebuild-plan-access-cancel");
         let inputs = ArchiveRebuildInputs {
@@ -1560,6 +1647,45 @@ mod tests {
         assert!(!quarantine.parent().unwrap().exists());
         assert!(!sidecars.columns.as_ref().unwrap().exists());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn sidecar_recovery_access_refuses_unreachable_quarantine_before_write_probe() {
+        let root = unique_temp_dir("gfm-sidecar-recovery-quarantine-root");
+        let offline = unique_temp_dir("gfm-sidecar-recovery-quarantine-offline");
+        let records = root.join("records.gfmidx");
+        let quarantine = offline.join("sidecar-quarantine-unavailable".repeat(16));
+        let sidecars = SidecarPaths {
+            columns: Some(root.join("columns.gfmcols")),
+            metadata: None,
+            prefixes: None,
+            substrings: None,
+            fuzzy: None,
+            dictionary: None,
+        };
+        fs::write(&records, b"records").unwrap();
+        fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+
+        let err = match retain_sidecar_recovery_access_checked(
+            &records,
+            &sidecars,
+            &quarantine,
+            || Ok(()),
+        ) {
+            Ok(_) => panic!("unreachable sidecar quarantine was admitted before volume preflight"),
+            Err(err) => err,
+        };
+
+        assert!(err.to_string().contains(
+            "sidecar repair quarantine volume access blocked: unreachable volume network"
+        ));
+        assert!(!err
+            .to_string()
+            .contains("archive write path metadata unavailable"));
+        assert!(!quarantine.exists());
+        assert!(!sidecars.columns.as_ref().unwrap().exists());
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(offline).unwrap();
     }
 
     #[test]
