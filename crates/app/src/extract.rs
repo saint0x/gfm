@@ -383,7 +383,7 @@ fn retain_extraction_quarantine_worker_access_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
     check_control()?;
-    let store_probe = write_probe_path(store)?.to_path_buf();
+    let store_probe = checked_write_probe_path(store, "extraction quarantine", &mut check_control)?;
     check_control()?;
     Ok(vec![
         preflight_access_scope_checked(path, AccessIntent::Read, worker, &mut check_control)?,
@@ -753,6 +753,37 @@ fn write_probe_path(path: &Path) -> Result<&Path> {
             format!("extraction write path existence unavailable: {err}"),
         )),
     }
+}
+
+fn checked_write_probe_path(
+    path: &Path,
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<PathBuf> {
+    check_control()?;
+    preflight_write_target_volume_checked(path, worker, &mut check_control)?;
+    check_control()?;
+    let probe = write_probe_path(path)?.to_path_buf();
+    check_control()?;
+    Ok(probe)
+}
+
+fn preflight_write_target_volume_checked(
+    path: &Path,
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    check_control()?;
+    let volume_path = crate::parent_or_cwd(path);
+    let volume_report =
+        VolumeDiscoveryReport::for_containing_path_checked(volume_path, &mut check_control)?;
+    check_control()?;
+    preflight_volume_access_scope_with_report(
+        volume_path,
+        AccessIntent::Write,
+        worker,
+        &volume_report,
+    )
 }
 
 fn sandbox_exec_path() -> Result<Option<PathBuf>> {
@@ -1214,7 +1245,7 @@ mod tests {
         assert!(matches!(err, GfmError::Permission { .. }));
         assert!(err
             .to_string()
-            .contains("quarantined extraction worker volume access blocked"));
+            .contains("extraction quarantine volume access blocked"));
         assert!(err.to_string().contains("unreachable volume network"));
         assert!(!store.exists());
 
@@ -1298,6 +1329,41 @@ mod tests {
         assert!(!store.exists());
         assert!(!store.parent().unwrap().exists());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn quarantine_worker_access_refuses_unreachable_store_before_write_probe() {
+        let root = unique_temp_dir("gfm-extract-quarantine-access-root");
+        let store_root = unique_temp_dir("gfm-extract-quarantine-access-store");
+        fs::write(store_root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let input = root.join("document.txt");
+        let store = store_root.join("quarantine-store-unavailable".repeat(16));
+        fs::write(&input, "block before store probe").unwrap();
+
+        let err = match retain_extraction_quarantine_worker_access_checked(
+            &input,
+            &store,
+            "quarantined extraction worker",
+            || Ok(()),
+        ) {
+            Ok(_) => panic!("unreachable quarantine store was admitted before volume preflight"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains(
+                "extraction quarantine volume access blocked: unreachable volume network"
+            ),
+            "{err}"
+        );
+        assert!(
+            !err.to_string()
+                .contains("extraction write path existence unavailable"),
+            "{err}"
+        );
+        assert!(!store.exists());
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(store_root).unwrap();
     }
 
     #[test]

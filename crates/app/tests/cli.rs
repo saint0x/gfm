@@ -10796,6 +10796,10 @@ fn quarantined_adaptive_extraction_worker_refuses_unreachable_store_before_recor
         "{stderr}"
     );
     assert!(
+        !stderr.contains("extraction write path existence unavailable"),
+        "{stderr}"
+    );
+    assert!(
         !stderr.contains(&format!(
             "\tworker=quarantined adaptive extraction\tpath={}",
             path.display()
@@ -10931,7 +10935,10 @@ fn extract_quarantine_refuses_unreachable_store_before_recording_from_binary() {
     let store_root = unique_temp_dir("gfm-cli-extract-quarantine-store-unreachable");
     fs::write(store_root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
     let path = source_root.join("Slow.pdf");
-    let store = store_root.join("quarantine.gfmquarantine");
+    let store = store_root.join(format!(
+        "{}.gfmquarantine",
+        "extract-quarantine-store-unavailable".repeat(8)
+    ));
     fs::write(&path, minimal_pdf("slow worker")).unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -10954,7 +10961,7 @@ fn extract_quarantine_refuses_unreachable_store_before_recording_from_binary() {
         "{stderr}"
     );
     assert!(
-        !stderr.contains("content write path metadata unavailable"),
+        !stderr.contains("extraction write path existence unavailable"),
         "{stderr}"
     );
     assert!(
