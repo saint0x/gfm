@@ -3435,6 +3435,11 @@
     },
     {
       "type": "fs_write",
+      "path": "tmp/gfm-fozzy-suffix-only.icloud",
+      "data": "icloud suffix only"
+    },
+    {
+      "type": "fs_write",
       "path": "tmp/gfm-fozzy-conflict.icloud-conflict.md",
       "data": "icloud conflict"
     },
@@ -3654,6 +3659,17 @@
         "tmp/gfm-fozzy-downloaded.icloud.md"
       ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "fileprovider-state-with-identity",
+        "tmp/gfm-fozzy-suffix-only.icloud"
+      ],
+      "exit_code": 0,
+      "stdout": "fileprovider-state\ttmp/gfm-fozzy-suffix-only.icloud\tdomain=local\tstate=local-only\tmaterialization=not-provider-backed\tmaterialization-source=filesystem\tmaterialization-confidence=filesystem\tmaterialization-reason=not-fileprovider-backed\toffline=false\tconflict=false\tbadges=\tprogress-direction=idle\tprogress-milli=-\tprogress-requested=false\tprogress-complete=false\tprogress-indeterminate=false\tprogress-source=state\tprogress-reason=not-fileprovider-backed\tdownload=hidden\tevict=hidden\treveal-conflict=hidden\tprovider=-\tsource=fixture-name+icloud-extension\treason=not-fileprovider-backed\n",
+      "times": 1
     },
     {
       "type": "proc_when",

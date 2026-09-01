@@ -2213,6 +2213,7 @@ fn reports_fileprovider_state_from_binary() {
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     let downloaded = root.join("Downloaded.icloud.md");
+    let suffix_only = root.join("SuffixOnly.icloud");
     let evicted = root.join("Evicted.icloud-placeholder");
     let value_evicted = root.join("ValueEvicted.icloud.md");
     let value_current = root.join("Remote.icloud-placeholder");
@@ -2222,6 +2223,7 @@ fn reports_fileprovider_state_from_binary() {
     let local_with_provider_xattr = root.join("Local.md");
     let conflict = root.join("Conflict.icloud-conflict.md");
     std::fs::write(&downloaded, "downloaded").unwrap();
+    std::fs::write(&suffix_only, "suffix only").unwrap();
     std::fs::write(&evicted, "placeholder").unwrap();
     mark_evicted_fixture(&evicted);
     std::fs::write(&value_evicted, "remote").unwrap();
@@ -2315,6 +2317,33 @@ fn reports_fileprovider_state_from_binary() {
         .contains("\tdomain=local\tstate=local-only\tmaterialization=not-provider-backed\t"));
     assert!(identity_state_stdout.contains("\tsource="));
     assert!(!identity_state_stdout.contains("nsfileprovidermanager"));
+
+    let suffix_identity_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-state-with-identity")
+        .arg(&suffix_only)
+        .output()
+        .unwrap();
+    assert!(
+        suffix_identity_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&suffix_identity_output.stderr)
+    );
+    let suffix_identity_stdout = String::from_utf8(suffix_identity_output.stdout).unwrap();
+    let suffix_identity_stderr = String::from_utf8_lossy(&suffix_identity_output.stderr);
+    assert_worker_admitted(
+        &suffix_identity_stderr,
+        "fileprovider identity state",
+        &suffix_only,
+    );
+    assert!(suffix_identity_stdout.starts_with("fileprovider-state\t"));
+    assert!(suffix_identity_stdout
+        .contains("\tdomain=local\tstate=local-only\tmaterialization=not-provider-backed\t"));
+    assert!(suffix_identity_stdout.contains("\tmaterialization-source=filesystem\t"));
+    assert!(suffix_identity_stdout.contains("\tsource=fixture-name+icloud-extension\t"));
+    assert!(
+        !suffix_identity_stdout.contains("nsfileprovidermanager"),
+        "{suffix_identity_stdout}"
+    );
 
     let domain_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("fileprovider-domain")

@@ -2100,7 +2100,6 @@ fn should_query_native_fileprovider_identity(path: &Path, hints: &CloudHints) ->
         || path_components(path)
             .iter()
             .any(|component| component == ICLOUD_DRIVE_COMPONENT)
-        || path.extension().and_then(|value| value.to_str()) == Some("icloud")
 }
 
 fn identity_not_queried() -> NativeFileProviderIdentity {
@@ -4734,9 +4733,16 @@ mod tests {
 
         assert!(!should_query_native_fileprovider_identity(&local, &hints));
 
-        let explicit_icloud_extension = PathBuf::from("/tmp/Remote.icloud");
+        let fixture_icloud_extension = PathBuf::from("/tmp/Remote.icloud");
+        assert!(!should_query_native_fileprovider_identity(
+            &fixture_icloud_extension,
+            &hints
+        ));
+
+        let explicit_icloud_container =
+            PathBuf::from("/Users/test/Library/Mobile Documents/com~apple~CloudDocs/Remote.md");
         assert!(should_query_native_fileprovider_identity(
-            &explicit_icloud_extension,
+            &explicit_icloud_container,
             &hints
         ));
 
