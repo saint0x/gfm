@@ -8,6 +8,7 @@ use crate::extract::{
     extraction_budget_profile_checked, extraction_budget_profile_from_volume_report,
     preflight_adaptive_extraction_worker_scratch, read_extraction_quarantine_cancellable,
     run_adaptive_extraction_worker_cancellable,
+    run_adaptive_extraction_worker_cancellable_with_volume_report,
     run_quarantined_adaptive_extraction_worker_cancellable, ADAPTIVE_WORKER_TIMEOUT,
 };
 use crate::runtime::{
@@ -198,10 +199,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 move |cancellation| {
                     let _access = access_report
                         .access_checked("adaptive extraction worker", || cancellation.check())?;
-                    run_adaptive_extraction_worker_cancellable(
+                    run_adaptive_extraction_worker_cancellable_with_volume_report(
                         &path,
                         pressure,
                         ADAPTIVE_WORKER_TIMEOUT,
+                        &access_report.volume_report,
                         &cancellation,
                     )
                 },

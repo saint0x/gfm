@@ -1,7 +1,7 @@
 use crate::{
     access::{
-        preflight_access_scope_checked, preflight_volume_access_scope_with_report,
-        ScopedAccessGuard,
+        preflight_access_scope_checked, preflight_access_scope_checked_with_volume_report,
+        preflight_volume_access_scope_with_report, ScopedAccessGuard,
     },
     permission_refresh::refresh_permission_state_at_path_checked,
 };
@@ -140,10 +140,29 @@ pub(crate) fn run_adaptive_extraction_worker_cancellable(
     cancellation: &Cancellation,
 ) -> Result<String> {
     cancellation.check()?;
-    let _input_access = preflight_access_scope_checked(
+    let report = VolumeDiscoveryReport::for_containing_path_checked(path, || cancellation.check())?;
+    run_adaptive_extraction_worker_cancellable_with_volume_report(
+        path,
+        pressure,
+        timeout,
+        &report,
+        cancellation,
+    )
+}
+
+pub(crate) fn run_adaptive_extraction_worker_cancellable_with_volume_report(
+    path: &Path,
+    pressure: SchedulingPressure,
+    timeout: Duration,
+    volume_report: &VolumeDiscoveryReport,
+    cancellation: &Cancellation,
+) -> Result<String> {
+    cancellation.check()?;
+    let _input_access = preflight_access_scope_checked_with_volume_report(
         path,
         AccessIntent::Read,
         "adaptive extraction worker",
+        volume_report,
         || cancellation.check(),
     )?;
     cancellation.check()?;
