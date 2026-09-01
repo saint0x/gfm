@@ -2241,6 +2241,7 @@ fn volume_removable_media_invalidation() -> VolumeEventIndexInvalidationReport {
     )
     .with_volume_id(VolumeId(43))
     .with_stable_identity("diskarbitration:uuid:REMOVABLE-TEST")
+    .with_removable(Some(false))
     .with_ejectable(Some(true))
     .with_filesystem_signature("fs=apfs|ejectable=1|removable=0");
     let current = IndexVolumeDescriptor::new(
@@ -2251,6 +2252,7 @@ fn volume_removable_media_invalidation() -> VolumeEventIndexInvalidationReport {
     )
     .with_volume_id(VolumeId(43))
     .with_stable_identity("diskarbitration:uuid:REMOVABLE-TEST")
+    .with_removable(Some(true))
     .with_ejectable(Some(true))
     .with_filesystem_signature("fs=apfs|ejectable=1|removable=1");
 

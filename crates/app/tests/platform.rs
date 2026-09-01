@@ -6647,11 +6647,14 @@ fn reports_removable_media_volume_event_index_invalidation_from_binary() {
     assert!(stdout.contains("\tcurrent-volume=43\tcurrent-class=external\t"));
     assert!(stdout.contains("\tprevious-ejectable=true\t"));
     assert!(stdout.contains("\tcurrent-ejectable=true\t"));
+    assert!(stdout.contains("\tprevious-removable=false\t"));
+    assert!(stdout.contains("\tcurrent-removable=true\t"));
     assert!(stdout.contains("\tfilesystem-changed=true\t"));
     assert!(stdout.contains("\tejectable-changed=false\t"));
+    assert!(stdout.contains("\tremovable-changed=true\t"));
     assert!(stdout.contains("\tindex-admission=true\trescan-index=true\t"));
     assert!(stdout.contains("\tcancel-index-jobs=true\tclear-fsevents-cursor=true\t"));
-    assert!(stdout.ends_with("reason=volume-event-filesystem-changed\n"));
+    assert!(stdout.ends_with("reason=volume-event-removable-media-changed\n"));
 }
 
 #[test]

@@ -293,6 +293,7 @@ pub(crate) fn index_volume_descriptor(volume: &VolumeDescriptor) -> IndexVolumeD
     .with_read_only(Some(volume.read_only))
     .with_writable(Some(volume.writable))
     .with_ejectable(Some(volume.ejectable))
+    .with_removable(Some(volume.removable))
     .with_mountable(volume.mountable)
     .with_case_sensitive(volume.case_sensitive)
     .with_filesystem_signature(index_volume_filesystem_signature(volume));
@@ -1224,6 +1225,7 @@ mod tests {
         assert_eq!(descriptor.writable, Some(false));
         assert_eq!(descriptor.read_only, Some(true));
         assert_eq!(descriptor.ejectable, Some(true));
+        assert_eq!(descriptor.removable, Some(true));
         assert_eq!(descriptor.mountable, Some(false));
         assert_eq!(descriptor.case_sensitive, Some(true));
         assert!(descriptor
