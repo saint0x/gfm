@@ -727,10 +727,19 @@ impl VolumeDiscoveryReport {
 
     pub fn volume_for_path(&self, path: &Path) -> Option<&VolumeDescriptor> {
         let lookup_path = normalized_lookup_path(path);
+        let ancestor_lookup_path = lookup_path
+            .is_none()
+            .then(|| normalized_existing_ancestor_path(path))
+            .flatten();
         let mut best = None;
         let mut best_depth = 0;
         for volume in &self.volumes {
-            let Some(depth) = volume_match_depth(volume, path, lookup_path.as_deref()) else {
+            let Some(depth) = volume_match_depth(
+                volume,
+                path,
+                lookup_path.as_deref(),
+                ancestor_lookup_path.as_deref(),
+            ) else {
                 continue;
             };
             if depth >= best_depth {
@@ -3238,10 +3247,14 @@ fn marker_fixture_path_allowed(path: &Path) -> bool {
     let Ok(path) = path.canonicalize() else {
         return false;
     };
-    path.starts_with(&temp_dir)
+    marker_fixture_temp_root_allowed(&path, &temp_dir)
         && path
             .components()
             .any(|component| component.as_os_str().to_string_lossy().starts_with("gfm-"))
+}
+
+fn marker_fixture_temp_root_allowed(path: &Path, temp_dir: &Path) -> bool {
+    path.starts_with(temp_dir) || path.starts_with("/private/tmp")
 }
 
 fn volume_fixture_markers_enabled() -> bool {
@@ -3348,11 +3361,13 @@ fn volume_match_depth(
     volume: &VolumeDescriptor,
     path: &Path,
     normalized_path: Option<&Path>,
+    normalized_existing_ancestor: Option<&Path>,
 ) -> Option<usize> {
     let direct_match = path.starts_with(&volume.path);
-    let normalized_volume_path = (direct_match || normalized_path.is_some())
-        .then(|| normalized_lookup_path(&volume.path))
-        .flatten();
+    let normalized_volume_path =
+        (direct_match || normalized_path.is_some() || normalized_existing_ancestor.is_some())
+            .then(|| normalized_lookup_path(&volume.path))
+            .flatten();
     if direct_match {
         return Some(
             normalized_volume_path
@@ -3362,11 +3377,13 @@ fn volume_match_depth(
                 .count(),
         );
     }
-    let normalized_path = normalized_path?;
     let normalized_volume_path = normalized_volume_path?;
-    normalized_path
-        .starts_with(&normalized_volume_path)
-        .then(|| normalized_volume_path.components().count())
+    if normalized_path.is_some_and(|path| path.starts_with(&normalized_volume_path)) {
+        return Some(normalized_volume_path.components().count());
+    }
+    normalized_existing_ancestor
+        .filter(|ancestor| ancestor.starts_with(&normalized_volume_path))
+        .map(|_| normalized_volume_path.components().count())
 }
 
 fn normalized_lookup_path(path: &Path) -> Option<PathBuf> {
@@ -3389,6 +3406,16 @@ fn normalized_lookup_path(path: &Path) -> Option<PathBuf> {
             Err(_) => return None,
         }
         missing.push(candidate.file_name()?.to_os_string());
+        candidate = candidate.parent()?;
+    }
+}
+
+fn normalized_existing_ancestor_path(path: &Path) -> Option<PathBuf> {
+    let mut candidate = path;
+    loop {
+        if let Ok(true) = candidate.try_exists() {
+            return candidate.canonicalize().ok();
+        }
         candidate = candidate.parent()?;
     }
 }
@@ -4609,6 +4636,25 @@ mod tests {
     }
 
     #[test]
+    fn volume_lookup_matches_missing_descendant_under_existing_marker_volume() {
+        let root = unique_temp_dir("gfm-volume-missing-descendant-marker");
+        let missing = root.join("Missing").join("Nested").join("Plan.md");
+        fs::write(root.join(VOLUME_MARKER), "network-unreachable\n").unwrap();
+        let report = VolumeDiscoveryReport::for_containing_path_checked(&missing, || Ok(()))
+            .expect("marker-backed containing volume should be discoverable");
+
+        let descriptor = report
+            .volume_for_path(&missing)
+            .expect("missing descendant should match existing marker volume");
+
+        assert_eq!(descriptor.path, root);
+        assert_eq!(descriptor.kind, VolumeKind::Network);
+        assert_eq!(descriptor.reachable, Some(false));
+        assert!(!missing.exists());
+        fs::remove_dir_all(descriptor.path.clone()).unwrap();
+    }
+
+    #[test]
     fn network_reachability_returns_unknown_for_unprobeable_fallback_path() {
         let root = unique_temp_dir("gfm-volume-reachability-unprobeable");
         let unprobeable = root.join("volume-reachability-unavailable".repeat(16));
@@ -4640,6 +4686,30 @@ mod tests {
 
         assert_eq!(volume.path, canonical_root);
         assert!(!alias_child.exists());
+
+        fs::remove_dir_all(alias_root).unwrap();
+    }
+
+    #[test]
+    fn volume_lookup_matches_unprobeable_tmp_alias_descendant() {
+        let alias_root = PathBuf::from("/tmp").join(format!(
+            "gfm-volume-tmp-alias-unprobeable-{}-{}",
+            std::process::id(),
+            TEMP_COUNTER.fetch_add(1, Ordering::SeqCst)
+        ));
+        fs::create_dir_all(&alias_root).unwrap();
+        fs::write(alias_root.join(VOLUME_MARKER), "network-unreachable\n").unwrap();
+        let unprobeable_child = alias_root.join("volume-path-unavailable".repeat(16));
+        let report =
+            VolumeDiscoveryReport::for_containing_path_checked(&unprobeable_child, || Ok(()))
+                .expect("marker-backed containing volume should be discoverable");
+
+        let volume = report
+            .volume_for_path(&unprobeable_child)
+            .expect("canonical volume should contain unprobeable /tmp alias descendant");
+
+        assert_eq!(volume.path, alias_root);
+        assert_eq!(normalized_lookup_path(&unprobeable_child), None);
 
         fs::remove_dir_all(alias_root).unwrap();
     }
@@ -5092,6 +5162,22 @@ mod tests {
         ));
         assert!(volume_fixture_marker_policy_enabled(false, None, true));
         assert!(volume_fixture_marker_policy_enabled(true, None, false));
+    }
+
+    #[test]
+    fn marker_fixture_root_allows_canonical_private_tmp_alias() {
+        assert!(marker_fixture_temp_root_allowed(
+            Path::new("/private/tmp/gfm-volume-fixture"),
+            Path::new("/var/folders/test/T")
+        ));
+        assert!(marker_fixture_temp_root_allowed(
+            Path::new("/var/folders/test/T/gfm-volume-fixture"),
+            Path::new("/var/folders/test/T")
+        ));
+        assert!(!marker_fixture_temp_root_allowed(
+            Path::new("/Users/me/gfm-volume-fixture"),
+            Path::new("/var/folders/test/T")
+        ));
     }
 
     #[test]
