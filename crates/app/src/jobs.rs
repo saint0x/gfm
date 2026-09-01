@@ -3,7 +3,8 @@ use crate::access::{
     ScopedAccessGuard,
 };
 use crate::runtime::{
-    default_job_journal_path, run_scheduled_volume_task_cancellable, run_volume_task_cancellable,
+    default_job_journal_path, run_scheduled_volume_task_cancellable_with_volume,
+    run_volume_task_cancellable,
 };
 use crate::{parse_optional_scheduling_pressure, parse_u64_arg, parse_usize_arg, required_path};
 use gfm_jobs::{
@@ -138,18 +139,29 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "jobs-runtime-retry-probe requires an attempt state path",
             )?;
             let pressure = parse_optional_scheduling_pressure(args)?;
-            let access_report = JobPathAccessReport::new_checked(
-                write_probe_path(&state)?.to_path_buf(),
-                AccessIntent::Write,
-                || Ok(()),
-            )?;
-            access_report.preflight_volume("runtime retry probe")?;
-            let outcome = run_scheduled_volume_task_cancellable(
-                access_report.volume(),
+            let outcome = run_scheduled_volume_task_cancellable_with_volume(
                 Priority::Background,
                 "runtime retry probe",
                 pressure,
+                {
+                    let state = state.clone();
+                    move || {
+                        let access_report = JobPathAccessReport::write_target_checked(
+                            &state,
+                            "runtime retry probe",
+                            || Ok(()),
+                        )?;
+                        access_report.preflight_volume("runtime retry probe")?;
+                        Ok(access_report.volume())
+                    }
+                },
                 move |cancellation| {
+                    cancellation.check()?;
+                    let access_report = JobPathAccessReport::write_target_checked(
+                        &state,
+                        "runtime retry probe",
+                        || cancellation.check(),
+                    )?;
                     cancellation.check()?;
                     let _access = access_report
                         .access_checked("runtime retry probe", || cancellation.check())?;
@@ -228,6 +240,17 @@ impl JobPathAccessReport {
         })
     }
 
+    fn write_target_checked(
+        path: &Path,
+        worker: &str,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check_control()?;
+        let probe = checked_write_probe_path(path, worker, &mut check_control)?;
+        check_control()?;
+        Self::new_checked(probe, AccessIntent::Write, check_control)
+    }
+
     fn preflight_volume(&self, worker: &str) -> Result<()> {
         preflight_volume_access_scope_with_report(
             &self.path,
@@ -274,7 +297,11 @@ impl JobPathAccessReports {
         mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<Self> {
         check_control()?;
-        let progress_probe = write_probe_path(progress_path)?.to_path_buf();
+        let progress_probe = checked_write_probe_path(
+            progress_path,
+            "jobs payload restore plan",
+            &mut check_control,
+        )?;
         check_control()?;
         Ok(Self {
             entries: vec![
@@ -320,11 +347,7 @@ impl JobPathAccessReports {
 
 fn run_jobs_payload_catalog(path: PathBuf) -> Result<Vec<String>> {
     const WORKER: &str = "jobs payload catalog";
-    let access_report = JobPathAccessReport::new_checked(
-        write_probe_path(&path)?.to_path_buf(),
-        AccessIntent::Write,
-        || Ok(()),
-    )?;
+    let access_report = JobPathAccessReport::write_target_checked(&path, WORKER, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
@@ -346,11 +369,7 @@ fn run_jobs_payload_catalog(path: PathBuf) -> Result<Vec<String>> {
 
 fn run_jobs_progress_snapshot(path: PathBuf) -> Result<Vec<String>> {
     const WORKER: &str = "jobs progress snapshot";
-    let access_report = JobPathAccessReport::new_checked(
-        write_probe_path(&path)?.to_path_buf(),
-        AccessIntent::Write,
-        || Ok(()),
-    )?;
+    let access_report = JobPathAccessReport::write_target_checked(&path, WORKER, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
@@ -373,11 +392,7 @@ fn run_jobs_progress_snapshot(path: PathBuf) -> Result<Vec<String>> {
 
 fn run_jobs_progress_restore(path: PathBuf, updated_ms: u64) -> Result<Vec<String>> {
     const WORKER: &str = "jobs progress restore";
-    let access_report = JobPathAccessReport::new_checked(
-        write_probe_path(&path)?.to_path_buf(),
-        AccessIntent::Write,
-        || Ok(()),
-    )?;
+    let access_report = JobPathAccessReport::write_target_checked(&path, WORKER, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
@@ -400,11 +415,7 @@ fn run_jobs_progress_control(
     updated_ms: u64,
 ) -> Result<Vec<String>> {
     const WORKER: &str = "jobs progress control";
-    let access_report = JobPathAccessReport::new_checked(
-        write_probe_path(&path)?.to_path_buf(),
-        AccessIntent::Write,
-        || Ok(()),
-    )?;
+    let access_report = JobPathAccessReport::write_target_checked(&path, WORKER, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
@@ -497,6 +508,37 @@ fn write_probe_path(path: &Path) -> Result<&Path> {
             format!("jobs write path metadata unavailable: {err}"),
         )),
     }
+}
+
+fn checked_write_probe_path(
+    path: &Path,
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<PathBuf> {
+    check_control()?;
+    preflight_write_target_volume_checked(path, worker, &mut check_control)?;
+    check_control()?;
+    let probe = write_probe_path(path)?.to_path_buf();
+    check_control()?;
+    Ok(probe)
+}
+
+fn preflight_write_target_volume_checked(
+    path: &Path,
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    check_control()?;
+    let volume_path = crate::parent_or_cwd(path);
+    let volume_report =
+        VolumeDiscoveryReport::for_containing_path_checked(volume_path, &mut check_control)?;
+    check_control()?;
+    preflight_volume_access_scope_with_report(
+        volume_path,
+        AccessIntent::Write,
+        worker,
+        &volume_report,
+    )
 }
 
 fn parse_progress_command(value: Option<String>) -> Result<JobProgressCommand> {
@@ -994,6 +1036,40 @@ mod tests {
     }
 
     #[test]
+    fn job_write_target_report_refuses_unreachable_volume_before_write_probe() {
+        let root = temp_dir("gfm-job-write-target-unreachable-before-probe");
+        fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let path = root.join(format!(
+            "{}.gfmprogress",
+            "jobs-progress-unavailable".repeat(8)
+        ));
+
+        let err =
+            match JobPathAccessReport::write_target_checked(&path, "jobs progress snapshot", || {
+                Ok(())
+            }) {
+                Ok(_) => {
+                    panic!("unreachable jobs write target was admitted before volume preflight")
+                }
+                Err(err) => err,
+            };
+
+        assert!(
+            err.to_string().contains(
+                "jobs progress snapshot volume access blocked: unreachable volume network"
+            ),
+            "{err}"
+        );
+        assert!(
+            !err.to_string()
+                .contains("jobs write path metadata unavailable"),
+            "{err}"
+        );
+        assert!(!path.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn payload_restore_access_checked_honors_pre_cancelled_control() {
         let catalog = std::env::temp_dir().join(format!(
             "gfm-payload-restore-catalog-pre-cancel-{}-{}.tsv",
@@ -1041,6 +1117,40 @@ mod tests {
     }
 
     #[test]
+    fn payload_restore_access_refuses_unreachable_progress_before_write_probe() {
+        let root = temp_dir("gfm-payload-restore-progress-unreachable-before-probe");
+        fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let catalog = temp_path("gfm-payload-restore-catalog-local", "tsv");
+        let progress = root.join(format!(
+            "{}.gfmprogress",
+            "jobs-payload-restore-progress-unavailable".repeat(8)
+        ));
+        fs::write(&catalog, "payload").unwrap();
+
+        let err = match retain_payload_restore_access_checked(&catalog, &progress, || Ok(())) {
+            Ok(_) => panic!(
+                "unreachable jobs payload restore progress was admitted before volume preflight"
+            ),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains(
+                "jobs payload restore plan volume access blocked: unreachable volume network"
+            ),
+            "{err}"
+        );
+        assert!(
+            !err.to_string()
+                .contains("jobs write path metadata unavailable"),
+            "{err}"
+        );
+        assert!(!progress.exists());
+        fs::remove_file(catalog).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn payload_restore_access_checked_can_cancel_during_access_preflights() {
         let catalog = std::env::temp_dir().join(format!(
             "gfm-payload-restore-catalog-access-cancel-{}-{}.tsv",
@@ -1067,5 +1177,24 @@ mod tests {
         assert!(checks >= 5);
         assert!(!progress.exists());
         fs::remove_file(catalog).unwrap();
+    }
+
+    fn temp_path(prefix: &str, extension: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "{}-{}-{}.{}",
+            prefix,
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos(),
+            extension
+        ))
+    }
+
+    fn temp_dir(prefix: &str) -> PathBuf {
+        let path = temp_path(prefix, "dir");
+        fs::create_dir_all(&path).unwrap();
+        path
     }
 }

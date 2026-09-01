@@ -17086,9 +17086,12 @@ fn reports_payload_restore_plan_from_existing_stores() {
 fn jobs_file_store_routes_refuse_unreachable_volume_before_persisting_from_binary() {
     let root = unique_temp_dir("gfm-cli-jobs-store-unreachable");
     fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
-    let catalog = root.join("jobs.gfmjobs");
-    let progress = root.join("jobs.gfmprogress");
-    let retry_state = root.join("retry.state");
+    let catalog = root.join(format!("{}.gfmjobs", "jobs-catalog-unavailable".repeat(8)));
+    let progress = root.join(format!(
+        "{}.gfmprogress",
+        "jobs-progress-unavailable".repeat(8)
+    ));
+    let retry_state = root.join(format!("{}.state", "jobs-retry-unavailable".repeat(8)));
 
     for args in [
         vec![
@@ -17115,6 +17118,10 @@ fn jobs_file_store_routes_refuse_unreachable_volume_before_persisting_from_binar
         assert!(stdout.is_empty(), "{args:?}: {stdout}");
         assert!(
             stderr.contains("volume access blocked: unreachable volume network"),
+            "{args:?}: {stderr}"
+        );
+        assert!(
+            !stderr.contains("jobs write path metadata unavailable"),
             "{args:?}: {stderr}"
         );
     }
@@ -17246,6 +17253,10 @@ fn jobs_restore_routes_refuse_unreachable_stores_before_mutating_from_binary() {
             .contains("jobs progress restore volume access blocked: unreachable volume network"),
         "{progress_restore_stderr}"
     );
+    assert!(
+        !progress_restore_stderr.contains("jobs write path metadata unavailable"),
+        "{progress_restore_stderr}"
+    );
     assert!(!progress.exists());
 
     let progress_control = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -17265,6 +17276,10 @@ fn jobs_restore_routes_refuse_unreachable_stores_before_mutating_from_binary() {
             .contains("jobs progress control volume access blocked: unreachable volume network"),
         "{progress_control_stderr}"
     );
+    assert!(
+        !progress_control_stderr.contains("jobs write path metadata unavailable"),
+        "{progress_control_stderr}"
+    );
     assert!(!progress.exists());
 
     let payload_restore = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -17282,6 +17297,10 @@ fn jobs_restore_routes_refuse_unreachable_stores_before_mutating_from_binary() {
         payload_restore_stderr.contains(
             "jobs payload restore plan volume access blocked: unreachable volume network"
         ),
+        "{payload_restore_stderr}"
+    );
+    assert!(
+        !payload_restore_stderr.contains("jobs write path metadata unavailable"),
         "{payload_restore_stderr}"
     );
     assert!(!progress.exists());
