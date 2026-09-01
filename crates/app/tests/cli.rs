@@ -12991,6 +12991,66 @@ fn search_content_index_set_refuses_unreachable_content_before_loading_from_bina
 }
 
 #[test]
+fn search_content_index_set_dedupes_repeated_content_admission_from_binary() {
+    let root = unique_temp_dir("gfm-cli-search-content-index-set-dedupe-root");
+    let records = unique_temp_path("gfm-cli-search-content-index-set-dedupe-records", "gfmidx");
+    let content = unique_temp_path(
+        "gfm-cli-search-content-index-set-dedupe-content",
+        "gfmcontent",
+    );
+    fs::write(root.join("archive.md"), "the body contains setdedupemarker").unwrap();
+
+    let index_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-content",
+            root.to_str().unwrap(),
+            records.to_str().unwrap(),
+            content.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        index_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&index_output.stderr)
+    );
+
+    let search_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "search-content-index-set",
+            records.to_str().unwrap(),
+            "setdedupemarker",
+            content.to_str().unwrap(),
+            content.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        search_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&search_output.stderr)
+    );
+
+    let stdout = String::from_utf8(search_output.stdout).unwrap();
+    let stderr = String::from_utf8(search_output.stderr).unwrap();
+    assert!(stdout.contains("archive.md"), "{stdout}");
+    assert_eq!(
+        stderr
+            .matches(&format!(
+                "security-worker-admission\tworker=content index set search content\tpath={}",
+                content.display()
+            ))
+            .count(),
+        1,
+        "{stderr}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(content).unwrap();
+}
+
+#[test]
 fn resolves_content_ids_from_archive_directory() {
     let root = unique_temp_dir("gfm-cli-content-ids-root");
     let records = unique_temp_path("gfm-cli-content-ids-records", "gfmidx");
