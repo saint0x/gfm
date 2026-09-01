@@ -118,8 +118,9 @@ fn config_routes_refuse_unreachable_volume_before_loading_or_persisting_from_bin
     fs::write(&offline_config, "not valid = [\n").unwrap();
     fs::write(&local_config, "not valid = [\n").unwrap();
 
+    let offline_new_config = offline.join(format!("{}.toml", "new-config-unavailable".repeat(16)));
     let init_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
-        .args(["config-init", offline.join("new.toml").to_str().unwrap()])
+        .args(["config-init", offline_new_config.to_str().unwrap()])
         .output()
         .unwrap();
     assert!(!init_output.status.success());
@@ -131,10 +132,14 @@ fn config_routes_refuse_unreachable_volume_before_loading_or_persisting_from_bin
         "{init_stderr}"
     );
     assert!(
+        !init_stderr.contains("config write path metadata unavailable"),
+        "{init_stderr}"
+    );
+    assert!(
         !init_stderr.contains("security-worker-admission\tworker=config init\t"),
         "{init_stderr}"
     );
-    assert!(!offline.join("new.toml").exists());
+    assert!(!offline_new_config.exists());
 
     for (route, worker) in [
         ("config-check", "config check"),

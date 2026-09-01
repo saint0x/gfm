@@ -603,22 +603,24 @@ fn run_config_dump(store: &ConfigStore) -> Result<GfmConfig> {
 }
 
 fn config_init_access_report(store: &ConfigStore) -> Result<ControlPathAccessReport> {
-    let probe = if config_path_exists(store.path())? {
-        ControlPathAccessReport::new_checked(
+    match config_path_exists(store.path()) {
+        Ok(true) => ControlPathAccessReport::new_checked(
             store.path().to_path_buf(),
             AccessIntent::Read,
             "config init",
             || Ok(()),
-        )?
-    } else {
-        ControlPathAccessReport::new_checked(
-            config_write_probe_path(store.path())?.to_path_buf(),
+        ),
+        Ok(false) => ControlPathAccessReport::new_checked(
+            config_write_probe_path_checked(store.path(), "config init", || Ok(()))?,
             AccessIntent::Write,
             "config init",
             || Ok(()),
-        )?
-    };
-    Ok(probe)
+        ),
+        Err(err) => {
+            config_write_target_volume_checked(store.path(), "config init", || Ok(()))?;
+            Err(err)
+        }
+    }
 }
 
 fn config_read_access_report(
@@ -658,6 +660,37 @@ pub(crate) fn config_write_probe_path(path: &Path) -> Result<&Path> {
             format!("config write path metadata unavailable: {err}"),
         )),
     }
+}
+
+pub(crate) fn config_write_probe_path_checked(
+    path: &Path,
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<PathBuf> {
+    check_control()?;
+    config_write_target_volume_checked(path, worker, &mut check_control)?;
+    check_control()?;
+    let probe = config_write_probe_path(path)?.to_path_buf();
+    check_control()?;
+    Ok(probe)
+}
+
+fn config_write_target_volume_checked(
+    path: &Path,
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    check_control()?;
+    let volume_path = parent_or_cwd(path);
+    let volume_report =
+        VolumeDiscoveryReport::for_containing_path_checked(volume_path, &mut check_control)?;
+    check_control()?;
+    access::preflight_volume_access_scope_with_report(
+        volume_path,
+        AccessIntent::Write,
+        worker,
+        &volume_report,
+    )
 }
 
 pub(crate) fn parent_or_cwd(path: &Path) -> &Path {

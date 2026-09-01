@@ -7,7 +7,7 @@ use crate::runtime::{
     run_volume_task_cancellable, run_volume_task_cancellable_with_payload_path,
 };
 use crate::{
-    config_store, config_write_probe_path, existing_read_probe_path,
+    config_store, config_write_probe_path_checked, existing_read_probe_path,
     parse_required_scheduling_pressure, required_path,
 };
 use gfm_config::ConfigStore;
@@ -525,7 +525,7 @@ fn run_parity_baseline(
 ) -> Result<String> {
     let access_reports = DiagnosticsAccessReports::new(vec![
         DiagnosticsAccessReportEntry::new_checked(
-            config_write_probe_path(store.path())?.to_path_buf(),
+            config_write_probe_path_checked(store.path(), "diagnostics parity config", || Ok(()))?,
             AccessIntent::Write,
             "diagnostics parity config",
             || Ok(()),

@@ -782,7 +782,10 @@ fn diagnostics_parity_baseline_refuses_unreachable_paths_before_config_write_fro
     let offline = unique_temp_dir("gfm-cli-diagnostics-parity-preflight-offline");
     fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
     let config = root.join("config.toml");
-    let offline_config = offline.join("config.toml");
+    let offline_config = offline.join(format!(
+        "{}.toml",
+        "diagnostics-config-unavailable".repeat(16)
+    ));
     let baseline = root.join("baselines");
     let offline_baseline = offline.join("baselines");
     fs::create_dir_all(&baseline).unwrap();
@@ -825,6 +828,10 @@ fn diagnostics_parity_baseline_refuses_unreachable_paths_before_config_write_fro
         config_stderr.contains(
             "diagnostics parity config volume access blocked: unreachable volume network"
         ),
+        "{config_stderr}"
+    );
+    assert!(
+        !config_stderr.contains("config write path metadata unavailable"),
         "{config_stderr}"
     );
     assert!(!offline_config.exists());
