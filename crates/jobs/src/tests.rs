@@ -184,6 +184,164 @@ fn scheduler_fair_drain_retains_blocked_jobs_until_dependencies_complete() {
 }
 
 #[test]
+fn scheduler_fair_drain_uses_persisted_completed_dependencies() {
+    let mut scheduler = Scheduler::new();
+    let metadata = scheduler.schedule_in_class(
+        Priority::Background,
+        JobClass::Maintenance,
+        "rebuild metadata",
+    );
+    let sidecar = scheduler.schedule_in_class_with_dependencies(
+        Priority::Visible,
+        JobClass::Repair,
+        "repair derived sidecar",
+        [metadata.id],
+    );
+
+    let first = scheduler.drain_fair_ready(JobFairnessPolicy::default(), []);
+
+    assert_eq!(first.labels(), ["rebuild metadata"]);
+    assert_eq!(first.blocked[0].id, sidecar.id);
+
+    scheduler.mark_completed(metadata.id);
+    let released = scheduler.drain_fair_ready(JobFairnessPolicy::default(), []);
+
+    assert_eq!(scheduler.completed_jobs(), [metadata.id]);
+    assert_eq!(released.labels(), ["repair derived sidecar"]);
+    assert!(released.blocked.is_empty());
+}
+
+#[test]
+fn scheduler_cancelled_job_does_not_block_completed_dependency_ledger() {
+    let mut scheduler = Scheduler::new();
+    let metadata = scheduler.schedule_in_class(
+        Priority::Background,
+        JobClass::Maintenance,
+        "rebuild metadata",
+    );
+    let repair = scheduler.schedule_in_class_with_dependencies(
+        Priority::Visible,
+        JobClass::Repair,
+        "repair derived sidecar",
+        [metadata.id],
+    );
+
+    scheduler.cancel(metadata.id);
+    scheduler.mark_completed(metadata.id);
+    let plan = scheduler.drain_fair_ready(JobFairnessPolicy::default(), []);
+
+    assert_eq!(plan.labels(), ["repair derived sidecar"]);
+    assert_eq!(plan.ready[0].id, repair.id);
+    assert!(plan.blocked.is_empty());
+    assert_eq!(scheduler.completed_jobs(), [metadata.id]);
+}
+
+#[test]
+fn scheduler_mark_completed_checked_preserves_ledger_when_cancelled_first() {
+    let mut scheduler = Scheduler::new();
+    let metadata = scheduler.schedule_in_class(
+        Priority::Background,
+        JobClass::Maintenance,
+        "rebuild metadata",
+    );
+
+    let result = scheduler.mark_completed_checked(metadata.id, || Err(GfmError::Cancelled));
+
+    assert_eq!(result, Err(GfmError::Cancelled));
+    assert!(scheduler.completed_jobs().is_empty());
+    assert_eq!(
+        scheduler
+            .drain_fair_ready(JobFairnessPolicy::default(), [])
+            .labels(),
+        ["rebuild metadata"]
+    );
+}
+
+#[test]
+fn scheduler_mark_completed_checked_rolls_back_when_cancelled_after_mutation() {
+    let mut scheduler = Scheduler::new();
+    let metadata = scheduler.schedule_in_class(
+        Priority::Background,
+        JobClass::Maintenance,
+        "rebuild metadata",
+    );
+    let repair = scheduler.schedule_in_class_with_dependencies(
+        Priority::Visible,
+        JobClass::Repair,
+        "repair derived sidecar",
+        [metadata.id],
+    );
+    scheduler.cancel(metadata.id);
+    let mut calls = 0;
+
+    let result = scheduler.mark_completed_checked(metadata.id, || {
+        calls += 1;
+        if calls == 2 {
+            Err(GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+    let plan = scheduler.drain_fair_ready(JobFairnessPolicy::default(), []);
+
+    assert_eq!(result, Err(GfmError::Cancelled));
+    assert!(scheduler.completed_jobs().is_empty());
+    assert!(plan.ready.is_empty());
+    assert_eq!(plan.blocked[0].id, repair.id);
+    assert_eq!(plan.blocked[0].missing_dependencies, [metadata.id]);
+}
+
+#[test]
+fn scheduler_completed_dependency_ledger_prunes_unreferenced_old_jobs() {
+    let mut scheduler = Scheduler::new();
+    let mut newest = Vec::new();
+
+    for index in 0..4104 {
+        let job = scheduler.schedule(Priority::Background, format!("completed-{index}"));
+        scheduler.mark_completed(job.id);
+        if index >= 4096 {
+            newest.push(job.id);
+        }
+    }
+
+    let completed = scheduler.completed_jobs();
+
+    assert!(!completed.contains(&JobId::from_raw(1)));
+    for id in newest {
+        assert!(
+            completed.contains(&id),
+            "recent completion should be retained"
+        );
+    }
+}
+
+#[test]
+fn scheduler_completed_dependency_ledger_keeps_old_ids_referenced_by_queue() {
+    let mut scheduler = Scheduler::new();
+    let metadata = scheduler.schedule_in_class(
+        Priority::Background,
+        JobClass::Maintenance,
+        "rebuild metadata",
+    );
+    scheduler.schedule_in_class_with_dependencies(
+        Priority::Visible,
+        JobClass::Repair,
+        "repair derived sidecar",
+        [metadata.id],
+    );
+
+    scheduler.mark_completed(metadata.id);
+    for index in 0..4104 {
+        let job = scheduler.schedule(Priority::Background, format!("completed-{index}"));
+        scheduler.mark_completed(job.id);
+    }
+    let plan = scheduler.drain_fair_ready(JobFairnessPolicy::default(), []);
+
+    assert!(scheduler.completed_jobs().contains(&metadata.id));
+    assert!(plan.labels().contains(&"repair derived sidecar"));
+}
+
+#[test]
 fn scheduler_fair_drain_does_not_release_same_batch_dependencies() {
     let mut scheduler = Scheduler::new();
     let metadata = scheduler.schedule_in_class(

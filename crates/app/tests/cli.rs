@@ -16741,27 +16741,31 @@ fn reports_job_fairness_plan_from_binary() {
 
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(
-        stdout.contains("ready\t1\tforeground\tinteractive\topen folder"),
+        stdout.contains("ready\tfirst\t1\tforeground\tinteractive\topen folder"),
         "{stdout}"
     );
     assert!(
-        stdout.contains("ready\t2\tvisible\tvisible\trender visible rows"),
+        stdout.contains("ready\tfirst\t2\tvisible\tvisible\trender visible rows"),
         "{stdout}"
     );
     assert!(
-        stdout.contains("ready\t3\tbackground\tbackground\tindex content"),
+        stdout.contains("ready\tfirst\t3\tbackground\tbackground\tindex content"),
         "{stdout}"
     );
     assert!(
-        stdout.contains("ready\t4\tmaintenance\tbackground\tcompact sidecars"),
+        stdout.contains("ready\tfirst\t4\tmaintenance\tbackground\tcompact sidecars"),
         "{stdout}"
     );
     assert!(
-        stdout.contains("blocked\t5\trepair\t4\trepair derived sidecar"),
+        stdout.contains("blocked\tfirst\t5\trepair\t4\trepair derived sidecar"),
         "{stdout}"
     );
     assert!(
-        stdout.contains("blocked\t6\trepair\t999\trepair missing thumbnail"),
+        stdout.contains("ready\tafter-completion\t5\trepair\tvisible\trepair derived sidecar"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("blocked\tafter-completion\t6\trepair\t999\trepair missing thumbnail"),
         "{stdout}"
     );
 }

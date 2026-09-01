@@ -60,30 +60,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             }
         }
         "jobs-fairness-plan" => {
-            let plan = sample_fairness_plan();
-            for job in plan.ready {
-                println!(
-                    "ready\t{}\t{}\t{}\t{}",
-                    job.id.value(),
-                    job.class.as_str(),
-                    priority_name(job.priority),
-                    job.label
-                );
-            }
-            for job in plan.blocked {
-                let missing = job
-                    .missing_dependencies
-                    .iter()
-                    .map(|dependency| dependency.value().to_string())
-                    .collect::<Vec<_>>()
-                    .join(",");
-                println!(
-                    "blocked\t{}\t{}\t{}\t{}",
-                    job.id.value(),
-                    job.class.as_str(),
-                    missing,
-                    job.label
-                );
+            for line in sample_fairness_plan() {
+                println!("{line}");
             }
         }
         "jobs-progress-snapshot" => {
@@ -607,7 +585,7 @@ fn sample_payload_catalog_records() -> Vec<JobPayloadRecord> {
     .collect()
 }
 
-fn sample_fairness_plan() -> gfm_jobs::JobFairnessPlan {
+fn sample_fairness_plan() -> Vec<String> {
     let mut scheduler = Scheduler::new();
     scheduler.schedule_in_class(Priority::Interactive, JobClass::Foreground, "open folder");
     scheduler.schedule_in_class(Priority::Visible, JobClass::Visible, "render visible rows");
@@ -630,7 +608,7 @@ fn sample_fairness_plan() -> gfm_jobs::JobFairnessPlan {
         [gfm_jobs::JobId::from_raw(999)],
     );
 
-    scheduler.drain_fair_ready(
+    let first = scheduler.drain_fair_ready(
         JobFairnessPolicy::new()
             .with_quota(JobClass::Foreground, 1)
             .with_quota(JobClass::Visible, 1)
@@ -638,7 +616,51 @@ fn sample_fairness_plan() -> gfm_jobs::JobFairnessPlan {
             .with_quota(JobClass::Maintenance, 1)
             .with_quota(JobClass::Repair, 1),
         [],
-    )
+    );
+    scheduler.mark_completed(compact.id);
+    let second = scheduler.drain_fair_ready(
+        JobFairnessPolicy::new()
+            .with_quota(JobClass::Foreground, 1)
+            .with_quota(JobClass::Visible, 1)
+            .with_quota(JobClass::Background, 1)
+            .with_quota(JobClass::Maintenance, 1)
+            .with_quota(JobClass::Repair, 1),
+        [],
+    );
+    let mut lines = format_fairness_plan("first", first);
+    lines.extend(format_fairness_plan("after-completion", second));
+    lines
+}
+
+fn format_fairness_plan(pass: &str, plan: gfm_jobs::JobFairnessPlan) -> Vec<String> {
+    let mut lines = Vec::new();
+    for job in plan.ready {
+        lines.push(format!(
+            "ready\t{}\t{}\t{}\t{}\t{}",
+            pass,
+            job.id.value(),
+            job.class.as_str(),
+            priority_name(job.priority),
+            job.label
+        ));
+    }
+    for job in plan.blocked {
+        let missing = job
+            .missing_dependencies
+            .iter()
+            .map(|dependency| dependency.value().to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        lines.push(format!(
+            "blocked\t{}\t{}\t{}\t{}\t{}",
+            pass,
+            job.id.value(),
+            job.class.as_str(),
+            missing,
+            job.label
+        ));
+    }
+    lines
 }
 
 fn sample_volume_cancellation_report(

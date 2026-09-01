@@ -10,6 +10,7 @@ use std::thread;
 use std::time::Duration;
 
 static PAYLOAD_CATALOG_TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+const COMPLETED_DEPENDENCY_RETENTION: usize = 4096;
 
 mod cancel;
 mod fair;
@@ -140,6 +141,8 @@ pub struct Scheduler {
     next: AtomicU64,
     queue: BinaryHeap<QueuedJob>,
     cancelled: HashSet<JobId>,
+    completed: HashSet<JobId>,
+    completed_order: VecDeque<JobId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -328,6 +331,42 @@ impl Scheduler {
         self.cancelled.insert(id);
     }
 
+    pub fn mark_completed(&mut self, id: JobId) {
+        self.mark_completed_checked(id, || Ok(()))
+            .expect("infallible job completion mark failed");
+    }
+
+    pub fn mark_completed_checked(
+        &mut self,
+        id: JobId,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<()> {
+        check_control()?;
+        let was_cancelled = self.cancelled.remove(&id);
+        let inserted = self.completed.insert(id);
+        if inserted {
+            self.completed_order.push_back(id);
+        }
+        if let Err(err) = check_control() {
+            if inserted {
+                self.completed.remove(&id);
+                self.completed_order.retain(|completed| *completed != id);
+            }
+            if was_cancelled {
+                self.cancelled.insert(id);
+            }
+            return Err(err);
+        }
+        self.prune_completed_ledger();
+        Ok(())
+    }
+
+    pub fn completed_jobs(&self) -> Vec<JobId> {
+        let mut completed = self.completed.iter().copied().collect::<Vec<_>>();
+        completed.sort_by_key(|id| id.value());
+        completed
+    }
+
     pub fn bind_volume(&mut self, id: JobId, volume: VolumeId) -> Option<Job> {
         self.bind_volume_checked(id, volume, || Ok(()))
             .expect("infallible job volume binding failed")
@@ -453,7 +492,7 @@ impl Scheduler {
         let staged = self.stage_ready_drain_checked(&mut check_control)?;
         check_control()?;
         let plan = JobFairnessPlanner::new(policy)
-            .with_completed(completed)
+            .with_completed(self.completed.iter().copied().chain(completed))
             .plan_checked(staged.ready.clone(), &mut check_control)?;
         let blocked_ids = plan
             .blocked
@@ -466,6 +505,7 @@ impl Scheduler {
         }
         self.queue.clear();
         self.cancelled = staged.cancelled;
+        self.completed.retain(|id| !self.cancelled.contains(id));
         for job in staged
             .ready
             .into_iter()
@@ -474,7 +514,33 @@ impl Scheduler {
             check_control()?;
             self.queue.push(QueuedJob(job));
         }
+        self.prune_completed_ledger();
         Ok(plan)
+    }
+
+    fn prune_completed_ledger(&mut self) {
+        let referenced = self
+            .queue
+            .iter()
+            .flat_map(|QueuedJob(job)| job.dependencies.iter().copied())
+            .collect::<HashSet<_>>();
+        self.completed_order
+            .retain(|id| self.completed.contains(id));
+        let mut rotated = 0usize;
+        while self.completed_order.len() > COMPLETED_DEPENDENCY_RETENTION
+            && rotated < self.completed_order.len()
+        {
+            let Some(id) = self.completed_order.pop_front() else {
+                break;
+            };
+            if referenced.contains(&id) {
+                self.completed_order.push_back(id);
+                rotated += 1;
+            } else {
+                self.completed.remove(&id);
+                rotated = 0;
+            }
+        }
     }
 
     fn stage_ready_drain_checked(
@@ -488,6 +554,9 @@ impl Scheduler {
         let mut cancelled_jobs = Vec::new();
         while let Some(QueuedJob(job)) = queue.pop() {
             check_control()?;
+            if self.completed.contains(&job.id) {
+                continue;
+            }
             if cancelled.remove(&job.id) {
                 cancelled_jobs.push(job);
                 continue;
