@@ -6876,7 +6876,14 @@ fn reports_volume_event_runtime_fanout_from_binary() {
     assert!(stdout.contains("volume-event-operation-policy-invalidation\tkind=disappeared\t"));
     assert!(stdout.contains("\tprevious-class="));
     assert!(stdout.contains("\tprevious-mount="));
+    assert!(stdout.contains("\tprevious-read-only=false\t"));
+    assert!(stdout.contains("\tprevious-network=false\t"));
+    assert!(stdout.contains("\tprevious-reachable=true\t"));
+    assert!(stdout.contains("\tprevious-slow="));
     assert!(stdout.contains("\tcurrent-class=-\tcurrent-mount=-\t"));
+    assert!(stdout.contains(
+        "\tcurrent-read-only=-\tcurrent-network=-\tcurrent-reachable=-\tcurrent-slow=-\t"
+    ));
     assert!(stdout.contains("\tinvalidate-policy=true\treason=volume-event-disappeared\n"));
     assert!(stdout.contains("\nvolume-job-cancellation\tvolume="));
     assert!(stdout.contains("\tclass=background\tcancelled=1\n"));
@@ -6908,8 +6915,16 @@ fn reports_volume_event_runtime_fanout_from_binary() {
     assert!(kept_stdout.contains("volume-event-operation-policy-invalidation\tkind=appeared\t"));
     assert!(kept_stdout.contains("\tprevious-class="));
     assert!(kept_stdout.contains("\tprevious-mount="));
+    assert!(kept_stdout.contains("\tprevious-read-only=false\t"));
+    assert!(kept_stdout.contains("\tprevious-network=false\t"));
+    assert!(kept_stdout.contains("\tprevious-reachable=true\t"));
+    assert!(kept_stdout.contains("\tprevious-slow=false\t"));
     assert!(kept_stdout.contains("\tcurrent-class="));
     assert!(kept_stdout.contains("\tcurrent-mount=mounted\t"));
+    assert!(kept_stdout.contains("\tcurrent-read-only=false\t"));
+    assert!(kept_stdout.contains("\tcurrent-network=false\t"));
+    assert!(kept_stdout.contains("\tcurrent-reachable=true\t"));
+    assert!(kept_stdout.contains("\tcurrent-slow=false\t"));
     assert!(kept_stdout.contains("\tinvalidate-policy=true\treason=volume-event-appeared\n"));
     assert!(kept_stdout.ends_with(
         "volume-job-cancellation\tvolume=-\tclass=background\tcancelled=0\treason=index-jobs-still-valid\n"

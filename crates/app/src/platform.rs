@@ -2085,7 +2085,7 @@ fn volume_event_operation_policy_invalidation_tsv(
     current: Option<&VolumeDescriptor>,
 ) -> String {
     format!(
-        "volume-event-operation-policy-invalidation\tkind={}\tpath={}\tprevious-class={}\tprevious-mount={}\tprevious-read-only={}\tcurrent-class={}\tcurrent-mount={}\tcurrent-read-only={}\tinvalidate-policy={}\treason={}",
+        "volume-event-operation-policy-invalidation\tkind={}\tpath={}\tprevious-class={}\tprevious-mount={}\tprevious-read-only={}\tprevious-network={}\tprevious-reachable={}\tprevious-slow={}\tcurrent-class={}\tcurrent-mount={}\tcurrent-read-only={}\tcurrent-network={}\tcurrent-reachable={}\tcurrent-slow={}\tinvalidate-policy={}\treason={}",
         platform.kind.as_str(),
         platform
             .path
@@ -2100,6 +2100,18 @@ fn volume_event_operation_policy_invalidation_tsv(
             .map(|volume| volume.read_only)
             .map(|read_only| read_only.to_string())
             .unwrap_or_else(|| "-".to_string()),
+        previous
+            .map(|volume| volume.network)
+            .map(|network| network.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        previous
+            .and_then(|volume| volume.reachable)
+            .map(|reachable| reachable.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        previous
+            .map(volume_reports_slow_for_operation_policy)
+            .map(|slow| slow.to_string())
+            .unwrap_or_else(|| "-".to_string()),
         current.map(|volume| volume.kind.as_str()).unwrap_or("-"),
         current
             .map(|volume| volume.mount_state.as_str())
@@ -2108,9 +2120,45 @@ fn volume_event_operation_policy_invalidation_tsv(
             .map(|volume| volume.read_only)
             .map(|read_only| read_only.to_string())
             .unwrap_or_else(|| "-".to_string()),
+        current
+            .map(|volume| volume.network)
+            .map(|network| network.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        current
+            .and_then(|volume| volume.reachable)
+            .map(|reachable| reachable.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        current
+            .map(volume_reports_slow_for_operation_policy)
+            .map(|slow| slow.to_string())
+            .unwrap_or_else(|| "-".to_string()),
         platform.invalidate_operation_policy,
         platform.reason
     )
+}
+
+fn volume_reports_slow_for_operation_policy(volume: &VolumeDescriptor) -> bool {
+    if volume.network || volume.reachable == Some(false) {
+        return false;
+    }
+    if volume.kind == gfm_mac::VolumeKind::DiskImage {
+        return true;
+    }
+    if !matches!(
+        volume.kind,
+        gfm_mac::VolumeKind::External | gfm_mac::VolumeKind::Removable
+    ) {
+        return false;
+    }
+    let protocol = volume.device_protocol.as_deref().unwrap_or_default();
+    let media_kind = volume.media_kind.as_deref().unwrap_or_default();
+    let media_type = volume.media_type.as_deref().unwrap_or_default();
+    volume.resource_automounted == Some(true)
+        || volume.removable
+            && (protocol.eq_ignore_ascii_case("usb")
+                || protocol.eq_ignore_ascii_case("firewire")
+                || media_kind.to_ascii_lowercase().contains("removable")
+                || media_type.to_ascii_lowercase().contains("removable"))
 }
 
 fn volume_case_sensitivity_invalidation(
