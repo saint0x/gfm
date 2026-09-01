@@ -10,13 +10,13 @@ use gfm_jobs::Priority;
 use gfm_mac::{AccessIntent, VolumeDiscoveryReport};
 use gfm_testkit::{
     diff_rgba_files, evaluate_pixel_threshold, materialize_macrobench_fixture_report,
-    materialize_parity_fixture, read_governed_mask_file, read_mask_file, run_large_sidecar_gate,
-    run_macrobench, run_parity_gate_manifest, run_regression_gate, run_search_typing_benchmark,
-    run_search_typing_session_benchmark, write_parity_review_bundle_manifest, ColorProfile,
-    DisplayScale, LargeSidecarGateOptions, MacOsParityProfile, MacrobenchOptions, MacrobenchScale,
-    MacrobenchStage, ParityAppearance, ParityFixtureOptions, ParityFixtureScale, ParitySurface,
-    PixelDiffOptions, PixelDriftThreshold, PixelSize, RegressionGateOptions,
-    SearchTypingBenchmarkOptions,
+    materialize_parity_fixture, parse_parity_gate_manifest, read_governed_mask_file,
+    read_mask_file, run_large_sidecar_gate, run_macrobench, run_parity_gate, run_regression_gate,
+    run_search_typing_benchmark, run_search_typing_session_benchmark, write_parity_review_bundle,
+    ColorProfile, DisplayScale, LargeSidecarGateOptions, MacOsParityProfile, MacrobenchOptions,
+    MacrobenchScale, MacrobenchStage, ParityAppearance, ParityFixtureOptions, ParityFixtureScale,
+    ParityGateInput, ParitySurface, PixelDiffOptions, PixelDriftThreshold, PixelSize,
+    RegressionGateOptions, SearchTypingBenchmarkOptions,
 };
 use gfm_types::{GfmError, Result};
 use std::fs;
@@ -264,7 +264,22 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     cancellation.check()?;
                     let _access = manifest_access.access_checked(|| cancellation.check())?;
                     cancellation.check()?;
-                    run_parity_gate_manifest(&manifest_for_worker)
+                    let inputs = read_parity_manifest_inputs_checked(&manifest_for_worker, || {
+                        cancellation.check()
+                    })?;
+                    cancellation.check()?;
+                    let artifact_access_reports =
+                        parity_artifact_access_reports_checked(&inputs, "parity gate", || {
+                            cancellation.check()
+                        })?;
+                    artifact_access_reports.preflight_volumes()?;
+                    cancellation.check()?;
+                    let _artifact_access =
+                        artifact_access_reports.access_checked(|| cancellation.check())?;
+                    cancellation.check()?;
+                    let mut report = run_parity_gate(inputs)?;
+                    report.manifest_path = Some(manifest_for_worker.clone());
+                    Ok(report)
                 },
             )?;
             println!(
@@ -314,10 +329,22 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     cancellation.check()?;
                     let _access = access_reports.access_checked(|| cancellation.check())?;
                     cancellation.check()?;
-                    write_parity_review_bundle_manifest(
-                        &manifest_for_worker,
-                        &output_dir_for_worker,
-                    )
+                    let inputs = read_parity_manifest_inputs_checked(&manifest_for_worker, || {
+                        cancellation.check()
+                    })?;
+                    cancellation.check()?;
+                    let artifact_access_reports =
+                        parity_artifact_access_reports_checked(&inputs, "parity review", || {
+                            cancellation.check()
+                        })?;
+                    artifact_access_reports.preflight_volumes()?;
+                    cancellation.check()?;
+                    let _artifact_access =
+                        artifact_access_reports.access_checked(|| cancellation.check())?;
+                    cancellation.check()?;
+                    let mut report = run_parity_gate(inputs)?;
+                    report.manifest_path = Some(manifest_for_worker.clone());
+                    write_parity_review_bundle(report, &output_dir_for_worker)
                 },
             )?;
             println!(
@@ -735,6 +762,51 @@ fn pixel_diff_access_reports_checked(
     Ok(GateAccessReports::new(entries))
 }
 
+fn read_parity_manifest_inputs_checked(
+    manifest: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Vec<ParityGateInput>> {
+    check_control()?;
+    let content = fs::read_to_string(manifest).map_err(|err| GfmError::io(manifest, err))?;
+    check_control()?;
+    let base = manifest.parent().unwrap_or_else(|| Path::new("."));
+    parse_parity_gate_manifest(&content, base)
+}
+
+fn parity_artifact_access_reports_checked(
+    inputs: &[ParityGateInput],
+    worker_prefix: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<GateAccessReports> {
+    let mut entries = Vec::new();
+    for input in inputs {
+        check_control()?;
+        entries.push(GateAccessReport::new_checked(
+            input.expected_path.clone(),
+            AccessIntent::Read,
+            format!("{worker_prefix} Finder capture"),
+            &mut check_control,
+        )?);
+        entries.push(GateAccessReport::new_checked(
+            input.actual_path.clone(),
+            AccessIntent::Read,
+            format!("{worker_prefix} GFM capture"),
+            &mut check_control,
+        )?);
+        if let Some(mask_path) = &input.mask_path {
+            check_control()?;
+            entries.push(GateAccessReport::new_checked(
+                mask_path.clone(),
+                AccessIntent::Read,
+                format!("{worker_prefix} mask"),
+                &mut check_control,
+            )?);
+        }
+    }
+    check_control()?;
+    Ok(GateAccessReports::new(entries))
+}
+
 fn parity_review_access_reports(manifest: &Path, output_dir: &Path) -> Result<GateAccessReports> {
     parity_review_access_reports_checked(manifest, output_dir, || Ok(()))
 }
@@ -1035,6 +1107,38 @@ mod tests {
             "{err}"
         );
         assert!(!output.exists());
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(offline).unwrap();
+    }
+
+    #[test]
+    fn parity_artifact_access_refuses_unreachable_capture_before_pixel_read() {
+        let root = unique_temp_dir("gfm-gates-parity-artifact-access-root");
+        let offline = unique_temp_dir("gfm-gates-parity-artifact-access-offline");
+        fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let finder_capture = offline.join("finder.rgba");
+        let gfm_capture = root.join("gfm.rgba");
+        let input = ParityGateInput::new(
+            ParitySurface::Toolbar,
+            &finder_capture,
+            &gfm_capture,
+            PixelSize::new(1, 1),
+        );
+
+        let err = parity_artifact_access_reports_checked(&[input], "parity gate", || Ok(()))
+            .and_then(|reports| reports.preflight_volumes())
+            .expect_err("unreachable Finder capture should fail before pixel reads");
+
+        assert!(
+            err.to_string().contains(
+                "parity gate Finder capture volume access blocked: unreachable volume network"
+            ),
+            "{err}"
+        );
+        assert!(
+            !err.to_string().contains("failed to read RGBA image"),
+            "{err}"
+        );
         fs::remove_dir_all(root).unwrap();
         fs::remove_dir_all(offline).unwrap();
     }

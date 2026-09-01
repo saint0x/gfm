@@ -1691,6 +1691,94 @@ fn parity_gate_rejects_unprovenanced_manifest_from_binary() {
 }
 
 #[test]
+fn parity_gate_refuses_unreachable_capture_before_pixel_read_from_binary() {
+    let root = unique_temp_dir("gfm-cli-parity-gate-artifact-root");
+    let offline = unique_temp_dir("gfm-cli-parity-gate-artifact-offline");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let expected = offline.join("finder.rgba");
+    let actual = root.join("gfm.rgba");
+    let manifest = root.join("gate.tsv");
+    fs::write(&expected, [0, 0, 0, 255]).unwrap();
+    fs::write(&actual, [0, 0, 0, 255]).unwrap();
+    fs::write(
+        &manifest,
+        format!(
+            "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\t{}\t{}\t1\t1\t\t1040\t720\tactive\ticon\tfixtures/toolbar\n",
+            expected.display(),
+            actual.display()
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["parity-gate", manifest.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("parity-gate\t"), "{stdout}");
+    assert!(
+        stderr.contains(
+            "parity gate Finder capture volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("failed to read RGBA image"), "{stderr}");
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
+fn parity_review_refuses_unreachable_capture_before_bundle_write_from_binary() {
+    let root = unique_temp_dir("gfm-cli-parity-review-artifact-root");
+    let offline = unique_temp_dir("gfm-cli-parity-review-artifact-offline");
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let expected = offline.join("finder.rgba");
+    let actual = root.join("gfm.rgba");
+    let manifest = root.join("gate.tsv");
+    let review = root.join("review");
+    fs::write(&expected, [0, 0, 0, 255]).unwrap();
+    fs::write(&actual, [0, 0, 0, 255]).unwrap();
+    fs::write(
+        &manifest,
+        format!(
+            "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\t{}\t{}\t1\t1\t\t1040\t720\tactive\ticon\tfixtures/toolbar\n",
+            expected.display(),
+            actual.display()
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "parity-review",
+            manifest.to_str().unwrap(),
+            review.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("parity-review\t"), "{stdout}");
+    assert!(
+        stderr.contains(
+            "parity review Finder capture volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("failed to read RGBA image"), "{stderr}");
+    assert!(!review.exists());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(offline).unwrap();
+}
+
+#[test]
 fn search_typing_benchmark_reports_hot_path_latency_from_binary() {
     let root = unique_temp_dir("gfm-cli-search-typing-benchmark");
 
