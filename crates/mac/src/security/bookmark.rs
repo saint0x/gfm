@@ -619,7 +619,7 @@ impl SecurityScopedBookmarkStoreReport {
     pub fn as_tsv(&self) -> String {
         format!(
             "security-bookmark-store\t{}\trecords={}\trepaired={}\tunavailable={}",
-            self.path.display(),
+            escape_path_field(&self.path),
             self.records,
             self.repaired,
             self.unavailable
@@ -683,13 +683,13 @@ impl SecurityScopedBookmarkReport {
     pub fn as_tsv(&self) -> String {
         format!(
             "security-bookmark\t{}\tstatus={}\tread-only={}\tbytes={}\tresolved={}\tstale={}\taccess-started={}\treason={}",
-            self.path.display(),
+            escape_path_field(&self.path),
             self.status.as_str(),
             self.read_only,
             self.byte_len,
             self.resolved_path
                 .as_deref()
-                .map(|path| path.display().to_string())
+                .map(escape_path_field)
                 .unwrap_or_else(|| "-".to_string()),
             self.stale,
             self.access_started,
@@ -777,6 +777,10 @@ fn escape_field(value: &str) -> String {
         .replace('\\', "\\\\")
         .replace('\t', "\\t")
         .replace('\n', "\\n")
+}
+
+fn escape_path_field(path: &Path) -> String {
+    escape_field(&path.to_string_lossy())
 }
 
 fn unescape_field(value: &str) -> std::result::Result<String, String> {
@@ -957,6 +961,52 @@ mod tests {
         assert!(resolved.as_tsv().contains("status=resolved"));
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bookmark_report_tsv_escapes_control_characters_in_paths() {
+        let report = SecurityScopedBookmarkReport {
+            path: PathBuf::from("/Users/me/Documents/Reports\tQ3\nDraft.md"),
+            status: SecurityScopedBookmarkStatus::Resolved,
+            read_only: true,
+            byte_len: 4,
+            resolved_path: Some(PathBuf::from(
+                "/Users/me/Documents\tArchive/Reports\nDraft.md",
+            )),
+            stale: false,
+            access_started: true,
+            reason: Some("bookmark resolved".to_string()),
+        };
+
+        let tsv = report.as_tsv();
+
+        assert_eq!(tsv.lines().count(), 1, "{tsv}");
+        assert!(tsv.starts_with(
+            "security-bookmark\t/Users/me/Documents/Reports\\tQ3\\nDraft.md\tstatus=resolved\t"
+        ));
+        assert!(
+            tsv.contains("\tresolved=/Users/me/Documents\\tArchive/Reports\\nDraft.md\t"),
+            "{tsv}"
+        );
+        assert_eq!(tsv.split('\t').count(), 9, "{tsv}");
+    }
+
+    #[test]
+    fn bookmark_store_report_tsv_escapes_control_characters_in_path() {
+        let report = SecurityScopedBookmarkStoreReport {
+            path: PathBuf::from("/Users/me/Library/Application Support/GFM\tState\nbookmarks.tsv"),
+            records: 2,
+            repaired: 1,
+            unavailable: 0,
+        };
+
+        let tsv = report.as_tsv();
+
+        assert_eq!(tsv.lines().count(), 1, "{tsv}");
+        assert!(tsv.starts_with(
+            "security-bookmark-store\t/Users/me/Library/Application Support/GFM\\tState\\nbookmarks.tsv\t"
+        ));
+        assert_eq!(tsv.split('\t').count(), 5, "{tsv}");
     }
 
     #[test]
