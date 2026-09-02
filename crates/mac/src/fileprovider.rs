@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 
 const ICLOUD_DRIVE_COMPONENT: &str = "com~apple~CloudDocs";
 const FILEPROVIDER_CACHED_ROOT_COMPONENT: &str = "CloudStorage";
+const MAX_PROVIDER_XATTR_NAMES: usize = 64;
 const MAX_PROVIDER_XATTR_VALUE_BYTES: usize = 4096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2397,6 +2398,7 @@ impl CloudHints {
         if should_read_provider_xattrs(&native, &native_identity, !path_sources.is_empty()) {
             check()?;
             if let Ok(attrs) = xattr::list(path) {
+                let mut provider_xattr_names = 0usize;
                 for attr in attrs {
                     check()?;
                     let attr = attr.to_string_lossy().to_string();
@@ -2404,6 +2406,10 @@ impl CloudHints {
                         || attr.contains("fileprovider")
                         || attr.contains("ubiquit")
                     {
+                        if provider_xattr_names >= MAX_PROVIDER_XATTR_NAMES {
+                            break;
+                        }
+                        provider_xattr_names += 1;
                         check()?;
                         if let Some(value) = xattr_string_value(path, &attr) {
                             check()?;
@@ -9668,6 +9674,30 @@ mod tests {
             &identity,
             false
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn state_read_bounds_provider_xattr_processing_on_hot_path() {
+        let root = unique_temp_dir();
+        let path = root.join("Remote.icloud");
+        fs::write(&path, "remote").unwrap();
+        for index in 0..(MAX_PROVIDER_XATTR_NAMES + 8) {
+            xattr::set(
+                &path,
+                format!("com.apple.fileprovider.test-{index:03}"),
+                b"unknown-provider-state=true",
+            )
+            .unwrap();
+        }
+
+        let hints = CloudHints::read_checked(&path, &mut || Ok(())).unwrap();
+
+        assert_eq!(hints.xattrs.len(), MAX_PROVIDER_XATTR_NAMES);
+        assert!(hints.source.split('+').any(|source| source == "xattr"));
+
+        fs::remove_file(path).unwrap();
+        fs::remove_dir_all(root).unwrap();
     }
 
     fn mark_evicted_fixture(path: &Path) {
