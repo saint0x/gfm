@@ -922,6 +922,7 @@ fn print_usage() {
   gfm diagnostics-parity-baseline <config.toml> <baseline-root> <macos-build>
   gfm diagnostics-storage-inspect <records.gfmidx|content.gfmcontent>
   gfm support-check
+  gfm host-scheduling-pressure
   gfm permission-onboarding
   gfm permission-invalidation [permission-state.tsv]
   gfm permission-invalidation-unavailable-volume-api <permission-state.tsv> <volume-root>

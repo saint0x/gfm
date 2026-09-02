@@ -22,24 +22,27 @@ use gfm_index::{
     VolumeIndexPolicy, VolumeInvalidationReport,
 };
 use gfm_jobs::{
-    Cancellation, JobClass, JobIoPressure, JobJournal, JobPayloadKind, JobProgressState, Priority,
-    RetriableTask, RetryPolicy, Scheduler, SchedulingAction, SchedulingPressure, TaskStatus,
-    VolumeConcurrencyPolicy, WorkerPool,
+    Cancellation, JobBatteryState, JobClass, JobIoPressure, JobJournal, JobPayloadKind,
+    JobProgressState, JobThermalState, JobUserActivity, Priority, RetriableTask, RetryPolicy,
+    Scheduler, SchedulingAction, SchedulingPressure, TaskStatus, VolumeConcurrencyPolicy,
+    WorkerPool,
 };
 use gfm_mac::{
-    current_host_profile, parse_spotlight_fixture, AccessIntent, CloudStorageState,
-    CloudTransferDirection, FileProviderConflictReport, FileProviderDomainEnumerationReport,
-    FileProviderDomainReport, FileProviderInvalidationReport, FileProviderObservedInvalidation,
-    FileProviderOperation, FileProviderOperationReport, FileProviderProgressReport,
-    FileProviderStateInvalidationReport, FileProviderStateObserver, FileProviderStateReport,
-    FileProviderStateSnapshot, MacBridgeContract, MountState, NativeIconBridgeContract,
-    NativeIconDescriptor, NativeIconInvalidationReport, SecurityScopedAccessReport,
-    SecurityScopedBookmarkStatus, SecurityScopedBookmarkStore, SecurityWorkerAction,
-    SecurityWorkerAdmissionReport, SpotlightMetadataReader, SpotlightReconciliationReport,
-    VolumeDescriptor, VolumeDiscoveryReport, VolumeEventInvalidationReport, VolumeEventKind,
-    VolumeEventReport, VolumeEventState, VolumeEventStateBatchReport, VolumeEventStateTransition,
-    VolumeEventStream, VolumeMountIdentityReport, VolumeOperation, VolumeOperationReport,
-    VolumeTopologyChangeKind, VolumeTopologyDiff, WatchRoot,
+    current_host_profile, current_host_scheduling_pressure, parse_spotlight_fixture, AccessIntent,
+    CloudStorageState, CloudTransferDirection, FileProviderConflictReport,
+    FileProviderDomainEnumerationReport, FileProviderDomainReport, FileProviderInvalidationReport,
+    FileProviderObservedInvalidation, FileProviderOperation, FileProviderOperationReport,
+    FileProviderProgressReport, FileProviderStateInvalidationReport, FileProviderStateObserver,
+    FileProviderStateReport, FileProviderStateSnapshot, HostBatteryState, HostIoPressure,
+    HostSchedulingPressureReport, HostThermalState, HostUserActivity, MacBridgeContract,
+    MountState, NativeIconBridgeContract, NativeIconDescriptor, NativeIconInvalidationReport,
+    SecurityScopedAccessReport, SecurityScopedBookmarkStatus, SecurityScopedBookmarkStore,
+    SecurityWorkerAction, SecurityWorkerAdmissionReport, SpotlightMetadataReader,
+    SpotlightReconciliationReport, VolumeDescriptor, VolumeDiscoveryReport,
+    VolumeEventInvalidationReport, VolumeEventKind, VolumeEventReport, VolumeEventState,
+    VolumeEventStateBatchReport, VolumeEventStateTransition, VolumeEventStream,
+    VolumeMountIdentityReport, VolumeOperation, VolumeOperationReport, VolumeTopologyChangeKind,
+    VolumeTopologyDiff, WatchRoot,
 };
 use gfm_preview::{
     decide_invalidation, decide_preview_security, preview_invalidation_for_fileprovider,
@@ -193,6 +196,14 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "mac-bridges" => {
             println!("{}", MacBridgeContract::finder_required().as_tsv());
+        }
+        "host-scheduling-pressure" => {
+            let report = current_host_scheduling_pressure();
+            println!(
+                "{}\t{}",
+                report.as_tsv(),
+                scheduling_pressure_tsv(host_scheduling_pressure(&report))
+            );
         }
         "native-icon" => {
             let path = required_path(args.next(), "native-icon requires a path")?;
@@ -2004,6 +2015,73 @@ fn volume_event_state_runtime_fanout(batch: &VolumeEventStateBatchReport) -> Vec
         lines.extend(volume_event_runtime_fanout_for_transition(transition));
     }
     lines
+}
+
+fn host_scheduling_pressure(report: &HostSchedulingPressureReport) -> SchedulingPressure {
+    SchedulingPressure {
+        io: match report.io_state {
+            HostIoPressure::Nominal => JobIoPressure::Nominal,
+            HostIoPressure::Elevated => JobIoPressure::Elevated,
+            HostIoPressure::Saturated => JobIoPressure::Saturated,
+        },
+        thermal: match report.thermal_state {
+            HostThermalState::Nominal => JobThermalState::Nominal,
+            HostThermalState::Fair => JobThermalState::Fair,
+            HostThermalState::Serious => JobThermalState::Serious,
+            HostThermalState::Critical => JobThermalState::Critical,
+        },
+        battery: match report.battery_state {
+            HostBatteryState::AcPower => JobBatteryState::AcPower,
+            HostBatteryState::Battery => JobBatteryState::Battery,
+            HostBatteryState::LowPower => JobBatteryState::LowPower,
+        },
+        user_activity: match report.user_activity {
+            HostUserActivity::Idle => JobUserActivity::Idle,
+            HostUserActivity::Active => JobUserActivity::Active,
+        },
+    }
+}
+
+fn scheduling_pressure_tsv(pressure: SchedulingPressure) -> String {
+    format!(
+        "scheduler-pressure\tio={}\tthermal={}\tbattery={}\tuser-activity={}",
+        job_io_pressure_tsv(pressure.io),
+        job_thermal_state_tsv(pressure.thermal),
+        job_battery_state_tsv(pressure.battery),
+        job_user_activity_tsv(pressure.user_activity),
+    )
+}
+
+fn job_io_pressure_tsv(value: JobIoPressure) -> &'static str {
+    match value {
+        JobIoPressure::Nominal => "nominal",
+        JobIoPressure::Elevated => "elevated",
+        JobIoPressure::Saturated => "saturated",
+    }
+}
+
+fn job_thermal_state_tsv(value: JobThermalState) -> &'static str {
+    match value {
+        JobThermalState::Nominal => "nominal",
+        JobThermalState::Fair => "fair",
+        JobThermalState::Serious => "serious",
+        JobThermalState::Critical => "critical",
+    }
+}
+
+fn job_battery_state_tsv(value: JobBatteryState) -> &'static str {
+    match value {
+        JobBatteryState::AcPower => "ac",
+        JobBatteryState::Battery => "battery",
+        JobBatteryState::LowPower => "low",
+    }
+}
+
+fn job_user_activity_tsv(value: JobUserActivity) -> &'static str {
+    match value {
+        JobUserActivity::Idle => "idle",
+        JobUserActivity::Active => "active",
+    }
 }
 
 fn volume_event_runtime_fanout_summary(
@@ -5222,7 +5300,10 @@ fn optional_platform_string(value: Option<String>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gfm_mac::{FileProviderStateSnapshotEntry, SecurityDecisionAction};
+    use gfm_mac::{
+        FileProviderStateSnapshotEntry, HostBatteryState, HostIoPressure, HostPressureSignalStatus,
+        HostSchedulingPressureReport, HostThermalState, HostUserActivity, SecurityDecisionAction,
+    };
 
     #[test]
     fn worker_admission_fanout_summary_escapes_first_blocked_fields() {
@@ -5314,6 +5395,41 @@ mod tests {
             "{summary}"
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn host_pressure_report_maps_to_scheduler_pressure() {
+        let pressure = host_scheduling_pressure(&HostSchedulingPressureReport {
+            thermal_status: HostPressureSignalStatus::Available,
+            thermal_state: HostThermalState::Critical,
+            thermal_reason: None,
+            battery_status: HostPressureSignalStatus::Available,
+            battery_state: HostBatteryState::LowPower,
+            battery_reason: None,
+            io_status: HostPressureSignalStatus::Available,
+            io_state: HostIoPressure::Saturated,
+            io_reason: None,
+            user_activity_status: HostPressureSignalStatus::Available,
+            user_activity: HostUserActivity::Active,
+            user_activity_reason: None,
+        });
+
+        assert_eq!(pressure.io, JobIoPressure::Saturated);
+        assert_eq!(pressure.thermal, JobThermalState::Critical);
+        assert_eq!(pressure.battery, JobBatteryState::LowPower);
+        assert_eq!(pressure.user_activity, JobUserActivity::Active);
+        assert_eq!(
+            pressure.decide(Priority::Background, 8, 4).action,
+            SchedulingAction::Defer
+        );
+        assert_eq!(
+            pressure.decide(Priority::Visible, 8, 4).action,
+            SchedulingAction::Run
+        );
+        assert_eq!(
+            scheduling_pressure_tsv(pressure),
+            "scheduler-pressure\tio=saturated\tthermal=critical\tbattery=low\tuser-activity=active"
+        );
     }
 
     #[test]

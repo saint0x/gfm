@@ -25,7 +25,9 @@ pub use fileprovider::{
 pub use finder::{FinderKindSource, NativeFinderKindReport};
 pub use gfm_mac_sys::NativeVolumeStatus;
 pub use host::{
-    current_host_profile, CpuArchitecture, HardwareProfile, HostProfile, MacOsVersion,
+    current_host_profile, current_host_scheduling_pressure, CpuArchitecture, HardwareProfile,
+    HostBatteryState, HostIoPressure, HostPressureSignalStatus, HostProfile,
+    HostSchedulingPressureReport, HostThermalState, HostUserActivity, MacOsVersion,
     SupportEvaluation, SupportMatrix, SupportTier,
 };
 pub use icon::{

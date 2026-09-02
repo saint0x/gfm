@@ -1,6 +1,7 @@
 mod bookmark;
 mod fileprovider;
 mod finder;
+mod pressure;
 mod spotlight;
 mod url;
 mod volume;
@@ -20,6 +21,9 @@ pub use fileprovider::{
     NativeUbiquitousError,
 };
 pub use finder::{copy_kind_string_for_path, NativeFinderKind, NativeFinderKindStatus};
+pub use pressure::{
+    copy_host_pressure, NativeHostPressure, NativeHostSignalStatus, NativeThermalState,
+};
 pub use spotlight::{
     read_spotlight_attributes, read_spotlight_attributes_batch, NativeSpotlightSnapshot,
     NativeSpotlightStatus,

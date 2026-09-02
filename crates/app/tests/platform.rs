@@ -51,6 +51,39 @@ fn reports_host_support_from_binary() {
 }
 
 #[test]
+fn reports_host_scheduling_pressure_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("host-scheduling-pressure")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("host-scheduling-pressure\t"), "{stdout}");
+    assert!(
+        stdout.contains("\tio-status=unsupported\tio=nominal\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tthermal-status="), "{stdout}");
+    assert!(stdout.contains("\tthermal="), "{stdout}");
+    assert!(stdout.contains("\tbattery-status="), "{stdout}");
+    assert!(stdout.contains("\tbattery="), "{stdout}");
+    assert!(
+        stdout.contains("\tuser-activity-status=unsupported\tuser-activity=idle\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\tscheduler-pressure\tio=nominal\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tuser-activity=idle\n"), "{stdout}");
+}
+
+#[test]
 fn reports_permission_onboarding_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("permission-onboarding")
