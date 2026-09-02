@@ -99,6 +99,9 @@ pub struct SidebarItemSpec {
     pub volume_read_only: Option<bool>,
     pub volume_network: Option<bool>,
     pub volume_reachable: Option<bool>,
+    pub volume_ejectable: Option<bool>,
+    pub volume_removable: Option<bool>,
+    pub volume_case_preserving: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -190,6 +193,9 @@ pub struct SidebarVolumeInvalidation {
     pub previous_read_only: Option<bool>,
     pub previous_network: Option<bool>,
     pub previous_reachable: Option<bool>,
+    pub previous_ejectable: Option<bool>,
+    pub previous_removable: Option<bool>,
+    pub previous_case_preserving: Option<bool>,
     pub previous_native_status: Option<String>,
     pub previous_native_reason: Option<String>,
     pub previous_resource_status: Option<String>,
@@ -201,6 +207,9 @@ pub struct SidebarVolumeInvalidation {
     pub current_read_only: Option<bool>,
     pub current_network: Option<bool>,
     pub current_reachable: Option<bool>,
+    pub current_ejectable: Option<bool>,
+    pub current_removable: Option<bool>,
+    pub current_case_preserving: Option<bool>,
     pub current_native_status: Option<String>,
     pub current_native_reason: Option<String>,
     pub current_resource_status: Option<String>,
@@ -234,6 +243,9 @@ impl SidebarVolumeInvalidation {
         let previous_read_only = previous.map(|volume| volume.read_only);
         let previous_network = previous.map(|volume| volume.network);
         let previous_reachable = previous.and_then(|volume| volume.reachable);
+        let previous_ejectable = previous.map(|volume| volume.ejectable);
+        let previous_removable = previous.map(|volume| volume.removable);
+        let previous_case_preserving = previous.and_then(|volume| volume.case_preserving);
         let previous_native_status = previous.and_then(|volume| volume.native_status.clone());
         let previous_native_reason = previous.and_then(|volume| volume.native_reason.clone());
         let previous_resource_status = previous.and_then(|volume| volume.resource_status.clone());
@@ -245,6 +257,9 @@ impl SidebarVolumeInvalidation {
         let current_read_only = current.map(|volume| volume.read_only);
         let current_network = current.map(|volume| volume.network);
         let current_reachable = current.and_then(|volume| volume.reachable);
+        let current_ejectable = current.map(|volume| volume.ejectable);
+        let current_removable = current.map(|volume| volume.removable);
+        let current_case_preserving = current.and_then(|volume| volume.case_preserving);
         let current_native_status = current.and_then(|volume| volume.native_status.clone());
         let current_native_reason = current.and_then(|volume| volume.native_reason.clone());
         let current_resource_status = current.and_then(|volume| volume.resource_status.clone());
@@ -285,6 +300,9 @@ impl SidebarVolumeInvalidation {
             previous_read_only,
             previous_network,
             previous_reachable,
+            previous_ejectable,
+            previous_removable,
+            previous_case_preserving,
             previous_native_status,
             previous_native_reason,
             previous_resource_status,
@@ -296,6 +314,9 @@ impl SidebarVolumeInvalidation {
             current_read_only,
             current_network,
             current_reachable,
+            current_ejectable,
+            current_removable,
+            current_case_preserving,
             current_native_status,
             current_native_reason,
             current_resource_status,
@@ -347,7 +368,7 @@ impl SidebarVolumeInvalidation {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "sidebar-volume-invalidation\trow={}\tpath={}\tkind={}\tprevious-kind={}\tprevious-mount={}\tprevious-read-only={}\tprevious-network={}\tprevious-reachable={}\tprevious-native-status={}\tprevious-native-reason={}\tprevious-resource-status={}\tprevious-resource-reason={}\tprevious-mount-status={}\tprevious-mount-reason={}\tcurrent-kind={}\tcurrent-mount={}\tread-only={}\tnetwork={}\treachable={}\tcurrent-native-status={}\tcurrent-native-reason={}\tcurrent-resource-status={}\tcurrent-resource-reason={}\tcurrent-mount-status={}\tcurrent-mount-reason={}\tinvalidate-row={}\tinvalidate-section={}\tremove-row={}\tdisable-row={}\treason={}",
+            "sidebar-volume-invalidation\trow={}\tpath={}\tkind={}\tprevious-kind={}\tprevious-mount={}\tprevious-read-only={}\tprevious-network={}\tprevious-reachable={}\tprevious-ejectable={}\tprevious-removable={}\tprevious-case-preserving={}\tprevious-native-status={}\tprevious-native-reason={}\tprevious-resource-status={}\tprevious-resource-reason={}\tprevious-mount-status={}\tprevious-mount-reason={}\tcurrent-kind={}\tcurrent-mount={}\tread-only={}\tnetwork={}\treachable={}\tejectable={}\tremovable={}\tcase-preserving={}\tcurrent-native-status={}\tcurrent-native-reason={}\tcurrent-resource-status={}\tcurrent-resource-reason={}\tcurrent-mount-status={}\tcurrent-mount-reason={}\tinvalidate-row={}\tinvalidate-section={}\tremove-row={}\tdisable-row={}\treason={}",
             self.row_id.as_deref().unwrap_or("-"),
             self.path
                 .as_ref()
@@ -367,6 +388,15 @@ impl SidebarVolumeInvalidation {
             self.previous_reachable
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string()),
+            self.previous_ejectable
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.previous_removable
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.previous_case_preserving
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
             format_optional_string(self.previous_native_status.as_deref()),
             format_optional_string(self.previous_native_reason.as_deref()),
             format_optional_string(self.previous_resource_status.as_deref()),
@@ -384,6 +414,15 @@ impl SidebarVolumeInvalidation {
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string()),
             self.current_reachable
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.current_ejectable
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.current_removable
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.current_case_preserving
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string()),
             format_optional_string(self.current_native_status.as_deref()),
@@ -412,6 +451,8 @@ pub struct SidebarVolumeSpec {
     pub read_only: bool,
     pub network: bool,
     pub reachable: Option<bool>,
+    pub removable: bool,
+    pub case_preserving: Option<bool>,
     pub native_status: Option<String>,
     pub native_reason: Option<String>,
     pub resource_status: Option<String>,
@@ -437,6 +478,8 @@ impl SidebarVolumeSpec {
             read_only: false,
             network: false,
             reachable: Some(true),
+            removable: false,
+            case_preserving: Some(true),
             native_status: None,
             native_reason: None,
             resource_status: None,
@@ -459,6 +502,16 @@ impl SidebarVolumeSpec {
         self.read_only = read_only;
         self.network = network;
         self.reachable = reachable;
+        self
+    }
+
+    pub fn with_volume_media_state(
+        mut self,
+        removable: bool,
+        case_preserving: Option<bool>,
+    ) -> Self {
+        self.removable = removable;
+        self.case_preserving = case_preserving;
         self
     }
 
@@ -747,7 +800,7 @@ impl SidebarContract {
         ));
         lines.extend(self.rows.iter().map(|row| {
             format!(
-                "row\t{}\t{}\t{}\t{}\t{}\t{}\tdepth={}\tenabled={}\tselected={}\tejectable={}\tvirtual={}\tpath-state={}\tcloud={}\tcloud-progress={}\tvolume-kind={}\tvolume-mount={}\tvolume-read-only={}\tvolume-network={}\tvolume-reachable={}",
+                "row\t{}\t{}\t{}\t{}\t{}\t{}\tdepth={}\tenabled={}\tselected={}\tejectable={}\tvirtual={}\tpath-state={}\tcloud={}\tcloud-progress={}\tvolume-kind={}\tvolume-mount={}\tvolume-read-only={}\tvolume-network={}\tvolume-reachable={}\tvolume-ejectable={}\tvolume-removable={}\tvolume-case-preserving={}",
                 row.section,
                 row.id,
                 row.label,
@@ -780,6 +833,15 @@ impl SidebarContract {
                     .map(|value| value.to_string())
                     .unwrap_or_else(|| "-".to_string()),
                 row.volume_reachable
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                row.volume_ejectable
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                row.volume_removable
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                row.volume_case_preserving
                     .map(|value| value.to_string())
                     .unwrap_or_else(|| "-".to_string())
             )
@@ -1142,6 +1204,9 @@ struct RowDescriptor {
     volume_read_only: Option<bool>,
     volume_network: Option<bool>,
     volume_reachable: Option<bool>,
+    volume_ejectable: Option<bool>,
+    volume_removable: Option<bool>,
+    volume_case_preserving: Option<bool>,
 }
 
 impl RowDescriptor {
@@ -1169,6 +1234,9 @@ impl RowDescriptor {
             volume_read_only: None,
             volume_network: None,
             volume_reachable: None,
+            volume_ejectable: None,
+            volume_removable: None,
+            volume_case_preserving: None,
         }
     }
 
@@ -1199,6 +1267,9 @@ impl RowDescriptor {
         self.volume_read_only = Some(volume.read_only);
         self.volume_network = Some(volume.network);
         self.volume_reachable = volume.reachable;
+        self.volume_ejectable = Some(volume.ejectable);
+        self.volume_removable = Some(volume.removable);
+        self.volume_case_preserving = volume.case_preserving;
         self
     }
 }
@@ -1225,6 +1296,9 @@ fn row(descriptor: RowDescriptor) -> SidebarItemSpec {
         volume_read_only: descriptor.volume_read_only,
         volume_network: descriptor.volume_network,
         volume_reachable: descriptor.volume_reachable,
+        volume_ejectable: descriptor.volume_ejectable,
+        volume_removable: descriptor.volume_removable,
+        volume_case_preserving: descriptor.volume_case_preserving,
     }
 }
 
@@ -1362,7 +1436,7 @@ mod tests {
             "row\tFavorites\thome\ttester\thome-folder\tfavorite\t/Users/tester\tdepth=0"
         ));
         assert!(output.contains(
-            "row\tiCloud\ticloud-drive\tiCloud Drive\ticloud-drive\tcloud\t-\tdepth=0\tenabled=false\tselected=false\tejectable=false\tvirtual=false\tpath-state=missing\tcloud=none\tcloud-progress=-\tvolume-kind=-\tvolume-mount=-\tvolume-read-only=-\tvolume-network=-\tvolume-reachable=-"
+            "row\tiCloud\ticloud-drive\tiCloud Drive\ticloud-drive\tcloud\t-\tdepth=0\tenabled=false\tselected=false\tejectable=false\tvirtual=false\tpath-state=missing\tcloud=none\tcloud-progress=-\tvolume-kind=-\tvolume-mount=-\tvolume-read-only=-\tvolume-network=-\tvolume-reachable=-\tvolume-ejectable=-\tvolume-removable=-\tvolume-case-preserving=-"
         ));
         assert!(output.contains(
             "row\tTags\ttag-all\tAll Tags...\tfinder-tag\ttag\t-\tdepth=0\tenabled=true"
@@ -1513,7 +1587,7 @@ mod tests {
         assert_eq!(row.path_state, SidebarPathState::Unavailable);
         assert!(!row.enabled);
         assert!(contract.as_tsv().contains(
-            "\tvolume-kind=network\tvolume-mount=stale\tvolume-read-only=true\tvolume-network=true\tvolume-reachable=false"
+            "\tvolume-kind=network\tvolume-mount=stale\tvolume-read-only=true\tvolume-network=true\tvolume-reachable=false\tvolume-ejectable=true\tvolume-removable=false\tvolume-case-preserving=true"
         ));
     }
 
@@ -1596,7 +1670,7 @@ mod tests {
         assert_eq!(invalidation.reason, "sidebar-volume-disabled");
         assert_eq!(
             invalidation.as_tsv(),
-            "sidebar-volume-invalidation\trow=volume-diskarbitration-uuid-team\tpath=/Volumes/Team\tkind=description-changed\tprevious-kind=-\tprevious-mount=-\tprevious-read-only=-\tprevious-network=-\tprevious-reachable=-\tprevious-native-status=-\tprevious-native-reason=-\tprevious-resource-status=-\tprevious-resource-reason=-\tprevious-mount-status=-\tprevious-mount-reason=-\tcurrent-kind=network\tcurrent-mount=stale\tread-only=true\tnetwork=true\treachable=false\tcurrent-native-status=-\tcurrent-native-reason=-\tcurrent-resource-status=-\tcurrent-resource-reason=-\tcurrent-mount-status=-\tcurrent-mount-reason=-\tinvalidate-row=true\tinvalidate-section=true\tremove-row=false\tdisable-row=true\treason=sidebar-volume-disabled"
+            "sidebar-volume-invalidation\trow=volume-diskarbitration-uuid-team\tpath=/Volumes/Team\tkind=description-changed\tprevious-kind=-\tprevious-mount=-\tprevious-read-only=-\tprevious-network=-\tprevious-reachable=-\tprevious-ejectable=-\tprevious-removable=-\tprevious-case-preserving=-\tprevious-native-status=-\tprevious-native-reason=-\tprevious-resource-status=-\tprevious-resource-reason=-\tprevious-mount-status=-\tprevious-mount-reason=-\tcurrent-kind=network\tcurrent-mount=stale\tread-only=true\tnetwork=true\treachable=false\tejectable=true\tremovable=false\tcase-preserving=true\tcurrent-native-status=-\tcurrent-native-reason=-\tcurrent-resource-status=-\tcurrent-resource-reason=-\tcurrent-mount-status=-\tcurrent-mount-reason=-\tinvalidate-row=true\tinvalidate-section=true\tremove-row=false\tdisable-row=true\treason=sidebar-volume-disabled"
         );
     }
 
@@ -1687,7 +1761,7 @@ mod tests {
         assert_eq!(invalidation.reason, "sidebar-volume-disabled");
         assert_eq!(
             invalidation.as_tsv(),
-            "sidebar-volume-invalidation\trow=volume-diskarbitration-uuid-team\tpath=/Volumes/Team\tkind=description-changed\tprevious-kind=-\tprevious-mount=-\tprevious-read-only=-\tprevious-network=-\tprevious-reachable=-\tprevious-native-status=-\tprevious-native-reason=-\tprevious-resource-status=-\tprevious-resource-reason=-\tprevious-mount-status=-\tprevious-mount-reason=-\tcurrent-kind=network\tcurrent-mount=mounted\tread-only=false\tnetwork=true\treachable=false\tcurrent-native-status=-\tcurrent-native-reason=-\tcurrent-resource-status=-\tcurrent-resource-reason=-\tcurrent-mount-status=-\tcurrent-mount-reason=-\tinvalidate-row=true\tinvalidate-section=true\tremove-row=false\tdisable-row=true\treason=sidebar-volume-disabled"
+            "sidebar-volume-invalidation\trow=volume-diskarbitration-uuid-team\tpath=/Volumes/Team\tkind=description-changed\tprevious-kind=-\tprevious-mount=-\tprevious-read-only=-\tprevious-network=-\tprevious-reachable=-\tprevious-ejectable=-\tprevious-removable=-\tprevious-case-preserving=-\tprevious-native-status=-\tprevious-native-reason=-\tprevious-resource-status=-\tprevious-resource-reason=-\tprevious-mount-status=-\tprevious-mount-reason=-\tcurrent-kind=network\tcurrent-mount=mounted\tread-only=false\tnetwork=true\treachable=false\tejectable=true\tremovable=false\tcase-preserving=true\tcurrent-native-status=-\tcurrent-native-reason=-\tcurrent-resource-status=-\tcurrent-resource-reason=-\tcurrent-mount-status=-\tcurrent-mount-reason=-\tinvalidate-row=true\tinvalidate-section=true\tremove-row=false\tdisable-row=true\treason=sidebar-volume-disabled"
         );
     }
 
@@ -1865,7 +1939,7 @@ mod tests {
         assert_eq!(invalidation.reason, "sidebar-volume-disappeared");
         assert_eq!(
             invalidation.as_tsv(),
-            "sidebar-volume-invalidation\trow=volume-diskarbitration-uuid-team\tpath=/Volumes/Team\tkind=disappeared\tprevious-kind=network\tprevious-mount=mounted\tprevious-read-only=false\tprevious-network=true\tprevious-reachable=true\tprevious-native-status=-\tprevious-native-reason=-\tprevious-resource-status=-\tprevious-resource-reason=-\tprevious-mount-status=-\tprevious-mount-reason=-\tcurrent-kind=-\tcurrent-mount=-\tread-only=-\tnetwork=-\treachable=-\tcurrent-native-status=-\tcurrent-native-reason=-\tcurrent-resource-status=-\tcurrent-resource-reason=-\tcurrent-mount-status=-\tcurrent-mount-reason=-\tinvalidate-row=true\tinvalidate-section=true\tremove-row=true\tdisable-row=false\treason=sidebar-volume-disappeared"
+            "sidebar-volume-invalidation\trow=volume-diskarbitration-uuid-team\tpath=/Volumes/Team\tkind=disappeared\tprevious-kind=network\tprevious-mount=mounted\tprevious-read-only=false\tprevious-network=true\tprevious-reachable=true\tprevious-ejectable=true\tprevious-removable=false\tprevious-case-preserving=true\tprevious-native-status=-\tprevious-native-reason=-\tprevious-resource-status=-\tprevious-resource-reason=-\tprevious-mount-status=-\tprevious-mount-reason=-\tcurrent-kind=-\tcurrent-mount=-\tread-only=-\tnetwork=-\treachable=-\tejectable=-\tremovable=-\tcase-preserving=-\tcurrent-native-status=-\tcurrent-native-reason=-\tcurrent-resource-status=-\tcurrent-resource-reason=-\tcurrent-mount-status=-\tcurrent-mount-reason=-\tinvalidate-row=true\tinvalidate-section=true\tremove-row=true\tdisable-row=false\treason=sidebar-volume-disappeared"
         );
     }
 

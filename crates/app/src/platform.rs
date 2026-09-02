@@ -2444,6 +2444,7 @@ fn sidebar_volume_spec(volume: &VolumeDescriptor) -> SidebarVolumeSpec {
         volume.network,
         volume.reachable,
     )
+    .with_volume_media_state(volume.removable, volume.case_preserving)
     .with_platform_api_context(
         volume_status_string(volume.native_status),
         volume.native_reason.clone(),
