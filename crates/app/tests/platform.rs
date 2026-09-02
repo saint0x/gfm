@@ -6915,6 +6915,34 @@ fn reports_volume_topology_api_reason_diff_from_binary() {
 }
 
 #[test]
+fn reports_api_reason_topology_index_invalidation_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-topology-api-reason-index-invalidation")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("volume-topology-diff\tcount=1\n"));
+    assert!(stdout.contains("volume-topology\tchanged\t"));
+    assert!(stdout.contains("\treason=volume-api-reason-changed\n"));
+    assert!(stdout.contains(
+        "volume-event-index-invalidation\tkind=description-changed\tpath=/Volumes/API Reason\t"
+    ));
+    assert!(stdout.contains("\tprevious-native-status=unavailable\t"));
+    assert!(stdout.contains("\tcurrent-native-status=unavailable\t"));
+    assert!(stdout.contains("\tapi-status-changed=false\t"));
+    assert!(stdout.contains("\tapi-reason-changed=true\t"));
+    assert!(stdout.contains("\tindex-admission=true\trescan-index=true\t"));
+    assert!(stdout.contains("\tcancel-index-jobs=true\tclear-fsevents-cursor=true\t"));
+    assert!(stdout.ends_with("reason=volume-event-api-reason-changed\n"));
+}
+
+#[test]
 fn reports_api_status_volume_invalidation_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("volume-api-status-invalidation")

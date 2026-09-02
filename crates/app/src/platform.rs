@@ -966,6 +966,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "volume-topology-api-reason" => {
             println!("{}", topology_api_reason_diff()?.as_tsv());
         }
+        "volume-topology-api-reason-index-invalidation" => {
+            let (previous, current) = topology_api_reason_reports()?;
+            println!(
+                "{}",
+                volume_topology_index_invalidation_tsv(&previous, &current)
+            );
+        }
         "spotlight-reconcile" => {
             let path = required_path(args.next(), "spotlight-reconcile requires a path")?;
             let fixture_path = args.next().map(PathBuf::from);
@@ -1390,6 +1397,11 @@ fn topology_api_status_diff() -> Result<VolumeTopologyDiff> {
 }
 
 fn topology_api_reason_diff() -> Result<VolumeTopologyDiff> {
+    let (previous, current) = topology_api_reason_reports()?;
+    Ok(VolumeTopologyDiff::evaluate(&previous, &current))
+}
+
+fn topology_api_reason_reports() -> Result<(VolumeDiscoveryReport, VolumeDiscoveryReport)> {
     let mut previous = VolumeDescriptor::for_path("/")?;
     previous.stable_identity = "diskarbitration:uuid:API-REASON".to_string();
     previous.label = "API Reason".to_string();
@@ -1404,11 +1416,11 @@ fn topology_api_reason_diff() -> Result<VolumeTopologyDiff> {
     previous.mount_table_reason = None;
     let mut current = previous.clone();
     current.native_reason = Some("DiskArbitration denied during topology refresh".to_string());
-    Ok(VolumeTopologyDiff::evaluate(
-        &VolumeDiscoveryReport {
+    Ok((
+        VolumeDiscoveryReport {
             volumes: vec![previous],
         },
-        &VolumeDiscoveryReport {
+        VolumeDiscoveryReport {
             volumes: vec![current],
         },
     ))
