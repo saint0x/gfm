@@ -7388,6 +7388,8 @@ fn reports_volume_event_runtime_fanout_from_binary() {
     assert!(stdout.contains("\tremove-row=true\t"));
     assert!(stdout.contains("volume-event-operation-policy-invalidation\tkind=disappeared\t"));
     assert!(stdout.contains("\tprevious-class="));
+    assert!(stdout.contains("\tprevious-stable-id="));
+    assert!(!stdout.contains("\tprevious-stable-id=-\t"));
     assert!(stdout.contains("\tprevious-mount="));
     assert!(stdout.contains("\tprevious-read-only=false\t"));
     assert!(stdout.contains("\tprevious-network=false\t"));
@@ -7397,6 +7399,7 @@ fn reports_volume_event_runtime_fanout_from_binary() {
     assert!(stdout.contains("\tprevious-case-preserving=true\t"));
     assert!(stdout.contains("\tprevious-slow="));
     assert!(stdout.contains("\tcurrent-class=-\tcurrent-mount=-\t"));
+    assert!(stdout.contains("\tcurrent-stable-id=-\t"));
     assert!(stdout.contains("\tcurrent-read-only=-\t"));
     assert!(stdout.contains("\tcurrent-network=-\t"));
     assert!(stdout.contains("\tcurrent-reachable=-\t"));
@@ -7434,12 +7437,16 @@ fn reports_volume_event_runtime_fanout_from_binary() {
     assert!(kept_stdout.contains("\tremove-row=false\t"));
     assert!(kept_stdout.contains("volume-event-operation-policy-invalidation\tkind=appeared\t"));
     assert!(kept_stdout.contains("\tprevious-class="));
+    assert!(kept_stdout.contains("\tprevious-stable-id="));
+    assert!(!kept_stdout.contains("\tprevious-stable-id=-\t"));
     assert!(kept_stdout.contains("\tprevious-mount="));
     assert!(kept_stdout.contains("\tprevious-read-only=false\t"));
     assert!(kept_stdout.contains("\tprevious-network=false\t"));
     assert!(kept_stdout.contains("\tprevious-reachable=true\t"));
     assert!(kept_stdout.contains("\tprevious-slow=false\t"));
     assert!(kept_stdout.contains("\tcurrent-class="));
+    assert!(kept_stdout.contains("\tcurrent-stable-id="));
+    assert!(!kept_stdout.contains("\tcurrent-stable-id=-\t"));
     assert!(kept_stdout.contains("\tcurrent-mount=mounted\t"));
     assert!(kept_stdout.contains("\tcurrent-read-only=false\t"));
     assert!(kept_stdout.contains("\tcurrent-network=false\t"));

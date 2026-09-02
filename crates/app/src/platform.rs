@@ -2103,7 +2103,7 @@ fn volume_event_operation_policy_invalidation_tsv(
     current: Option<&VolumeDescriptor>,
 ) -> String {
     format!(
-        "volume-event-operation-policy-invalidation\tkind={}\tpath={}\tprevious-class={}\tprevious-mount={}\tprevious-read-only={}\tprevious-network={}\tprevious-reachable={}\tprevious-removable={}\tprevious-case-sensitive={}\tprevious-case-preserving={}\tprevious-slow={}\tcurrent-class={}\tcurrent-mount={}\tcurrent-read-only={}\tcurrent-network={}\tcurrent-reachable={}\tcurrent-removable={}\tcurrent-case-sensitive={}\tcurrent-case-preserving={}\tcurrent-slow={}\tinvalidate-policy={}\treason={}",
+        "volume-event-operation-policy-invalidation\tkind={}\tpath={}\tprevious-class={}\tprevious-stable-id={}\tprevious-mount={}\tprevious-read-only={}\tprevious-network={}\tprevious-reachable={}\tprevious-removable={}\tprevious-case-sensitive={}\tprevious-case-preserving={}\tprevious-slow={}\tcurrent-class={}\tcurrent-stable-id={}\tcurrent-mount={}\tcurrent-read-only={}\tcurrent-network={}\tcurrent-reachable={}\tcurrent-removable={}\tcurrent-case-sensitive={}\tcurrent-case-preserving={}\tcurrent-slow={}\tinvalidate-policy={}\treason={}",
         platform.kind.as_str(),
         platform
             .path
@@ -2111,6 +2111,10 @@ fn volume_event_operation_policy_invalidation_tsv(
             .map(|path| path.display().to_string())
             .unwrap_or_else(|| "-".to_string()),
         previous.map(|volume| volume.kind.as_str()).unwrap_or("-"),
+        previous
+            .map(|volume| escape_field(&volume.stable_identity))
+            .filter(|identity| !identity.trim().is_empty())
+            .unwrap_or_else(|| "-".to_string()),
         previous
             .map(|volume| volume.mount_state.as_str())
             .unwrap_or("-"),
@@ -2134,6 +2138,10 @@ fn volume_event_operation_policy_invalidation_tsv(
             .map(|slow| slow.to_string())
             .unwrap_or_else(|| "-".to_string()),
         current.map(|volume| volume.kind.as_str()).unwrap_or("-"),
+        current
+            .map(|volume| escape_field(&volume.stable_identity))
+            .filter(|identity| !identity.trim().is_empty())
+            .unwrap_or_else(|| "-".to_string()),
         current
             .map(|volume| volume.mount_state.as_str())
             .unwrap_or("-"),

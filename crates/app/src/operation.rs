@@ -767,21 +767,35 @@ fn operation_volume_copy_policy_report(operation: &Operation) -> Result<String> 
     let report = operation_volume_report_checked(operation, || Ok(()))?;
     let policy = operation_volume_copy_policy_from_report(operation, &report);
     Ok(match operation {
-        Operation::Copy { from, to } | Operation::Move { from, to } => format!(
-            "operation-volume-copy-policy\tsource={}\tdestination={}\tsource-class={}\tdestination-class={}\tbuffer-bytes={}\tfile-cloning={}\tdistinct-volumes={}\thard-links={}\tsparse-files={}\tvolumes={}",
-            from.display(),
-            to.display(),
-            operation_volume_class_name(policy.class_for_path(from)),
-            operation_volume_class_name(policy.class_for_path(to)),
-            policy.copy_buffer_bytes_for_paths(from, to),
-            policy.file_cloning_supported_for_paths(from, to),
-            policy.paths_are_known_distinct_volumes(from, to),
-            policy.hard_links_supported_for_path(to),
-            policy.sparse_files_supported_for_path(to),
-            report.volumes.len()
-        ),
-        _ => "operation-volume-copy-policy\tsource=-\tdestination=-\tsource-class=-\tdestination-class=-\tbuffer-bytes=0\tfile-cloning=false\tdistinct-volumes=false\thard-links=false\tsparse-files=false\tvolumes=0".to_string(),
+        Operation::Copy { from, to } | Operation::Move { from, to } => {
+            let source_identity = operation_volume_identity_for_path(&report, from);
+            let destination_identity = operation_volume_identity_for_path(&report, to);
+            format!(
+                "operation-volume-copy-policy\tsource={}\tdestination={}\tsource-class={}\tdestination-class={}\tsource-stable-id={}\tdestination-stable-id={}\tbuffer-bytes={}\tfile-cloning={}\tdistinct-volumes={}\thard-links={}\tsparse-files={}\tvolumes={}",
+                from.display(),
+                to.display(),
+                operation_volume_class_name(policy.class_for_path(from)),
+                operation_volume_class_name(policy.class_for_path(to)),
+                source_identity,
+                destination_identity,
+                policy.copy_buffer_bytes_for_paths(from, to),
+                policy.file_cloning_supported_for_paths(from, to),
+                policy.paths_are_known_distinct_volumes(from, to),
+                policy.hard_links_supported_for_path(to),
+                policy.sparse_files_supported_for_path(to),
+                report.volumes.len()
+            )
+        }
+        _ => "operation-volume-copy-policy\tsource=-\tdestination=-\tsource-class=-\tdestination-class=-\tsource-stable-id=-\tdestination-stable-id=-\tbuffer-bytes=0\tfile-cloning=false\tdistinct-volumes=false\thard-links=false\tsparse-files=false\tvolumes=0".to_string(),
     })
+}
+
+fn operation_volume_identity_for_path(report: &VolumeDiscoveryReport, path: &Path) -> String {
+    report
+        .volume_for_path(path)
+        .map(|volume| escape_operation_field(&volume.stable_identity))
+        .filter(|identity| !identity.trim().is_empty())
+        .unwrap_or_else(|| "-".to_string())
 }
 
 fn preflight_operation_volume_policy_access(operation: &Operation) -> Result<()> {
@@ -1855,6 +1869,10 @@ mod tests {
         assert!(report.starts_with("operation-volume-copy-policy\t"));
         assert!(report.contains("\tsource-class=network\t"));
         assert!(report.contains("\tdestination-class=external\t"));
+        assert!(report.contains("\tsource-stable-id="));
+        assert!(!report.contains("\tsource-stable-id=-\t"));
+        assert!(report.contains("\tdestination-stable-id="));
+        assert!(!report.contains("\tdestination-stable-id=-\t"));
         assert!(report.contains("\tbuffer-bytes=65536\t"));
         assert!(report.contains("\tfile-cloning=false\t"));
         assert!(report.contains("\tdistinct-volumes=true\t"));

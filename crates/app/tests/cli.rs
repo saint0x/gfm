@@ -8197,6 +8197,10 @@ fn operation_volume_copy_policy_reports_descriptor_classes_from_binary() {
         stdout.contains("\tdestination-class=external\t"),
         "{stdout}"
     );
+    assert!(stdout.contains("\tsource-stable-id="), "{stdout}");
+    assert!(!stdout.contains("\tsource-stable-id=-\t"), "{stdout}");
+    assert!(stdout.contains("\tdestination-stable-id="), "{stdout}");
+    assert!(!stdout.contains("\tdestination-stable-id=-\t"), "{stdout}");
     assert!(stdout.contains("\tbuffer-bytes=65536\t"), "{stdout}");
     assert!(stdout.contains("\tdistinct-volumes=true\t"), "{stdout}");
     assert!(stdout.contains("\tvolumes=2"), "{stdout}");
@@ -8242,6 +8246,10 @@ fn operation_volume_copy_policy_reports_disk_image_as_slow_from_binary() {
     );
     assert!(stdout.contains("\tsource-class=slow\t"), "{stdout}");
     assert!(stdout.contains("\tdestination-class=local\t"), "{stdout}");
+    assert!(stdout.contains("\tsource-stable-id="), "{stdout}");
+    assert!(!stdout.contains("\tsource-stable-id=-\t"), "{stdout}");
+    assert!(stdout.contains("\tdestination-stable-id="), "{stdout}");
+    assert!(!stdout.contains("\tdestination-stable-id=-\t"), "{stdout}");
     assert!(stdout.contains("\tbuffer-bytes=65536\t"), "{stdout}");
     assert!(stdout.contains("\tdistinct-volumes=true\t"), "{stdout}");
     assert!(stdout.contains("\tvolumes=2"), "{stdout}");
