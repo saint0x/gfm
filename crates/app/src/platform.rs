@@ -2921,6 +2921,9 @@ fn previous_index_volume_descriptor_from_args(
     if let Some(mount_reason) = optional_platform_string(args.next()) {
         previous = previous.with_mount_reason(mount_reason);
     }
+    if let Some(reachable) = optional_platform_bool(args.next(), "previous reachable")? {
+        previous = previous.with_reachable(Some(reachable));
+    }
     Ok(previous)
 }
 
@@ -5209,6 +5212,7 @@ mod tests {
                 "-",
                 "unavailable",
                 "mount table unavailable",
+                "false",
             ]
             .into_iter()
             .map(str::to_string),
@@ -5216,6 +5220,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(previous.read_only, Some(false));
+        assert_eq!(previous.reachable, Some(false));
         assert_eq!(previous.writable, Some(true));
         assert_eq!(previous.ejectable, Some(true));
         assert_eq!(previous.mountable, Some(false));
@@ -5316,6 +5321,66 @@ mod tests {
             tsv.contains("\tprevious-native-reason=DiskArbitration unavailable before refresh\t")
         );
         assert!(tsv.contains("\tapi-status-changed=true\t"));
+    }
+
+    #[test]
+    fn volume_invalidation_uses_previous_arg_reachability_for_index_admission() {
+        let previous = previous_index_volume_descriptor_from_args(
+            IndexVolumeDescriptor::new(
+                "Team",
+                "/Volumes/Team",
+                IndexVolumeClass::Network,
+                IndexMountState::Mounted,
+            ),
+            &mut [
+                "-",
+                "-",
+                "-",
+                "-",
+                "-",
+                "diskarbitration:uuid:TEAM",
+                "-",
+                "-",
+                "-",
+                "-",
+                "-",
+                "-",
+                "-",
+                "available",
+                "-",
+                "available",
+                "-",
+                "available",
+                "-",
+                "false",
+            ]
+            .into_iter()
+            .map(str::to_string),
+        )
+        .unwrap();
+        let current = IndexVolumeDescriptor::new(
+            "Team",
+            "/Volumes/Team",
+            IndexVolumeClass::Network,
+            IndexMountState::Mounted,
+        )
+        .with_stable_identity("diskarbitration:uuid:TEAM")
+        .with_reachable(Some(true))
+        .with_native_status("available")
+        .with_resource_status("available")
+        .with_mount_status("available");
+
+        let report = VolumeInvalidationReport::evaluate(Some(&previous), Some(&current));
+        let tsv = report.as_tsv();
+
+        assert_eq!(report.previous_reachable, Some(false));
+        assert_eq!(report.current_reachable, Some(true));
+        assert!(report.invalidate_index_admission);
+        assert!(report.rescan_index);
+        assert!(report.cancel_index_jobs);
+        assert_eq!(report.reason, "volume-reachability-changed");
+        assert!(tsv.contains("\tprevious-reachable=false\t"));
+        assert!(tsv.contains("\tcurrent-reachable=true\t"));
     }
 
     #[test]

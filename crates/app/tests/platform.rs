@@ -6353,6 +6353,7 @@ fn volume_invalidation_accepts_previous_api_snapshot_from_binary() {
             "URL resource values unavailable before refresh",
             "unavailable",
             "mount table unavailable before refresh",
+            "false",
         ])
         .output()
         .unwrap();
@@ -6364,6 +6365,7 @@ fn volume_invalidation_accepts_previous_api_snapshot_from_binary() {
     let stdout = String::from_utf8(output.stdout).unwrap();
 
     assert!(stdout.starts_with("volume-invalidation\tpath="), "{stdout}");
+    assert!(stdout.contains("\tprevious-reachable=false\t"));
     assert!(stdout.contains("\tprevious-stable-id=diskarbitration:uuid:WORK\t"));
     assert!(stdout.contains("\tprevious-native-status=unavailable\t"));
     assert!(
@@ -6376,6 +6378,65 @@ fn volume_invalidation_accepts_previous_api_snapshot_from_binary() {
     assert!(stdout.contains("\tprevious-mount-reason=mount table unavailable before refresh\t"));
     assert!(stdout.contains("\tapi-status-changed=true\t"), "{stdout}");
     assert!(stdout.contains("\tindex-admission=true\trescan-index=true\t"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn volume_invalidation_accepts_previous_reachability_snapshot_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-volume-invalidation-reachability-snapshot-{}",
+        std::process::id()
+    ));
+    let network = root.join("Team Share");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&network).unwrap();
+    std::fs::write(network.join(".gfm-volume-kind"), "network-smb\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-invalidation")
+        .arg("network")
+        .arg("mounted")
+        .arg(&network)
+        .args([
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "diskarbitration:uuid:TEAM",
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "available",
+            "-",
+            "available",
+            "-",
+            "available",
+            "-",
+            "false",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("volume-invalidation\tpath="), "{stdout}");
+    assert!(stdout.contains("\tprevious-class=network\tprevious-mount=mounted\t"));
+    assert!(stdout.contains("\tprevious-reachable=false\t"));
+    assert!(stdout.contains("\tcurrent-class=network\tcurrent-mount=mounted\t"));
+    assert!(stdout.contains("\tcurrent-reachable=true\t"));
+    assert!(stdout.contains("\tindex-admission=true\trescan-index=true\t"));
+    assert!(stdout.contains("\tcancel-index-jobs=true\tclear-fsevents-cursor=true\t"));
+    assert!(stdout.ends_with("reason=volume-reachability-changed\n"));
 
     let _ = std::fs::remove_dir_all(root);
 }
