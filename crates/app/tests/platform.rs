@@ -815,11 +815,14 @@ fn reports_security_worker_admission_from_binary() {
     let root = std::env::temp_dir().join(format!("gfm-security-worker-{}", std::process::id()));
     let path = root.join("plain.md");
     let missing = root.join("missing.md");
+    let state = root.join("permission-state.tsv");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(&path, "plain").unwrap();
+    seed_stale_permission_state(&state);
 
     let allowed = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_PERMISSION_STATE", &state)
         .arg("security-worker-admission")
         .arg("index worker")
         .arg(&path)
@@ -832,12 +835,29 @@ fn reports_security_worker_admission_from_binary() {
         String::from_utf8_lossy(&allowed.stderr)
     );
     let allowed_stdout = String::from_utf8(allowed.stdout).unwrap();
+    let allowed_stderr = String::from_utf8(allowed.stderr).unwrap();
     assert!(allowed_stdout.starts_with("security-worker-admission\t"));
     assert!(allowed_stdout.contains("\tintent=index\tscope=none\tprobe=granted\t"));
     assert!(allowed_stdout.contains("\tworker-action=start\t"));
     assert!(allowed_stdout.contains("\tcan-touch-filesystem=true\t"));
+    assert!(
+        allowed_stderr.contains(
+            "permission-refresh\taudience=workers\tsubject=index worker\tinitialized=false\tchanged=1\t",
+        ),
+        "{allowed_stderr}"
+    );
+    assert!(
+        allowed_stderr.contains("\tfirst-change-scope=")
+            && !allowed_stderr.contains("\tfirst-change-scope=-")
+            && allowed_stderr.contains("\tfirst-change-kind=")
+            && allowed_stderr.contains("\tfirst-change-current=")
+            && allowed_stderr.contains("\tfirst-change-path=")
+            && allowed_stderr.contains("\tfirst-change-reason="),
+        "{allowed_stderr}"
+    );
 
     let denied = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_PERMISSION_STATE", &state)
         .arg("security-worker-admission")
         .arg("preview worker")
         .arg(&missing)
@@ -850,9 +870,14 @@ fn reports_security_worker_admission_from_binary() {
         String::from_utf8_lossy(&denied.stderr)
     );
     let denied_stdout = String::from_utf8(denied.stdout).unwrap();
+    let denied_stderr = String::from_utf8(denied.stderr).unwrap();
     assert!(denied_stdout.contains("\tintent=preview\tscope=none\tprobe=missing\t"));
     assert!(denied_stdout.contains("\tworker-action=deny\t"));
     assert!(denied_stdout.contains("\tcan-touch-filesystem=false\t"));
+    assert!(
+        !denied_stderr.contains("permission-refresh\taudience=workers\t"),
+        "{denied_stderr}"
+    );
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -861,12 +886,21 @@ fn reports_security_worker_admission_from_binary() {
 fn reports_security_worker_admission_fanout_from_binary() {
     let root =
         std::env::temp_dir().join(format!("gfm-security-worker-fanout-{}", std::process::id()));
+    let state_root = std::env::temp_dir().join(format!(
+        "gfm-security-worker-fanout-state-{}",
+        std::process::id()
+    ));
     let path = root.join("Preview.pdf");
+    let state = state_root.join("permission-state.tsv");
     let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&state_root);
     std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&state_root).unwrap();
     std::fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    seed_stale_permission_state(&state);
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_PERMISSION_STATE", &state)
         .arg("security-worker-admission-fanout")
         .arg(&path)
         .arg("index worker")
@@ -885,6 +919,7 @@ fn reports_security_worker_admission_fanout_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
 
     assert!(stdout.starts_with(
         "security-worker-admission-fanout\tworkers=4\tstart=0\tprompt=0\tmetadata-only=0\tdeny=4\t"
@@ -933,9 +968,23 @@ fn reports_security_worker_admission_fanout_from_binary() {
         5,
         "{stdout}"
     );
+    assert!(
+        stderr.contains("permission-refresh\taudience=workers\tsubject=worker-admission-fanout;index worker:index;preview worker:preview;thumbnail worker:preview;operation worker:operate\tinitialized=false\tchanged=1\t"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("\tfirst-change-scope=")
+            && !stderr.contains("\tfirst-change-scope=-")
+            && stderr.contains("\tfirst-change-kind=")
+            && stderr.contains("\tfirst-change-current=")
+            && stderr.contains("\tfirst-change-path=")
+            && stderr.contains("\tfirst-change-reason="),
+        "{stderr}"
+    );
     assert!(!stdout.contains("\tprobe=missing\t"), "{stdout}");
 
     let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(state_root);
 }
 
 #[test]
@@ -7961,4 +8010,33 @@ fn worker_admission_count_with_intent(
                 && (intent == "-" || line.split('\t').any(|field| field == expected_intent))
         })
         .count()
+}
+
+fn seed_stale_permission_state(state: &std::path::Path) {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("permission-invalidation")
+        .arg(state)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let text = std::fs::read_to_string(state).unwrap();
+    let mut lines = text.lines().map(str::to_string).collect::<Vec<_>>();
+    let first_scope = lines
+        .iter_mut()
+        .skip(1)
+        .find(|line| !line.trim().is_empty())
+        .expect("permission snapshot should include at least one scope");
+    let mut fields = first_scope
+        .split('\t')
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    assert!(fields.len() >= 4, "{first_scope}");
+    fields[1] = "granted".to_string();
+    fields[3] = "stale platform admission fixture".to_string();
+    *first_scope = fields.join("\t");
+    std::fs::write(state, format!("{}\n", lines.join("\n"))).unwrap();
 }

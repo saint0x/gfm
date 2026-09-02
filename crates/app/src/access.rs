@@ -27,6 +27,9 @@ pub(crate) fn worker_admission_with_volume_gate_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<SecurityWorkerAdmissionReport> {
     check_control()?;
+    let worker = worker.into();
+    let _ = refresh_permission_state(PermissionRefreshAudience::Workers, &worker)?;
+    check_control()?;
     let volume_path = absolute_volume_probe_path(path);
     let volume_report =
         VolumeDiscoveryReport::for_containing_path_checked(&volume_path, &mut check_control)?;
@@ -75,6 +78,9 @@ pub(crate) fn worker_admissions_with_shared_volume_report_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<SecurityWorkerAdmissionReport>> {
     check_control()?;
+    let subject = worker_admission_fanout_subject(requests);
+    let _ = refresh_permission_state(PermissionRefreshAudience::Workers, &subject)?;
+    check_control()?;
     let volume_path = absolute_volume_probe_path(path);
     let volume_report =
         VolumeDiscoveryReport::for_containing_path_checked(&volume_path, &mut check_control)?;
@@ -102,6 +108,20 @@ pub(crate) fn worker_admissions_with_volume_report(
             )
         })
         .collect()
+}
+
+fn worker_admission_fanout_subject(requests: &[WorkerAdmissionRequest]) -> String {
+    const MAX_SUBJECT_CHARS: usize = 160;
+    let mut subject = String::from("worker-admission-fanout");
+    for request in requests {
+        let candidate = format!(";{}:{}", request.worker, request.intent.as_str());
+        if subject.len().saturating_add(candidate.len()) > MAX_SUBJECT_CHARS {
+            subject.push_str(";...");
+            break;
+        }
+        subject.push_str(&candidate);
+    }
+    subject
 }
 
 pub(crate) fn worker_admission_blocked_by_volume(
