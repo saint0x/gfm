@@ -1547,7 +1547,7 @@ fn native_event_descriptor_checked(
     };
     check()?;
     match path.try_exists() {
-        Ok(true) => match VolumeDescriptor::for_path_checked(path, &mut check) {
+        Ok(true) => match VolumeDescriptor::for_path_policy_checked(path, &mut check) {
             Ok(descriptor) => Ok(Some(descriptor)),
             Err(GfmError::Cancelled) => Err(GfmError::Cancelled),
             Err(_) => Ok(None),
@@ -8389,6 +8389,33 @@ mod tests {
         assert!(invalidation.invalidate_operation_policy);
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn native_event_descriptor_defers_capacity_reads() {
+        let root = unique_temp_dir("gfm-native-volume-event-policy-capacity");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let event = gfm_mac_sys::NativeVolumeEvent {
+            kind: gfm_mac_sys::NativeVolumeEventKind::Appeared,
+            description: native_description(|description| {
+                description.status = NativeVolumeStatus::Available;
+                description.volume_path = Some(root.clone());
+                description.reason = Some("DiskArbitration volume appeared".to_string());
+            }),
+        };
+
+        let report = VolumeEventReport::from_native_checked(event, || Ok(())).unwrap();
+        let descriptor = report
+            .descriptor
+            .as_ref()
+            .expect("available appeared event should publish policy descriptor");
+
+        assert_eq!(report.kind, VolumeEventKind::Appeared);
+        assert_eq!(descriptor.path, root);
+        assert_eq!(descriptor.kind, VolumeKind::External);
+        assert_eq!(descriptor.capacity, VolumeCapacity::deferred());
+
+        fs::remove_dir_all(descriptor.path.clone()).unwrap();
     }
 
     #[test]
