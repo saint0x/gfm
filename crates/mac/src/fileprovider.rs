@@ -440,7 +440,7 @@ impl FileProviderDomainReport {
     pub fn as_tsv(&self) -> String {
         format!(
             "fileprovider-domain\t{}\tdomain={}\tidentity-status={}\tmanager-status={}\tresource-status={}\tdomain-count={}\titem={}\tdomain-id={}\tmatched-display={}\tstorage-relative={}\tdisconnected={}\tprovider={}\tsource={}\treason={}",
-            self.path.display(),
+            escape_path_field(&self.path),
             self.domain.as_str(),
             self.native_identity_status.as_str(),
             self.native_manager_status.as_str(),
@@ -610,7 +610,7 @@ impl FileProviderProgressReport {
     pub fn as_tsv(&self) -> String {
         format!(
             "fileprovider-progress\t{}\tstate={}\t{}",
-            self.path.display(),
+            escape_path_field(&self.path),
             self.state.storage_state.as_str(),
             self.state.progress.as_tsv_fields()
         )
@@ -671,7 +671,7 @@ impl FileProviderConflictReport {
     pub fn as_tsv(&self) -> String {
         format!(
             "fileprovider-conflict\t{}\tconflict={}\tstate={}\taffected={}\taffected-paths={}\treveal={}\tblock-operations={}\treason={}",
-            self.path.display(),
+            escape_path_field(&self.path),
             self.has_unresolved_conflict,
             self.state.storage_state.as_str(),
             self.affected_paths.len(),
@@ -950,7 +950,7 @@ impl FileProviderInvalidationReport {
     pub fn as_tsv(&self) -> String {
         format!(
             "fileprovider-invalidation\t{}\tprevious={}\tcurrent={}\tchanged={}\t{}\ticon={}\tpreview-memory={}\tpreview-disk={}\tsidebar={}\treindex-metadata={}\treason={}",
-            self.path.display(),
+            escape_path_field(&self.path),
             self.previous.as_str(),
             self.current.storage_state.as_str(),
             self.state_changed,
@@ -1826,7 +1826,7 @@ impl FileProviderOperationReport {
     pub fn as_tsv(&self) -> String {
         format!(
             "fileprovider-operation\t{}\toperation={}\tdisposition={}\tnative-status={}\t{}\t{}\treason={}",
-            self.path.display(),
+            escape_path_field(&self.path),
             self.operation.as_str(),
             self.disposition.as_str(),
             self.native_status
@@ -2179,7 +2179,7 @@ impl FileProviderStateReport {
     pub fn as_tsv(&self) -> String {
         format!(
             "fileprovider-state\t{}\tdomain={}\tstate={}\tmaterialization={}\tmaterialization-source={}\tmaterialization-confidence={}\tmaterialization-reason={}\toffline={}\tconflict={}\tbadges={}\t{}\tdownload={}\tevict={}\treveal-conflict={}\tprovider={}\tsource={}\treason={}",
-            self.path.display(),
+            escape_path_field(&self.path),
             self.domain.as_str(),
             self.storage_state.as_str(),
             self.materialization.as_str(),
@@ -3469,6 +3469,10 @@ fn escape_field(value: &str) -> String {
     output
 }
 
+fn escape_path_field(path: &Path) -> String {
+    escape_field(&path.to_string_lossy())
+}
+
 fn unescape_field(value: &str) -> String {
     let mut output = String::new();
     let mut chars = value.chars();
@@ -3727,6 +3731,84 @@ mod tests {
         );
         assert_eq!(report.commands.download, CloudCommandState::Disabled);
         assert_eq!(report.commands.evict, CloudCommandState::Disabled);
+    }
+
+    #[test]
+    fn report_tsv_serializers_escape_control_characters_in_paths() {
+        let path = PathBuf::from(
+            "/Users/test/Library/Mobile Documents/com~apple~CloudDocs/Reports\tQ3\nDraft.md",
+        );
+        let hints = CloudHints {
+            native: native_values(),
+            native_identity: identity_not_queried(),
+            xattrs: Vec::new(),
+            xattr_values: Vec::new(),
+            provider_identifier: None,
+            source: "icloud-path".to_string(),
+        };
+        let state = FileProviderStateReport::from_hints(path.clone(), hints);
+        let domain = FileProviderDomainReport {
+            path: path.clone(),
+            domain: FileProviderDomain::ICloudDrive,
+            native_identity_status: NativeFileProviderIdentityStatus::NotQueried,
+            native_manager_status: NativeFileProviderDomainStatus::Unavailable,
+            resource_status: "available",
+            domain_count: 0,
+            item_identifier: None,
+            domain_identifier: None,
+            matched_domain_display_name: None,
+            matched_path_relative_to_document_storage: None,
+            matched_domain_disconnected: None,
+            provider_identifier: None,
+            source: "icloud-path".to_string(),
+            reason: Some("domain enumeration unavailable".to_string()),
+        };
+        let progress = FileProviderProgressReport {
+            path: path.clone(),
+            state: state.clone(),
+        };
+        let conflict = FileProviderConflictReport {
+            path: path.clone(),
+            state: state.clone(),
+            has_unresolved_conflict: false,
+            affected_paths: vec![path.clone()],
+            reveal_command: CloudCommandState::Hidden,
+            block_operations: false,
+            reason: "no-provider-conflict".to_string(),
+        };
+        let invalidation = FileProviderInvalidationReport {
+            path: path.clone(),
+            previous: CloudStorageState::Unknown,
+            current: state.clone(),
+            state_changed: false,
+            invalidate_icon: false,
+            invalidate_preview_memory: false,
+            invalidate_preview_disk: false,
+            invalidate_sidebar: false,
+            reindex_metadata: false,
+            reason: "fileprovider-state-unchanged",
+        };
+        let operation = FileProviderOperationReport {
+            path,
+            operation: FileProviderOperation::Download,
+            disposition: FileProviderOperationDisposition::Refused,
+            native_status: None,
+            before: state.clone(),
+            after: None,
+            reason: Some("download disabled".to_string()),
+        };
+
+        for tsv in [
+            state.as_tsv(),
+            domain.as_tsv(),
+            progress.as_tsv(),
+            conflict.as_tsv(),
+            invalidation.as_tsv(),
+            operation.as_tsv(),
+        ] {
+            assert_eq!(tsv.lines().count(), 1, "{tsv}");
+            assert!(tsv.contains("Reports\\tQ3\\nDraft.md"), "{tsv}");
+        }
     }
 
     #[test]
