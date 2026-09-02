@@ -3222,18 +3222,19 @@ fn volume_access_tsv(
         .unwrap_or_default();
     if let Some(volume) = volume_report.volume_for_path(path) {
         format!(
-            "{escaped_prefix}\tworker={escaped_worker}{role_field}\tpath={}\tvolume-id={}\tstable-id={}\tclass={}\tmount={}\treachable={}\tread-only={}\treason=cached-volume-report",
+            "{escaped_prefix}\tworker={escaped_worker}{role_field}\tpath={}\tvolume-id={}\tstable-id={}\tclass={}\tmount={}\treachable={}\twritable={}\tread-only={}\treason=cached-volume-report",
             escape_tsv_field(&path.to_string_lossy()),
             volume.id.0,
             escape_tsv_field(&volume.stable_identity),
             volume.kind.as_str(),
             volume.mount_state.as_str(),
             format_optional_bool(volume.reachable),
+            volume.writable,
             volume.read_only,
         )
     } else {
         format!(
-            "{escaped_prefix}\tworker={escaped_worker}{role_field}\tpath={}\tvolume-id=-\tstable-id=-\tclass=-\tmount=-\treachable=-\tread-only=-\treason=no-containing-volume",
+            "{escaped_prefix}\tworker={escaped_worker}{role_field}\tpath={}\tvolume-id=-\tstable-id=-\tclass=-\tmount=-\treachable=-\twritable=-\tread-only=-\treason=no-containing-volume",
             escape_tsv_field(&path.to_string_lossy()),
         )
     }
