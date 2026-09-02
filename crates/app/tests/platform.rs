@@ -1008,6 +1008,8 @@ fn security_worker_admission_fanout_refuses_unavailable_volume_api_from_binary()
         .arg("index")
         .arg("preview worker")
         .arg("preview")
+        .arg("thumbnail worker")
+        .arg("preview")
         .arg("extraction worker")
         .arg("read")
         .arg("operation worker")
@@ -1022,10 +1024,10 @@ fn security_worker_admission_fanout_refuses_unavailable_volume_api_from_binary()
     let stdout = String::from_utf8(output.stdout).unwrap();
 
     assert!(stdout.starts_with(
-        "security-worker-admission-fanout\tworkers=4\tworker-families=index:1,preview:1,thumbnail:0,extraction:1,operation:1,other:0\tblocked-worker-families=index:1,preview:1,thumbnail:0,extraction:1,operation:1,other:0\tstart=0\tprompt=0\tmetadata-only=0\tdeny=4\t"
+        "security-worker-admission-fanout\tworkers=5\tworker-families=index:1,preview:1,thumbnail:1,extraction:1,operation:1,other:0\tblocked-worker-families=index:1,preview:1,thumbnail:1,extraction:1,operation:1,other:0\tstart=0\tprompt=0\tmetadata-only=0\tdeny=5\t"
     ));
     assert!(stdout.contains("\tcan-touch-filesystem=0\t"));
-    assert!(stdout.contains("\trefresh-on-permission-change=4\t"));
+    assert!(stdout.contains("\trefresh-on-permission-change=5\t"));
     assert!(stdout.contains("\tany-blocked=true\t"));
     assert!(stdout.contains("\tall-blocked=true\t"));
     assert!(stdout.contains("\trefresh-required=true\t"));
@@ -1038,32 +1040,32 @@ fn security_worker_admission_fanout_refuses_unavailable_volume_api_from_binary()
     assert!(stdout.contains("\tfirst-refresh-scope=none\n"));
     assert_eq!(
         stdout.matches("\tprobe=unavailable\t").count(),
-        4,
+        5,
         "{stdout}"
     );
     assert_eq!(
         stdout.matches("\tworker-action=deny\t").count(),
-        4,
+        5,
         "{stdout}"
     );
     assert_eq!(
         stdout.matches("unavailable volume network").count(),
-        5,
+        6,
         "{stdout}"
     );
     assert_eq!(
         stdout.matches("native-status=unavailable").count(),
-        5,
+        6,
         "{stdout}"
     );
     assert_eq!(
         stdout.matches("resource-status=unavailable").count(),
-        5,
+        6,
         "{stdout}"
     );
     assert_eq!(
         stdout.matches("mount-status=unavailable").count(),
-        5,
+        6,
         "{stdout}"
     );
     assert!(!stdout.contains("\tprobe=unknown\t"), "{stdout}");

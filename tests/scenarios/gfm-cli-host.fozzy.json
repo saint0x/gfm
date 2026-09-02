@@ -6894,6 +6894,8 @@
         "index",
         "preview worker",
         "preview",
+        "thumbnail worker",
+        "preview",
         "extraction worker",
         "read",
         "operation worker",
