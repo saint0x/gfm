@@ -972,7 +972,7 @@ fn content_volume_access_tsv(
 ) -> String {
     if let Some(volume) = volume_report.volume_for_path(path) {
         format!(
-            "{}\tworker={}\tpath={}\tintent={}\tvolume-id={}\tstable-id={}\tclass={}\tmount={}\treachable={}\tread-only={}\treason=cached-volume-report",
+            "{}\tworker={}\tpath={}\tintent={}\tvolume-id={}\tstable-id={}\tclass={}\tmount={}\treachable={}\twritable={}\tread-only={}\treason=cached-volume-report",
             escape_content_tsv_field(prefix),
             escape_content_tsv_field(worker),
             escape_content_tsv_field(&path.to_string_lossy()),
@@ -982,11 +982,12 @@ fn content_volume_access_tsv(
             volume.kind.as_str(),
             volume.mount_state.as_str(),
             format_content_optional_bool(volume.reachable),
+            volume.writable,
             volume.read_only,
         )
     } else {
         format!(
-            "{}\tworker={}\tpath={}\tintent={}\tvolume-id=-\tstable-id=-\tclass=-\tmount=-\treachable=-\tread-only=-\treason=no-containing-volume",
+            "{}\tworker={}\tpath={}\tintent={}\tvolume-id=-\tstable-id=-\tclass=-\tmount=-\treachable=-\twritable=-\tread-only=-\treason=no-containing-volume",
             escape_content_tsv_field(prefix),
             escape_content_tsv_field(worker),
             escape_content_tsv_field(&path.to_string_lossy()),

@@ -4549,6 +4549,7 @@ fn ui_search_results_contract_runs_through_visible_worker_from_binary() {
             root.display()
         )) && stderr.contains("\tstable-id=")
             && !stderr.contains("\tstable-id=-\t")
+            && stderr.contains("\twritable=")
             && stderr.contains("\treason=cached-volume-report"),
         "{stderr}"
     );
@@ -10142,6 +10143,7 @@ fn searches_text_content_from_binary() {
             root.display()
         )) && stderr.contains("\tstable-id=")
             && !stderr.contains("\tstable-id=-\t")
+            && stderr.contains("\twritable=")
             && stderr.contains("\treason=cached-volume-report"),
         "{stderr}"
     );
@@ -10181,6 +10183,7 @@ fn adaptive_search_content_applies_pressure_budget_from_binary() {
             root.display()
         )) && stderr.contains("\tstable-id=")
             && !stderr.contains("\tstable-id=-\t")
+            && stderr.contains("\twritable=")
             && stderr.contains("\treason=cached-volume-report"),
         "{stderr}"
     );
@@ -10468,6 +10471,7 @@ fn reports_compressed_pdf_extraction_from_binary() {
             path.display()
         )) && stderr.contains("\tstable-id=")
             && !stderr.contains("\tstable-id=-\t")
+            && stderr.contains("\twritable=")
             && stderr.contains("\treason=cached-volume-report"),
         "{stderr}"
     );
@@ -10523,6 +10527,7 @@ fn extract_report_retries_transient_failure_from_binary() {
             path.display()
         )) && stderr.contains("\tstable-id=")
             && !stderr.contains("\tstable-id=-\t")
+            && stderr.contains("\twritable=")
             && stderr.contains("\treason=cached-volume-report"),
         "{stderr}"
     );
@@ -19983,6 +19988,7 @@ fn assert_operation_volume_access(
         )) && stderr.contains(&format!("\tclass={class}\tmount={mount}\t"))
             && stderr.contains("\tstable-id=")
             && !stderr.contains("\tstable-id=-\t")
+            && stderr.contains("\twritable=")
             && stderr.contains("\tlabel=")
             && !stderr.contains("\tlabel=-\t")
             && stderr.contains("\tvolume-root=")

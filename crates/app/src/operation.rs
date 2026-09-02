@@ -1264,7 +1264,7 @@ fn operation_volume_access_tsv(
     );
     if let Some(volume) = volume_report.volume_for_path(&probe.probe_path) {
         format!(
-            "{}\toperation={}\tworker={}\trole={}\tpath={}\tprobe-path={}\tintent=operate\tvolume-id={}\tstable-id={}\tlabel={}\tvolume-root={}\tclass={}\tmount={}\treachable={}\tread-only={}\treason=cached-volume-report",
+            "{}\toperation={}\tworker={}\trole={}\tpath={}\tprobe-path={}\tintent=operate\tvolume-id={}\tstable-id={}\tlabel={}\tvolume-root={}\tclass={}\tmount={}\treachable={}\twritable={}\tread-only={}\treason=cached-volume-report",
             prefix,
             operation_kind(operation),
             escape_operation_field(&worker),
@@ -1278,11 +1278,12 @@ fn operation_volume_access_tsv(
             volume.kind.as_str(),
             volume.mount_state.as_str(),
             format_operation_optional_bool(volume.reachable),
+            volume.writable,
             volume.read_only,
         )
     } else {
         format!(
-            "{}\toperation={}\tworker={}\trole={}\tpath={}\tprobe-path={}\tintent=operate\tvolume-id=-\tstable-id=-\tlabel=-\tvolume-root=-\tclass=-\tmount=-\treachable=-\tread-only=-\treason=no-containing-volume",
+            "{}\toperation={}\tworker={}\trole={}\tpath={}\tprobe-path={}\tintent=operate\tvolume-id=-\tstable-id=-\tlabel=-\tvolume-root=-\tclass=-\tmount=-\treachable=-\twritable=-\tread-only=-\treason=no-containing-volume",
             prefix,
             operation_kind(operation),
             escape_operation_field(&worker),

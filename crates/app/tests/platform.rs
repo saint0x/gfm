@@ -1430,6 +1430,7 @@ fn quicklook_session_retries_transient_preview_failure_from_binary() {
             document.display()
         )) && stderr.contains("\tstable-id=")
             && !stderr.contains("\tstable-id=-\t")
+            && stderr.contains("\twritable=")
             && stderr.contains("\treason=cached-volume-report"),
         "{stderr}"
     );
@@ -1439,6 +1440,7 @@ fn quicklook_session_retries_transient_preview_failure_from_binary() {
             retry_probe.parent().unwrap().display()
         )) && stderr.contains("\tstable-id=")
             && !stderr.contains("\tstable-id=-\t")
+            && stderr.contains("\twritable=")
             && stderr.contains("\treason=cached-volume-report"),
         "{stderr}"
     );
@@ -1499,6 +1501,7 @@ fn thumbnail_generation_retries_transient_preview_failure_from_binary() {
             image.display()
         )) && stderr.contains("\tstable-id=")
             && !stderr.contains("\tstable-id=-\t")
+            && stderr.contains("\twritable=")
             && stderr.contains("\treason=cached-volume-report"),
         "{stderr}"
     );
@@ -1585,6 +1588,7 @@ fn reports_native_icon_descriptor_from_binary() {
             root.join("GFM.app").display()
         )) && app_stderr.contains("\tstable-id=")
             && !app_stderr.contains("\tstable-id=-\t")
+            && app_stderr.contains("\twritable=")
             && app_stderr.contains("\treason=cached-volume-report"),
         "{app_stderr}"
     );
@@ -1612,6 +1616,7 @@ fn reports_native_icon_descriptor_from_binary() {
             root.join("Report.PDF").display()
         )) && document_stderr.contains("\tstable-id=")
             && !document_stderr.contains("\tstable-id=-\t")
+            && document_stderr.contains("\twritable=")
             && document_stderr.contains("\treason=cached-volume-report"),
         "{document_stderr}"
     );
@@ -1643,6 +1648,7 @@ fn reports_native_icon_descriptor_from_binary() {
             root.join("Report.PDF").display()
         )) && bridge_stderr.contains("\tstable-id=")
             && !bridge_stderr.contains("\tstable-id=-\t")
+            && bridge_stderr.contains("\twritable=")
             && bridge_stderr.contains("\treason=cached-volume-report"),
         "{bridge_stderr}"
     );
@@ -2023,6 +2029,7 @@ fn reports_icon_preview_contract_from_binary() {
             root.join("GFM.app").display()
         )) && stderr.contains("\tstable-id=")
             && !stderr.contains("\tstable-id=-\t")
+            && stderr.contains("\twritable=")
             && stderr.contains("\treason=cached-volume-report"),
         "{stderr}"
     );
@@ -2072,6 +2079,7 @@ fn icon_preview_retries_transient_preview_failure_from_binary() {
             app.display()
         )) && stderr.contains("\tstable-id=")
             && !stderr.contains("\tstable-id=-\t")
+            && stderr.contains("\twritable=")
             && stderr.contains("\treason=cached-volume-report"),
         "{stderr}"
     );
@@ -2081,6 +2089,7 @@ fn icon_preview_retries_transient_preview_failure_from_binary() {
             retry_probe.parent().unwrap().display()
         )) && stderr.contains("\tstable-id=")
             && !stderr.contains("\tstable-id=-\t")
+            && stderr.contains("\twritable=")
             && stderr.contains("\treason=cached-volume-report"),
         "{stderr}"
     );
