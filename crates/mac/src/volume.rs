@@ -1032,6 +1032,7 @@ impl VolumeTopologyChange {
                 | "volume-identity-changed"
                 | "volume-case-sensitivity-changed"
                 | "volume-api-status-changed"
+                | "volume-api-reason-changed"
                 | "volume-apfs-metadata-changed"
                 | "volume-mount-table-changed"
                 | "volume-filesystem-changed"
@@ -1048,6 +1049,7 @@ impl VolumeTopologyChange {
                 | "volume-identity-changed"
                 | "volume-case-sensitivity-changed"
                 | "volume-api-status-changed"
+                | "volume-api-reason-changed"
                 | "volume-apfs-metadata-changed"
                 | "volume-mount-table-changed"
                 | "volume-filesystem-changed"
@@ -3243,6 +3245,8 @@ fn topology_change_reason(
         || previous.mount_table_status != current.mount_table_status
     {
         Some("volume-api-status-changed")
+    } else if volume_api_reason_changed(previous, current) {
+        Some("volume-api-reason-changed")
     } else if previous.apfs_container_uuid != current.apfs_container_uuid
         || previous.apfs_role != current.apfs_role
     {
@@ -3284,6 +3288,15 @@ fn topology_change_reason(
     } else {
         None
     }
+}
+
+fn volume_api_reason_changed(previous: &VolumeDescriptor, current: &VolumeDescriptor) -> bool {
+    normalized_event_reason_option(previous.native_reason.as_deref())
+        != normalized_event_reason_option(current.native_reason.as_deref())
+        || normalized_event_reason_option(previous.resource_reason.as_deref())
+            != normalized_event_reason_option(current.resource_reason.as_deref())
+        || normalized_event_reason_option(previous.mount_table_reason.as_deref())
+            != normalized_event_reason_option(current.mount_table_reason.as_deref())
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -6347,6 +6360,90 @@ mod tests {
         assert!(diff.as_tsv().contains("\tcurrent-resource-reason=-\t"));
         assert!(diff.as_tsv().contains("\tcurrent-mount-status=available\t"));
         assert!(diff.as_tsv().contains("\tcurrent-mount-reason=-\t"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn topology_diff_reports_native_api_reason_as_policy_change() {
+        let root = unique_temp_dir("gfm-volume-topology-api-reason");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let mut previous_volume = VolumeDescriptor::for_path(&root).unwrap();
+        previous_volume.native_status = Some(NativeVolumeStatus::Unavailable);
+        previous_volume.native_reason =
+            Some("DiskArbitration unavailable\tbefore topology refresh".to_string());
+        previous_volume.resource_status = Some(NativeVolumeStatus::Available);
+        previous_volume.resource_reason = Some("".to_string());
+        previous_volume.mount_table_status = Some(NativeVolumeStatus::Available);
+        previous_volume.mount_table_reason = Some("\n".to_string());
+        let mut current_volume = previous_volume.clone();
+        current_volume.native_reason =
+            Some("DiskArbitration denied during topology refresh".to_string());
+        let previous = VolumeDiscoveryReport {
+            volumes: vec![previous_volume],
+        };
+        let current = VolumeDiscoveryReport {
+            volumes: vec![current_volume],
+        };
+
+        let diff = VolumeTopologyDiff::evaluate(&previous, &current);
+
+        assert_eq!(diff.changes.len(), 1);
+        assert_eq!(diff.changes[0].reason, "volume-api-reason-changed");
+        assert_eq!(
+            diff.changes[0].previous_native_status,
+            Some(NativeVolumeStatus::Unavailable)
+        );
+        assert_eq!(
+            diff.changes[0].current_native_status,
+            Some(NativeVolumeStatus::Unavailable)
+        );
+        assert_eq!(
+            diff.changes[0].previous_native_reason.as_deref(),
+            Some("DiskArbitration unavailable\tbefore topology refresh")
+        );
+        assert_eq!(
+            diff.changes[0].current_native_reason.as_deref(),
+            Some("DiskArbitration denied during topology refresh")
+        );
+        assert_eq!(diff.changes[0].previous_resource_reason, None);
+        assert_eq!(diff.changes[0].previous_mount_table_reason, None);
+        assert!(diff.changes[0].invalidate_sidebar);
+        assert!(diff.changes[0].invalidate_operation_policy);
+        assert!(diff.changes[0].invalidate_index_admission);
+        assert!(diff.changes[0].rescan_index);
+        assert!(diff.as_tsv().contains(
+            "\tprevious-native-reason=DiskArbitration unavailable\\tbefore topology refresh\t"
+        ));
+        assert!(diff
+            .as_tsv()
+            .contains("\tcurrent-native-reason=DiskArbitration denied during topology refresh\t"));
+        assert!(diff.as_tsv().ends_with("reason=volume-api-reason-changed"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn topology_diff_ignores_blank_api_reason_changes() {
+        let root = unique_temp_dir("gfm-volume-topology-api-blank-reason");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let mut previous_volume = VolumeDescriptor::for_path(&root).unwrap();
+        previous_volume.native_status = Some(NativeVolumeStatus::Unavailable);
+        previous_volume.native_reason = Some("".to_string());
+        previous_volume.resource_status = Some(NativeVolumeStatus::Available);
+        previous_volume.mount_table_status = Some(NativeVolumeStatus::Available);
+        let mut current_volume = previous_volume.clone();
+        current_volume.native_reason = Some("\n\t".to_string());
+        let previous = VolumeDiscoveryReport {
+            volumes: vec![previous_volume],
+        };
+        let current = VolumeDiscoveryReport {
+            volumes: vec![current_volume],
+        };
+
+        let diff = VolumeTopologyDiff::evaluate(&previous, &current);
+
+        assert!(diff.changes.is_empty(), "{:?}", diff.changes);
 
         fs::remove_dir_all(root).unwrap();
     }

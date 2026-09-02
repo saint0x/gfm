@@ -963,6 +963,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "volume-topology-api-status" => {
             println!("{}", topology_api_status_diff()?.as_tsv());
         }
+        "volume-topology-api-reason" => {
+            println!("{}", topology_api_reason_diff()?.as_tsv());
+        }
         "spotlight-reconcile" => {
             let path = required_path(args.next(), "spotlight-reconcile requires a path")?;
             let fixture_path = args.next().map(PathBuf::from);
@@ -1376,6 +1379,31 @@ fn topology_api_status_diff() -> Result<VolumeTopologyDiff> {
     current.resource_reason = None;
     current.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Available);
     current.mount_table_reason = None;
+    Ok(VolumeTopologyDiff::evaluate(
+        &VolumeDiscoveryReport {
+            volumes: vec![previous],
+        },
+        &VolumeDiscoveryReport {
+            volumes: vec![current],
+        },
+    ))
+}
+
+fn topology_api_reason_diff() -> Result<VolumeTopologyDiff> {
+    let mut previous = VolumeDescriptor::for_path("/")?;
+    previous.stable_identity = "diskarbitration:uuid:API-REASON".to_string();
+    previous.label = "API Reason".to_string();
+    previous.path = PathBuf::from("/Volumes/API Reason");
+    previous.kind = gfm_mac::VolumeKind::External;
+    previous.native_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+    previous.native_reason =
+        Some("DiskArbitration unavailable before topology refresh".to_string());
+    previous.resource_status = Some(gfm_mac::NativeVolumeStatus::Available);
+    previous.resource_reason = None;
+    previous.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Available);
+    previous.mount_table_reason = None;
+    let mut current = previous.clone();
+    current.native_reason = Some("DiskArbitration denied during topology refresh".to_string());
     Ok(VolumeTopologyDiff::evaluate(
         &VolumeDiscoveryReport {
             volumes: vec![previous],

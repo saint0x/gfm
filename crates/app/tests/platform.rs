@@ -6883,6 +6883,38 @@ fn reports_volume_topology_api_status_diff_from_binary() {
 }
 
 #[test]
+fn reports_volume_topology_api_reason_diff_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-topology-api-reason")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("volume-topology-diff\tcount=1\n"));
+    assert!(stdout.contains("volume-topology\tchanged\t"));
+    assert!(stdout.contains("\tstable-id=diskarbitration:uuid:API-REASON\t"));
+    assert!(stdout.contains("\tprevious-native-status=unavailable\t"));
+    assert!(stdout.contains(
+        "\tprevious-native-reason=DiskArbitration unavailable before topology refresh\t"
+    ));
+    assert!(stdout.contains("\tcurrent-native-status=unavailable\t"));
+    assert!(
+        stdout.contains("\tcurrent-native-reason=DiskArbitration denied during topology refresh\t")
+    );
+    assert!(stdout.contains("\tprevious-resource-status=available\t"));
+    assert!(stdout.contains("\tcurrent-resource-status=available\t"));
+    assert!(stdout.contains("\tprevious-mount-status=available\t"));
+    assert!(stdout.contains("\tcurrent-mount-status=available\t"));
+    assert!(stdout.contains("\tsidebar=true\toperation-policy=true\tindex-admission=true\t"));
+    assert!(stdout.ends_with("reason=volume-api-reason-changed\n"));
+}
+
+#[test]
 fn reports_api_status_volume_invalidation_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("volume-api-status-invalidation")
