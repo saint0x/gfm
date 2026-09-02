@@ -921,6 +921,15 @@ pub(crate) fn run_content_search_with_volume_report(
         "content search",
         &volume_report,
     )?;
+    eprintln!(
+        "{}",
+        content_volume_access_tsv(
+            "content-search-volume-access",
+            "content search",
+            &root,
+            &volume_report
+        )
+    );
     let volume = volume_report.volume_for_path(&root).map(|volume| volume.id);
     run_volume_task_cancellable(
         volume,
@@ -944,6 +953,50 @@ pub(crate) fn run_content_search_with_volume_report(
             Ok((indexed, hits))
         },
     )
+}
+
+fn content_volume_access_tsv(
+    prefix: &str,
+    worker: &str,
+    path: &Path,
+    volume_report: &VolumeDiscoveryReport,
+) -> String {
+    if let Some(volume) = volume_report.volume_for_path(path) {
+        format!(
+            "{}\tworker={}\tpath={}\tintent={}\tvolume-id={}\tstable-id={}\tclass={}\tmount={}\treachable={}\tread-only={}\treason=cached-volume-report",
+            escape_content_tsv_field(prefix),
+            escape_content_tsv_field(worker),
+            escape_content_tsv_field(&path.to_string_lossy()),
+            AccessIntent::Index.as_str(),
+            volume.id.0,
+            escape_content_tsv_field(&volume.stable_identity),
+            volume.kind.as_str(),
+            volume.mount_state.as_str(),
+            format_content_optional_bool(volume.reachable),
+            volume.read_only,
+        )
+    } else {
+        format!(
+            "{}\tworker={}\tpath={}\tintent={}\tvolume-id=-\tstable-id=-\tclass=-\tmount=-\treachable=-\tread-only=-\treason=no-containing-volume",
+            escape_content_tsv_field(prefix),
+            escape_content_tsv_field(worker),
+            escape_content_tsv_field(&path.to_string_lossy()),
+            AccessIntent::Index.as_str(),
+        )
+    }
+}
+
+fn format_content_optional_bool(value: Option<bool>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn escape_content_tsv_field(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
 }
 
 fn run_extraction_report(
