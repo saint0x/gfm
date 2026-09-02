@@ -2643,6 +2643,7 @@ impl VolumeOperationReport {
             volume_resource_reason,
             volume_mount_status,
             volume_mount_reason,
+            command_state,
         ) = self
             .volume
             .as_ref()
@@ -2678,6 +2679,7 @@ impl VolumeOperationReport {
                         .map(NativeVolumeStatus::as_str)
                         .unwrap_or("-"),
                     visible_volume_api_reason(volume.mount_table_reason.as_deref()).to_string(),
+                    volume_operation_command_state(self.operation, volume).as_str(),
                 )
             })
             .unwrap_or((
@@ -2702,9 +2704,10 @@ impl VolumeOperationReport {
                 "-".to_string(),
                 "-",
                 "-".to_string(),
+                "-",
             ));
         format!(
-            "volume-operation\t{}\tpath={}\tdisposition={}\tnative-status={}\tdissenter-status={}\tvolume-kind={}\tmount={}\tvolume-writable={}\tvolume-read-only={}\tvolume-network={}\tvolume-reachable={}\tvolume-ejectable={}\tvolume-removable={}\tvolume-case-sensitive={}\tvolume-case-preserving={}\tvolume-mountable={}\tstable-id={}\tbsd={}\tapfs-container-uuid={}\tapfs-role={}\tvolume-native-status={}\tvolume-native-reason={}\tvolume-resource-status={}\tvolume-resource-reason={}\tvolume-mount-status={}\tvolume-mount-reason={}\treason={}",
+            "volume-operation\t{}\tpath={}\tdisposition={}\tnative-status={}\tdissenter-status={}\tcommand-state={}\tvolume-kind={}\tmount={}\tvolume-writable={}\tvolume-read-only={}\tvolume-network={}\tvolume-reachable={}\tvolume-ejectable={}\tvolume-removable={}\tvolume-case-sensitive={}\tvolume-case-preserving={}\tvolume-mountable={}\tstable-id={}\tbsd={}\tapfs-container-uuid={}\tapfs-role={}\tvolume-native-status={}\tvolume-native-reason={}\tvolume-resource-status={}\tvolume-resource-reason={}\tvolume-mount-status={}\tvolume-mount-reason={}\treason={}",
             self.operation.as_str(),
             self.path.display(),
             self.disposition.as_str(),
@@ -2714,6 +2717,7 @@ impl VolumeOperationReport {
             self.dissenter_status
                 .map(|status| format!("0x{status:08x}"))
                 .unwrap_or_else(|| "-".to_string()),
+            command_state,
             kind,
             mount,
             optional_bool(self.volume.as_ref().map(|_| writable)),
@@ -2769,6 +2773,17 @@ fn operation_targets_volume_root(path: &Path, volume_path: &Path) -> bool {
     ) {
         (Some(path), Some(volume_path)) => path == volume_path,
         _ => false,
+    }
+}
+
+fn volume_operation_command_state(
+    operation: VolumeOperation,
+    volume: &VolumeDescriptor,
+) -> VolumeCommandState {
+    match operation {
+        VolumeOperation::Eject => volume.commands.eject,
+        VolumeOperation::Unmount => volume.commands.unmount,
+        VolumeOperation::Mount => volume.commands.mount,
     }
 }
 
@@ -4965,6 +4980,7 @@ mod tests {
         assert_eq!(report.dissenter_status, None);
         assert_eq!(report.reason, "fixture-volume-native-operation-disabled");
         assert!(report.as_tsv().contains("\tdissenter-status=-\t"));
+        assert!(report.as_tsv().contains("\tcommand-state=enabled\t"));
         assert!(report
             .as_tsv()
             .contains("\tvolume-kind=external\tmount=mounted\t"));
@@ -4992,6 +5008,7 @@ mod tests {
         assert_eq!(report.dissenter_status, None);
         assert_eq!(report.reason, "fixture-volume-native-operation-disabled");
         assert!(report.as_tsv().starts_with("volume-operation\tunmount\t"));
+        assert!(report.as_tsv().contains("\tcommand-state=enabled\t"));
         assert!(report.as_tsv().contains("\tvolume-kind=external\t"));
         assert!(report.as_tsv().contains("\tmount=mounted\t"));
 

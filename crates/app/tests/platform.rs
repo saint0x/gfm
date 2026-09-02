@@ -7518,6 +7518,7 @@ fn reports_volume_operation_refusal_from_binary() {
 
     assert!(stdout.starts_with("volume-operation\teject\t"));
     assert!(stdout.contains("\tdisposition=refused\tnative-status=-\tdissenter-status=-\t"));
+    assert!(stdout.contains("\tcommand-state=enabled\t"));
     assert!(stdout.contains("\tvolume-kind=external\tmount=mounted\t"));
     assert!(stdout.contains("\tvolume-writable=true\t"));
     assert!(stdout.contains("\tvolume-read-only=false\t"));
@@ -7562,6 +7563,7 @@ fn reports_volume_unmount_operation_refusal_from_binary() {
 
     assert!(stdout.starts_with("volume-operation\tunmount\t"));
     assert!(stdout.contains("\tdisposition=refused\tnative-status=-\tdissenter-status=-\t"));
+    assert!(stdout.contains("\tcommand-state=enabled\t"));
     assert!(stdout.contains("\tvolume-kind=external\tmount=mounted\t"));
     assert!(stdout.contains("\tvolume-ejectable=true\t"));
     assert!(stdout.contains("\tvolume-removable=true\t"));
@@ -7595,6 +7597,7 @@ fn reports_volume_operation_policy_refusal_from_binary() {
 
     assert!(stdout.starts_with("volume-operation\teject\t"));
     assert!(stdout.contains("\tdisposition=refused\tnative-status=-\tdissenter-status=-\t"));
+    assert!(stdout.contains("\tcommand-state=hidden\t"));
     assert!(stdout.contains("\tvolume-kind=internal\tmount=mounted\t"));
     assert!(stdout.contains("\treason=internal-volume-not-ejectable\n"));
 

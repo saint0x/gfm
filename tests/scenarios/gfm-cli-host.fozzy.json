@@ -4852,7 +4852,7 @@
         "tmp/gfm-fozzy-dist"
       ],
       "exit_code": 0,
-      "stdout": "volume-operation\tunmount\tpath=tmp/gfm-fozzy-dist\tdisposition=refused\tnative-status=-\tdissenter-status=-\tvolume-kind=external\tmount=mounted\tstable-id=fixture-marker:external-removable:dev:16777230:tmp/gfm-fozzy-dist\treason=fixture-volume-native-operation-disabled\n",
+      "stdout": "volume-operation\tunmount\tpath=tmp/gfm-fozzy-dist\tdisposition=refused\tnative-status=-\tdissenter-status=-\tcommand-state=enabled\tvolume-kind=external\tmount=mounted\tstable-id=fixture-marker:external-removable:dev:16777230:tmp/gfm-fozzy-dist\treason=fixture-volume-native-operation-disabled\n",
       "stderr": "",
       "times": 1
     },
@@ -4919,7 +4919,7 @@
         "tmp/gfm-fozzy-internal-volume"
       ],
       "exit_code": 0,
-      "stdout": "volume-operation\teject\tpath=tmp/gfm-fozzy-internal-volume\tdisposition=refused\tnative-status=-\tdissenter-status=-\tvolume-kind=internal\tmount=mounted\tstable-id=fixture-marker:internal:dev:16777230:tmp/gfm-fozzy-internal-volume\treason=internal-volume-not-ejectable\n",
+      "stdout": "volume-operation\teject\tpath=tmp/gfm-fozzy-internal-volume\tdisposition=refused\tnative-status=-\tdissenter-status=-\tcommand-state=hidden\tvolume-kind=internal\tmount=mounted\tstable-id=fixture-marker:internal:dev:16777230:tmp/gfm-fozzy-internal-volume\treason=internal-volume-not-ejectable\n",
       "stderr": "",
       "times": 1
     },
@@ -4932,7 +4932,7 @@
         "tmp/gfm-fozzy-dist"
       ],
       "exit_code": 0,
-      "stdout": "volume-operation\tmount\tpath=tmp/gfm-fozzy-dist\tdisposition=refused\tnative-status=-\tdissenter-status=-\tvolume-kind=external\tmount=mounted\tstable-id=fixture-marker:external-removable:dev:16777230:tmp/gfm-fozzy-dist\treason=mount-command-disabled\n",
+      "stdout": "volume-operation\tmount\tpath=tmp/gfm-fozzy-dist\tdisposition=refused\tnative-status=-\tdissenter-status=-\tcommand-state=disabled\tvolume-kind=external\tmount=mounted\tstable-id=fixture-marker:external-removable:dev:16777230:tmp/gfm-fozzy-dist\treason=mount-command-disabled\n",
       "stderr": "",
       "times": 1
     },
