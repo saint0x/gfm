@@ -898,43 +898,53 @@ fn render_entries_tsv(report: &ParityGateReport) -> String {
             entry.input.surface.as_str(),
             entry.diff.size.width,
             entry.diff.size.height,
-            entry.input.expected_path.display(),
-            entry.input.actual_path.display(),
+            escape_tsv_path(&entry.input.expected_path),
+            escape_tsv_path(&entry.input.actual_path),
             entry
                 .input
                 .mask_path
                 .as_ref()
-                .map(|path| path.display().to_string())
+                .map(|path| escape_tsv_path(path))
                 .unwrap_or_default(),
             provenance
                 .map(|value| value.macos_build.as_str())
+                .map(escape_tsv_field)
                 .unwrap_or_default(),
             provenance
                 .map(|value| value.hardware_profile.as_str())
+                .map(escape_tsv_field)
                 .unwrap_or_default(),
             provenance
                 .map(|value| value.display_profile.as_str())
+                .map(escape_tsv_field)
                 .unwrap_or_default(),
             provenance
                 .map(|value| value.app_version.as_str())
+                .map(escape_tsv_field)
                 .unwrap_or_default(),
             provenance
                 .map(|value| value.fixture_manifest.as_str())
+                .map(escape_tsv_field)
                 .unwrap_or_default(),
             provenance
                 .map(|value| value.captured_at.as_str())
+                .map(escape_tsv_field)
                 .unwrap_or_default(),
             provenance
                 .map(|value| value.capture_command.as_str())
+                .map(escape_tsv_field)
                 .unwrap_or_default(),
             provenance
                 .map(|value| value.reviewer.as_str())
+                .map(escape_tsv_field)
                 .unwrap_or_default(),
             provenance
                 .map(|value| value.signer.as_str())
+                .map(escape_tsv_field)
                 .unwrap_or_default(),
             provenance
                 .map(|value| value.approved_mask_set.as_str())
+                .map(escape_tsv_field)
                 .unwrap_or_default(),
             provenance
                 .map(|value| value.appearance.as_str())
@@ -959,6 +969,7 @@ fn render_entries_tsv(report: &ParityGateReport) -> String {
                 .unwrap_or_default(),
             provenance
                 .map(|value| value.fixture_root.display().to_string())
+                .map(|value| escape_tsv_field(&value))
                 .unwrap_or_default(),
             entry.diff.mismatched_pixels,
             entry.diff.unmasked_mismatches,
@@ -1055,14 +1066,14 @@ struct BundleManifestContext<'a> {
 fn render_bundle_manifest(context: &BundleManifestContext<'_>) -> String {
     let mut text = format!(
         "kind\tpath\nreview\t{}\nentries\t{}\nviolations\t{}\nfirst-unmasked\t{}\nregions\t{}\nmask-justifications\t{}\nvisual-diffs\t{}\nsource-artifacts\t{}\n",
-        context.review_path.display(),
-        context.entries_path.display(),
-        context.violations_path.display(),
-        context.first_mismatch_path.display(),
-        context.region_summary_path.display(),
-        context.mask_justification_path.display(),
-        context.visual_diff_dir.display(),
-        context.source_artifact_dir.display()
+        escape_tsv_path(context.review_path),
+        escape_tsv_path(context.entries_path),
+        escape_tsv_path(context.violations_path),
+        escape_tsv_path(context.first_mismatch_path),
+        escape_tsv_path(context.region_summary_path),
+        escape_tsv_path(context.mask_justification_path),
+        escape_tsv_path(context.visual_diff_dir),
+        escape_tsv_path(context.source_artifact_dir)
     );
     for row in context.artifact_rows {
         text.push_str(row);
@@ -1095,7 +1106,7 @@ fn write_review_image_artifacts(
         let stem = format!("{index:03}-{}", entry.input.surface.as_str());
         let diff_path = visual_diff_dir.join(format!("{stem}-diff.png"));
         write_visual_diff_png(&diff_path, &expected, &actual, &entry.diff)?;
-        rows.push(format!("visual-diff\t{}", diff_path.display()));
+        rows.push(format!("visual-diff\t{}", escape_tsv_path(&diff_path)));
 
         let expected_copy = source_artifact_dir.join(format!(
             "{stem}-finder{}",
@@ -1107,8 +1118,11 @@ fn write_review_image_artifacts(
         ));
         copy_artifact(&entry.input.expected_path, &expected_copy)?;
         copy_artifact(&entry.input.actual_path, &actual_copy)?;
-        rows.push(format!("finder-source\t{}", expected_copy.display()));
-        rows.push(format!("gfm-source\t{}", actual_copy.display()));
+        rows.push(format!(
+            "finder-source\t{}",
+            escape_tsv_path(&expected_copy)
+        ));
+        rows.push(format!("gfm-source\t{}", escape_tsv_path(&actual_copy)));
     }
     Ok(rows)
 }
@@ -1128,6 +1142,10 @@ fn copy_artifact(source: &Path, destination: &Path) -> Result<()> {
 
 fn escape_tsv_field(value: &str) -> String {
     value.replace(['\t', '\n', '\r'], " ")
+}
+
+fn escape_tsv_path(path: &Path) -> String {
+    escape_tsv_field(&path.display().to_string())
 }
 
 fn resolve_manifest_path(base: &Path, value: &str) -> PathBuf {
@@ -1555,6 +1573,78 @@ mod tests {
         assert!(fs::read_to_string(&bundle.first_mismatch_path)
             .unwrap()
             .contains("090a0aff"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn review_bundle_tsv_escapes_control_character_paths_and_provenance() {
+        let root = unique_temp_dir("gfm-parity-review-escaped-tsv");
+        let expected = root.join("finder\tcapture.rgba");
+        let actual = root.join("gfm\ncapture.rgba");
+        let output = root.join("review\tbundle");
+        fs::write(&expected, [0, 0, 0, 255]).unwrap();
+        fs::write(&actual, [0, 0, 0, 255]).unwrap();
+
+        let report = ParityGateReport {
+            manifest_path: Some(root.join("gate\rmanifest.tsv")),
+            entries: vec![ParityGateEntryReport {
+                input: ParityGateInput::new(
+                    ParitySurface::Text,
+                    &expected,
+                    &actual,
+                    PixelSize::new(1, 1),
+                )
+                .with_provenance(ParityCaptureProvenance {
+                    macos_build: "25A354".to_string(),
+                    hardware_profile: "macbookpro18,3".to_string(),
+                    display_profile: "studio\tdisplay".to_string(),
+                    app_version: "0.1.0".to_string(),
+                    fixture_manifest: "fixtures\nmanifest.tsv".to_string(),
+                    captured_at: "2026-08-27T00:00:00Z".to_string(),
+                    capture_command: "screencapture\t-x".to_string(),
+                    reviewer: "reviewer\nname".to_string(),
+                    signer: "signer\rname".to_string(),
+                    approved_mask_set: "macos-25A354-default".to_string(),
+                    appearance: ParityAppearance::Dark,
+                    scale: DisplayScale::Two,
+                    color_profile: ColorProfile::DisplayP3,
+                    window_size: PixelSize::new(1040, 720),
+                    focus: ParityFocusState::Active,
+                    view_mode: ParityViewMode::List,
+                    fixture_root: root.join("fixtures\troot"),
+                }),
+                diff: empty_report(PixelSize::new(1, 1)),
+                evaluation: PixelThresholdEvaluation {
+                    threshold: PixelDriftThreshold::finder_strict(ParitySurface::Text),
+                    passed: true,
+                    violations: Vec::new(),
+                },
+            }],
+        };
+
+        let bundle = write_parity_review_bundle(report, &output).unwrap();
+        let entries = fs::read_to_string(&bundle.entries_path).unwrap();
+        let bundle_manifest = fs::read_to_string(&bundle.bundle_manifest_path).unwrap();
+
+        assert!(entries.contains("finder capture.rgba"), "{entries}");
+        assert!(entries.contains("gfm capture.rgba"), "{entries}");
+        assert!(entries.contains("studio display"), "{entries}");
+        assert!(entries.contains("fixtures manifest.tsv"), "{entries}");
+        assert!(entries.contains("screencapture -x"), "{entries}");
+        assert!(entries.contains("reviewer name"), "{entries}");
+        assert!(entries.contains("signer name"), "{entries}");
+        assert!(entries.contains("fixtures root"), "{entries}");
+        assert!(!entries.contains("finder\tcapture.rgba"), "{entries}");
+        assert!(!entries.contains("gfm\ncapture.rgba"), "{entries}");
+        assert!(
+            bundle_manifest.contains("review bundle/review.md"),
+            "{bundle_manifest}"
+        );
+        assert!(
+            !bundle_manifest.contains("review\tbundle"),
+            "{bundle_manifest}"
+        );
 
         fs::remove_dir_all(root).unwrap();
     }
