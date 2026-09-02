@@ -10,6 +10,7 @@ use crate::extract::{
     run_adaptive_extraction_worker_cancellable_with_volume_report,
     run_quarantined_adaptive_extraction_worker_cancellable, ADAPTIVE_WORKER_TIMEOUT,
 };
+use crate::platform::{current_host_job_scheduling_pressure, scheduling_pressure_tsv};
 use crate::runtime::{
     default_content_job_path, default_extraction_quarantine_path, default_job_journal_path,
     run_retriable_volume_task_cancellable_with_payload_path, run_scheduled_volume_task_cancellable,
@@ -646,8 +647,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 return Ok(true);
             };
             {
-                let outcome =
-                    run_content_job(&spec, &journal, SchedulingPressure::default(), &spec_path)?;
+                let pressure = current_host_job_scheduling_pressure();
+                eprintln!("{}", scheduling_pressure_tsv(pressure));
+                let outcome = run_content_job(&spec, &journal, pressure, &spec_path)?;
                 if outcome.deferred {
                     eprintln!(
                         "resumed-background-content-deferred action={:?}; {}",

@@ -2042,11 +2042,11 @@ fn host_scheduling_pressure(report: &HostSchedulingPressureReport) -> Scheduling
     }
 }
 
-fn current_host_preview_scheduling_pressure() -> SchedulingPressure {
+pub(crate) fn current_host_job_scheduling_pressure() -> SchedulingPressure {
     host_scheduling_pressure(&current_host_scheduling_pressure())
 }
 
-fn scheduling_pressure_tsv(pressure: SchedulingPressure) -> String {
+pub(crate) fn scheduling_pressure_tsv(pressure: SchedulingPressure) -> String {
     format!(
         "scheduler-pressure\tio={}\tthermal={}\tbattery={}\tuser-activity={}",
         job_io_pressure_tsv(pressure.io),
@@ -3562,7 +3562,7 @@ fn run_quicklook_session(path: PathBuf) -> Result<QuickLookSessionContract> {
     let access_report = PreviewAccessReport::new_checked(path, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     eprintln!("{}", access_report.volume_access_tsv(WORKER));
-    let pressure = current_host_preview_scheduling_pressure();
+    let pressure = current_host_job_scheduling_pressure();
     eprintln!("{}", scheduling_pressure_tsv(pressure));
     let volume = access_report.volume();
     let payload_path = access_report.path.clone();
@@ -3584,7 +3584,7 @@ fn run_quicklook_session_retry_probe(
     let access_report = PreviewAccessReport::new_checked(path, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     eprintln!("{}", access_report.volume_access_tsv(WORKER));
-    let pressure = current_host_preview_scheduling_pressure();
+    let pressure = current_host_job_scheduling_pressure();
     eprintln!("{}", scheduling_pressure_tsv(pressure));
     let retry_probe = PreviewRetryProbe::new_checked(attempt_state, WORKER, || Ok(()))?;
     retry_probe.preflight_volume()?;
@@ -3612,7 +3612,7 @@ fn run_thumbnail_generation(path: PathBuf) -> Result<ThumbnailGenerationContract
     let access_report = PreviewAccessReport::new_checked(path, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     eprintln!("{}", access_report.volume_access_tsv(WORKER));
-    let pressure = current_host_preview_scheduling_pressure();
+    let pressure = current_host_job_scheduling_pressure();
     eprintln!("{}", scheduling_pressure_tsv(pressure));
     let volume = access_report.volume();
     let payload_path = access_report.path.clone();
@@ -3634,7 +3634,7 @@ fn run_thumbnail_generation_retry_probe(
     let access_report = PreviewAccessReport::new_checked(path, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     eprintln!("{}", access_report.volume_access_tsv(WORKER));
-    let pressure = current_host_preview_scheduling_pressure();
+    let pressure = current_host_job_scheduling_pressure();
     eprintln!("{}", scheduling_pressure_tsv(pressure));
     let retry_probe = PreviewRetryProbe::new_checked(attempt_state, WORKER, || Ok(()))?;
     retry_probe.preflight_volume()?;

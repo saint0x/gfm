@@ -72,15 +72,16 @@ fn reports_host_scheduling_pressure_from_binary() {
     assert!(stdout.contains("\tthermal="), "{stdout}");
     assert!(stdout.contains("\tbattery-status="), "{stdout}");
     assert!(stdout.contains("\tbattery="), "{stdout}");
-    assert!(
-        stdout.contains("\tuser-activity-status=unsupported\tuser-activity=idle\t"),
-        "{stdout}"
-    );
+    assert!(stdout.contains("\tuser-activity-status="), "{stdout}");
+    assert!(stdout.contains("\tuser-activity="), "{stdout}");
     assert!(
         stdout.contains("\tscheduler-pressure\tio=nominal\t"),
         "{stdout}"
     );
-    assert!(stdout.contains("\tuser-activity=idle\n"), "{stdout}");
+    assert!(
+        stdout.ends_with("\tuser-activity=idle\n") || stdout.ends_with("\tuser-activity=active\n"),
+        "{stdout}"
+    );
 }
 
 #[test]

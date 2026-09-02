@@ -10,6 +10,9 @@ use std::ffi::c_void;
 #[link(name = "Foundation", kind = "framework")]
 extern "C" {}
 
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {}
+
 #[link(name = "IOKit", kind = "framework")]
 extern "C" {}
 
@@ -23,7 +26,12 @@ extern "C" {
     fn IOPSCopyPowerSourcesList(blob: CFTypeRef) -> CFArrayRef;
     fn IOPSGetPowerSourceDescription(blob: CFTypeRef, ps: CFTypeRef) -> CFDictionaryRef;
     fn CFDictionaryGetValue(dictionary: CFDictionaryRef, key: *const c_void) -> *const c_void;
+    fn CGEventSourceSecondsSinceLastEventType(state_id: u32, event_type: u32) -> f64;
 }
+
+const CG_EVENT_SOURCE_STATE_COMBINED_SESSION_STATE: u32 = 0;
+const CG_ANY_INPUT_EVENT_TYPE: u32 = u32::MAX;
+const ACTIVE_INPUT_WINDOW_SECONDS: f64 = 2.0;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NativeHostPressure {
@@ -36,6 +44,10 @@ pub struct NativeHostPressure {
     pub power_source_status: NativeHostSignalStatus,
     pub power_source_state: Option<NativePowerSourceState>,
     pub power_source_reason: Option<String>,
+    pub user_activity_status: NativeHostSignalStatus,
+    pub user_activity_state: Option<NativeUserActivityState>,
+    pub user_activity_idle_millis: Option<u64>,
+    pub user_activity_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,6 +80,21 @@ pub enum NativePowerSourceState {
     AcPower,
     BatteryPower,
     Offline,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeUserActivityState {
+    Idle,
+    Active,
+}
+
+impl NativeUserActivityState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Active => "active",
+        }
+    }
 }
 
 impl NativePowerSourceState {
@@ -103,12 +130,22 @@ pub fn copy_host_pressure() -> NativeHostPressure {
             power_source_status: NativeHostSignalStatus::Unsupported,
             power_source_state: None,
             power_source_reason: Some("NSProcessInfo processInfo is unavailable".to_string()),
+            user_activity_status: NativeHostSignalStatus::Unsupported,
+            user_activity_state: None,
+            user_activity_idle_millis: None,
+            user_activity_reason: Some("NSProcessInfo processInfo is unavailable".to_string()),
         };
     };
 
     let (thermal_status, thermal_state, thermal_reason) = read_thermal_state(process_info);
     let (low_power_status, low_power_enabled, low_power_reason) = read_low_power_mode(process_info);
     let (power_source_status, power_source_state, power_source_reason) = read_power_source_state();
+    let (
+        user_activity_status,
+        user_activity_state,
+        user_activity_idle_millis,
+        user_activity_reason,
+    ) = read_user_activity();
 
     NativeHostPressure {
         thermal_status,
@@ -120,6 +157,10 @@ pub fn copy_host_pressure() -> NativeHostPressure {
         power_source_status,
         power_source_state,
         power_source_reason,
+        user_activity_status,
+        user_activity_state,
+        user_activity_idle_millis,
+        user_activity_reason,
     }
 }
 
@@ -318,6 +359,43 @@ fn power_source_state_from_value(value: CFTypeRef) -> Option<NativePowerSourceSt
         "Off Line" => Some(NativePowerSourceState::Offline),
         _ => None,
     }
+}
+
+fn read_user_activity() -> (
+    NativeHostSignalStatus,
+    Option<NativeUserActivityState>,
+    Option<u64>,
+    Option<String>,
+) {
+    let seconds = unsafe {
+        CGEventSourceSecondsSinceLastEventType(
+            CG_EVENT_SOURCE_STATE_COMBINED_SESSION_STATE,
+            CG_ANY_INPUT_EVENT_TYPE,
+        )
+    };
+    if !seconds.is_finite() || seconds < 0.0 {
+        return (
+            NativeHostSignalStatus::Unavailable,
+            None,
+            None,
+            Some(format!(
+                "CoreGraphics returned invalid idle duration {seconds}"
+            )),
+        );
+    }
+
+    let idle_millis = (seconds * 1000.0).round() as u64;
+    let activity = if seconds <= ACTIVE_INPUT_WINDOW_SECONDS {
+        NativeUserActivityState::Active
+    } else {
+        NativeUserActivityState::Idle
+    };
+    (
+        NativeHostSignalStatus::Available,
+        Some(activity),
+        Some(idle_millis),
+        None,
+    )
 }
 
 fn object_responds_to_selector(object: *mut Object, selector: Sel) -> bool {

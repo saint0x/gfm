@@ -329,6 +329,12 @@ impl HostSchedulingPressureReport {
             native.power_source_state,
             native.power_source_reason,
         );
+        let (user_activity_status, user_activity, user_activity_reason) = map_user_activity_signal(
+            native.user_activity_status,
+            native.user_activity_state,
+            native.user_activity_idle_millis,
+            native.user_activity_reason,
+        );
         Self {
             thermal_status,
             thermal_state,
@@ -339,9 +345,9 @@ impl HostSchedulingPressureReport {
             io_status: HostPressureSignalStatus::Unsupported,
             io_state: HostIoPressure::Nominal,
             io_reason: Some("macOS IO pressure source is not wired".to_string()),
-            user_activity_status: HostPressureSignalStatus::Unsupported,
-            user_activity: HostUserActivity::Idle,
-            user_activity_reason: Some("UI user-activity source is not wired".to_string()),
+            user_activity_status,
+            user_activity,
+            user_activity_reason,
         }
     }
 
@@ -479,6 +485,42 @@ fn map_power_source_signal(
     }
 }
 
+fn map_user_activity_signal(
+    status: gfm_mac_sys::NativeHostSignalStatus,
+    state: Option<gfm_mac_sys::NativeUserActivityState>,
+    idle_millis: Option<u64>,
+    reason: Option<String>,
+) -> (HostPressureSignalStatus, HostUserActivity, Option<String>) {
+    match (status, state) {
+        (
+            gfm_mac_sys::NativeHostSignalStatus::Available,
+            Some(gfm_mac_sys::NativeUserActivityState::Active),
+        ) => (
+            HostPressureSignalStatus::Available,
+            HostUserActivity::Active,
+            idle_millis.map(|millis| format!("last input {millis}ms ago")),
+        ),
+        (
+            gfm_mac_sys::NativeHostSignalStatus::Available,
+            Some(gfm_mac_sys::NativeUserActivityState::Idle),
+        ) => (
+            HostPressureSignalStatus::Available,
+            HostUserActivity::Idle,
+            idle_millis.map(|millis| format!("last input {millis}ms ago")),
+        ),
+        (gfm_mac_sys::NativeHostSignalStatus::Unsupported, _) => (
+            HostPressureSignalStatus::Unsupported,
+            HostUserActivity::Idle,
+            reason,
+        ),
+        _ => (
+            HostPressureSignalStatus::Unavailable,
+            HostUserActivity::Idle,
+            reason,
+        ),
+    }
+}
+
 fn optional_host_reason(reason: Option<&str>) -> String {
     reason
         .filter(|reason| !reason.trim().is_empty())
@@ -587,6 +629,10 @@ mod tests {
             power_source_status: gfm_mac_sys::NativeHostSignalStatus::Available,
             power_source_state: Some(gfm_mac_sys::NativePowerSourceState::AcPower),
             power_source_reason: None,
+            user_activity_status: gfm_mac_sys::NativeHostSignalStatus::Available,
+            user_activity_state: Some(gfm_mac_sys::NativeUserActivityState::Active),
+            user_activity_idle_millis: Some(125),
+            user_activity_reason: None,
         });
 
         assert_eq!(report.thermal_status, HostPressureSignalStatus::Available);
@@ -601,9 +647,13 @@ mod tests {
         );
         assert_eq!(
             report.user_activity_status,
-            HostPressureSignalStatus::Unsupported
+            HostPressureSignalStatus::Available
         );
-        assert_eq!(report.user_activity, HostUserActivity::Idle);
+        assert_eq!(report.user_activity, HostUserActivity::Active);
+        assert_eq!(
+            report.user_activity_reason.as_deref(),
+            Some("last input 125ms ago")
+        );
     }
 
     #[test]
@@ -618,6 +668,10 @@ mod tests {
             power_source_status: gfm_mac_sys::NativeHostSignalStatus::Available,
             power_source_state: Some(gfm_mac_sys::NativePowerSourceState::BatteryPower),
             power_source_reason: None,
+            user_activity_status: gfm_mac_sys::NativeHostSignalStatus::Available,
+            user_activity_state: Some(gfm_mac_sys::NativeUserActivityState::Idle),
+            user_activity_idle_millis: Some(8_000),
+            user_activity_reason: None,
         });
 
         assert_eq!(report.battery_status, HostPressureSignalStatus::Available);
@@ -637,10 +691,43 @@ mod tests {
             power_source_status: gfm_mac_sys::NativeHostSignalStatus::Available,
             power_source_state: Some(gfm_mac_sys::NativePowerSourceState::AcPower),
             power_source_reason: None,
+            user_activity_status: gfm_mac_sys::NativeHostSignalStatus::Available,
+            user_activity_state: Some(gfm_mac_sys::NativeUserActivityState::Idle),
+            user_activity_idle_millis: Some(8_000),
+            user_activity_reason: None,
         });
 
         assert_eq!(report.battery_status, HostPressureSignalStatus::Available);
         assert_eq!(report.battery_state, HostBatteryState::LowPower);
+    }
+
+    #[test]
+    fn maps_native_user_activity_idle_duration() {
+        let report = HostSchedulingPressureReport::from_native(gfm_mac_sys::NativeHostPressure {
+            thermal_status: gfm_mac_sys::NativeHostSignalStatus::Available,
+            thermal_state: Some(gfm_mac_sys::NativeThermalState::Nominal),
+            thermal_reason: None,
+            low_power_status: gfm_mac_sys::NativeHostSignalStatus::Available,
+            low_power_enabled: Some(false),
+            low_power_reason: None,
+            power_source_status: gfm_mac_sys::NativeHostSignalStatus::Available,
+            power_source_state: Some(gfm_mac_sys::NativePowerSourceState::AcPower),
+            power_source_reason: None,
+            user_activity_status: gfm_mac_sys::NativeHostSignalStatus::Available,
+            user_activity_state: Some(gfm_mac_sys::NativeUserActivityState::Idle),
+            user_activity_idle_millis: Some(12_500),
+            user_activity_reason: None,
+        });
+
+        assert_eq!(
+            report.user_activity_status,
+            HostPressureSignalStatus::Available
+        );
+        assert_eq!(report.user_activity, HostUserActivity::Idle);
+        assert_eq!(
+            report.user_activity_reason.as_deref(),
+            Some("last input 12500ms ago")
+        );
     }
 
     #[test]
@@ -655,6 +742,10 @@ mod tests {
             power_source_status: gfm_mac_sys::NativeHostSignalStatus::Unsupported,
             power_source_state: None,
             power_source_reason: Some("power\tunsupported".to_string()),
+            user_activity_status: gfm_mac_sys::NativeHostSignalStatus::Unavailable,
+            user_activity_state: None,
+            user_activity_idle_millis: None,
+            user_activity_reason: Some("input\tunknown".to_string()),
         });
 
         let tsv = report.as_tsv();
@@ -665,6 +756,7 @@ mod tests {
         assert!(tsv.contains("\tthermal-reason=thermal\\tunknown\\nnow\\r\t"));
         assert!(tsv.contains("\tbattery-status=unsupported\tbattery=ac\t"));
         assert!(tsv.contains("\tbattery-reason=low power\\tunsupported\t"));
-        assert!(tsv.contains("\tuser-activity-status=unsupported\tuser-activity=idle\t"));
+        assert!(tsv.contains("\tuser-activity-status=unavailable\tuser-activity=idle\t"));
+        assert!(tsv.contains("\tuser-activity-reason=input\\tunknown"));
     }
 }

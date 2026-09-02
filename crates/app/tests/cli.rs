@@ -18562,6 +18562,10 @@ fn defers_background_content_indexer_under_saturated_io_from_binary() {
     );
     let resume_stderr = String::from_utf8(resume_output.stderr).unwrap();
     assert!(
+        resume_stderr.contains("scheduler-pressure\t"),
+        "{resume_stderr}"
+    );
+    assert!(
         resume_stderr.contains("resumed-background-content-indexed"),
         "{resume_stderr}"
     );
