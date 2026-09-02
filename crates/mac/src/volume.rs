@@ -2513,6 +2513,11 @@ fn native_volume_event_coalescing_key(event: &gfm_mac_sys::NativeVolumeEvent) ->
                 .as_ref()
                 .map(|path| format!("path:{}", path.to_string_lossy()))
         })
+        .or_else(|| {
+            (event.kind == gfm_mac_sys::NativeVolumeEventKind::Unavailable
+                && description.status == NativeVolumeStatus::Unavailable)
+                .then(|| "global-unavailable".to_string())
+        })
 }
 
 impl VolumeEventStateDrainReport {
@@ -6811,6 +6816,41 @@ mod tests {
     }
 
     #[test]
+    fn coalescing_suppresses_duplicate_global_unavailable_events() {
+        let first = gfm_mac_sys::NativeVolumeEvent {
+            kind: gfm_mac_sys::NativeVolumeEventKind::Unavailable,
+            description: native_description(|description| {
+                description.status = NativeVolumeStatus::Unavailable;
+                description.reason = Some("diskarbitration session unavailable".to_string());
+            }),
+        };
+        let second = gfm_mac_sys::NativeVolumeEvent {
+            kind: gfm_mac_sys::NativeVolumeEventKind::Unavailable,
+            description: native_description(|description| {
+                description.status = NativeVolumeStatus::Unavailable;
+                description.reason = Some("diskarbitration callback channel closed".to_string());
+            }),
+        };
+
+        let coalesced = coalesce_native_volume_events_for_state(vec![first, second]);
+
+        assert_eq!(coalesced.len(), 1);
+        assert_eq!(
+            coalesced[0].kind,
+            gfm_mac_sys::NativeVolumeEventKind::Unavailable
+        );
+        assert_eq!(coalesced[0].description.volume_path, None);
+        assert_eq!(
+            coalesced[0].description.status,
+            NativeVolumeStatus::Unavailable
+        );
+        assert_eq!(
+            coalesced[0].description.reason.as_deref(),
+            Some("diskarbitration callback channel closed")
+        );
+    }
+
+    #[test]
     fn volume_event_stream_state_drain_reports_raw_and_resolved_counts() {
         let root = unique_temp_dir("gfm-volume-event-state-drain-counts");
         fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
@@ -6853,6 +6893,49 @@ mod tests {
         assert!(tsv.contains("\tresolved=1"));
         drop(stream);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_event_stream_state_drain_coalesces_global_unavailable_bursts() {
+        let first = gfm_mac_sys::NativeVolumeEvent {
+            kind: gfm_mac_sys::NativeVolumeEventKind::Unavailable,
+            description: native_description(|description| {
+                description.status = NativeVolumeStatus::Unavailable;
+                description.reason = Some("diskarbitration session unavailable".to_string());
+            }),
+        };
+        let second = gfm_mac_sys::NativeVolumeEvent {
+            kind: gfm_mac_sys::NativeVolumeEventKind::Unavailable,
+            description: native_description(|description| {
+                description.status = NativeVolumeStatus::Unavailable;
+                description.reason = Some("diskarbitration callback channel closed".to_string());
+            }),
+        };
+        let mut state = VolumeEventState::new(VolumeDiscoveryReport {
+            volumes: Vec::new(),
+        });
+        let stream = volume_event_stream_with_pending([first, second]);
+
+        let report = stream
+            .drain_into_state_checked(&mut state, 2, || Ok(()))
+            .unwrap();
+
+        assert_eq!(report.batch.input_events, 2);
+        assert_eq!(report.batch.resolved_events, 1);
+        assert_eq!(report.batch.applied_events, 1);
+        assert!(report.batch.invalidate_sidebar);
+        assert!(report.batch.invalidate_operation_policy);
+        assert!(report.batch.invalidate_index_admission);
+        assert!(report.batch.rescan_index);
+        assert!(report.batch.cancel_index_jobs);
+        assert!(report.batch.clear_fsevents_cursor);
+        assert_eq!(report.batch.transitions.len(), 1);
+        assert_eq!(
+            report.batch.transitions[0].invalidation.reason,
+            "diskarbitration callback channel closed"
+        );
+        assert!(state.report().volumes.is_empty());
+        drop(stream);
     }
 
     #[test]
