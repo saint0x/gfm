@@ -8316,6 +8316,8 @@ fn operation_volume_copy_policy_reports_descriptor_classes_from_binary() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
+    let network_root = fs::canonicalize(&network).unwrap();
+    let external_root = fs::canonicalize(&external).unwrap();
     assert!(
         stdout.starts_with("operation-volume-copy-policy\t"),
         "{stdout}"
@@ -8329,6 +8331,22 @@ fn operation_volume_copy_policy_reports_descriptor_classes_from_binary() {
     assert!(!stdout.contains("\tsource-stable-id=-\t"), "{stdout}");
     assert!(stdout.contains("\tdestination-stable-id="), "{stdout}");
     assert!(!stdout.contains("\tdestination-stable-id=-\t"), "{stdout}");
+    assert!(stdout.contains("\tsource-label=TeamShare\t"), "{stdout}");
+    assert!(stdout.contains("\tdestination-label=Backup\t"), "{stdout}");
+    assert!(
+        stdout.contains(&format!(
+            "\tsource-volume-root={}\t",
+            network_root.display()
+        )),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(&format!(
+            "\tdestination-volume-root={}\t",
+            external_root.display()
+        )),
+        "{stdout}"
+    );
     assert!(stdout.contains("\tbuffer-bytes=65536\t"), "{stdout}");
     assert!(stdout.contains("\tdistinct-volumes=true\t"), "{stdout}");
     assert!(stdout.contains("\tvolumes=2"), "{stdout}");
@@ -8368,6 +8386,7 @@ fn operation_volume_copy_policy_reports_disk_image_as_slow_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let image_root = fs::canonicalize(&image).unwrap();
     assert!(
         stdout.starts_with("operation-volume-copy-policy\t"),
         "{stdout}"
@@ -8378,6 +8397,16 @@ fn operation_volume_copy_policy_reports_disk_image_as_slow_from_binary() {
     assert!(!stdout.contains("\tsource-stable-id=-\t"), "{stdout}");
     assert!(stdout.contains("\tdestination-stable-id="), "{stdout}");
     assert!(!stdout.contains("\tdestination-stable-id=-\t"), "{stdout}");
+    assert!(stdout.contains("\tsource-label=Installer\t"), "{stdout}");
+    assert!(!stdout.contains("\tdestination-label=-\t"), "{stdout}");
+    assert!(
+        stdout.contains(&format!("\tsource-volume-root={}\t", image_root.display())),
+        "{stdout}"
+    );
+    assert!(
+        !stdout.contains("\tdestination-volume-root=-\t"),
+        "{stdout}"
+    );
     assert!(stdout.contains("\tbuffer-bytes=65536\t"), "{stdout}");
     assert!(stdout.contains("\tdistinct-volumes=true\t"), "{stdout}");
     assert!(stdout.contains("\tvolumes=2"), "{stdout}");

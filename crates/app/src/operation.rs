@@ -770,14 +770,22 @@ fn operation_volume_copy_policy_report(operation: &Operation) -> Result<String> 
         Operation::Copy { from, to } | Operation::Move { from, to } => {
             let source_identity = operation_volume_identity_for_path(&report, from);
             let destination_identity = operation_volume_identity_for_path(&report, to);
+            let source_label = operation_volume_label_for_path(&report, from);
+            let destination_label = operation_volume_label_for_path(&report, to);
+            let source_root = operation_volume_root_for_path(&report, from);
+            let destination_root = operation_volume_root_for_path(&report, to);
             format!(
-                "operation-volume-copy-policy\tsource={}\tdestination={}\tsource-class={}\tdestination-class={}\tsource-stable-id={}\tdestination-stable-id={}\tbuffer-bytes={}\tfile-cloning={}\tdistinct-volumes={}\thard-links={}\tsparse-files={}\tvolumes={}",
+                "operation-volume-copy-policy\tsource={}\tdestination={}\tsource-class={}\tdestination-class={}\tsource-stable-id={}\tdestination-stable-id={}\tsource-label={}\tdestination-label={}\tsource-volume-root={}\tdestination-volume-root={}\tbuffer-bytes={}\tfile-cloning={}\tdistinct-volumes={}\thard-links={}\tsparse-files={}\tvolumes={}",
                 from.display(),
                 to.display(),
                 operation_volume_class_name(policy.class_for_path(from)),
                 operation_volume_class_name(policy.class_for_path(to)),
                 source_identity,
                 destination_identity,
+                source_label,
+                destination_label,
+                source_root,
+                destination_root,
                 policy.copy_buffer_bytes_for_paths(from, to),
                 policy.file_cloning_supported_for_paths(from, to),
                 policy.paths_are_known_distinct_volumes(from, to),
@@ -786,7 +794,7 @@ fn operation_volume_copy_policy_report(operation: &Operation) -> Result<String> 
                 report.volumes.len()
             )
         }
-        _ => "operation-volume-copy-policy\tsource=-\tdestination=-\tsource-class=-\tdestination-class=-\tsource-stable-id=-\tdestination-stable-id=-\tbuffer-bytes=0\tfile-cloning=false\tdistinct-volumes=false\thard-links=false\tsparse-files=false\tvolumes=0".to_string(),
+        _ => "operation-volume-copy-policy\tsource=-\tdestination=-\tsource-class=-\tdestination-class=-\tsource-stable-id=-\tdestination-stable-id=-\tsource-label=-\tdestination-label=-\tsource-volume-root=-\tdestination-volume-root=-\tbuffer-bytes=0\tfile-cloning=false\tdistinct-volumes=false\thard-links=false\tsparse-files=false\tvolumes=0".to_string(),
     })
 }
 
@@ -795,6 +803,22 @@ fn operation_volume_identity_for_path(report: &VolumeDiscoveryReport, path: &Pat
         .volume_for_path(path)
         .map(|volume| escape_operation_field(&volume.stable_identity))
         .filter(|identity| !identity.trim().is_empty())
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn operation_volume_label_for_path(report: &VolumeDiscoveryReport, path: &Path) -> String {
+    report
+        .volume_for_path(path)
+        .map(|volume| escape_operation_field(&volume.label))
+        .filter(|label| !label.trim().is_empty())
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn operation_volume_root_for_path(report: &VolumeDiscoveryReport, path: &Path) -> String {
+    report
+        .volume_for_path(path)
+        .map(|volume| escape_operation_field(&volume.path.to_string_lossy()))
+        .filter(|root| !root.trim().is_empty())
         .unwrap_or_else(|| "-".to_string())
 }
 
