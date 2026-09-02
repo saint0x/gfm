@@ -686,6 +686,7 @@ fn escape_field(value: &str) -> String {
         .replace('\\', "\\\\")
         .replace('\t', "\\t")
         .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 fn escape_path_field(path: &Path) -> String {
@@ -957,32 +958,38 @@ mod tests {
     #[test]
     fn security_scope_tsv_escapes_control_characters_in_path_fields() {
         let report = SecurityScopedAccessReport::blocked_before_filesystem_probe(
-            PathBuf::from("/Users/me/Documents/Reports\tQ3\nDraft.md"),
+            PathBuf::from("/Users/me/Documents/Reports\tQ3\nDraft\rFinal.md"),
             AccessIntent::Preview,
-            "preview worker volume access blocked: unreachable volume network",
+            "preview worker volume access blocked:\tunreachable\nvolume\rnetwork",
         );
 
         let tsv = report.as_tsv();
 
         assert_eq!(tsv.lines().count(), 1, "{tsv}");
         assert!(tsv.starts_with(
-            "security-scope\t/Users/me/Documents/Reports\\tQ3\\nDraft.md\tintent=preview\t"
+            "security-scope\t/Users/me/Documents/Reports\\tQ3\\nDraft\\rFinal.md\tintent=preview\t"
         ));
+        assert!(
+            tsv.contains(
+                "reason=preview worker volume access blocked:\\tunreachable\\nvolume\\rnetwork"
+            ),
+            "{tsv}"
+        );
         assert_eq!(tsv.split('\t').count(), 12, "{tsv}");
     }
 
     #[test]
     fn worker_admission_tsv_escapes_control_characters_in_path_fields() {
         let report = SecurityScopedAccessReport::blocked_before_filesystem_probe(
-            PathBuf::from("/Users/me/Documents/Reports\tQ3\nDraft.md"),
+            PathBuf::from("/Users/me/Documents/Reports\tQ3\nDraft\rFinal.md"),
             AccessIntent::Preview,
             "preview worker volume access blocked: unreachable volume network",
         );
 
-        let tsv = report.worker_admission("preview\tworker").as_tsv();
+        let tsv = report.worker_admission("preview\tworker\rmain").as_tsv();
 
         assert_eq!(tsv.lines().count(), 1, "{tsv}");
-        assert!(tsv.contains("worker=preview\\tworker\tpath=/Users/me/Documents/Reports\\tQ3\\nDraft.md\tintent=preview"), "{tsv}");
+        assert!(tsv.contains("worker=preview\\tworker\\rmain\tpath=/Users/me/Documents/Reports\\tQ3\\nDraft\\rFinal.md\tintent=preview"), "{tsv}");
         assert_eq!(tsv.split('\t').count(), 13, "{tsv}");
     }
 

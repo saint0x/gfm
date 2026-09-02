@@ -777,6 +777,7 @@ fn escape_field(value: &str) -> String {
         .replace('\\', "\\\\")
         .replace('\t', "\\t")
         .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 fn escape_path_field(path: &Path) -> String {
@@ -795,6 +796,7 @@ fn unescape_field(value: &str) -> std::result::Result<String, String> {
             Some('\\') => output.push('\\'),
             Some('t') => output.push('\t'),
             Some('n') => output.push('\n'),
+            Some('r') => output.push('\r'),
             Some(other) => return Err(format!("unknown escape sequence \\{other}")),
             None => return Err("unterminated escape sequence".to_string()),
         }
@@ -966,26 +968,30 @@ mod tests {
     #[test]
     fn bookmark_report_tsv_escapes_control_characters_in_paths() {
         let report = SecurityScopedBookmarkReport {
-            path: PathBuf::from("/Users/me/Documents/Reports\tQ3\nDraft.md"),
+            path: PathBuf::from("/Users/me/Documents/Reports\tQ3\nDraft\rFinal.md"),
             status: SecurityScopedBookmarkStatus::Resolved,
             read_only: true,
             byte_len: 4,
             resolved_path: Some(PathBuf::from(
-                "/Users/me/Documents\tArchive/Reports\nDraft.md",
+                "/Users/me/Documents\tArchive/Reports\nDraft\rFinal.md",
             )),
             stale: false,
             access_started: true,
-            reason: Some("bookmark resolved".to_string()),
+            reason: Some("bookmark\tresolved\nwith\rcontrols".to_string()),
         };
 
         let tsv = report.as_tsv();
 
         assert_eq!(tsv.lines().count(), 1, "{tsv}");
         assert!(tsv.starts_with(
-            "security-bookmark\t/Users/me/Documents/Reports\\tQ3\\nDraft.md\tstatus=resolved\t"
+            "security-bookmark\t/Users/me/Documents/Reports\\tQ3\\nDraft\\rFinal.md\tstatus=resolved\t"
         ));
         assert!(
-            tsv.contains("\tresolved=/Users/me/Documents\\tArchive/Reports\\nDraft.md\t"),
+            tsv.contains("\tresolved=/Users/me/Documents\\tArchive/Reports\\nDraft\\rFinal.md\t"),
+            "{tsv}"
+        );
+        assert!(
+            tsv.contains("reason=bookmark\\tresolved\\nwith\\rcontrols"),
             "{tsv}"
         );
         assert_eq!(tsv.split('\t').count(), 9, "{tsv}");
@@ -994,7 +1000,9 @@ mod tests {
     #[test]
     fn bookmark_store_report_tsv_escapes_control_characters_in_path() {
         let report = SecurityScopedBookmarkStoreReport {
-            path: PathBuf::from("/Users/me/Library/Application Support/GFM\tState\nbookmarks.tsv"),
+            path: PathBuf::from(
+                "/Users/me/Library/Application Support/GFM\tState\nbookmarks\rFinal.tsv",
+            ),
             records: 2,
             repaired: 1,
             unavailable: 0,
@@ -1004,7 +1012,7 @@ mod tests {
 
         assert_eq!(tsv.lines().count(), 1, "{tsv}");
         assert!(tsv.starts_with(
-            "security-bookmark-store\t/Users/me/Library/Application Support/GFM\\tState\\nbookmarks.tsv\t"
+            "security-bookmark-store\t/Users/me/Library/Application Support/GFM\\tState\\nbookmarks\\rFinal.tsv\t"
         ));
         assert_eq!(tsv.split('\t').count(), 5, "{tsv}");
     }
@@ -1034,6 +1042,31 @@ mod tests {
         assert!(fs::read_to_string(store.path())
             .unwrap()
             .starts_with(STORE_MAGIC));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bookmark_store_round_trips_carriage_returns_in_record_paths() {
+        let root = temp_root("security-bookmark-store-control-paths");
+        let store = SecurityScopedBookmarkStore::new(root.join("bookmarks.tsv"));
+        let path = root.join("Documents\tQ3").join("Plan\nDraft\rFinal.md");
+        let records = vec![SecurityScopedBookmarkRecord {
+            path: path.clone(),
+            read_only: true,
+            data: vec![0xde, 0xad, 0xbe, 0xef],
+        }];
+
+        store.write_all(&records).unwrap();
+        let text = fs::read_to_string(store.path()).unwrap();
+        let reloaded = store.read().unwrap();
+
+        assert_eq!(text.lines().count(), 2, "{text}");
+        assert!(
+            text.contains("Documents\\tQ3/Plan\\nDraft\\rFinal.md"),
+            "{text}"
+        );
+        assert_eq!(reloaded, records);
 
         fs::remove_dir_all(root).unwrap();
     }

@@ -86,6 +86,7 @@ fn escape_field(value: &str) -> String {
         .replace('\\', "\\\\")
         .replace('\t', "\\t")
         .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 #[cfg(test)]
@@ -101,11 +102,15 @@ mod tests {
         let report = NativeFinderKindReport {
             kind_string: fallback_kind(&record),
             source: FinderKindSource::FilesystemFallback,
-            reason: Some("forced fallback".to_string()),
+            reason: Some("forced\tfallback\nwithout\rlaunchservices".to_string()),
         };
 
         assert_eq!(report.kind_string, "Md Document");
         assert!(report.as_tsv().contains("source=filesystem-fallback"));
+        assert_eq!(report.as_tsv().lines().count(), 1);
+        assert!(report
+            .as_tsv()
+            .contains("reason=forced\\tfallback\\nwithout\\rlaunchservices"));
     }
 
     #[test]
