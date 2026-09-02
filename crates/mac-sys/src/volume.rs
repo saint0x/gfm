@@ -745,6 +745,7 @@ pub fn submit_volume_operation(
 
 pub fn submit_volume_mount_by_bsd_name(bsd_name: &str) -> NativeVolumeOperationResult {
     let operation = NativeVolumeOperation::Mount;
+    let bsd_name = bsd_name.trim();
     if !valid_bsd_disk_name(bsd_name) {
         return NativeVolumeOperationResult {
             operation,
@@ -828,6 +829,7 @@ pub fn submit_volume_mount_by_bsd_name(bsd_name: &str) -> NativeVolumeOperationR
 }
 
 fn valid_bsd_disk_name(name: &str) -> bool {
+    let name = name.trim();
     let Some(rest) = name.strip_prefix("disk") else {
         return false;
     };
@@ -1894,6 +1896,8 @@ mod tests {
     fn bsd_mount_identity_accepts_disk_and_slice_forms() {
         assert!(valid_bsd_disk_name("disk4"));
         assert!(valid_bsd_disk_name("disk4s1"));
+        assert!(valid_bsd_disk_name(" disk4 "));
+        assert!(valid_bsd_disk_name("\tdisk4s1\n"));
         assert!(!valid_bsd_disk_name("notadisk"));
     }
 

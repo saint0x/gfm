@@ -3011,7 +3011,7 @@ pub struct VolumeMountIdentityReport {
 
 impl VolumeMountIdentityReport {
     pub fn execute(bsd_name: impl Into<String>) -> Self {
-        let bsd_name = bsd_name.into();
+        let bsd_name = normalize_bsd_name(bsd_name.into());
         Self::from_native(bsd_name)
     }
 
@@ -3020,7 +3020,7 @@ impl VolumeMountIdentityReport {
         mut check: impl FnMut() -> Result<()>,
     ) -> Result<Self> {
         check()?;
-        let bsd_name = bsd_name.into();
+        let bsd_name = normalize_bsd_name(bsd_name.into());
         check()?;
         let native = gfm_mac_sys::submit_volume_mount_by_bsd_name(&bsd_name);
         Self::from_native_result_checked(bsd_name, native, check)
@@ -3065,6 +3065,10 @@ impl VolumeMountIdentityReport {
             escape_field(&self.reason)
         )
     }
+}
+
+fn normalize_bsd_name(bsd_name: String) -> String {
+    bsd_name.trim().to_string()
 }
 
 fn disposition_for_native_operation(
@@ -5598,6 +5602,23 @@ mod tests {
     #[test]
     fn volume_mount_identity_refuses_invalid_bsd_name_before_native_call() {
         let report = VolumeMountIdentityReport::execute("not/a/disk");
+
+        assert_eq!(report.bsd_name, "not/a/disk");
+        assert_eq!(report.disposition, VolumeOperationDisposition::Unsupported);
+        assert_eq!(
+            report.native_status,
+            NativeVolumeOperationStatus::Unsupported
+        );
+        assert_eq!(report.dissenter_status, None);
+        assert_eq!(report.reason, "diskarbitration-mount-requires-bsd-name");
+        assert!(report
+            .as_tsv()
+            .starts_with("volume-mount-bsd\tbsd-name=not/a/disk\t"));
+    }
+
+    #[test]
+    fn volume_mount_identity_normalizes_bsd_name_before_reporting_and_validation() {
+        let report = VolumeMountIdentityReport::execute(" \tnot/a/disk\n ");
 
         assert_eq!(report.bsd_name, "not/a/disk");
         assert_eq!(report.disposition, VolumeOperationDisposition::Unsupported);
