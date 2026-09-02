@@ -58,7 +58,7 @@ use gfm_ui::{
     SidebarVolumeEventKind, SidebarVolumeInvalidation, SidebarVolumeKind, SidebarVolumeMountState,
     SidebarVolumeSpec,
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::ffi::OsString;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -4571,8 +4571,12 @@ fn observed_preview_cache_invalidation_tsv(
     let mut cache =
         PreviewCache::new_cancellable(PreviewCacheConfig::new(cache_root), cancellation)?;
     let mut lines = vec![observed.as_tsv()];
+    let mut invalidated_paths = HashSet::new();
     for report in &observed.report.changes {
         cancellation.check()?;
+        if !invalidated_paths.insert(report.path.clone()) {
+            continue;
+        }
         let key = preview_cache_key_for_path_kind(&cache, &report.path, kind, cancellation)?;
         let invalidation_keys =
             cache.invalidation_keys_for_path_checked(&key.path, key.clone(), || {
@@ -6299,6 +6303,106 @@ mod tests {
         let mut reloaded = PreviewCache::new(PreviewCacheConfig::new(&cache_root)).unwrap();
         assert_eq!(reloaded.get(&thumbnail_key).unwrap(), None);
         assert_eq!(reloaded.get(&quicklook_key).unwrap(), None);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn observed_preview_cache_invalidation_deduplicates_repeated_changed_paths() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-platform-preview-cache-observed-dedupe-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let cache_root = root.join("preview-cache");
+        let item = root.join("Remote.icloud-placeholder");
+        std::fs::write(&item, "placeholder").unwrap();
+        let seeded_key = PreviewRequestKey::new(
+            FileId::new(VolumeId(7), 31),
+            item.clone(),
+            PreviewKind::Thumbnail,
+        );
+        let mut cache = PreviewCache::new(PreviewCacheConfig::new(&cache_root)).unwrap();
+        cache
+            .insert(gfm_preview::PreviewEntry::new(
+                seeded_key.clone(),
+                b"thumbnail".to_vec(),
+            ))
+            .unwrap();
+        drop(cache);
+        let current = FileProviderStateReport {
+            path: item.clone(),
+            domain: gfm_mac::FileProviderDomain::ICloudDrive,
+            storage_state: CloudStorageState::Evicted,
+            materialization: gfm_mac::CloudMaterialization::RemotePlaceholder,
+            materialization_source: gfm_mac::CloudMaterializationSource::NativeUrlResource,
+            materialization_confidence: gfm_mac::CloudMaterializationConfidence::Native,
+            materialization_reason: Some("native-url-resource-not-downloaded".to_string()),
+            progress: gfm_mac::CloudTransferProgress {
+                direction: CloudTransferDirection::Idle,
+                percent_milli: None,
+                requested: false,
+                complete: false,
+                indeterminate: false,
+                source: "state",
+                reason: Some("remote-placeholder".to_string()),
+            },
+            badges: Vec::new(),
+            commands: gfm_mac::CloudCommandPolicy {
+                download: gfm_mac::CloudCommandState::Enabled,
+                evict: gfm_mac::CloudCommandState::Disabled,
+                reveal_conflict: gfm_mac::CloudCommandState::Hidden,
+                reason: None,
+            },
+            offline: false,
+            conflict: false,
+            provider_identifier: Some("com.apple.CloudDocs".to_string()),
+            source: "native-url-resource".to_string(),
+        };
+        let change = FileProviderInvalidationReport {
+            path: item.clone(),
+            previous: CloudStorageState::Downloaded,
+            current,
+            state_changed: true,
+            invalidate_icon: true,
+            invalidate_preview_memory: true,
+            invalidate_preview_disk: true,
+            invalidate_sidebar: true,
+            reindex_metadata: true,
+            reason: "fileprovider-state-changed",
+        };
+        let observed = FileProviderObservedInvalidation {
+            events: 2,
+            event_kinds: vec![gfm_mac::FileProviderObservedEventKind::Metadata],
+            paths: vec![item.clone()],
+            report: FileProviderStateInvalidationReport {
+                initialized: false,
+                changes: vec![change.clone(), change],
+                invalidate_icon: true,
+                invalidate_preview_memory: true,
+                invalidate_preview_disk: true,
+                invalidate_sidebar: true,
+                reindex_metadata: true,
+            },
+        };
+
+        let output = observed_preview_cache_invalidation_tsv(
+            &observed,
+            &cache_root,
+            PreviewKind::Thumbnail,
+            &Cancellation::default(),
+        )
+        .expect("duplicate observed provider paths should invalidate cache once");
+
+        assert_eq!(
+            output.matches("preview-cache-invalidation\t").count(),
+            1,
+            "{output}"
+        );
+        assert!(output.contains("\tkind=thumbnail\treason=content-or-icloud\t"));
+        assert!(output.contains("\tremoved-memory=false\tremoved-disk=true"));
+        let mut reloaded = PreviewCache::new(PreviewCacheConfig::new(&cache_root)).unwrap();
+        assert_eq!(reloaded.get(&seeded_key).unwrap(), None);
         std::fs::remove_dir_all(root).unwrap();
     }
 
