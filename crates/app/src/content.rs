@@ -20,9 +20,10 @@ use crate::runtime::{
     runtime_progress_store, RuntimeJobHandle,
 };
 use crate::{
-    optional_path_arg, parse_battery_state, parse_io_pressure, parse_optional_scheduling_pressure,
-    parse_quarantine_failure_kind, parse_required_scheduling_pressure, parse_thermal_state,
-    parse_u32, parse_u64, parse_user_activity, required_path, required_string,
+    optional_path_arg, parse_battery_state, parse_io_pressure,
+    parse_optional_scheduling_pressure_or_else, parse_quarantine_failure_kind,
+    parse_required_scheduling_pressure, parse_thermal_state, parse_u32, parse_u64,
+    parse_user_activity, required_path, required_string,
 };
 use gfm_content::{CachedExtractor, ExtractionFingerprint, ExtractionQuarantine, Extractor};
 use gfm_fs::record_for_path_checked;
@@ -569,7 +570,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "index-content-background requires a content path",
             )?;
-            let pressure = parse_optional_scheduling_pressure(args)?;
+            let pressure = parse_optional_scheduling_pressure_or_else(
+                args,
+                current_host_job_scheduling_pressure,
+            )?;
+            eprintln!("{}", scheduling_pressure_tsv(pressure));
             let journal = JobJournal::new(default_job_journal_path());
             let mut spec = ContentIndexJobSpec::new(&root, segment_dir, records, content);
             let spec_path = default_content_job_path();

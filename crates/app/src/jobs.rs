@@ -2,11 +2,14 @@ use crate::access::{
     preflight_access_scope_checked_with_volume_report, preflight_volume_access_scope_with_report,
     ScopedAccessGuard,
 };
+use crate::platform::{current_host_job_scheduling_pressure, scheduling_pressure_tsv};
 use crate::runtime::{
     default_job_journal_path, run_scheduled_volume_task_cancellable_with_volume,
     run_volume_task_cancellable,
 };
-use crate::{parse_optional_scheduling_pressure, parse_u64_arg, parse_usize_arg, required_path};
+use crate::{
+    parse_optional_scheduling_pressure_or_else, parse_u64_arg, parse_usize_arg, required_path,
+};
 use gfm_jobs::{
     Cancellation, FailureClass, JobClass, JobFairnessPolicy, JobJournal, JobPayloadCatalog,
     JobPayloadKind, JobPayloadRecord, JobProgressCommand, JobProgressSnapshot, JobProgressState,
@@ -139,7 +142,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "jobs-runtime-retry-probe requires an attempt state path",
             )?;
-            let pressure = parse_optional_scheduling_pressure(args)?;
+            let pressure = parse_optional_scheduling_pressure_or_else(
+                args,
+                current_host_job_scheduling_pressure,
+            )?;
+            eprintln!("{}", scheduling_pressure_tsv(pressure));
             let retry_access = Arc::new(Mutex::new(None::<JobPathAccessReport>));
             let outcome = run_scheduled_volume_task_cancellable_with_volume(
                 Priority::Background,

@@ -17892,6 +17892,11 @@ fn runs_background_content_indexer_from_binary() {
         "{}",
         String::from_utf8_lossy(&index_output.stderr)
     );
+    let index_stderr = String::from_utf8_lossy(&index_output.stderr);
+    assert!(
+        index_stderr.contains("scheduler-pressure\t"),
+        "{index_stderr}"
+    );
 
     let search_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
@@ -19530,9 +19535,16 @@ fn scheduled_runtime_retry_probe_retries_transient_failure_from_binary() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("scheduler-pressure\t"), "{stderr}");
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(
-        stdout.contains("runtime-retry-probe\tcompleted\t2\tRun"),
+        stdout.contains("runtime-retry-probe\tcompleted\t2\tRun")
+            || stdout.contains("runtime-retry-probe\tcompleted\t2\tThrottle"),
+        "{stdout}"
+    );
+    assert!(
+        !stdout.contains("runtime-retry-probe\tdeferred\t"),
         "{stdout}"
     );
     assert_eq!(fs::read_to_string(&state).unwrap(), "2");

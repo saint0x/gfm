@@ -175,11 +175,12 @@ pub(crate) fn required_string(value: Option<String>, message: &str) -> Result<St
     value.ok_or_else(|| GfmError::Format(message.to_string()))
 }
 
-pub(crate) fn parse_optional_scheduling_pressure(
+pub(crate) fn parse_optional_scheduling_pressure_or_else(
     args: &mut impl Iterator<Item = String>,
+    default: impl FnOnce() -> SchedulingPressure,
 ) -> Result<SchedulingPressure> {
     let Some(io) = args.next() else {
-        return Ok(SchedulingPressure::default());
+        return Ok(default());
     };
     parse_scheduling_pressure_tail(io, args, "adaptive scheduling")
 }
