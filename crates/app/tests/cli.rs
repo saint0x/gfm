@@ -7907,9 +7907,28 @@ fn performs_journaled_copy_move_and_delete_from_binary() {
         Err(err) => panic!("unexpected xattr setup failure: {err}"),
     };
 
-    run_gfm(
+    let copy_output = run_gfm_output(
         &journal,
         ["copy", source.to_str().unwrap(), copy.to_str().unwrap()],
+    );
+    let copy_stderr = String::from_utf8_lossy(&copy_output.stderr);
+    assert_operation_volume_access(
+        &copy_stderr,
+        "copy",
+        "source",
+        &source,
+        &source,
+        "system",
+        "mounted",
+    );
+    assert_operation_volume_access(
+        &copy_stderr,
+        "copy",
+        "destination-parent",
+        root.as_path(),
+        root.as_path(),
+        "system",
+        "mounted",
     );
     assert_eq!(fs::read_to_string(&copy).unwrap(), "hello ops");
     assert_eq!(
@@ -8239,6 +8258,18 @@ fn operation_refuses_unreachable_destination_volume_before_copying_from_binary()
         stderr.contains("unreachable volume network") && stderr.contains("role=destination-parent"),
         "{stderr}"
     );
+    assert_operation_volume_access(
+        &stderr, "copy", "source", &source, &source, "system", "mounted",
+    );
+    assert_operation_volume_access(
+        &stderr,
+        "copy",
+        "destination-parent",
+        &destination_volume,
+        &destination_volume,
+        "network",
+        "mounted",
+    );
     assert_eq!(
         fs::read_to_string(&source).unwrap(),
         "do not copy onto unreachable storage"
@@ -8486,6 +8517,18 @@ fn operation_refuses_read_only_destination_volume_before_copying_from_binary() {
     assert!(
         stderr.contains("refresh-on-permission-change=true"),
         "{stderr}"
+    );
+    assert_operation_volume_access(
+        &stderr, "copy", "source", &source, &source, "system", "mounted",
+    );
+    assert_operation_volume_access(
+        &stderr,
+        "copy",
+        "destination-parent",
+        &destination_volume,
+        &destination_volume,
+        "external",
+        "mounted",
     );
     assert_eq!(
         fs::read_to_string(&source).unwrap(),
@@ -19715,6 +19758,13 @@ fn reports_volume_scoped_job_cancellation_from_binary() {
 }
 
 fn run_gfm<const N: usize>(journal: &std::path::Path, args: [&str; N]) {
+    let _ = run_gfm_output(journal, args);
+}
+
+fn run_gfm_output<const N: usize>(
+    journal: &std::path::Path,
+    args: [&str; N],
+) -> std::process::Output {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .env("GFM_OPS_JOURNAL", journal)
         .args(args)
@@ -19726,6 +19776,7 @@ fn run_gfm<const N: usize>(journal: &std::path::Path, args: [&str; N]) {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+    output
 }
 
 fn assert_index_security_preflight(stderr: &[u8]) {
@@ -19751,6 +19802,30 @@ fn assert_index_volume_access(
             "{prefix}\tworker={worker}{role}\tpath={}\tintent={intent}",
             path.display()
         )) && stderr.contains("\tstable-id=")
+            && !stderr.contains("\tstable-id=-\t")
+            && stderr.contains("\treason=cached-volume-report"),
+        "{stderr}"
+    );
+}
+
+fn assert_operation_volume_access(
+    stderr: &str,
+    operation: &str,
+    role: &str,
+    path: &Path,
+    probe_path: &Path,
+    class: &str,
+    mount: &str,
+) {
+    let path = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let probe_path = fs::canonicalize(probe_path).unwrap_or_else(|_| probe_path.to_path_buf());
+    assert!(
+        stderr.contains(&format!(
+            "operation-volume-access\toperation={operation}\tworker={operation} {role}\trole={role}\tpath={}\tprobe-path={}\tintent=operate",
+            path.display(),
+            probe_path.display()
+        )) && stderr.contains(&format!("\tclass={class}\tmount={mount}\t"))
+            && stderr.contains("\tstable-id=")
             && !stderr.contains("\tstable-id=-\t")
             && stderr.contains("\treason=cached-volume-report"),
         "{stderr}"

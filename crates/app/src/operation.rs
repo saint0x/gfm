@@ -1028,6 +1028,10 @@ fn operation_access_preflight_with_bookmark_store_checked(
     for probe in &probes {
         check_control()?;
         let report = &probe.admission.access;
+        eprintln!(
+            "{}",
+            operation_volume_access_tsv(operation, probe, volume_report)
+        );
         eprintln!("{}", probe.admission.as_tsv());
         if matches!(probe.admission.worker_action, SecurityWorkerAction::Deny)
             && !probe.admission.can_touch_filesystem
@@ -1185,6 +1189,54 @@ struct OperationAccessProbe {
     requirement: OperationAccessRequirement,
     probe_path: PathBuf,
     admission: SecurityWorkerAdmissionReport,
+}
+
+fn operation_volume_access_tsv(
+    operation: &Operation,
+    probe: &OperationAccessProbe,
+    volume_report: &VolumeDiscoveryReport,
+) -> String {
+    let prefix = "operation-volume-access";
+    let worker = format!(
+        "{} {}",
+        operation_kind(operation),
+        probe.requirement.role.as_str()
+    );
+    if let Some(volume) = volume_report.volume_for_path(&probe.probe_path) {
+        format!(
+            "{}\toperation={}\tworker={}\trole={}\tpath={}\tprobe-path={}\tintent=operate\tvolume-id={}\tstable-id={}\tclass={}\tmount={}\treachable={}\tread-only={}\treason=cached-volume-report",
+            prefix,
+            operation_kind(operation),
+            escape_operation_field(&worker),
+            probe.requirement.role.as_str(),
+            escape_operation_field(&probe.requirement.path.to_string_lossy()),
+            escape_operation_field(&probe.probe_path.to_string_lossy()),
+            volume.id.0,
+            escape_operation_field(&volume.stable_identity),
+            volume.kind.as_str(),
+            volume.mount_state.as_str(),
+            format_operation_optional_bool(volume.reachable),
+            volume.read_only,
+        )
+    } else {
+        format!(
+            "{}\toperation={}\tworker={}\trole={}\tpath={}\tprobe-path={}\tintent=operate\tvolume-id=-\tstable-id=-\tclass=-\tmount=-\treachable=-\tread-only=-\treason=no-containing-volume",
+            prefix,
+            operation_kind(operation),
+            escape_operation_field(&worker),
+            probe.requirement.role.as_str(),
+            escape_operation_field(&probe.requirement.path.to_string_lossy()),
+            escape_operation_field(&probe.probe_path.to_string_lossy()),
+        )
+    }
+}
+
+fn format_operation_optional_bool(value: Option<bool>) -> &'static str {
+    match value {
+        Some(true) => "true",
+        Some(false) => "false",
+        None => "-",
+    }
 }
 
 fn operation_access_probes_checked(
