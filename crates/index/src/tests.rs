@@ -2687,8 +2687,22 @@ fn volume_event_index_invalidation_cancels_jobs_when_identity_changes() {
     assert!(report.cancel_index_jobs);
     assert!(report.clear_fsevents_cursor);
     assert_eq!(report.reason, "volume-event-identity-changed");
+    assert_eq!(
+        report.previous_stable_identity.as_deref(),
+        Some("diskarbitration:uuid:OLD")
+    );
+    assert_eq!(
+        report.current_stable_identity.as_deref(),
+        Some("diskarbitration:uuid:NEW")
+    );
     assert!(report.as_tsv().contains("\tidentity-changed=true\t"));
     assert!(report.as_tsv().contains("\tfilesystem-changed=false\t"));
+    assert!(report
+        .as_tsv()
+        .contains("\tprevious-stable-id=diskarbitration:uuid:OLD\t"));
+    assert!(report
+        .as_tsv()
+        .contains("\tcurrent-stable-id=diskarbitration:uuid:NEW\t"));
 }
 
 #[test]
@@ -2999,6 +3013,20 @@ fn volume_invalidation_cancels_index_jobs_when_stable_identity_changes() {
     assert!(report.cancel_index_jobs);
     assert!(report.clear_fsevents_cursor);
     assert_eq!(report.reason, "volume-identity-changed");
+    assert_eq!(
+        report.previous_stable_identity.as_deref(),
+        Some("diskarbitration:uuid:OLD")
+    );
+    assert_eq!(
+        report.current_stable_identity.as_deref(),
+        Some("diskarbitration:uuid:NEW")
+    );
+    assert!(report
+        .as_tsv()
+        .contains("\tprevious-stable-id=diskarbitration:uuid:OLD\t"));
+    assert!(report
+        .as_tsv()
+        .contains("\tcurrent-stable-id=diskarbitration:uuid:NEW\t"));
 }
 
 #[test]

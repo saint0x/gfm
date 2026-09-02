@@ -611,6 +611,7 @@ pub struct VolumeInvalidationReport {
     pub previous_removable: Option<bool>,
     pub previous_mountable: Option<bool>,
     pub previous_case_sensitive: Option<bool>,
+    pub previous_stable_identity: Option<String>,
     pub previous_native_status: Option<String>,
     pub previous_native_reason: Option<String>,
     pub previous_resource_status: Option<String>,
@@ -626,6 +627,7 @@ pub struct VolumeInvalidationReport {
     pub current_removable: Option<bool>,
     pub current_mountable: Option<bool>,
     pub current_case_sensitive: Option<bool>,
+    pub current_stable_identity: Option<String>,
     pub current_native_status: Option<String>,
     pub current_native_reason: Option<String>,
     pub current_resource_status: Option<String>,
@@ -657,6 +659,7 @@ pub struct VolumeEventIndexInvalidationReport {
     pub previous_removable: Option<bool>,
     pub previous_mountable: Option<bool>,
     pub previous_case_sensitive: Option<bool>,
+    pub previous_stable_identity: Option<String>,
     pub previous_native_status: Option<String>,
     pub previous_native_reason: Option<String>,
     pub previous_resource_status: Option<String>,
@@ -673,6 +676,7 @@ pub struct VolumeEventIndexInvalidationReport {
     pub current_removable: Option<bool>,
     pub current_mountable: Option<bool>,
     pub current_case_sensitive: Option<bool>,
+    pub current_stable_identity: Option<String>,
     pub current_native_status: Option<String>,
     pub current_native_reason: Option<String>,
     pub current_resource_status: Option<String>,
@@ -714,6 +718,7 @@ impl VolumeInvalidationReport {
         let previous_removable = previous.and_then(|volume| volume.removable);
         let previous_mountable = previous.and_then(|volume| volume.mountable);
         let previous_case_sensitive = previous.and_then(|volume| volume.case_sensitive);
+        let previous_stable_identity = previous.and_then(|volume| volume.stable_identity.clone());
         let previous_native_status = previous.and_then(|volume| volume.native_status.clone());
         let previous_native_reason = previous.and_then(|volume| volume.native_reason.clone());
         let previous_resource_status = previous.and_then(|volume| volume.resource_status.clone());
@@ -729,6 +734,7 @@ impl VolumeInvalidationReport {
         let current_removable = current.and_then(|volume| volume.removable);
         let current_mountable = current.and_then(|volume| volume.mountable);
         let current_case_sensitive = current.and_then(|volume| volume.case_sensitive);
+        let current_stable_identity = current.and_then(|volume| volume.stable_identity.clone());
         let current_native_status = current.and_then(|volume| volume.native_status.clone());
         let current_native_reason = current.and_then(|volume| volume.native_reason.clone());
         let current_resource_status = current.and_then(|volume| volume.resource_status.clone());
@@ -965,6 +971,7 @@ impl VolumeInvalidationReport {
             previous_removable,
             previous_mountable,
             previous_case_sensitive,
+            previous_stable_identity,
             previous_native_status,
             previous_native_reason,
             previous_resource_status,
@@ -980,6 +987,7 @@ impl VolumeInvalidationReport {
             current_removable,
             current_mountable,
             current_case_sensitive,
+            current_stable_identity,
             current_native_status,
             current_native_reason,
             current_resource_status,
@@ -1000,7 +1008,7 @@ impl VolumeInvalidationReport {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume-invalidation\tpath={}\tprevious-class={}\tprevious-mount={}\tprevious-reachable={}\tprevious-read-only={}\tcurrent-class={}\tcurrent-mount={}\tcurrent-reachable={}\tcurrent-read-only={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\tprevious-writable={}\tprevious-ejectable={}\tprevious-removable={}\tprevious-mountable={}\tprevious-case-sensitive={}\tcurrent-writable={}\tcurrent-ejectable={}\tcurrent-removable={}\tcurrent-mountable={}\tcurrent-case-sensitive={}\tprevious-native-status={}\tprevious-native-reason={}\tprevious-resource-status={}\tprevious-resource-reason={}\tprevious-mount-status={}\tprevious-mount-reason={}\tcurrent-native-status={}\tcurrent-native-reason={}\tcurrent-resource-status={}\tcurrent-resource-reason={}\tcurrent-mount-status={}\tcurrent-mount-reason={}\tapi-status-changed={}\tfilesystem-identity-changed={}\treason={}",
+            "volume-invalidation\tpath={}\tprevious-class={}\tprevious-mount={}\tprevious-reachable={}\tprevious-read-only={}\tcurrent-class={}\tcurrent-mount={}\tcurrent-reachable={}\tcurrent-read-only={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\tprevious-writable={}\tprevious-ejectable={}\tprevious-removable={}\tprevious-mountable={}\tprevious-case-sensitive={}\tcurrent-writable={}\tcurrent-ejectable={}\tcurrent-removable={}\tcurrent-mountable={}\tcurrent-case-sensitive={}\tprevious-native-status={}\tprevious-native-reason={}\tprevious-resource-status={}\tprevious-resource-reason={}\tprevious-mount-status={}\tprevious-mount-reason={}\tcurrent-native-status={}\tcurrent-native-reason={}\tcurrent-resource-status={}\tcurrent-resource-reason={}\tcurrent-mount-status={}\tcurrent-mount-reason={}\tapi-status-changed={}\tfilesystem-identity-changed={}\tprevious-stable-id={}\tcurrent-stable-id={}\treason={}",
             self.path.display(),
             self.previous_class
                 .map(IndexVolumeClass::as_str)
@@ -1054,6 +1062,8 @@ impl VolumeInvalidationReport {
             format_optional_string(self.current_mount_reason.as_deref()),
             self.api_status_changed,
             self.filesystem_identity_changed,
+            format_optional_string(self.previous_stable_identity.as_deref()),
+            format_optional_string(self.current_stable_identity.as_deref()),
             escape_field(&self.reason)
         )
     }
@@ -1204,6 +1214,7 @@ impl VolumeEventIndexInvalidationReport {
             previous_removable: previous.and_then(|volume| volume.removable),
             previous_mountable: previous.and_then(|volume| volume.mountable),
             previous_case_sensitive: previous.and_then(|volume| volume.case_sensitive),
+            previous_stable_identity: previous.and_then(|volume| volume.stable_identity.clone()),
             previous_native_status: previous.and_then(|volume| volume.native_status.clone()),
             previous_native_reason: previous.and_then(|volume| volume.native_reason.clone()),
             previous_resource_status: previous.and_then(|volume| volume.resource_status.clone()),
@@ -1220,6 +1231,7 @@ impl VolumeEventIndexInvalidationReport {
             current_removable: current.and_then(|volume| volume.removable),
             current_mountable: current.and_then(|volume| volume.mountable),
             current_case_sensitive: current.and_then(|volume| volume.case_sensitive),
+            current_stable_identity: current.and_then(|volume| volume.stable_identity.clone()),
             current_native_status: current.and_then(|volume| volume.native_status.clone()),
             current_native_reason: current.and_then(|volume| volume.native_reason.clone()),
             current_resource_status: current.and_then(|volume| volume.resource_status.clone()),
@@ -1246,7 +1258,7 @@ impl VolumeEventIndexInvalidationReport {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume-event-index-invalidation\tkind={}\tpath={}\tprevious-volume={}\tprevious-class={}\tprevious-mount={}\tprevious-reachable={}\tprevious-read-only={}\tcurrent-volume={}\tcurrent-class={}\tcurrent-mount={}\tcurrent-reachable={}\tcurrent-read-only={}\tread-only-changed={}\tidentity-changed={}\tfilesystem-changed={}\tfilesystem-identity-changed={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\tprevious-writable={}\tprevious-ejectable={}\tprevious-removable={}\tprevious-mountable={}\tprevious-case-sensitive={}\tcurrent-writable={}\tcurrent-ejectable={}\tcurrent-removable={}\tcurrent-mountable={}\tcurrent-case-sensitive={}\twritable-changed={}\tejectable-changed={}\tremovable-changed={}\tmountable-changed={}\tcase-sensitive-changed={}\tprevious-native-status={}\tprevious-native-reason={}\tprevious-resource-status={}\tprevious-resource-reason={}\tprevious-mount-status={}\tprevious-mount-reason={}\tcurrent-native-status={}\tcurrent-native-reason={}\tcurrent-resource-status={}\tcurrent-resource-reason={}\tcurrent-mount-status={}\tcurrent-mount-reason={}\tapi-status-changed={}\treason={}",
+            "volume-event-index-invalidation\tkind={}\tpath={}\tprevious-volume={}\tprevious-class={}\tprevious-mount={}\tprevious-reachable={}\tprevious-read-only={}\tcurrent-volume={}\tcurrent-class={}\tcurrent-mount={}\tcurrent-reachable={}\tcurrent-read-only={}\tread-only-changed={}\tidentity-changed={}\tfilesystem-changed={}\tfilesystem-identity-changed={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\tprevious-writable={}\tprevious-ejectable={}\tprevious-removable={}\tprevious-mountable={}\tprevious-case-sensitive={}\tcurrent-writable={}\tcurrent-ejectable={}\tcurrent-removable={}\tcurrent-mountable={}\tcurrent-case-sensitive={}\twritable-changed={}\tejectable-changed={}\tremovable-changed={}\tmountable-changed={}\tcase-sensitive-changed={}\tprevious-native-status={}\tprevious-native-reason={}\tprevious-resource-status={}\tprevious-resource-reason={}\tprevious-mount-status={}\tprevious-mount-reason={}\tcurrent-native-status={}\tcurrent-native-reason={}\tcurrent-resource-status={}\tcurrent-resource-reason={}\tcurrent-mount-status={}\tcurrent-mount-reason={}\tapi-status-changed={}\tprevious-stable-id={}\tcurrent-stable-id={}\treason={}",
             self.kind.as_str(),
             self.path
                 .as_ref()
@@ -1316,6 +1328,8 @@ impl VolumeEventIndexInvalidationReport {
             format_optional_string(self.current_mount_status.as_deref()),
             format_optional_string(self.current_mount_reason.as_deref()),
             self.api_status_changed,
+            format_optional_string(self.previous_stable_identity.as_deref()),
+            format_optional_string(self.current_stable_identity.as_deref()),
             escape_field(&self.reason)
         )
     }
