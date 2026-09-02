@@ -10572,6 +10572,37 @@ fn reports_compressed_pdf_extraction_from_binary() {
 }
 
 #[test]
+fn extract_report_escapes_control_characters_from_binary() {
+    let root = unique_temp_dir("gfm-cli-extract-report-control-path");
+    let path = root.join("Reports\tQ3\nDraft\rFinal.md");
+    fs::write(&path, "escaped extraction report").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["extract-report", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines = stdout.lines().collect::<Vec<_>>();
+
+    assert_eq!(lines.len(), 2, "{stdout}");
+    assert_eq!(lines[0].split('\t').count(), 8, "{stdout}");
+    assert!(
+        lines[0].contains("path=") && lines[0].contains("Reports\\tQ3\\nDraft\\rFinal.md"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains('\r'), "{stdout}");
+    assert_eq!(lines[1], "quarantine\tallow", "{stdout}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn extract_report_retries_transient_failure_from_binary() {
     let root = unique_temp_dir("gfm-cli-extract-report-retry-root");
     let path = root.join("Retry.txt");
@@ -12133,6 +12164,38 @@ fn reports_extraction_cache_hits_from_binary() {
         "{stdout}"
     );
     assert!(stdout.contains("\tmetadata-epoch="), "{stdout}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn extract_cache_escapes_control_characters_from_binary() {
+    let root = unique_temp_dir("gfm-cli-extract-cache-control-path");
+    let path = root.join("Cache\tRoot\nDraft\rFinal.md");
+    fs::write(&path, "cached cli path escaping").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["extract-cache", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines = stdout.lines().collect::<Vec<_>>();
+
+    assert_eq!(lines.len(), 2, "{stdout}");
+    for line in lines {
+        assert_eq!(line.split('\t').count(), 10, "{stdout}");
+        assert!(
+            line.contains("path=") && line.contains("Cache\\tRoot\\nDraft\\rFinal.md"),
+            "{stdout}"
+        );
+    }
+    assert!(!stdout.contains('\r'), "{stdout}");
 
     fs::remove_dir_all(root).unwrap();
 }

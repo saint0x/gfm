@@ -91,6 +91,34 @@ fn text_output_budget_truncates_without_splitting_utf8() {
 }
 
 #[test]
+fn extraction_report_tsv_escapes_path_and_reason_control_characters() {
+    let report = ExtractionReport {
+        path: PathBuf::from("/tmp/Reports\tQ3\nDraft\rFinal.md"),
+        format: ExtractionFormat::Text,
+        status: ExtractionStatus::Quarantined("worker\ttimeout\nwhile\rreading"),
+        fingerprint: ExtractionFingerprint {
+            extractor_version: TEXT_EXTRACTOR_VERSION,
+            len: 12,
+            modified_ns: None,
+        },
+        document: None,
+    };
+    let tsv = report.as_tsv();
+
+    assert_eq!(tsv.lines().count(), 1, "{tsv}");
+    assert!(!tsv.contains('\r'), "{tsv}");
+    assert!(
+        tsv.contains("path=/tmp/Reports\\tQ3\\nDraft\\rFinal.md"),
+        "{tsv}"
+    );
+    assert!(
+        tsv.contains("reason=worker\\ttimeout\\nwhile\\rreading"),
+        "{tsv}"
+    );
+    assert_eq!(tsv.split('\t').count(), 8, "{tsv}");
+}
+
+#[test]
 fn extraction_report_checked_honors_pre_cancelled_control_before_metadata_probe() {
     let root = unique_temp_dir("gfm-content-extract-report-pre-cancel");
     let path = root.join("missing.md");
@@ -882,6 +910,47 @@ fn cached_extractor_hits_for_unchanged_file_identity_and_signature() {
     assert_eq!(cached.cache_len(), 1);
     assert!(second.as_tsv().contains("status=hit"));
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cached_extraction_report_tsv_escapes_control_characters() {
+    let path = PathBuf::from("/tmp/Cache\tRoot\nDraft\rFinal.md");
+    let report = CachedExtractionReport {
+        status: ExtractionCacheStatus::Hit,
+        key: ExtractionCacheKey {
+            file_id: FileId::new(VolumeId(7), 42),
+            extractor_version: TEXT_EXTRACTOR_VERSION,
+            content: ExtractionContentSignature {
+                len: 512,
+                modified_ns: Some(99),
+                sample_hash: 0xfeed_cafe,
+            },
+            metadata_epoch: 0xface,
+        },
+        report: ExtractionReport {
+            path,
+            format: ExtractionFormat::Text,
+            status: ExtractionStatus::Extracted,
+            fingerprint: ExtractionFingerprint {
+                extractor_version: TEXT_EXTRACTOR_VERSION,
+                len: 512,
+                modified_ns: Some(99),
+            },
+            document: Some(ContentDocument {
+                bytes_read: 12,
+                text: "cached text".to_string(),
+            }),
+        },
+    };
+    let tsv = report.as_tsv();
+
+    assert_eq!(tsv.lines().count(), 1, "{tsv}");
+    assert!(!tsv.contains('\r'), "{tsv}");
+    assert!(
+        tsv.contains("path=/tmp/Cache\\tRoot\\nDraft\\rFinal.md"),
+        "{tsv}"
+    );
+    assert_eq!(tsv.split('\t').count(), 10, "{tsv}");
 }
 
 #[test]

@@ -1,4 +1,4 @@
-use crate::{extractor_version_for_path, ExtractionReport, Extractor};
+use crate::{extractor_version_for_path, report::escape_report_field, ExtractionReport, Extractor};
 use gfm_types::{FileId, FileRecord, GfmError, Result};
 use std::collections::{BTreeMap, VecDeque};
 use std::fs::File;
@@ -114,7 +114,7 @@ impl CachedExtractionReport {
             "extract-cache\tstatus={}\t{}\tpath={}",
             self.status.as_str(),
             self.key.as_tsv_fields(),
-            self.report.path.display()
+            escape_report_field(&self.report.path.to_string_lossy())
         )
     }
 }

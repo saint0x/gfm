@@ -121,10 +121,10 @@ impl ExtractionReport {
     pub fn as_tsv(&self) -> String {
         format!(
             "extract\tpath={}\tformat={}\tstatus={}\treason={}\tversion={}\tbytes-read={}\ttext-bytes={}",
-            self.path.display(),
+            escape_report_field(&self.path.to_string_lossy()),
             self.format.as_str(),
             self.status.as_str(),
-            self.status.reason(),
+            escape_report_field(self.status.reason()),
             self.fingerprint.extractor_version,
             self.document
                 .as_ref()
@@ -136,4 +136,12 @@ impl ExtractionReport {
                 .unwrap_or(0)
         )
     }
+}
+
+pub(crate) fn escape_report_field(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
