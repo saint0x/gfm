@@ -1,10 +1,10 @@
 use crate::{
     cloud_materialization_for_state, decide_cloud_preview_for_materialization, decide_invalidation,
-    decide_preview_security, preview_invalidation_for_fileprovider, security_input_for_path,
-    volume_descriptor_is_remote_for_preview, CloudPreviewDecision, PreviewInvalidationDecision,
-    PreviewInvalidationEvent, PreviewKind, PreviewRequestKey, PreviewScheduler,
-    PreviewSchedulingPolicy, PreviewSecurityDecision, PreviewSecurityPolicy, PreviewTask,
-    PreviewTaskDecision, Rect, Viewport,
+    decide_preview_security, escape_path_field, preview_invalidation_for_fileprovider,
+    security_input_for_path, volume_descriptor_is_remote_for_preview, CloudPreviewDecision,
+    PreviewInvalidationDecision, PreviewInvalidationEvent, PreviewKind, PreviewRequestKey,
+    PreviewScheduler, PreviewSchedulingPolicy, PreviewSecurityDecision, PreviewSecurityPolicy,
+    PreviewTask, PreviewTaskDecision, Rect, Viewport,
 };
 use gfm_mac::{CloudMaterialization, CloudStorageState, VolumeDescriptor};
 use gfm_types::Result;
@@ -218,7 +218,7 @@ impl ThumbnailGenerationContract {
     pub fn as_tsv(&self) -> String {
         format!(
             "thumbnail-generation\t{}\t{}\tcloud={}\t{}\t{}px\tscale={}m\t{}:{}\tcache={}\tinvalidate-memory={}\tinvalidate-disk={}\tschedule={}",
-            self.key.path.display(),
+            escape_path_field(&self.key.path),
             self.security.as_str(),
             self.cloud.as_str(),
             self.generator_mode.as_str(),
@@ -561,6 +561,29 @@ mod tests {
             contract.as_tsv(),
             "thumbnail-generation\t/tmp/Image.png\tallow-native\tcloud=native-eligible\tquicklook-thumbnailing\t256px\tscale=2000m\t1:11\tcache=refresh-memory-only\tinvalidate-memory=true\tinvalidate-disk=false\tschedule=scheduled:visible"
         );
+    }
+
+    #[test]
+    fn thumbnail_generation_tsv_escapes_control_characters_in_path() {
+        let contract = ThumbnailGenerationContract::from_input(
+            &PreviewSecurityPolicy::default(),
+            input(
+                "Reports\tQ3\nDraft\rThumbnail.png",
+                Rect::new(0, 0, 128, 128),
+            ),
+        )
+        .unwrap();
+
+        let tsv = contract.as_tsv();
+
+        assert_eq!(tsv.lines().count(), 1, "{tsv}");
+        assert!(
+            tsv.contains(
+                "thumbnail-generation\t/tmp/Reports\\tQ3\\nDraft\\rThumbnail.png\tallow-native\t"
+            ),
+            "{tsv}"
+        );
+        assert_eq!(tsv.split('\t').count(), 12, "{tsv}");
     }
 
     fn input(name: &str, rect: Rect) -> ThumbnailGenerationInput {

@@ -1,3 +1,4 @@
+use crate::escape_path_field;
 use crate::{
     decide_invalidation, PreviewInvalidationDecision, PreviewInvalidationEvent, PreviewRequestKey,
 };
@@ -75,7 +76,7 @@ impl IconPreviewContract {
     pub fn as_tsv(&self) -> String {
         format!(
             "icon-preview\t{}\t{}\t{}\t{}\tbadges={}\tcache={}\tinvalidate-memory={}\tinvalidate-disk={}",
-            self.key.path.display(),
+            escape_path_field(&self.key.path),
             self.descriptor.role.as_str(),
             self.descriptor.provider.as_str(),
             self.descriptor.type_hint,
@@ -165,6 +166,19 @@ mod tests {
         );
         assert!(contract.invalidation.invalidate_memory);
         assert!(!contract.invalidation.invalidate_disk);
+    }
+
+    #[test]
+    fn icon_preview_tsv_escapes_control_characters_in_path() {
+        let contract = IconPreviewContract::from_input(IconPreviewInput::new(
+            key("Reports\tQ3\nDraft\rIcon.png"),
+            record("Reports\tQ3\nDraft\rIcon.png", FileKind::File),
+        ));
+        let tsv = contract.as_tsv();
+
+        assert_eq!(tsv.lines().count(), 1, "{tsv}");
+        assert!(tsv.contains("Reports\\tQ3\\nDraft\\rIcon.png"), "{tsv}");
+        assert_eq!(tsv.split('\t').count(), 9, "{tsv}");
     }
 
     #[test]

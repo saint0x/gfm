@@ -1,10 +1,10 @@
 use crate::{
     cloud_materialization_for_state, decide_cloud_preview_for_materialization, decide_invalidation,
-    decide_preview_security, preview_invalidation_for_fileprovider, security_input_for_path,
-    volume_descriptor_is_remote_for_preview, CloudPreviewDecision, PreviewInvalidationDecision,
-    PreviewInvalidationEvent, PreviewKind, PreviewRequestKey, PreviewScheduler,
-    PreviewSchedulingPolicy, PreviewSecurityDecision, PreviewSecurityPolicy, PreviewTask,
-    PreviewTaskDecision, Rect, Viewport,
+    decide_preview_security, escape_path_field, preview_invalidation_for_fileprovider,
+    security_input_for_path, volume_descriptor_is_remote_for_preview, CloudPreviewDecision,
+    PreviewInvalidationDecision, PreviewInvalidationEvent, PreviewKind, PreviewRequestKey,
+    PreviewScheduler, PreviewSchedulingPolicy, PreviewSecurityDecision, PreviewSecurityPolicy,
+    PreviewTask, PreviewTaskDecision, Rect, Viewport,
 };
 use gfm_mac::{CloudMaterialization, CloudStorageState, VolumeDescriptor};
 use gfm_types::Result;
@@ -185,7 +185,7 @@ impl QuickLookSessionContract {
         format!(
             "quicklook-session\t{}\t{}\t{}\tcloud={}\t{}\t{}:{}\tinvalidate-memory={}\tinvalidate-disk={}\tschedule={}",
             self.key.kind.as_str(),
-            self.key.path.display(),
+            escape_path_field(&self.key.path),
             self.security.as_str(),
             self.cloud.as_str(),
             self.controller_mode.as_str(),
@@ -480,6 +480,24 @@ mod tests {
             contract.as_tsv(),
             "quicklook-session\tquick-look\t/tmp/Report.pdf\tallow-native\tcloud=native-eligible\tnative-preview-controller\t1:10\tinvalidate-memory=true\tinvalidate-disk=true\tschedule=scheduled:visible"
         );
+    }
+
+    #[test]
+    fn quicklook_session_tsv_escapes_control_characters_in_path() {
+        let contract = QuickLookSessionContract::from_input(
+            &PreviewSecurityPolicy::default(),
+            input("Reports\tQ3\nDraft\rPreview.pdf", Rect::new(0, 0, 400, 300)),
+        )
+        .unwrap();
+
+        let tsv = contract.as_tsv();
+
+        assert_eq!(tsv.lines().count(), 1, "{tsv}");
+        assert!(
+            tsv.contains("quick-look\t/tmp/Reports\\tQ3\\nDraft\\rPreview.pdf\tallow-native\t"),
+            "{tsv}"
+        );
+        assert_eq!(tsv.split('\t').count(), 10, "{tsv}");
     }
 
     fn input(name: &str, rect: Rect) -> QuickLookSessionInput {

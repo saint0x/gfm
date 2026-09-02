@@ -85,6 +85,18 @@ impl PreviewRequestKey {
     }
 }
 
+pub(crate) fn escape_path_field(path: &Path) -> String {
+    escape_field(&path.to_string_lossy())
+}
+
+pub(crate) fn escape_field(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PreviewEntry {
     pub key: PreviewRequestKey,
@@ -1074,7 +1086,7 @@ impl PreviewCacheInvalidationReport {
     pub fn as_tsv(&self) -> String {
         format!(
             "preview-cache-invalidation\t{}\tkind={}\treason={}\tinvalidate-memory={}\tinvalidate-disk={}\tremoved-memory={}\tremoved-disk={}",
-            self.key.path.display(),
+            escape_path_field(&self.key.path),
             self.key.kind.as_str(),
             self.decision.reason,
             self.decision.invalidate_memory,
@@ -1850,6 +1862,25 @@ mod tests {
         assert!(report.removed_disk);
         assert_eq!(report.decision.reason, "content-or-icloud");
         assert_eq!(cache.get(&key).unwrap(), None);
+    }
+
+    #[test]
+    fn cache_invalidation_tsv_escapes_control_characters_in_path() {
+        let key = key("Reports\tQ3\nDraft\rPreview.md", PreviewKind::Thumbnail);
+        let report = PreviewCacheInvalidationReport {
+            key,
+            decision: decide_invalidation(PreviewInvalidationEvent {
+                metadata_changed: true,
+                ..PreviewInvalidationEvent::default()
+            }),
+            removed_memory: false,
+            removed_disk: false,
+        };
+        let tsv = report.as_tsv();
+
+        assert_eq!(tsv.lines().count(), 1, "{tsv}");
+        assert!(tsv.contains("Reports\\tQ3\\nDraft\\rPreview.md"), "{tsv}");
+        assert_eq!(tsv.split('\t').count(), 8, "{tsv}");
     }
 
     #[test]
