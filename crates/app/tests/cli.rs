@@ -10217,6 +10217,15 @@ fn reports_compressed_pdf_extraction_from_binary() {
         "{stderr}"
     );
     assert!(stderr.contains("\tintent=read\t"), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "content-extraction-volume-access\tworker=content extraction\tpath={}\tintent=read",
+            path.display()
+        )) && stderr.contains("\tstable-id=")
+            && !stderr.contains("\tstable-id=-\t")
+            && stderr.contains("\treason=cached-volume-report"),
+        "{stderr}"
+    );
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("extract\tpath="), "{stdout}");
     assert!(
@@ -10261,6 +10270,26 @@ fn extract_report_retries_transient_failure_from_binary() {
         output.status.success(),
         "{}",
         String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains(&format!(
+            "content-extraction-volume-access\tworker=content extraction\tpath={}\tintent=read",
+            path.display()
+        )) && stderr.contains("\tstable-id=")
+            && !stderr.contains("\tstable-id=-\t")
+            && stderr.contains("\treason=cached-volume-report"),
+        "{stderr}"
+    );
+    let retry_probe_parent = std::fs::canonicalize(retry_probe.parent().unwrap()).unwrap();
+    assert!(
+        stderr.contains(&format!(
+            "content-extraction-retry-volume-access\tworker=content extraction\tpath={}\tintent=write",
+            retry_probe_parent.display()
+        )) && stderr.contains("\tstable-id=")
+            && !stderr.contains("\tstable-id=-\t")
+            && stderr.contains("\treason=cached-volume-report"),
+        "{stderr}"
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("extract\tpath="), "{stdout}");

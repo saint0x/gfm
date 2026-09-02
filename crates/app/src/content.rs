@@ -154,6 +154,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 || Ok(()),
             )?;
             access_report.preflight_volume("adaptive content extraction")?;
+            eprintln!(
+                "{}",
+                access_report.volume_access_tsv(
+                    "content-extraction-volume-access",
+                    "adaptive content extraction"
+                )
+            );
             preflight_content_input_admission_before_runtime(
                 &access_report,
                 "adaptive content extraction",
@@ -927,6 +934,7 @@ pub(crate) fn run_content_search_with_volume_report(
             "content-search-volume-access",
             "content search",
             &root,
+            AccessIntent::Index,
             &volume_report
         )
     );
@@ -959,6 +967,7 @@ fn content_volume_access_tsv(
     prefix: &str,
     worker: &str,
     path: &Path,
+    intent: AccessIntent,
     volume_report: &VolumeDiscoveryReport,
 ) -> String {
     if let Some(volume) = volume_report.volume_for_path(path) {
@@ -967,7 +976,7 @@ fn content_volume_access_tsv(
             escape_content_tsv_field(prefix),
             escape_content_tsv_field(worker),
             escape_content_tsv_field(&path.to_string_lossy()),
-            AccessIntent::Index.as_str(),
+            intent.as_str(),
             volume.id.0,
             escape_content_tsv_field(&volume.stable_identity),
             volume.kind.as_str(),
@@ -981,7 +990,7 @@ fn content_volume_access_tsv(
             escape_content_tsv_field(prefix),
             escape_content_tsv_field(worker),
             escape_content_tsv_field(&path.to_string_lossy()),
-            AccessIntent::Index.as_str(),
+            intent.as_str(),
         )
     }
 }
@@ -1012,9 +1021,17 @@ fn run_extraction_report(
     )?;
     let retry_probe_access_report = retry_probe_access_report(retry_probe.as_deref())?;
     access_report.preflight_volume(worker)?;
+    eprintln!(
+        "{}",
+        access_report.volume_access_tsv("content-extraction-volume-access", worker)
+    );
     preflight_content_input_admission_before_runtime(&access_report, worker)?;
     if let Some(report) = retry_probe_access_report.as_ref() {
         report.preflight_volume(worker)?;
+        eprintln!(
+            "{}",
+            report.volume_access_tsv("content-extraction-retry-volume-access", worker)
+        );
     }
     run_extraction_report_after_preflight(
         path,
@@ -2516,6 +2533,10 @@ impl ForegroundContentIndexAccessReport {
             &self.volume_report,
             check_control,
         )
+    }
+
+    fn volume_access_tsv(&self, prefix: &str, worker: &str) -> String {
+        content_volume_access_tsv(prefix, worker, &self.path, self.intent, &self.volume_report)
     }
 
     fn volume(&self) -> Option<gfm_types::VolumeId> {
