@@ -374,6 +374,11 @@ fn decide(
             SecurityDecisionAction::Prompt,
             "protected root requires Full Disk Access guidance".to_string(),
         ),
+        AccessProbeState::Denied if bookmark_required => (
+            SecurityAccessMode::SecurityScopedBookmark,
+            SecurityDecisionAction::Prompt,
+            "access denied; request a user-selected security-scoped bookmark".to_string(),
+        ),
         AccessProbeState::Denied
             if matches!(intent, AccessIntent::Index | AccessIntent::Preview) =>
         {
@@ -383,11 +388,6 @@ fn decide(
                 "access denied; continue with metadata-only degraded mode".to_string(),
             )
         }
-        AccessProbeState::Denied if bookmark_required => (
-            SecurityAccessMode::SecurityScopedBookmark,
-            SecurityDecisionAction::Prompt,
-            "access denied; request a user-selected security-scoped bookmark".to_string(),
-        ),
         AccessProbeState::Denied => (
             SecurityAccessMode::Denied,
             SecurityDecisionAction::Deny,
@@ -1065,15 +1065,32 @@ mod tests {
     }
 
     #[test]
-    fn worker_admission_degrades_without_filesystem_touch() {
+    fn denied_protected_user_locations_prompt_for_bookmark_before_degradation() {
+        let (mode, action, reason) = decide(
+            ProtectedScope::Documents,
+            AccessProbeState::Denied,
+            AccessIntent::Preview,
+            true,
+        );
+
+        assert_eq!(mode, SecurityAccessMode::SecurityScopedBookmark);
+        assert_eq!(action, SecurityDecisionAction::Prompt);
+        assert_eq!(
+            reason,
+            "access denied; request a user-selected security-scoped bookmark"
+        );
+    }
+
+    #[test]
+    fn worker_admission_degrades_unprotected_preview_without_filesystem_touch() {
         let report = SecurityScopedAccessReport {
-            path: PathBuf::from("/Users/me/Documents/Private.md"),
+            path: PathBuf::from("/Users/me/Private.md"),
             intent: AccessIntent::Preview,
-            scope: ProtectedScope::Documents,
+            scope: ProtectedScope::None,
             probe: AccessProbeState::Denied,
             mode: SecurityAccessMode::DegradedMetadataOnly,
             action: SecurityDecisionAction::Degrade,
-            bookmark_required: true,
+            bookmark_required: false,
             can_read: false,
             can_write: false,
             least_privilege: true,

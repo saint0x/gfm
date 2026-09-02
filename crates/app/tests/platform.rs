@@ -1,5 +1,6 @@
 use gfm_preview::{PreviewCache, PreviewCacheConfig, PreviewEntry, PreviewKind, PreviewRequestKey};
 use gfm_types::{FileId, VolumeId};
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
 
@@ -108,6 +109,67 @@ fn ui_permission_access_contract_reports_bookmark_prompt_orchestration_from_bina
     assert!(stdout.contains("\tprompt-source=security-scoped-bookmark\t"));
     assert!(stdout.contains("\tbookmark-required=true\t"));
     assert!(stdout.contains("security-worker-admission\tworker=preview worker\t"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn ui_permission_access_contract_reports_denied_protected_bookmark_orchestration_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-ui-permission-access-denied-bookmark-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let documents = root.join("Documents");
+    std::fs::create_dir_all(&documents).unwrap();
+    let path = documents.join("Private.md");
+    std::fs::write(&path, "private").unwrap();
+    let original_permissions = std::fs::metadata(&path).unwrap().permissions();
+    let mut denied_permissions = original_permissions.clone();
+    denied_permissions.set_mode(0o0);
+    std::fs::set_permissions(&path, denied_permissions).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("HOME", &root)
+        .arg("ui-permission-access-contract")
+        .arg(&path)
+        .arg("preview")
+        .arg("preview worker")
+        .output()
+        .unwrap();
+    let _ = std::fs::set_permissions(&path, original_permissions);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(
+        stdout.starts_with("dialog\tsurface=permission\tpresentation=window-sheet\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\tprompt-kind=bookmark-acquisition\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\tprompt-action=choose-location\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tpromptable=true\t"), "{stdout}");
+    assert!(
+        stdout.contains("\tprompt-source=security-scoped-bookmark\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tprobe=denied\t"), "{stdout}");
+    assert!(stdout.contains("\taccess-action=prompt\t"), "{stdout}");
+    assert!(stdout.contains("\tworker-action=prompt\t"), "{stdout}");
+    assert!(stdout.contains("\tbookmark-required=true\t"), "{stdout}");
+    assert!(
+        !stdout.contains("\tprompt-source=metadata-only\t"),
+        "{stdout}"
+    );
 
     let _ = std::fs::remove_dir_all(root);
 }
