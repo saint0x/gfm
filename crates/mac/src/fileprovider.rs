@@ -3168,12 +3168,16 @@ fn progress_for_state(state: CloudStorageState, hints: &CloudHints) -> CloudTran
             requested: hints.native.download_requested.unwrap_or(false),
             complete: false,
             indeterminate: false,
-            source: if hints.native.percent_downloaded_milli.is_some() {
+            source: if native_has_remote_placeholder_evidence(&hints.native) {
                 "native-url-resource"
             } else {
                 "state"
             },
-            reason: Some("remote-placeholder".to_string()),
+            reason: Some(
+                native_remote_placeholder_reason(&hints.native)
+                    .unwrap_or("remote-placeholder")
+                    .to_string(),
+            ),
         },
         CloudStorageState::Downloading => CloudTransferProgress::from_native(
             CloudTransferDirection::Download,
@@ -7081,8 +7085,12 @@ mod tests {
             report.materialization_source,
             CloudMaterializationSource::NativeUrlResource
         );
-        assert_eq!(report.progress.source, "state");
+        assert_eq!(report.progress.source, "native-url-resource");
         assert_eq!(report.progress.percent_milli, Some(0));
+        assert_eq!(
+            report.progress.reason.as_deref(),
+            Some("native-url-resource-is-downloaded-false")
+        );
         assert_eq!(report.commands.download, CloudCommandState::Enabled);
         assert_eq!(report.commands.reason, None);
     }
@@ -7162,6 +7170,11 @@ mod tests {
         );
         assert_eq!(report.progress.direction, CloudTransferDirection::Download);
         assert_eq!(report.progress.percent_milli, Some(0));
+        assert_eq!(report.progress.source, "native-url-resource");
+        assert_eq!(
+            report.progress.reason.as_deref(),
+            Some("native-url-resource-downloading-status-not-downloaded")
+        );
         assert_eq!(report.commands.download, CloudCommandState::Enabled);
         assert_eq!(report.commands.evict, CloudCommandState::Disabled);
     }
@@ -7240,6 +7253,11 @@ mod tests {
             Some("native-url-resource-zero-download-progress")
         );
         assert_eq!(report.progress.percent_milli, Some(0));
+        assert_eq!(report.progress.source, "native-url-resource");
+        assert_eq!(
+            report.progress.reason.as_deref(),
+            Some("native-url-resource-zero-download-progress")
+        );
     }
 
     #[test]
@@ -7443,6 +7461,11 @@ mod tests {
             report.materialization_reason.as_deref(),
             Some("native-url-resource-unallocated-placeholder")
         );
+        assert_eq!(report.progress.source, "native-url-resource");
+        assert_eq!(
+            report.progress.reason.as_deref(),
+            Some("native-url-resource-unallocated-placeholder")
+        );
     }
 
     #[test]
@@ -7478,6 +7501,11 @@ mod tests {
         );
         assert_eq!(
             report.materialization_reason.as_deref(),
+            Some("native-url-resource-unallocated-placeholder")
+        );
+        assert_eq!(report.progress.source, "native-url-resource");
+        assert_eq!(
+            report.progress.reason.as_deref(),
             Some("native-url-resource-unallocated-placeholder")
         );
     }
