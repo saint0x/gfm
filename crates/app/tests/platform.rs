@@ -6366,9 +6366,9 @@ fn volume_invalidation_accepts_previous_api_snapshot_from_binary() {
     assert!(stdout.starts_with("volume-invalidation\tpath="), "{stdout}");
     assert!(stdout.contains("\tprevious-stable-id=diskarbitration:uuid:WORK\t"));
     assert!(stdout.contains("\tprevious-native-status=unavailable\t"));
-    assert!(stdout.contains(
-        "\tprevious-native-reason=DiskArbitration unavailable\\tbefore refresh\t"
-    ));
+    assert!(
+        stdout.contains("\tprevious-native-reason=DiskArbitration unavailable\\tbefore refresh\t")
+    );
     assert!(stdout.contains("\tprevious-resource-status=unavailable\t"));
     assert!(stdout
         .contains("\tprevious-resource-reason=URL resource values unavailable before refresh\t"));
@@ -6789,6 +6789,52 @@ fn reports_api_status_volume_invalidation_from_binary() {
     assert!(stdout.contains("\tindex-admission=true\trescan-index=true\t"));
     assert!(stdout.contains("\tcancel-index-jobs=true\tclear-fsevents-cursor=true\t"));
     assert!(stdout.ends_with("reason=volume-api-status-changed\n"));
+}
+
+#[test]
+fn reports_current_api_unavailable_volume_invalidation_before_missing_path_probe_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-volume-current-api-unavailable-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-current-api-unavailable-invalidation")
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("volume-invalidation\tpath="), "{stdout}");
+    assert!(stdout.contains("\tprevious-class=external\tprevious-mount=mounted\t"));
+    assert!(stdout.contains("\tcurrent-class=external\tcurrent-mount=mounted\t"));
+    assert!(stdout.contains("\tcurrent-reachable=true\t"));
+    assert!(stdout.contains("\tcurrent-native-status=unavailable\t"));
+    assert!(stdout.contains(
+        "\tcurrent-native-reason=DiskArbitration unavailable during index invalidation\t"
+    ));
+    assert!(stdout.contains("\tcurrent-resource-status=unavailable\t"));
+    assert!(stdout.contains(
+        "\tcurrent-resource-reason=URL resource values unavailable during index invalidation\t"
+    ));
+    assert!(stdout.contains("\tcurrent-mount-status=unavailable\t"));
+    assert!(stdout
+        .contains("\tcurrent-mount-reason=mount table unavailable during index invalidation\t"));
+    assert!(stdout.contains("\tapi-status-changed=true\t"));
+    assert!(stdout.contains("\tindex-admission=true\trescan-index=true\t"));
+    assert!(stdout.contains("\tcancel-index-jobs=true\tclear-fsevents-cursor=true\t"));
+    assert!(stdout.ends_with("reason=volume-api-status-changed\n"));
+
+    let missing = root.join("Missing.md");
+    assert!(!missing.exists());
+    let _ = std::fs::remove_dir_all(root);
 }
 
 #[test]

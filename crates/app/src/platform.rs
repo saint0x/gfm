@@ -745,6 +745,16 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "volume-api-status-invalidation" => {
             println!("{}", volume_api_status_invalidation().as_tsv());
         }
+        "volume-current-api-unavailable-invalidation" => {
+            let root = required_path(
+                args.next(),
+                "volume-current-api-unavailable-invalidation requires a volume root",
+            )?;
+            println!(
+                "{}",
+                volume_current_api_unavailable_invalidation(root)?.as_tsv()
+            );
+        }
         "volume-apfs-metadata-invalidation" => {
             println!("{}", volume_apfs_metadata_invalidation().as_tsv());
         }
@@ -2381,6 +2391,43 @@ fn volume_api_status_invalidation() -> VolumeInvalidationReport {
     VolumeInvalidationReport::evaluate(Some(&previous), Some(&current))
 }
 
+fn volume_current_api_unavailable_invalidation(root: PathBuf) -> Result<VolumeInvalidationReport> {
+    let mut volume = VolumeDescriptor::for_path(&root)?;
+    volume.kind = gfm_mac::VolumeKind::External;
+    volume.mount_state = gfm_mac::MountState::Mounted;
+    volume.reachable = Some(true);
+    volume.native_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+    volume.native_reason =
+        Some("DiskArbitration unavailable during index invalidation".to_string());
+    volume.resource_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+    volume.resource_reason =
+        Some("URL resource values unavailable during index invalidation".to_string());
+    volume.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+    volume.mount_table_reason =
+        Some("mount table unavailable during index invalidation".to_string());
+    let previous = IndexVolumeDescriptor::new(
+        volume.label.clone(),
+        root.clone(),
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(volume.id)
+    .with_stable_identity(volume.stable_identity.clone())
+    .with_native_status("available")
+    .with_resource_status("available")
+    .with_mount_status("available");
+    let report = VolumeDiscoveryReport {
+        volumes: vec![volume],
+    };
+    let current_path = root.join("Missing.md");
+    let current =
+        current_index_volume_descriptor_from_report_checked(&current_path, &report, || Ok(()))?;
+    Ok(VolumeInvalidationReport::evaluate(
+        Some(&previous),
+        current.as_ref(),
+    ))
+}
+
 fn volume_apfs_metadata_invalidation() -> VolumeInvalidationReport {
     let previous = IndexVolumeDescriptor::new(
         "APFS Metadata",
@@ -2771,6 +2818,14 @@ fn current_index_volume_descriptor_checked(
     check_control()?;
     let report =
         VolumeDiscoveryReport::for_containing_path_policy_checked(path, &mut check_control)?;
+    current_index_volume_descriptor_from_report_checked(path, &report, check_control)
+}
+
+fn current_index_volume_descriptor_from_report_checked(
+    path: &Path,
+    report: &VolumeDiscoveryReport,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Option<IndexVolumeDescriptor>> {
     check_control()?;
     let descriptor = report.volume_for_path(path).cloned();
     let parent_descriptor = report.volume_for_path(crate::parent_or_cwd(path));
@@ -2778,7 +2833,9 @@ fn current_index_volume_descriptor_checked(
         .as_ref()
         .or(parent_descriptor)
         .filter(|descriptor| {
-            descriptor.mount_state != MountState::Mounted || descriptor.reachable == Some(false)
+            descriptor.mount_state != MountState::Mounted
+                || descriptor.reachable == Some(false)
+                || descriptor.platform_state_unavailable()
         })
     {
         return Ok(Some(index_volume_descriptor(descriptor)));
@@ -5072,6 +5129,53 @@ mod tests {
         assert_eq!(descriptor.mount_state, IndexMountState::Mounted);
         assert_eq!(descriptor.reachable, Some(false));
         assert_eq!(descriptor.path, root);
+        assert!(!path.exists());
+        std::fs::remove_dir_all(descriptor.path).unwrap();
+    }
+
+    #[test]
+    fn current_index_volume_descriptor_reports_unavailable_volume_before_existence_probe() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-current-index-volume-descriptor-api-unavailable-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let mut volume = VolumeDescriptor::for_path(&root).unwrap();
+        volume.native_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        volume.native_reason = Some("DiskArbitration unavailable during index refresh".to_string());
+        volume.resource_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        volume.resource_reason =
+            Some("URL resource values unavailable during index refresh".to_string());
+        volume.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        volume.mount_table_reason =
+            Some("mount table unavailable during index refresh".to_string());
+        let report = VolumeDiscoveryReport {
+            volumes: vec![volume],
+        };
+        let path = root.join("Missing.md");
+
+        let descriptor =
+            current_index_volume_descriptor_from_report_checked(&path, &report, || Ok(()))
+                .expect("unavailable volume descriptor should be reported before path probing")
+                .expect("unavailable current volume should be represented");
+
+        assert_eq!(descriptor.path, root);
+        assert_eq!(descriptor.native_status.as_deref(), Some("unavailable"));
+        assert_eq!(
+            descriptor.native_reason.as_deref(),
+            Some("DiskArbitration unavailable during index refresh")
+        );
+        assert_eq!(descriptor.resource_status.as_deref(), Some("unavailable"));
+        assert_eq!(
+            descriptor.resource_reason.as_deref(),
+            Some("URL resource values unavailable during index refresh")
+        );
+        assert_eq!(descriptor.mount_status.as_deref(), Some("unavailable"));
+        assert_eq!(
+            descriptor.mount_reason.as_deref(),
+            Some("mount table unavailable during index refresh")
+        );
         assert!(!path.exists());
         std::fs::remove_dir_all(descriptor.path).unwrap();
     }
