@@ -698,10 +698,18 @@ fn print_persistent_index_recovery_report(report: PersistentIndexRecovery) {
         report
             .quarantined_records_path
             .as_ref()
-            .map(|path| path.display().to_string())
+            .map(|path| escape_diagnostics_tsv_field(&path.to_string_lossy()))
             .unwrap_or_else(|| "-".to_string())
     );
     println!("{}", report.after.as_tsv());
+}
+
+fn escape_diagnostics_tsv_field(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 #[cfg(test)]

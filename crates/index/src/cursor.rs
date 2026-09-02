@@ -182,7 +182,7 @@ impl FseventsCursor {
             "fsevents-cursor\tschema={}\tvolume={}\tmount={}\tscan-epoch={}\tlast-event-id={}\thealth={}",
             self.schema_version,
             self.volume_id.0,
-            self.mount_id,
+            escape(&self.mount_id),
             self.scan_epoch,
             self.last_event_id,
             self.health.as_str()
@@ -275,7 +275,7 @@ impl FseventsResumePlan {
             self.from_event_id
                 .map(|event_id| event_id.to_string())
                 .unwrap_or_else(|| "-".to_string()),
-            self.reason
+            escape(&self.reason)
         )
     }
 

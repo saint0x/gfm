@@ -4136,6 +4136,84 @@ fn persists_fsevents_cursor_from_binary() {
 }
 
 #[test]
+fn fsevents_cursor_rows_escape_control_characters_from_binary() {
+    let root = unique_temp_dir("gfm-cli-fsevents-control-root");
+    let control_root = root.join("Root\tMount\nDraft\r");
+    let index = unique_temp_path("gfm-cli-fsevents-control-records", "gfmidx");
+    let state = unique_temp_path("gfm-cli-fsevents-control-state", "gfmstate");
+    let cursor = unique_temp_path("gfm-cli-fsevents-control-cursor", "gfmcursor");
+    fs::create_dir_all(&control_root).unwrap();
+    fs::write(control_root.join("CursorSearch.md"), "alpha").unwrap();
+
+    let index_state = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-state",
+            control_root.to_str().unwrap(),
+            index.to_str().unwrap(),
+            state.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        index_state.status.success(),
+        "{}",
+        String::from_utf8_lossy(&index_state.stderr)
+    );
+
+    let checkpoint = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "fsevents-cursor-checkpoint",
+            state.to_str().unwrap(),
+            cursor.to_str().unwrap(),
+            "123",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        checkpoint.status.success(),
+        "{}",
+        String::from_utf8_lossy(&checkpoint.stderr)
+    );
+    let checkpoint_stdout = String::from_utf8(checkpoint.stdout).unwrap();
+    assert_eq!(checkpoint_stdout.lines().count(), 1, "{checkpoint_stdout}");
+    assert!(!checkpoint_stdout.contains('\r'), "{checkpoint_stdout}");
+    assert!(
+        checkpoint_stdout.contains(&format!(
+            "mount=dev:{}:root:{}\t",
+            test_volume_id(&control_root),
+            escape_test_tsv_field(&fs::canonicalize(&control_root).unwrap().to_string_lossy())
+        )),
+        "{checkpoint_stdout}"
+    );
+
+    let resume = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "fsevents-cursor-resume",
+            state.to_str().unwrap(),
+            cursor.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        resume.status.success(),
+        "{}",
+        String::from_utf8_lossy(&resume.stderr)
+    );
+    let resume_stdout = String::from_utf8(resume.stdout).unwrap();
+    assert_eq!(resume_stdout.lines().count(), 1, "{resume_stdout}");
+    assert!(!resume_stdout.contains('\r'), "{resume_stdout}");
+    assert!(
+        resume_stdout.contains("reason=cursor-clean"),
+        "{resume_stdout}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(index).unwrap();
+    fs::remove_file(state).unwrap();
+    fs::remove_file(cursor).unwrap();
+}
+
+#[test]
 fn fsevents_cursor_checkpoint_surfaces_cursor_probe_failure_before_state_read_from_binary() {
     let root = unique_temp_dir("gfm-cli-fsevents-cursor-probe-root");
     let state = root.join("state.gfmstate");

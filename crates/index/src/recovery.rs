@@ -53,13 +53,16 @@ impl PersistentIndexPlan {
             "persistent-index-plan\taction={}\treason={}\troot={}\trecords={}\tstate={}\trecord-count={}\tstate-record-count={}\tstate-schema={}\tdetail={}",
             persistent_index_action_name(self.action),
             persistent_index_reason_name(self.reason),
-            self.root.display(),
-            self.records_path.display(),
-            self.state_path.display(),
+            escape_tsv_field(&self.root.to_string_lossy()),
+            escape_tsv_field(&self.records_path.to_string_lossy()),
+            escape_tsv_field(&self.state_path.to_string_lossy()),
             optional_usize(self.record_count),
             optional_usize(self.state_record_count),
             optional_u32(self.state_schema_version),
-            self.detail.as_deref().unwrap_or("-")
+            self.detail
+                .as_deref()
+                .map(escape_tsv_field)
+                .unwrap_or_else(|| "-".to_string())
         )
     }
 }
@@ -528,4 +531,12 @@ fn optional_u32(value: Option<u32>) -> String {
     value
         .map(|value| value.to_string())
         .unwrap_or_else(|| "-".to_string())
+}
+
+fn escape_tsv_field(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }

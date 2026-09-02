@@ -4932,6 +4932,73 @@ fn persistent_index_state_tsv_escapes_control_characters() {
 }
 
 #[test]
+fn persistent_index_plan_tsv_escapes_control_characters() {
+    let plan = PersistentIndexPlan {
+        action: PersistentIndexAction::RebuildState,
+        reason: PersistentIndexReason::RootMismatch,
+        root: PathBuf::from("/Volumes/Recovery\tRoot\nDraft\rFinal"),
+        records_path: PathBuf::from("/tmp/recovery\trecords\nDraft\rFinal.gfmidx"),
+        state_path: PathBuf::from("/tmp/recovery\tstate\nDraft\rFinal.gfmstate"),
+        record_count: Some(3),
+        state_record_count: Some(2),
+        state_schema_version: Some(1),
+        detail: Some("state\troot\nmismatch\rwith\\path".to_string()),
+    };
+    let tsv = plan.as_tsv();
+
+    assert_eq!(tsv.lines().count(), 1, "{tsv}");
+    assert!(!tsv.contains('\r'), "{tsv}");
+    assert!(
+        tsv.contains("root=/Volumes/Recovery\\tRoot\\nDraft\\rFinal\t"),
+        "{tsv}"
+    );
+    assert!(
+        tsv.contains("records=/tmp/recovery\\trecords\\nDraft\\rFinal.gfmidx\t"),
+        "{tsv}"
+    );
+    assert!(
+        tsv.contains("state=/tmp/recovery\\tstate\\nDraft\\rFinal.gfmstate\t"),
+        "{tsv}"
+    );
+    assert!(
+        tsv.contains("detail=state\\troot\\nmismatch\\rwith\\\\path"),
+        "{tsv}"
+    );
+}
+
+#[test]
+fn fsevents_cursor_and_resume_tsv_escape_control_characters() {
+    let cursor = FseventsCursor {
+        schema_version: FSEVENTS_CURSOR_SCHEMA_VERSION,
+        volume_id: VolumeId(9),
+        mount_id: "mount\tid\nagain\rwith\\slash".to_string(),
+        scan_epoch: 4,
+        last_event_id: 99,
+        health: FseventsCursorHealth::Clean,
+    };
+    let resume = FseventsResumePlan {
+        action: FseventsResumeAction::Rescan,
+        from_event_id: None,
+        reason: "cursor\tstale\nagain\rwith\\slash".to_string(),
+    };
+    let cursor_tsv = cursor.as_tsv();
+    let resume_tsv = resume.as_tsv();
+
+    assert_eq!(cursor_tsv.lines().count(), 1, "{cursor_tsv}");
+    assert_eq!(resume_tsv.lines().count(), 1, "{resume_tsv}");
+    assert!(!cursor_tsv.contains('\r'), "{cursor_tsv}");
+    assert!(!resume_tsv.contains('\r'), "{resume_tsv}");
+    assert!(
+        cursor_tsv.contains("mount=mount\\tid\\nagain\\rwith\\\\slash\t"),
+        "{cursor_tsv}"
+    );
+    assert!(
+        resume_tsv.contains("reason=cursor\\tstale\\nagain\\rwith\\\\slash"),
+        "{resume_tsv}"
+    );
+}
+
+#[test]
 fn persistent_index_decision_state_writer_updates_epoch_without_crawling_records() {
     let records = unique_temp_path("gfm-index-state-api-writer-records", "gfmidx");
     let state_path = unique_temp_path("gfm-index-state-api-writer", "gfmstate");

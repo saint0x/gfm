@@ -486,6 +486,67 @@ fn diagnostics_plans_and_recovers_persistent_index_from_binary() {
 }
 
 #[test]
+fn diagnostics_index_recovery_plan_escapes_control_character_paths_from_binary() {
+    let root = unique_temp_dir("gfm-cli-diagnostics-recovery-control");
+    let control_root = root.join("Recovery\tRoot\nDraft\r");
+    let records = root.join("Records\tArchive\nDraft\r.gfmidx");
+    let state = root.join("State\tArchive\nDraft\r.gfmstate");
+    let quarantine = root.join("Quarantine\tArchive\nDraft\r");
+    fs::create_dir_all(&control_root).unwrap();
+    fs::write(control_root.join("needle.md"), "diagnostic needle").unwrap();
+
+    let index_state = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-state",
+            control_root.to_str().unwrap(),
+            records.to_str().unwrap(),
+            state.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        index_state.status.success(),
+        "{}",
+        String::from_utf8_lossy(&index_state.stderr)
+    );
+    fs::remove_file(&state).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "diagnostics-index-recovery-plan",
+            control_root.to_str().unwrap(),
+            records.to_str().unwrap(),
+            state.to_str().unwrap(),
+            quarantine.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(stdout.lines().count(), 1, "{stdout}");
+    assert!(!stdout.contains('\r'), "{stdout}");
+    assert!(
+        stdout.contains(&format!(
+            "root={}\t",
+            escape_test_tsv_field(&control_root.to_string_lossy())
+        )) && stdout.contains(&format!(
+            "records={}\t",
+            escape_test_tsv_field(&records.to_string_lossy())
+        )) && stdout.contains(&format!(
+            "state={}\t",
+            escape_test_tsv_field(&state.to_string_lossy())
+        )),
+        "{stdout}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn diagnostics_recover_refuses_unreachable_volume_before_repair_from_binary() {
     let root = unique_temp_dir("gfm-cli-diagnostics-recovery-unreachable");
     let records = root.join("records.gfmidx");
@@ -941,4 +1002,12 @@ fn unique_temp_path(prefix: &str, extension: &str) -> PathBuf {
         "{prefix}-{}-{nanos}.{extension}",
         std::process::id()
     ))
+}
+
+fn escape_test_tsv_field(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
