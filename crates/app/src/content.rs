@@ -972,7 +972,7 @@ fn content_volume_access_tsv(
 ) -> String {
     if let Some(volume) = volume_report.volume_for_path(path) {
         format!(
-            "{}\tworker={}\tpath={}\tintent={}\tvolume-id={}\tstable-id={}\tclass={}\tmount={}\treachable={}\twritable={}\tread-only={}\treason=cached-volume-report",
+            "{}\tworker={}\tpath={}\tintent={}\tvolume-id={}\tstable-id={}\tclass={}\tmount={}\treachable={}\twritable={}\tread-only={}\tvolume-root={}\tvolume-label={}\treason=cached-volume-report",
             escape_content_tsv_field(prefix),
             escape_content_tsv_field(worker),
             escape_content_tsv_field(&path.to_string_lossy()),
@@ -984,10 +984,12 @@ fn content_volume_access_tsv(
             format_content_optional_bool(volume.reachable),
             volume.writable,
             volume.read_only,
+            escape_content_tsv_field(&volume.path.to_string_lossy()),
+            escape_content_tsv_field(&volume.label),
         )
     } else {
         format!(
-            "{}\tworker={}\tpath={}\tintent={}\tvolume-id=-\tstable-id=-\tclass=-\tmount=-\treachable=-\twritable=-\tread-only=-\treason=no-containing-volume",
+            "{}\tworker={}\tpath={}\tintent={}\tvolume-id=-\tstable-id=-\tclass=-\tmount=-\treachable=-\twritable=-\tread-only=-\tvolume-root=-\tvolume-label=-\treason=no-containing-volume",
             escape_content_tsv_field(prefix),
             escape_content_tsv_field(worker),
             escape_content_tsv_field(&path.to_string_lossy()),
@@ -2237,7 +2239,9 @@ mod tests {
             .join("content\tinput\none\r.md");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, "content\n").unwrap();
-        let report = VolumeDiscoveryReport::for_containing_path_checked(&path, || Ok(())).unwrap();
+        let mut report =
+            VolumeDiscoveryReport::for_containing_path_checked(&path, || Ok(())).unwrap();
+        report.volumes[0].label = "Content\tVolume\nLabel\r".to_string();
 
         let tsv = content_volume_access_tsv(
             "content\tprefix",
@@ -2255,7 +2259,12 @@ mod tests {
             tsv.contains("Reports\\tQ3\\nDraft\\r/content\\tinput\\none\\r.md"),
             "{tsv}"
         );
-        assert_eq!(tsv.split('\t').count(), 12, "{tsv}");
+        assert!(tsv.contains("\tvolume-root="), "{tsv}");
+        assert!(
+            tsv.contains("\tvolume-label=Content\\tVolume\\nLabel\\r\t"),
+            "{tsv}"
+        );
+        assert_eq!(tsv.split('\t').count(), 14, "{tsv}");
 
         fs::remove_dir_all(root).unwrap();
     }

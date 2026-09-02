@@ -1248,7 +1248,7 @@ fn interface_volume_access_tsv(
 ) -> String {
     if let Some(volume) = volume_report.volume_for_path(volume_path) {
         format!(
-            "{}\tworker={}\tpath={}\tintent={}\tvolume-id={}\tstable-id={}\tclass={}\tmount={}\treachable={}\twritable={}\tread-only={}\treason=cached-volume-report",
+            "{}\tworker={}\tpath={}\tintent={}\tvolume-id={}\tstable-id={}\tclass={}\tmount={}\treachable={}\twritable={}\tread-only={}\tvolume-root={}\tvolume-label={}\treason=cached-volume-report",
             escape_tsv_field(prefix),
             escape_tsv_field(worker),
             escape_tsv_field(&path.to_string_lossy()),
@@ -1260,10 +1260,12 @@ fn interface_volume_access_tsv(
             format_optional_bool(volume.reachable),
             volume.writable,
             volume.read_only,
+            escape_tsv_field(&volume.path.to_string_lossy()),
+            escape_tsv_field(&volume.label),
         )
     } else {
         format!(
-            "{}\tworker={}\tpath={}\tintent={}\tvolume-id=-\tstable-id=-\tclass=-\tmount=-\treachable=-\twritable=-\tread-only=-\treason=no-containing-volume",
+            "{}\tworker={}\tpath={}\tintent={}\tvolume-id=-\tstable-id=-\tclass=-\tmount=-\treachable=-\twritable=-\tread-only=-\tvolume-root=-\tvolume-label=-\treason=no-containing-volume",
             escape_tsv_field(prefix),
             escape_tsv_field(worker),
             escape_tsv_field(&path.to_string_lossy()),
@@ -2260,6 +2262,7 @@ mod tests {
         std::fs::write(&path, b"records").unwrap();
         let mut volume = gfm_mac::VolumeDescriptor::for_path(&root).unwrap();
         volume.stable_identity = "interface\tstable\nid\r".to_string();
+        volume.label = "interface\tvolume\nlabel\r".to_string();
         let report = VolumeDiscoveryReport {
             volumes: vec![volume],
         };
@@ -2278,7 +2281,12 @@ mod tests {
             .starts_with("ui-search\\tvolume\\naccess\\r\tworker=ui\\tsearch\\nworker\\r\tpath="));
         assert!(tsv.contains("UI\\tSearch\\nRoot\\r.gfmidx\tintent=read\t"));
         assert!(tsv.contains("stable-id=interface\\tstable\\nid\\r\t"));
-        assert_eq!(tsv.split('\t').count(), 12, "{tsv}");
+        assert!(tsv.contains("\tvolume-root="), "{tsv}");
+        assert!(
+            tsv.contains("\tvolume-label=interface\\tvolume\\nlabel\\r\t"),
+            "{tsv}"
+        );
+        assert_eq!(tsv.split('\t').count(), 14, "{tsv}");
 
         std::fs::remove_dir_all(root).unwrap();
     }

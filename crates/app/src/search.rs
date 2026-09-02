@@ -3222,7 +3222,7 @@ fn volume_access_tsv(
         .unwrap_or_default();
     if let Some(volume) = volume_report.volume_for_path(path) {
         format!(
-            "{escaped_prefix}\tworker={escaped_worker}{role_field}\tpath={}\tvolume-id={}\tstable-id={}\tclass={}\tmount={}\treachable={}\twritable={}\tread-only={}\treason=cached-volume-report",
+            "{escaped_prefix}\tworker={escaped_worker}{role_field}\tpath={}\tvolume-id={}\tstable-id={}\tclass={}\tmount={}\treachable={}\twritable={}\tread-only={}\tvolume-root={}\tvolume-label={}\treason=cached-volume-report",
             escape_tsv_field(&path.to_string_lossy()),
             volume.id.0,
             escape_tsv_field(&volume.stable_identity),
@@ -3231,10 +3231,12 @@ fn volume_access_tsv(
             format_optional_bool(volume.reachable),
             volume.writable,
             volume.read_only,
+            escape_tsv_field(&volume.path.to_string_lossy()),
+            escape_tsv_field(&volume.label),
         )
     } else {
         format!(
-            "{escaped_prefix}\tworker={escaped_worker}{role_field}\tpath={}\tvolume-id=-\tstable-id=-\tclass=-\tmount=-\treachable=-\twritable=-\tread-only=-\treason=no-containing-volume",
+            "{escaped_prefix}\tworker={escaped_worker}{role_field}\tpath={}\tvolume-id=-\tstable-id=-\tclass=-\tmount=-\treachable=-\twritable=-\tread-only=-\tvolume-root=-\tvolume-label=-\treason=no-containing-volume",
             escape_tsv_field(&path.to_string_lossy()),
         )
     }
@@ -4159,6 +4161,7 @@ mod tests {
         fs::write(&path, b"records").unwrap();
         let mut volume = gfm_mac::VolumeDescriptor::for_path(&root).unwrap();
         volume.stable_identity = "stable\tid\none\r".to_string();
+        volume.label = "search\tvolume\nlabel\r".to_string();
         let report = VolumeDiscoveryReport {
             volumes: vec![volume],
         };
@@ -4178,7 +4181,12 @@ mod tests {
         assert!(tsv.contains("path="), "{tsv}");
         assert!(tsv.contains("Records\\tOne\\nTwo\\r.gfmidx"), "{tsv}");
         assert!(tsv.contains("stable-id=stable\\tid\\none\\r"), "{tsv}");
-        assert_eq!(tsv.split('\t').count(), 12, "{tsv}");
+        assert!(tsv.contains("\tvolume-root="), "{tsv}");
+        assert!(
+            tsv.contains("\tvolume-label=search\\tvolume\\nlabel\\r\t"),
+            "{tsv}"
+        );
+        assert_eq!(tsv.split('\t').count(), 14, "{tsv}");
 
         fs::remove_dir_all(root).unwrap();
     }
