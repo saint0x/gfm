@@ -3387,6 +3387,55 @@ fn persists_volume_index_state_from_binary() {
 }
 
 #[test]
+fn index_state_escapes_control_characters_from_binary() {
+    let root = unique_temp_dir("gfm-cli-index-state-control-root").join("Root\tOne\nTwo\rThree");
+    let index = unique_temp_path("gfm-cli-index-state-control-records", "gfmidx");
+    let state = unique_temp_path("gfm-cli-index-state-control", "gfmstate");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("Stateful\tSearch\nDraft\rFinal.md"), "alpha").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-state",
+            root.to_str().unwrap(),
+            index.to_str().unwrap(),
+            state.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines = stdout.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 1, "{stdout}");
+    assert_eq!(lines[0].split('\t').count(), 17, "{stdout}");
+    assert!(
+        lines[0].contains("root=") && lines[0].contains("Root\\tOne\\nTwo\\rThree"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains('\r'), "{stdout}");
+
+    let inspect = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["index-state-inspect", state.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        inspect.status.success(),
+        "{}",
+        String::from_utf8_lossy(&inspect.stderr)
+    );
+    assert_eq!(String::from_utf8(inspect.stdout).unwrap(), stdout);
+
+    fs::remove_dir_all(root.parent().unwrap()).unwrap();
+    fs::remove_file(index).unwrap();
+    fs::remove_file(state).unwrap();
+}
+
+#[test]
 fn writes_index_admission_state_from_binary_without_records_crawl() {
     let root = unique_temp_dir("gfm-cli-index-admission-root");
     let index = unique_temp_path("gfm-cli-index-admission-records", "gfmidx");
@@ -3506,6 +3555,60 @@ fn reports_scan_progress_from_binary() {
     assert_eq!(String::from_utf8(inspect.stdout).unwrap(), stdout);
 
     fs::remove_dir_all(root).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(progress).unwrap();
+}
+
+#[test]
+fn scan_progress_escapes_control_characters_from_binary() {
+    let root = unique_temp_dir("gfm-cli-scan-progress-control-root").join("Root\tOne\nTwo\rThree");
+    let records = unique_temp_path("gfm-cli-scan-progress-control-records", "gfmidx");
+    let progress = unique_temp_path("gfm-cli-scan-progress-control", "gfmprogress");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("Progress\tNeedle\nDraft\rFinal.md"), "alpha").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "scan-progress",
+            root.to_str().unwrap(),
+            records.to_str().unwrap(),
+            progress.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines = stdout.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 1, "{stdout}");
+    assert_eq!(lines[0].split('\t').count(), 9, "{stdout}");
+    assert!(
+        lines[0].contains("root=") && lines[0].contains("Root\\tOne\\nTwo\\rThree"),
+        "{stdout}"
+    );
+    assert!(
+        lines[0].contains("last-path=")
+            && lines[0].contains("Progress\\tNeedle\\nDraft\\rFinal.md"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains('\r'), "{stdout}");
+
+    let inspect = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["scan-progress-inspect", progress.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        inspect.status.success(),
+        "{}",
+        String::from_utf8_lossy(&inspect.stderr)
+    );
+    assert_eq!(String::from_utf8(inspect.stdout).unwrap(), stdout);
+
+    fs::remove_dir_all(root.parent().unwrap()).unwrap();
     fs::remove_file(records).unwrap();
     fs::remove_file(progress).unwrap();
 }

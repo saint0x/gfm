@@ -3956,6 +3956,30 @@ fn content_query_session_reuses_archives_and_record_cache() {
 }
 
 #[test]
+fn content_query_cache_invalidation_tsv_escapes_control_characters() {
+    let report = ContentQueryCacheInvalidationReport {
+        path: PathBuf::from("/tmp/content\tquery\ncache\rstate.gfmcontent"),
+        invalidated: true,
+        result_entries_before: 3,
+        result_entries_after: 0,
+        reason: "provider\tmetadata\nchanged\rv2".to_string(),
+    };
+    let tsv = report.as_tsv();
+
+    assert_eq!(tsv.lines().count(), 1, "{tsv}");
+    assert!(!tsv.contains('\r'), "{tsv}");
+    assert!(
+        tsv.contains("content\\tquery\\ncache\\rstate.gfmcontent\t"),
+        "{tsv}"
+    );
+    assert!(
+        tsv.contains("reason=provider\\tmetadata\\nchanged\\rv2"),
+        "{tsv}"
+    );
+    assert_eq!(tsv.split('\t').count(), 6, "{tsv}");
+}
+
+#[test]
 fn content_query_session_hydrates_full_archive_for_non_content_queries() {
     let root = unique_temp_dir("gfm-content-query-session-non-content-root");
     let records = unique_temp_path("gfm-content-query-session-non-content-records", "gfmidx");
@@ -4865,6 +4889,49 @@ fn persistent_index_state_round_trips_api_unavailable_admission_decision() {
 }
 
 #[test]
+fn persistent_index_state_tsv_escapes_control_characters() {
+    let state = IndexVolumeState {
+        schema_version: INDEX_STATE_SCHEMA_VERSION,
+        root: PathBuf::from("/Volumes/Remote\tDocs\nDraft\rFinal"),
+        records_path: PathBuf::from("/tmp/records\tcache\nstate\rFinal.gfmidx"),
+        volume_id: VolumeId(41),
+        mount_id: "dev:41:root:/Volumes/Remote\tDocs\nDraft\rFinal".to_string(),
+        scan_epoch: 7,
+        record_count: 11,
+        inaccessible_count: 2,
+        index_action: Some("api\tunavailable".to_string()),
+        index_reason: Some("native\nstatus\rchanged".to_string()),
+        native_status: Some("unavailable".to_string()),
+        native_reason: Some("DiskArbitration\tlost\nsession\rstate".to_string()),
+        resource_status: Some("available".to_string()),
+        resource_reason: Some("URL\tresource\nok\rstate".to_string()),
+        mount_status: Some("unavailable".to_string()),
+        mount_reason: Some("mount\ttable\nbusy\rretry".to_string()),
+    };
+    let tsv = state.as_tsv();
+
+    assert_eq!(tsv.lines().count(), 1, "{tsv}");
+    assert!(!tsv.contains('\r'), "{tsv}");
+    assert!(
+        tsv.contains("root=/Volumes/Remote\\tDocs\\nDraft\\rFinal\t"),
+        "{tsv}"
+    );
+    assert!(
+        tsv.contains("records-path=/tmp/records\\tcache\\nstate\\rFinal.gfmidx\t"),
+        "{tsv}"
+    );
+    assert!(
+        tsv.contains("mount=dev:41:root:/Volumes/Remote\\tDocs\\nDraft\\rFinal\t"),
+        "{tsv}"
+    );
+    assert!(
+        tsv.contains("native-reason=DiskArbitration\\tlost\\nsession\\rstate\t"),
+        "{tsv}"
+    );
+    assert_eq!(tsv.split('\t').count(), 17, "{tsv}");
+}
+
+#[test]
 fn persistent_index_decision_state_writer_updates_epoch_without_crawling_records() {
     let records = unique_temp_path("gfm-index-state-api-writer-records", "gfmidx");
     let state_path = unique_temp_path("gfm-index-state-api-writer", "gfmstate");
@@ -5309,6 +5376,40 @@ fn scan_progress_checkpoint_tracks_completed_scan_publication() {
     fs::remove_dir_all(root).unwrap();
     fs::remove_file(records).unwrap();
     fs::remove_file(progress).unwrap();
+}
+
+#[test]
+fn scan_progress_tsv_escapes_control_character_paths() {
+    let checkpoint = ScanProgressCheckpoint::started(
+        PathBuf::from("/Volumes/Index\tRoot\nDraft\rFinal"),
+        PathBuf::from("/tmp/records\tpath\nDraft\rFinal.gfmidx"),
+    )
+    .with_progress(
+        8,
+        1,
+        Some(PathBuf::from(
+            "/Volumes/Index\tRoot\nDraft\rFinal/Needle\tOne\nTwo\r.md",
+        )),
+    )
+    .with_publication(2, 1)
+    .completed();
+    let tsv = checkpoint.as_tsv();
+
+    assert_eq!(tsv.lines().count(), 1, "{tsv}");
+    assert!(!tsv.contains('\r'), "{tsv}");
+    assert!(
+        tsv.contains("root=/Volumes/Index\\tRoot\\nDraft\\rFinal\t"),
+        "{tsv}"
+    );
+    assert!(
+        tsv.contains("records-path=/tmp/records\\tpath\\nDraft\\rFinal.gfmidx\t"),
+        "{tsv}"
+    );
+    assert!(
+        tsv.contains("last-path=/Volumes/Index\\tRoot\\nDraft\\rFinal/Needle\\tOne\\nTwo\\r.md\t"),
+        "{tsv}"
+    );
+    assert_eq!(tsv.split('\t').count(), 9, "{tsv}");
 }
 
 #[test]

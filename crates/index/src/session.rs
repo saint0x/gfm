@@ -38,11 +38,11 @@ impl ContentQueryCacheInvalidationReport {
     pub fn as_tsv(&self) -> String {
         format!(
             "content-query-cache-invalidation\t{}\tinvalidated={}\tresult-entries-before={}\tresult-entries-after={}\treason={}",
-            self.path.display(),
+            escape_tsv_field(&self.path.to_string_lossy()),
             self.invalidated,
             self.result_entries_before,
             self.result_entries_after,
-            self.reason
+            escape_tsv_field(&self.reason)
         )
     }
 }
@@ -503,6 +503,14 @@ fn content_candidate_ids_cancellable(
         }
     }
     Ok(ids)
+}
+
+fn escape_tsv_field(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 fn canonical_query_term_checked(

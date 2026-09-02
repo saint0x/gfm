@@ -236,15 +236,15 @@ impl ScanProgressCheckpoint {
     pub fn as_tsv(&self) -> String {
         format!(
             "scan-progress\troot={}\trecords-path={}\tscanned={}\tinaccessible={}\tsegments={}\ttombstones={}\tlast-path={}\tcompleted={}",
-            self.root.display(),
-            self.records_path.display(),
+            escape_path(&self.root),
+            escape_path(&self.records_path),
             self.scanned_records,
             self.inaccessible_records,
             self.published_segments,
             self.tombstones,
             self.last_path
                 .as_deref()
-                .map(|path| path.display().to_string())
+                .map(escape_path)
                 .unwrap_or_else(|| "-".to_string()),
             self.completed
         )

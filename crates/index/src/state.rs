@@ -320,11 +320,11 @@ impl IndexVolumeState {
     pub fn as_tsv(&self) -> String {
         format!(
             "index-state\troot={}\trecords-path={}\tschema={}\tvolume={}\tmount={}\tscan-epoch={}\trecord-count={}\tinaccessible-count={}\tindex-action={}\tindex-reason={}\tnative-status={}\tnative-reason={}\tresource-status={}\tresource-reason={}\tmount-status={}\tmount-reason={}",
-            self.root.display(),
-            self.records_path.display(),
+            escape_path(&self.root),
+            escape_path(&self.records_path),
             self.schema_version,
             self.volume_id.0,
-            self.mount_id,
+            escape(&self.mount_id),
             self.scan_epoch,
             self.record_count,
             self.inaccessible_count,

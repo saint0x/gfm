@@ -4134,6 +4134,7 @@ fn escape_field(value: &str) -> String {
         .replace('\\', "\\\\")
         .replace('\t', "\\t")
         .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 fn escape_path_field(path: &Path) -> String {
@@ -4562,15 +4563,16 @@ mod tests {
     #[test]
     fn volume_descriptor_tsv_escapes_control_characters_in_path() {
         let root = unique_temp_dir("gfm-volume-descriptor-tsv-path");
-        let volume_path = root.join("Team\tShare\nOne");
+        let volume_path = root.join("Team\tShare\nOne\rFinal");
         fs::create_dir_all(&volume_path).unwrap();
         let descriptor = VolumeDescriptor::for_path(&volume_path).unwrap();
 
         let tsv = descriptor.as_tsv();
 
         assert_eq!(tsv.lines().count(), 1, "{tsv}");
+        assert!(!tsv.contains('\r'), "{tsv}");
         assert!(
-            tsv.contains("path=") && tsv.contains("Team\\tShare\\nOne\tkind="),
+            tsv.contains("path=") && tsv.contains("Team\\tShare\\nOne\\rFinal\tkind="),
             "{tsv}"
         );
 
@@ -4580,15 +4582,16 @@ mod tests {
     #[test]
     fn volume_topology_tsv_escapes_control_characters_in_path() {
         let root = unique_temp_dir("gfm-volume-topology-tsv-path");
-        let volume_path = root.join("Team\tShare\nOne");
+        let volume_path = root.join("Team\tShare\nOne\rFinal");
         fs::create_dir_all(&volume_path).unwrap();
         let descriptor = VolumeDescriptor::for_path(&volume_path).unwrap();
 
         let tsv = VolumeTopologyChange::connected(&descriptor).as_tsv();
 
         assert_eq!(tsv.lines().count(), 1, "{tsv}");
+        assert!(!tsv.contains('\r'), "{tsv}");
         assert!(
-            tsv.contains("\tpath=") && tsv.contains("Team\\tShare\\nOne\tprevious-kind="),
+            tsv.contains("\tpath=") && tsv.contains("Team\\tShare\\nOne\\rFinal\tprevious-kind="),
             "{tsv}"
         );
 
@@ -4598,19 +4601,27 @@ mod tests {
     #[test]
     fn volume_operation_tsv_escapes_control_characters_in_path() {
         let report = VolumeOperationReport {
-            path: PathBuf::from("/Volumes/Team\tShare\nOne"),
+            path: PathBuf::from("/Volumes/Team\tShare\nOne\rFinal"),
             operation: VolumeOperation::Unmount,
             disposition: VolumeOperationDisposition::Refused,
             native_status: None,
             dissenter_status: None,
             volume: None,
-            reason: "test refusal".to_string(),
+            reason: "test\trefusal\nwith\rcontrols".to_string(),
         };
 
         let tsv = report.as_tsv();
 
         assert_eq!(tsv.lines().count(), 1, "{tsv}");
-        assert!(tsv.contains("path=/Volumes/Team\\tShare\\nOne\t"), "{tsv}");
+        assert!(!tsv.contains('\r'), "{tsv}");
+        assert!(
+            tsv.contains("path=/Volumes/Team\\tShare\\nOne\\rFinal\t"),
+            "{tsv}"
+        );
+        assert!(
+            tsv.contains("reason=test\\trefusal\\nwith\\rcontrols"),
+            "{tsv}"
+        );
     }
 
     #[test]
