@@ -2347,13 +2347,19 @@ impl FileProviderStateReport {
 }
 
 fn ensure_fileprovider_read_path(path: &Path) -> Result<bool> {
-    match path.try_exists() {
-        Ok(true) => Ok(true),
-        Ok(false) if is_evicted_placeholder_path(path) => Ok(false),
-        Ok(false) => Err(GfmError::io(path, "path does not exist")),
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(err)
+            if err.kind() == std::io::ErrorKind::NotFound && is_evicted_placeholder_path(path) =>
+        {
+            Ok(false)
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            Err(GfmError::io(path, "path does not exist"))
+        }
         Err(err) => Err(GfmError::io(
             path,
-            format!("path existence unavailable: {err}"),
+            format!("path metadata unavailable: {err}"),
         )),
     }
 }
@@ -5906,7 +5912,7 @@ mod tests {
 
         let err = FileProviderDomainReport::read_path(&path).unwrap_err();
 
-        assert!(err.to_string().contains("path existence unavailable"));
+        assert!(err.to_string().contains("path metadata unavailable"));
     }
 
     #[cfg(unix)]
@@ -5918,7 +5924,7 @@ mod tests {
 
         let err = FileProviderStateReport::read_path(&path).unwrap_err();
 
-        assert!(err.to_string().contains("path existence unavailable"));
+        assert!(err.to_string().contains("path metadata unavailable"));
     }
 
     #[cfg(unix)]
