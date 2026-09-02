@@ -1696,15 +1696,12 @@ impl FileProviderOperationReport {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "fileprovider-operation\t{}\toperation={}\tdisposition={}\tbefore-state={}\tafter-state={}\treason={}",
+            "fileprovider-operation\t{}\toperation={}\tdisposition={}\t{}\t{}\treason={}",
             self.path.display(),
             self.operation.as_str(),
             self.disposition.as_str(),
-            self.before.storage_state.as_str(),
-            self.after
-                .as_ref()
-                .map(|report| report.storage_state.as_str())
-                .unwrap_or("-"),
+            prefixed_state_tsv_fields("before", Some(&self.before)),
+            prefixed_state_tsv_fields("after", self.after.as_ref()),
             self.reason
                 .as_deref()
                 .map(escape_field)
@@ -1775,6 +1772,74 @@ impl FileProviderOperationReport {
             reason: Some(reason.into()),
         }
     }
+}
+
+fn cloud_badges_tsv(badges: &[CloudBadge]) -> String {
+    badges
+        .iter()
+        .map(|badge| badge.as_str())
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn prefixed_state_tsv_fields(prefix: &str, report: Option<&FileProviderStateReport>) -> String {
+    match report {
+        Some(report) => format!(
+            "{prefix}-domain={}\t{prefix}-state={}\t{prefix}-materialization={}\t{prefix}-materialization-source={}\t{prefix}-materialization-confidence={}\t{prefix}-materialization-reason={}\t{prefix}-offline={}\t{prefix}-conflict={}\t{prefix}-badges={}\t{}\t{prefix}-download={}\t{prefix}-evict={}\t{prefix}-reveal-conflict={}\t{prefix}-provider={}\t{prefix}-source={}\t{prefix}-command-reason={}",
+            report.domain.as_str(),
+            report.storage_state.as_str(),
+            report.materialization.as_str(),
+            report.materialization_source.as_str(),
+            report.materialization_confidence.as_str(),
+            report
+                .materialization_reason
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "-".to_string()),
+            report.offline,
+            report.conflict,
+            cloud_badges_tsv(&report.badges),
+            prefixed_progress_tsv_fields(prefix, &report.progress),
+            report.commands.download.as_str(),
+            report.commands.evict.as_str(),
+            report.commands.reveal_conflict.as_str(),
+            report
+                .provider_identifier
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "-".to_string()),
+            escape_field(&report.source),
+            report
+                .commands
+                .reason
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "-".to_string()),
+        ),
+        None => format!(
+            "{prefix}-domain=-\t{prefix}-state=-\t{prefix}-materialization=-\t{prefix}-materialization-source=-\t{prefix}-materialization-confidence=-\t{prefix}-materialization-reason=-\t{prefix}-offline=-\t{prefix}-conflict=-\t{prefix}-badges=-\t{prefix}-progress-direction=-\t{prefix}-progress-milli=-\t{prefix}-progress-requested=-\t{prefix}-progress-complete=-\t{prefix}-progress-indeterminate=-\t{prefix}-progress-source=-\t{prefix}-progress-reason=-\t{prefix}-download=-\t{prefix}-evict=-\t{prefix}-reveal-conflict=-\t{prefix}-provider=-\t{prefix}-source=-\t{prefix}-command-reason=-",
+        ),
+    }
+}
+
+fn prefixed_progress_tsv_fields(prefix: &str, progress: &CloudTransferProgress) -> String {
+    format!(
+        "{prefix}-progress-direction={}\t{prefix}-progress-milli={}\t{prefix}-progress-requested={}\t{prefix}-progress-complete={}\t{prefix}-progress-indeterminate={}\t{prefix}-progress-source={}\t{prefix}-progress-reason={}",
+        progress.direction.as_str(),
+        progress
+            .percent_milli
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        progress.requested,
+        progress.complete,
+        progress.indeterminate,
+        progress.source,
+        progress
+            .reason
+            .as_deref()
+            .map(escape_field)
+            .unwrap_or_else(|| "-".to_string()),
+    )
 }
 
 fn provider_state_operation_refusal(
@@ -5231,6 +5296,12 @@ mod tests {
             Some("operation-disabled-for-current-state")
         );
         assert_eq!(download.before.storage_state, CloudStorageState::LocalOnly);
+        let download_tsv = download.as_tsv();
+        assert!(download_tsv.contains("\tbefore-domain=local\t"));
+        assert!(download_tsv.contains("\tbefore-state=local-only\t"));
+        assert!(download_tsv.contains("\tbefore-materialization=not-provider-backed\t"));
+        assert!(download_tsv.contains("\tbefore-download=hidden\tbefore-evict=hidden\t"));
+        assert!(download_tsv.contains("\tafter-state=-\tafter-materialization=-\t"));
 
         let evict = FileProviderOperationReport::execute(&downloaded, FileProviderOperation::Evict)
             .unwrap();
@@ -5290,6 +5361,17 @@ mod tests {
             "{report:?}"
         );
         assert!(report.as_tsv().contains("\tdisposition=unavailable\t"));
+        assert!(report.as_tsv().contains("\tbefore-domain=icloud-drive\t"));
+        assert!(report.as_tsv().contains("\tbefore-state=unknown\t"));
+        assert!(report
+            .as_tsv()
+            .contains("\tbefore-materialization=unknown\t"));
+        assert!(report
+            .as_tsv()
+            .contains("\tbefore-materialization-source=native-url-resource:unavailable\t"));
+        assert!(report
+            .as_tsv()
+            .contains("\tbefore-materialization-confidence=native\t"));
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -5337,6 +5419,17 @@ mod tests {
             Some("native-url-resource-missing")
         );
         assert!(report.as_tsv().contains("\tdisposition=missing\t"));
+        assert!(report.as_tsv().contains("\tbefore-domain=fileprovider\t"));
+        assert!(report.as_tsv().contains("\tbefore-state=unknown\t"));
+        assert!(report
+            .as_tsv()
+            .contains("\tbefore-materialization=unknown\t"));
+        assert!(report
+            .as_tsv()
+            .contains("\tbefore-materialization-source=native-url-resource:missing\t"));
+        assert!(report
+            .as_tsv()
+            .contains("\tbefore-materialization-confidence=native\t"));
         assert!(report
             .as_tsv()
             .ends_with("reason=native-url-resource-missing"));
@@ -5387,6 +5480,17 @@ mod tests {
             Some("native-url-resource-unavailable")
         );
         assert!(report.as_tsv().contains("\tdisposition=unavailable\t"));
+        assert!(report.as_tsv().contains("\tbefore-domain=fileprovider\t"));
+        assert!(report.as_tsv().contains("\tbefore-state=unknown\t"));
+        assert!(report
+            .as_tsv()
+            .contains("\tbefore-materialization=unknown\t"));
+        assert!(report
+            .as_tsv()
+            .contains("\tbefore-materialization-source=native-url-resource:unavailable\t"));
+        assert!(report.as_tsv().contains(
+            "\tbefore-materialization-reason=native FileProvider URL resource values unavailable\t"
+        ));
         assert!(report
             .as_tsv()
             .ends_with("reason=native-url-resource-unavailable"));

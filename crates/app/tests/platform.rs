@@ -3082,7 +3082,15 @@ fn refuses_fileprovider_operations_without_native_provider_from_binary() {
     assert_worker_admitted(&download_stderr, "fileprovider operation", &evicted);
     assert!(download_stdout.starts_with("fileprovider-operation\t"));
     assert!(download_stdout.contains("\toperation=download\tdisposition=refused\t"));
-    assert!(download_stdout.contains("\tbefore-state=evicted\tafter-state=-\t"));
+    assert!(download_stdout.contains("\tbefore-domain=icloud-drive\t"));
+    assert!(download_stdout.contains("\tbefore-state=evicted\t"));
+    assert!(download_stdout.contains("\tbefore-materialization=remote-placeholder\t"));
+    assert!(download_stdout.contains("\tbefore-materialization-source=xattr-fallback\t"));
+    assert!(download_stdout.contains("\tbefore-materialization-confidence=xattr-fallback\t"));
+    assert!(download_stdout.contains("\tbefore-offline=true\t"));
+    assert!(download_stdout.contains("\tbefore-badges=cloud\t"));
+    assert!(download_stdout.contains("\tbefore-download=disabled\tbefore-evict=disabled\t"));
+    assert!(download_stdout.contains("\tafter-state=-\tafter-materialization=-\t"));
     assert!(download_stdout.ends_with("reason=not-native-provider-backed\n"));
 
     let evict_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -3100,7 +3108,10 @@ fn refuses_fileprovider_operations_without_native_provider_from_binary() {
     let evict_stderr = String::from_utf8_lossy(&evict_output.stderr);
     assert_worker_admitted(&evict_stderr, "fileprovider operation", &downloaded);
     assert!(evict_stdout.contains("\toperation=evict\tdisposition=refused\t"));
-    assert!(evict_stdout.contains("\tbefore-state=local-only\tafter-state=-\t"));
+    assert!(evict_stdout.contains("\tbefore-domain=local\t"));
+    assert!(evict_stdout.contains("\tbefore-state=local-only\t"));
+    assert!(evict_stdout.contains("\tbefore-materialization=not-provider-backed\t"));
+    assert!(evict_stdout.contains("\tafter-state=-\tafter-materialization=-\t"));
     assert!(evict_stdout.ends_with("reason=operation-disabled-for-current-state\n"));
 
     let conflict = root.join("Conflict.icloud-conflict.md");
@@ -3121,7 +3132,11 @@ fn refuses_fileprovider_operations_without_native_provider_from_binary() {
     let conflict_stderr = String::from_utf8_lossy(&conflict_output.stderr);
     assert_worker_admitted(&conflict_stderr, "fileprovider operation", &conflict);
     assert!(conflict_stdout.contains("\toperation=evict\tdisposition=refused\t"));
-    assert!(conflict_stdout.contains("\tbefore-state=conflict\tafter-state=-\t"));
+    assert!(conflict_stdout.contains("\tbefore-state=conflict\t"));
+    assert!(conflict_stdout.contains("\tbefore-materialization=conflict\t"));
+    assert!(conflict_stdout.contains("\tbefore-conflict=true\t"));
+    assert!(conflict_stdout.contains("\tbefore-reveal-conflict=enabled\t"));
+    assert!(conflict_stdout.contains("\tafter-state=-\tafter-materialization=-\t"));
     assert!(conflict_stdout.ends_with("reason=provider-conflict-requires-resolution\n"));
 
     let missing = std::fs::canonicalize(&root).unwrap().join("Missing.icloud");
@@ -3140,7 +3155,12 @@ fn refuses_fileprovider_operations_without_native_provider_from_binary() {
     let missing_stderr = String::from_utf8_lossy(&missing_output.stderr);
     assert_worker_admitted(&missing_stderr, "fileprovider operation", &missing);
     assert!(missing_stdout.contains("\toperation=download\tdisposition=missing\t"));
-    assert!(missing_stdout.contains("\tbefore-state=unknown\tafter-state=-\t"));
+    assert!(missing_stdout.contains("\tbefore-state=unknown\t"));
+    assert!(missing_stdout.contains("\tbefore-materialization=unknown\t"));
+    assert!(
+        missing_stdout.contains("\tbefore-materialization-source=native-url-resource:missing\t")
+    );
+    assert!(missing_stdout.contains("\tafter-state=-\tafter-materialization=-\t"));
     assert!(missing_stdout.ends_with("reason=native-url-resource-missing\n"));
 
     let _ = std::fs::remove_dir_all(root);
