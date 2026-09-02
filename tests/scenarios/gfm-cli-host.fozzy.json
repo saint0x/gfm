@@ -8172,6 +8172,11 @@
       "data": "1\t0\t1\t1\tOS-owned toolbar repaint\n1\t0\t1\t1\tOS-owned clock tick\n"
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-pixel-overlap-governed-mask.tsv",
+      "data": "1\t0\t1\t1\tOS-owned toolbar repaint\n0\t0\t2\t1\tOS-owned hover repaint\n"
+    },
+    {
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -8267,6 +8272,21 @@
         "3",
         "1",
         "tmp/gfm-pixel-duplicate-governed-mask.tsv"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "pixel-threshold-check",
+        "toolbar",
+        "tmp/gfm-pixel-expected.rgba",
+        "tmp/gfm-pixel-actual.rgba",
+        "3",
+        "1",
+        "tmp/gfm-pixel-overlap-governed-mask.tsv"
       ],
       "exit_code": 1,
       "times": 1
