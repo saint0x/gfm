@@ -1193,7 +1193,7 @@ mod tests {
         let mask = root.join("mask.tsv");
         fs::write(&expected, [0, 0, 0, 255, 10, 10, 10, 255]).unwrap();
         fs::write(&actual, [0, 0, 0, 255, 9, 10, 10, 255]).unwrap();
-        fs::write(&mask, "1\t0\t1\t1\tclock owned by system menu extras\n").unwrap();
+        fs::write(&mask, "1\t0\t1\t1\tOS-owned system menu clock\n").unwrap();
 
         let report = run_parity_gate(vec![ParityGateInput::new(
             ParitySurface::Toolbar,

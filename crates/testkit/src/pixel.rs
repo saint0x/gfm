@@ -660,6 +660,12 @@ pub fn parse_governed_masks(content: &str, size: PixelSize) -> Result<Vec<PixelM
                 line_index + 1
             )));
         }
+        if !reason.to_ascii_lowercase().contains("os-owned") {
+            return Err(GfmError::Format(format!(
+                "governed mask line {} must justify an OS-owned dynamic pixel; GFM-owned layout, text, and icon drift cannot be masked",
+                line_index + 1
+            )));
+        }
         let rect = PixelMaskRect {
             x: parse_mask_field(fields[0], line_index, "x")?,
             y: parse_mask_field(fields[1], line_index, "y")?,
@@ -842,11 +848,26 @@ mod tests {
 
     #[test]
     fn parses_governed_masks_with_reasons() {
-        let masks = parse_governed_masks("1\t2\t3\t4\tclock glyph blink\n", PixelSize::new(10, 10))
-            .unwrap();
+        let masks = parse_governed_masks(
+            "1\t2\t3\t4\tOS-owned clock glyph blink\n",
+            PixelSize::new(10, 10),
+        )
+        .unwrap();
 
         assert_eq!(masks[0].rect, PixelMaskRect::new(1, 2, 3, 4));
-        assert_eq!(masks[0].reason, "clock glyph blink");
+        assert_eq!(masks[0].reason, "OS-owned clock glyph blink");
+    }
+
+    #[test]
+    fn governed_masks_reject_gfm_owned_drift_reasons() {
+        let err = parse_governed_masks(
+            "1\t2\t3\t4\tGFM-owned toolbar icon drift\n",
+            PixelSize::new(10, 10),
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("OS-owned dynamic pixel"));
+        assert!(err.to_string().contains("GFM-owned layout"));
     }
 
     #[test]
@@ -854,13 +875,13 @@ mod tests {
         let expected = vec![0, 0, 0, 255, 10, 10, 10, 255];
         let actual = vec![0, 0, 0, 255, 9, 10, 10, 255];
         let options = PixelDiffOptions::strict(PixelSize::new(2, 1)).with_governed_masks(vec![
-            PixelMaskRegion::new(PixelMaskRect::new(0, 0, 1, 1), "stale clock mask"),
+            PixelMaskRegion::new(PixelMaskRect::new(0, 0, 1, 1), "OS-owned stale clock mask"),
         ]);
 
         let err = diff_rgba(&expected, &actual, &options).unwrap_err();
 
         assert!(err.to_string().contains("loose or stale"));
-        assert!(err.to_string().contains("stale clock mask"));
+        assert!(err.to_string().contains("OS-owned stale clock mask"));
     }
 
     #[test]
