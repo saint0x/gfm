@@ -2984,7 +2984,7 @@ fn native_has_remote_placeholder_evidence(values: &NativeFileProviderResourceVal
         values.downloading_status,
         Some(NativeUbiquitousDownloadingStatus::NotDownloaded)
     ) || values.is_downloaded == Some(false)
-        || values.percent_downloaded_milli == Some(0)
+        || (values.percent_downloaded_milli == Some(0) && values.file_size_bytes != Some(0))
         || native_has_unallocated_placeholder_evidence(values)
 }
 
@@ -8330,6 +8330,41 @@ mod tests {
         );
         assert_eq!(
             report.progress.reason.as_deref(),
+            Some("native-url-resource-zero-byte-materialized")
+        );
+    }
+
+    #[test]
+    fn native_zero_byte_file_ignores_zero_download_percent_as_placeholder_evidence() {
+        let path = PathBuf::from("/tmp/Empty.dat");
+        let mut native = native_values();
+        native.is_ubiquitous = Some(true);
+        native.has_unresolved_conflicts = Some(false);
+        native.is_downloading = Some(false);
+        native.is_uploading = Some(false);
+        native.file_size_bytes = Some(0);
+        native.file_allocated_size_bytes = Some(0);
+        native.percent_downloaded_milli = Some(0);
+        let hints = CloudHints {
+            native,
+            native_identity: identity_not_queried(),
+            xattrs: Vec::new(),
+            xattr_values: Vec::new(),
+            provider_identifier: None,
+            source: "native-url-resource".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.domain, FileProviderDomain::ICloudDrive);
+        assert_eq!(report.storage_state, CloudStorageState::Downloaded);
+        assert_eq!(report.materialization, CloudMaterialization::Materialized);
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::NativeUrlResource
+        );
+        assert_eq!(
+            report.materialization_reason.as_deref(),
             Some("native-url-resource-zero-byte-materialized")
         );
     }
