@@ -7545,6 +7545,188 @@ mod tests {
     }
 
     #[test]
+    fn native_materialization_reasons_preserve_exact_download_evidence() {
+        let cases = [
+            (
+                {
+                    let mut native = native_values();
+                    native.is_ubiquitous = Some(true);
+                    native.is_downloaded = Some(true);
+                    native
+                },
+                "native-url-resource-is-downloaded",
+            ),
+            (
+                {
+                    let mut native = native_values();
+                    native.is_ubiquitous = Some(true);
+                    native.downloading_status = Some(NativeUbiquitousDownloadingStatus::Downloaded);
+                    native
+                },
+                "native-url-resource-downloading-status-downloaded",
+            ),
+            (
+                {
+                    let mut native = native_values();
+                    native.is_ubiquitous = Some(true);
+                    native.percent_downloaded_milli = Some(100_000);
+                    native
+                },
+                "native-url-resource-download-complete",
+            ),
+            (
+                {
+                    let mut native = native_values();
+                    native.is_ubiquitous = Some(true);
+                    native.is_uploaded = Some(true);
+                    native
+                },
+                "native-url-resource-is-uploaded",
+            ),
+            (
+                {
+                    let mut native = native_values();
+                    native.is_ubiquitous = Some(true);
+                    native.percent_uploaded_milli = Some(100_000);
+                    native
+                },
+                "native-url-resource-upload-complete",
+            ),
+            (
+                {
+                    let mut native = native_values();
+                    native.is_ubiquitous = Some(true);
+                    native
+                },
+                "native-url-resource-materialized",
+            ),
+        ];
+
+        for (native, reason) in cases {
+            let hints = native_reason_hints(native);
+
+            assert_eq!(
+                materialization_reason_for_state(CloudStorageState::Downloaded, &hints).as_deref(),
+                Some(reason)
+            );
+        }
+    }
+
+    #[test]
+    fn native_materialization_reasons_preserve_exact_transfer_evidence() {
+        let cases = [
+            (
+                CloudStorageState::Downloading,
+                {
+                    let mut native = native_values();
+                    native.is_ubiquitous = Some(true);
+                    native.is_downloading = Some(true);
+                    native
+                },
+                "native-url-resource-is-downloading",
+            ),
+            (
+                CloudStorageState::Downloading,
+                {
+                    let mut native = native_values();
+                    native.is_ubiquitous = Some(true);
+                    native.percent_downloaded_milli = Some(33_000);
+                    native
+                },
+                "native-url-resource-partial-download-progress",
+            ),
+            (
+                CloudStorageState::Downloading,
+                {
+                    let mut native = native_values();
+                    native.is_ubiquitous = Some(true);
+                    native
+                },
+                "native-url-resource-downloading",
+            ),
+            (
+                CloudStorageState::Uploading,
+                {
+                    let mut native = native_values();
+                    native.is_ubiquitous = Some(true);
+                    native.is_uploading = Some(true);
+                    native
+                },
+                "native-url-resource-is-uploading",
+            ),
+            (
+                CloudStorageState::Uploading,
+                {
+                    let mut native = native_values();
+                    native.is_ubiquitous = Some(true);
+                    native.percent_uploaded_milli = Some(42_000);
+                    native
+                },
+                "native-url-resource-partial-upload-progress",
+            ),
+            (
+                CloudStorageState::Uploading,
+                {
+                    let mut native = native_values();
+                    native.is_ubiquitous = Some(true);
+                    native
+                },
+                "native-url-resource-uploading",
+            ),
+        ];
+
+        for (state, native, reason) in cases {
+            let hints = native_reason_hints(native);
+
+            assert_eq!(
+                materialization_reason_for_state(state, &hints).as_deref(),
+                Some(reason)
+            );
+        }
+    }
+
+    #[test]
+    fn native_materialization_reasons_preserve_exact_waiting_evidence() {
+        let cases = [
+            (
+                {
+                    let mut native = native_values();
+                    native.is_ubiquitous = Some(true);
+                    native.download_requested = Some(true);
+                    native
+                },
+                "native-url-resource-download-requested",
+            ),
+            (
+                {
+                    let mut native = native_values();
+                    native.is_ubiquitous = Some(true);
+                    native.is_uploaded = Some(false);
+                    native
+                },
+                "native-url-resource-upload-pending",
+            ),
+            (
+                {
+                    let mut native = native_values();
+                    native.is_ubiquitous = Some(true);
+                    native
+                },
+                "native-url-resource-waiting",
+            ),
+        ];
+
+        for (native, reason) in cases {
+            let hints = native_reason_hints(native);
+
+            assert_eq!(
+                materialization_reason_for_state(CloudStorageState::Waiting, &hints).as_deref(),
+                Some(reason)
+            );
+        }
+    }
+
+    #[test]
     fn native_conflict_state_overrides_local_filename_fallbacks() {
         let path = PathBuf::from("/tmp/Report.md");
         let mut native = native_values();
@@ -8541,6 +8723,17 @@ mod tests {
         ));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    fn native_reason_hints(native: NativeFileProviderResourceValues) -> CloudHints {
+        CloudHints {
+            native,
+            native_identity: identity_not_queried(),
+            xattrs: Vec::new(),
+            xattr_values: Vec::new(),
+            provider_identifier: None,
+            source: "native-url-resource".to_string(),
+        }
     }
 
     fn native_values() -> NativeFileProviderResourceValues {
