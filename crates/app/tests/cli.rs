@@ -20887,10 +20887,10 @@ fn reports_volume_scoped_job_cancellation_from_binary() {
     );
 
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(
-        stdout.starts_with("volume-job-cancellation\tvolume=7\tclass=background\tcancelled=1\n")
-    );
-    assert!(stdout.contains("cancelled-job\t1\tbackground\tbackground\tindex detached volume"));
+    assert!(stdout.starts_with(
+        "volume-job-cancellation\tvolume=7\tclass=background\tcancelled=1\tpayload-kinds=-\n"
+    ));
+    assert!(stdout.contains("cancelled-job\t1\tbackground\tbackground\t-\tindex detached volume"));
     assert!(!stdout.contains("render visible thumbnails"));
     assert!(!stdout.contains("index mounted volume"));
 }

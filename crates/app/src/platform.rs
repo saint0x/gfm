@@ -3022,25 +3022,50 @@ fn runtime_volume_cancellation(
     }
     let volume = report.current_volume_id.or(report.previous_volume_id)?;
     let mut scheduler = Scheduler::new();
-    scheduler.schedule_on_volume_in_class(
+    scheduler.schedule_on_volume_payload_in_class(
         Priority::Background,
         JobClass::Background,
+        JobPayloadKind::Indexing,
         "index invalidated volume",
         volume,
     );
-    scheduler.schedule_on_volume_in_class(
+    scheduler.schedule_on_volume_payload_in_class(
+        Priority::Background,
+        JobClass::Background,
+        JobPayloadKind::Thumbnail,
+        "render stale background volume thumbnails",
+        volume,
+    );
+    scheduler.schedule_on_volume_payload_in_class(
+        Priority::Background,
+        JobClass::Background,
+        JobPayloadKind::Preview,
+        "render stale background volume previews",
+        volume,
+    );
+    scheduler.schedule_on_volume_payload_in_class(
         Priority::Visible,
         JobClass::Visible,
+        JobPayloadKind::Preview,
         "render visible volume previews",
         volume,
     );
-    scheduler.schedule_on_volume_in_class(
+    scheduler.schedule_on_volume_payload_in_class(
         Priority::Background,
         JobClass::Background,
+        JobPayloadKind::Indexing,
         "index unrelated volume",
         VolumeId(volume.0 + 1),
     );
-    Some(scheduler.cancel_volume_jobs(volume, Some(JobClass::Background)))
+    Some(scheduler.cancel_volume_jobs_for_payload_kinds(
+        volume,
+        Some(JobClass::Background),
+        &[
+            JobPayloadKind::Indexing,
+            JobPayloadKind::Thumbnail,
+            JobPayloadKind::Preview,
+        ],
+    ))
 }
 
 fn sidebar_volume_spec(volume: &VolumeDescriptor) -> SidebarVolumeSpec {

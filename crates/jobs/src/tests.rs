@@ -660,7 +660,9 @@ fn scheduler_cancels_queued_jobs_for_volume_and_class_only() {
     assert_eq!(report.cancelled.len(), 1);
     assert_eq!(report.cancelled[0].id, target_index.id);
     assert!(target_index.cancellation().is_cancelled());
-    assert!(report.as_tsv().contains("cancelled=1\ncancelled-job\t"));
+    assert!(report
+        .as_tsv()
+        .contains("cancelled=1\tpayload-kinds=-\ncancelled-job\t"));
 
     let plan = scheduler.drain_fair_ready(JobFairnessPolicy::default(), []);
     assert_eq!(
@@ -694,6 +696,80 @@ fn scheduler_volume_cancellation_cancels_every_class_when_unfiltered() {
     assert!(report.as_tsv().contains("preview\\nselected"));
     assert!(report.as_tsv().contains("repair\\tindex"));
     assert!(scheduler.drain_ready().is_empty());
+}
+
+#[test]
+fn scheduler_volume_cancellation_filters_by_payload_kind() {
+    let mut scheduler = Scheduler::new();
+    let volume = VolumeId(13);
+    let indexing = scheduler.schedule_on_volume_payload_in_class(
+        Priority::Background,
+        JobClass::Background,
+        JobPayloadKind::Indexing,
+        "index detached volume",
+        volume,
+    );
+    let thumbnail = scheduler.schedule_on_volume_payload_in_class(
+        Priority::Background,
+        JobClass::Background,
+        JobPayloadKind::Thumbnail,
+        "render stale thumbnails",
+        volume,
+    );
+    let visible_preview = scheduler.schedule_on_volume_payload_in_class(
+        Priority::Visible,
+        JobClass::Visible,
+        JobPayloadKind::Preview,
+        "render visible preview",
+        volume,
+    );
+    let extraction = scheduler.schedule_on_volume_payload_in_class(
+        Priority::Background,
+        JobClass::Background,
+        JobPayloadKind::Extraction,
+        "extract background text",
+        volume,
+    );
+
+    let report = scheduler.cancel_volume_jobs_for_payload_kinds(
+        volume,
+        Some(JobClass::Background),
+        &[JobPayloadKind::Indexing, JobPayloadKind::Thumbnail],
+    );
+
+    assert_eq!(report.volume, volume);
+    assert_eq!(report.class, Some(JobClass::Background));
+    assert_eq!(
+        report.payload_kinds,
+        vec![JobPayloadKind::Indexing, JobPayloadKind::Thumbnail]
+    );
+    assert_eq!(
+        report
+            .cancelled
+            .iter()
+            .map(|job| (job.id, job.payload_kind))
+            .collect::<Vec<_>>(),
+        vec![
+            (indexing.id, Some(JobPayloadKind::Indexing)),
+            (thumbnail.id, Some(JobPayloadKind::Thumbnail)),
+        ]
+    );
+    assert!(indexing.cancellation().is_cancelled());
+    assert!(thumbnail.cancellation().is_cancelled());
+    assert!(!visible_preview.cancellation().is_cancelled());
+    assert!(!extraction.cancellation().is_cancelled());
+    assert!(report
+        .as_tsv()
+        .contains("payload-kinds=indexing,thumbnail\n"));
+    assert!(report
+        .as_tsv()
+        .contains("cancelled-job\t1\tbackground\tbackground\tindexing\t"));
+
+    let plan = scheduler.drain_fair_ready(JobFairnessPolicy::default(), []);
+    assert_eq!(
+        plan.labels(),
+        ["render visible preview", "extract background text"]
+    );
 }
 
 #[test]
@@ -775,7 +851,7 @@ fn checked_volume_cancellation_preserves_queue_and_tokens_when_cancelled() {
     );
     let mut checks = 0usize;
     let err = scheduler
-        .cancel_volume_jobs_checked(volume, Some(JobClass::Background), || {
+        .cancel_volume_jobs_checked(volume, Some(JobClass::Background), None, || {
             checks += 1;
             if checks > 3 {
                 Err(GfmError::Cancelled)

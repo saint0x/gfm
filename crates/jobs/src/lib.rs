@@ -120,6 +120,7 @@ pub struct Job {
     pub id: JobId,
     pub priority: Priority,
     pub class: JobClass,
+    pub payload_kind: Option<JobPayloadKind>,
     pub label: String,
     pub volume: Option<VolumeId>,
     pub dependencies: Vec<JobId>,
@@ -149,6 +150,7 @@ pub struct Scheduler {
 pub struct VolumeCancellationReport {
     pub volume: VolumeId,
     pub class: Option<JobClass>,
+    pub payload_kinds: Vec<JobPayloadKind>,
     pub cancelled: Vec<CancelledJob>,
 }
 
@@ -165,15 +167,17 @@ pub struct CancelledJob {
     pub label: String,
     pub class: JobClass,
     pub priority: Priority,
+    pub payload_kind: Option<JobPayloadKind>,
 }
 
 impl VolumeCancellationReport {
     pub fn as_tsv(&self) -> String {
         let header = format!(
-            "volume-job-cancellation\tvolume={}\tclass={}\tcancelled={}",
+            "volume-job-cancellation\tvolume={}\tclass={}\tcancelled={}\tpayload-kinds={}",
             self.volume.0,
             self.class.map(JobClass::as_str).unwrap_or("-"),
-            self.cancelled.len()
+            self.cancelled.len(),
+            format_payload_kinds(&self.payload_kinds)
         );
         if self.cancelled.is_empty() {
             return header;
@@ -183,10 +187,11 @@ impl VolumeCancellationReport {
             .iter()
             .map(|job| {
                 format!(
-                    "cancelled-job\t{}\t{}\t{}\t{}",
+                    "cancelled-job\t{}\t{}\t{}\t{}\t{}",
                     job.id.value(),
                     job.class.as_str(),
                     job.priority.as_str(),
+                    job.payload_kind.map(JobPayloadKind::as_str).unwrap_or("-"),
                     escape(&job.label)
                 )
             })
@@ -225,7 +230,7 @@ impl Scheduler {
         class: JobClass,
         label: impl Into<String>,
     ) -> Job {
-        self.schedule_with_options(priority, class, label, None, Vec::new())
+        self.schedule_with_options(priority, class, None, label, None, Vec::new())
     }
 
     pub fn schedule_with_dependencies(
@@ -237,6 +242,7 @@ impl Scheduler {
         self.schedule_with_options(
             priority,
             JobClass::from_priority(priority),
+            None,
             label,
             None,
             dependencies.into_iter().collect(),
@@ -253,6 +259,7 @@ impl Scheduler {
         self.schedule_with_options(
             priority,
             class,
+            None,
             label,
             None,
             dependencies.into_iter().collect(),
@@ -275,7 +282,7 @@ impl Scheduler {
         label: impl Into<String>,
         volume: VolumeId,
     ) -> Job {
-        self.schedule_with_options(priority, class, label, Some(volume), Vec::new())
+        self.schedule_with_options(priority, class, None, label, Some(volume), Vec::new())
     }
 
     pub fn schedule_on_volume_with_dependencies(
@@ -288,6 +295,7 @@ impl Scheduler {
         self.schedule_with_options(
             priority,
             JobClass::from_priority(priority),
+            None,
             label,
             Some(volume),
             dependencies.into_iter().collect(),
@@ -305,9 +313,61 @@ impl Scheduler {
         self.schedule_with_options(
             priority,
             class,
+            None,
             label,
             Some(volume),
             dependencies.into_iter().collect(),
+        )
+    }
+
+    pub fn schedule_payload(
+        &mut self,
+        priority: Priority,
+        payload_kind: JobPayloadKind,
+        label: impl Into<String>,
+    ) -> Job {
+        self.schedule_with_options(
+            priority,
+            JobClass::from_priority(priority),
+            Some(payload_kind),
+            label,
+            None,
+            Vec::new(),
+        )
+    }
+
+    pub fn schedule_on_volume_payload(
+        &mut self,
+        priority: Priority,
+        payload_kind: JobPayloadKind,
+        label: impl Into<String>,
+        volume: VolumeId,
+    ) -> Job {
+        self.schedule_with_options(
+            priority,
+            JobClass::from_priority(priority),
+            Some(payload_kind),
+            label,
+            Some(volume),
+            Vec::new(),
+        )
+    }
+
+    pub fn schedule_on_volume_payload_in_class(
+        &mut self,
+        priority: Priority,
+        class: JobClass,
+        payload_kind: JobPayloadKind,
+        label: impl Into<String>,
+        volume: VolumeId,
+    ) -> Job {
+        self.schedule_with_options(
+            priority,
+            class,
+            Some(payload_kind),
+            label,
+            Some(volume),
+            Vec::new(),
         )
     }
 
@@ -320,6 +380,7 @@ impl Scheduler {
         self.schedule_with_options(
             priority,
             JobClass::from_priority(priority),
+            None,
             label,
             volume,
             Vec::new(),
@@ -330,6 +391,7 @@ impl Scheduler {
         &mut self,
         priority: Priority,
         class: JobClass,
+        payload_kind: Option<JobPayloadKind>,
         label: impl Into<String>,
         volume: Option<VolumeId>,
         dependencies: Vec<JobId>,
@@ -339,6 +401,7 @@ impl Scheduler {
             id,
             priority,
             class,
+            payload_kind,
             label: label.into(),
             volume,
             dependencies,
@@ -495,14 +558,25 @@ impl Scheduler {
         volume: VolumeId,
         class: Option<JobClass>,
     ) -> VolumeCancellationReport {
-        self.cancel_volume_jobs_checked(volume, class, || Ok(()))
+        self.cancel_volume_jobs_checked(volume, class, None, || Ok(()))
             .expect("infallible volume job cancellation failed")
+    }
+
+    pub fn cancel_volume_jobs_for_payload_kinds(
+        &mut self,
+        volume: VolumeId,
+        class: Option<JobClass>,
+        payload_kinds: &[JobPayloadKind],
+    ) -> VolumeCancellationReport {
+        self.cancel_volume_jobs_checked(volume, class, Some(payload_kinds), || Ok(()))
+            .expect("infallible volume payload job cancellation failed")
     }
 
     pub fn cancel_volume_jobs_checked(
         &mut self,
         volume: VolumeId,
         class: Option<JobClass>,
+        payload_kinds: Option<&[JobPayloadKind]>,
         mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<VolumeCancellationReport> {
         check_control()?;
@@ -511,12 +585,19 @@ impl Scheduler {
         let mut cancelled_jobs = Vec::new();
         for QueuedJob(job) in self.queue.iter().cloned() {
             check_control()?;
-            if job.volume == Some(volume) && class.is_none_or(|class| class == job.class) {
+            if job.volume == Some(volume)
+                && class.is_none_or(|class| class == job.class)
+                && payload_kinds.is_none_or(|kinds| {
+                    job.payload_kind
+                        .is_some_and(|payload_kind| kinds.contains(&payload_kind))
+                })
+            {
                 cancelled.push(CancelledJob {
                     id: job.id,
                     label: job.label.clone(),
                     class: job.class,
                     priority: job.priority,
+                    payload_kind: job.payload_kind,
                 });
                 cancelled_jobs.push(job);
             } else {
@@ -534,6 +615,7 @@ impl Scheduler {
         Ok(VolumeCancellationReport {
             volume,
             class,
+            payload_kinds: payload_kinds.unwrap_or_default().to_vec(),
             cancelled,
         })
     }
@@ -681,6 +763,16 @@ fn format_job_ids(ids: &[JobId]) -> String {
         .map(|id| id.value().to_string())
         .collect::<Vec<_>>()
         .join(",")
+}
+
+fn format_payload_kinds(kinds: &[JobPayloadKind]) -> String {
+    if kinds.is_empty() {
+        return "-".to_string();
+    }
+    let mut names = kinds.iter().map(|kind| kind.as_str()).collect::<Vec<_>>();
+    names.sort_unstable();
+    names.dedup();
+    names.join(",")
 }
 
 struct StagedReadyDrain {

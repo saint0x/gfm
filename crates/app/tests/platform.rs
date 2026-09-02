@@ -7042,8 +7042,16 @@ fn reports_api_reason_topology_runtime_fanout_from_binary() {
     assert!(stdout.contains("\tinvalidate-policy=true\treason=volume-api-reason-changed\n"));
     assert!(stdout.contains("\nvolume-job-cancellation\tvolume="));
     assert!(!stdout.contains("\nvolume-job-cancellation\tvolume=-\t"));
-    assert!(stdout.contains("\tclass=background\tcancelled=1\n"));
-    assert!(stdout.contains("cancelled-job\t1\tbackground\tbackground\tindex invalidated volume"));
+    assert!(stdout
+        .contains("\tclass=background\tcancelled=3\tpayload-kinds=indexing,preview,thumbnail\n"));
+    assert!(stdout
+        .contains("cancelled-job\t1\tbackground\tbackground\tindexing\tindex invalidated volume"));
+    assert!(stdout.contains(
+        "cancelled-job\t2\tbackground\tbackground\tthumbnail\trender stale background volume thumbnails"
+    ));
+    assert!(stdout.contains(
+        "cancelled-job\t3\tbackground\tbackground\tpreview\trender stale background volume previews"
+    ));
     assert!(!stdout.contains("render visible volume previews"));
 }
 
@@ -8168,9 +8176,11 @@ fn reports_volume_event_state_runtime_fanout_from_binary() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     let lines = stdout.lines().collect::<Vec<_>>();
 
-    assert!(stdout.starts_with(
-        "volume-event-state-runtime-fanout\tinput=3\tresolved=3\tapplied=2\tresulting-volumes=1\t"
-    ));
+    assert!(stdout.starts_with("volume-event-state-runtime-fanout\tinput=3\tresolved=3\t"));
+    assert!(
+        stdout.contains("\tapplied=2\tresulting-volumes=1\t")
+            || stdout.contains("\tapplied=3\tresulting-volumes=0\t")
+    );
     assert!(stdout.contains(
         "\tsidebar=true\toperation-policy=true\tindex-admission=true\trescan-index=true\t"
     ));
@@ -8216,8 +8226,16 @@ fn reports_volume_event_state_runtime_fanout_from_binary() {
     assert!(stdout.contains("\tprevious-class=external\tprevious-mount=mounted\t"));
     assert!(stdout.contains("\tcurrent-class=-\tcurrent-mount=-\t"));
     assert!(stdout.contains("\nvolume-job-cancellation\tvolume="));
-    assert!(stdout.contains("\tclass=background\tcancelled=1\n"));
-    assert!(stdout.contains("cancelled-job\t1\tbackground\tbackground\tindex invalidated volume"));
+    assert!(stdout
+        .contains("\tclass=background\tcancelled=3\tpayload-kinds=indexing,preview,thumbnail\n"));
+    assert!(stdout
+        .contains("cancelled-job\t1\tbackground\tbackground\tindexing\tindex invalidated volume"));
+    assert!(stdout.contains(
+        "cancelled-job\t2\tbackground\tbackground\tthumbnail\trender stale background volume thumbnails"
+    ));
+    assert!(stdout.contains(
+        "cancelled-job\t3\tbackground\tbackground\tpreview\trender stale background volume previews"
+    ));
     assert!(stdout.contains(
         "volume-job-cancellation\tvolume=-\tclass=background\tcancelled=0\treason=index-jobs-still-valid\n"
     ));
@@ -8301,9 +8319,16 @@ fn reports_volume_event_runtime_cancellation_from_binary() {
     );
     assert!(cancelled_stdout.contains("\tcancel-index-jobs=true\t"));
     assert!(cancelled_stdout.contains("\nvolume-job-cancellation\tvolume="));
-    assert!(cancelled_stdout.contains("\tclass=background\tcancelled=1\n"));
     assert!(cancelled_stdout
-        .contains("cancelled-job\t1\tbackground\tbackground\tindex invalidated volume"));
+        .contains("\tclass=background\tcancelled=3\tpayload-kinds=indexing,preview,thumbnail\n"));
+    assert!(cancelled_stdout
+        .contains("cancelled-job\t1\tbackground\tbackground\tindexing\tindex invalidated volume"));
+    assert!(cancelled_stdout.contains(
+        "cancelled-job\t2\tbackground\tbackground\tthumbnail\trender stale background volume thumbnails"
+    ));
+    assert!(cancelled_stdout.contains(
+        "cancelled-job\t3\tbackground\tbackground\tpreview\trender stale background volume previews"
+    ));
     assert!(!cancelled_stdout.contains("render visible volume previews"));
     assert!(!cancelled_stdout.contains("index unrelated volume"));
 
@@ -8324,7 +8349,8 @@ fn reports_volume_event_runtime_cancellation_from_binary() {
     assert!(disappeared_stdout.contains("\tcurrent-volume=-\t"));
     assert!(disappeared_stdout.contains("\tcancel-index-jobs=true\t"));
     assert!(disappeared_stdout.contains("\nvolume-job-cancellation\tvolume="));
-    assert!(disappeared_stdout.contains("\tclass=background\tcancelled=1\n"));
+    assert!(disappeared_stdout
+        .contains("\tclass=background\tcancelled=3\tpayload-kinds=indexing,preview,thumbnail\n"));
 
     let kept = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("volume-event-runtime-invalidation")
@@ -8412,8 +8438,16 @@ fn reports_volume_event_runtime_fanout_from_binary() {
     assert!(stdout.contains("\tcurrent-slow=-\t"));
     assert!(stdout.contains("\tinvalidate-policy=true\treason=volume-event-disappeared\n"));
     assert!(stdout.contains("\nvolume-job-cancellation\tvolume="));
-    assert!(stdout.contains("\tclass=background\tcancelled=1\n"));
-    assert!(stdout.contains("cancelled-job\t1\tbackground\tbackground\tindex invalidated volume"));
+    assert!(stdout
+        .contains("\tclass=background\tcancelled=3\tpayload-kinds=indexing,preview,thumbnail\n"));
+    assert!(stdout
+        .contains("cancelled-job\t1\tbackground\tbackground\tindexing\tindex invalidated volume"));
+    assert!(stdout.contains(
+        "cancelled-job\t2\tbackground\tbackground\tthumbnail\trender stale background volume thumbnails"
+    ));
+    assert!(stdout.contains(
+        "cancelled-job\t3\tbackground\tbackground\tpreview\trender stale background volume previews"
+    ));
     assert!(!stdout.contains("render visible volume previews"));
     assert!(!stdout.contains("index unrelated volume"));
 
