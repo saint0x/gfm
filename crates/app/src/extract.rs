@@ -233,6 +233,8 @@ struct WorkerScratch {
 
 impl WorkerScratch {
     fn prepare_checked(mut check_control: impl FnMut() -> Result<()>) -> Result<Self> {
+        preflight_worker_scratch_volume_checked(&mut check_control)?;
+        check_control()?;
         let stdout_path = worker_temp_path("stdout");
         let stderr_path = worker_temp_path("stderr");
         let permission_state_dir = worker_temp_dir("permission-state");
@@ -1278,6 +1280,25 @@ mod tests {
 
         assert!(matches!(result, Err(GfmError::Cancelled)));
         assert!(checks >= 5);
+        assert_eq!(scratch_before, worker_scratch_entries());
+    }
+
+    #[test]
+    fn worker_scratch_prepare_honors_cancelled_volume_preflight_before_retain() {
+        let scratch_before = worker_scratch_entries();
+        let mut checks = 0usize;
+
+        let result = WorkerScratch::prepare_checked(|| {
+            checks += 1;
+            if checks >= 2 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(checks >= 2);
         assert_eq!(scratch_before, worker_scratch_entries());
     }
 
