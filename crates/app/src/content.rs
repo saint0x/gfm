@@ -3198,9 +3198,14 @@ pub(crate) fn run_content_job(
         let mut scheduler = Scheduler::new();
         let volume = spec.volume;
         let job = if let Some(volume) = volume {
-            scheduler.schedule_on_volume(Priority::Background, label, volume)
+            scheduler.schedule_on_volume_payload(
+                Priority::Background,
+                JobPayloadKind::Indexing,
+                label,
+                volume,
+            )
         } else {
-            scheduler.schedule(Priority::Background, label)
+            scheduler.schedule_payload(Priority::Background, JobPayloadKind::Indexing, label)
         };
         let runtime = RuntimeJobHandle::begin_with_payload_path(
             &job,
@@ -3232,7 +3237,12 @@ pub(crate) fn run_content_job(
     let job_spec = spec.clone();
     let (job_result_tx, job_result_rx) = mpsc::sync_channel(1);
     let mut scheduler = Scheduler::new();
-    let job = scheduler.schedule_on_volume(Priority::Background, label, volume);
+    let job = scheduler.schedule_on_volume_payload(
+        Priority::Background,
+        JobPayloadKind::Indexing,
+        label,
+        volume,
+    );
     let runtime = RuntimeJobHandle::begin_with_payload_path(
         &job,
         JobPayloadKind::Indexing,

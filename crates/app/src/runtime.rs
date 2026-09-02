@@ -102,19 +102,20 @@ fn run_retriable_volume_task_cancellable_with_runtime_payload_path<T>(
 where
     T: Send + 'static,
 {
+    let payload_kind = payload_kind_for_label(label);
     let (result_tx, result_rx) = mpsc::sync_channel(1);
     let mut scheduler = Scheduler::new();
     let job = if let Some(volume) = volume {
-        scheduler.schedule_on_volume(priority, label, volume)
+        scheduler.schedule_on_volume_payload(priority, payload_kind, label, volume)
     } else {
-        scheduler.schedule(priority, label)
+        scheduler.schedule_payload(priority, payload_kind, label)
     };
     let journal = JobJournal::new(default_job_journal_path());
     let _journal_access = preflight_runtime_write(journal.path(), label)?;
     let job = drain_single_runtime_job(&mut scheduler, job, label)?;
     let runtime = RuntimeJobHandle::begin_with_payload_path(
         &job,
-        payload_kind_for_label(label),
+        payload_kind,
         label,
         payload_path,
         1,
@@ -166,17 +167,18 @@ fn run_volume_task_cancellable_with_runtime_payload_path<T>(
 where
     T: Send + 'static,
 {
+    let payload_kind = payload_kind_for_label(label);
     let (result_tx, result_rx) = mpsc::sync_channel(1);
     let mut scheduler = Scheduler::new();
     let job = if let Some(volume) = volume {
-        scheduler.schedule_on_volume(priority, label, volume)
+        scheduler.schedule_on_volume_payload(priority, payload_kind, label, volume)
     } else {
-        scheduler.schedule(priority, label)
+        scheduler.schedule_payload(priority, payload_kind, label)
     };
     let job = drain_single_runtime_job(&mut scheduler, job, label)?;
     let runtime = RuntimeJobHandle::begin_with_payload_path(
         &job,
-        payload_kind_for_label(label),
+        payload_kind,
         label,
         payload_path,
         1,
@@ -222,12 +224,13 @@ pub(crate) fn run_volume_task_cancellable_without_progress<T>(
 where
     T: Send + 'static,
 {
+    let payload_kind = payload_kind_for_label(label);
     let (result_tx, result_rx) = mpsc::sync_channel(1);
     let mut scheduler = Scheduler::new();
     let job = if let Some(volume) = volume {
-        scheduler.schedule_on_volume(priority, label, volume)
+        scheduler.schedule_on_volume_payload(priority, payload_kind, label, volume)
     } else {
-        scheduler.schedule(priority, label)
+        scheduler.schedule_payload(priority, payload_kind, label)
     };
     let job = drain_single_runtime_job(&mut scheduler, job, label)?;
     let task = Task::new(job.clone(), move |cancellation| {
@@ -316,14 +319,15 @@ where
     T: Send + 'static,
 {
     let payload_path = payload_path.into();
+    let payload_kind = payload_kind_for_label(label);
     let scheduling = pressure.decide(priority, 1, 1);
     let mut scheduler = Scheduler::new();
-    let mut job = scheduler.schedule(priority, label);
+    let mut job = scheduler.schedule_payload(priority, payload_kind, label);
     let journal = JobJournal::new(default_job_journal_path());
     if scheduling.action == SchedulingAction::Defer {
         let runtime = RuntimeJobHandle::begin_with_payload_path(
             &job,
-            payload_kind_for_label(label),
+            payload_kind,
             label,
             payload_path,
             1,
@@ -347,7 +351,7 @@ where
         .transpose()?;
     let runtime = RuntimeJobHandle::begin_with_payload_path(
         &job,
-        payload_kind_for_label(label),
+        payload_kind,
         label,
         payload_path,
         1,
@@ -507,6 +511,16 @@ impl RuntimeJobHandle {
         mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<Self> {
         check_control()?;
+        if let Some(job_kind) = job.payload_kind {
+            if job_kind != request.kind {
+                return Err(GfmError::Format(format!(
+                    "runtime job kind mismatch for {}: scheduled {} but began {}",
+                    request.label,
+                    job_kind.as_str(),
+                    request.kind.as_str()
+                )));
+            }
+        }
         if let Some(catalog) = stores.payload_catalog {
             let _access = preflight_runtime_write_checked(
                 catalog.path(),
@@ -872,6 +886,42 @@ mod tests {
         };
 
         assert_eq!(err, GfmError::Cancelled);
+        assert!(!catalog_path.exists());
+        assert!(!progress_path.exists());
+    }
+
+    #[test]
+    fn runtime_begin_rejects_mismatched_scheduled_payload_kind_before_store_writes() {
+        let catalog_path = temp_path("gfm-runtime-begin-catalog-kind-mismatch", "gfmjobs");
+        let progress_path = temp_path("gfm-runtime-begin-progress-kind-mismatch", "gfmprogress");
+        let mut scheduler = Scheduler::new();
+        let job = scheduler.schedule_on_volume_payload(
+            Priority::Visible,
+            JobPayloadKind::Preview,
+            "quicklook preview",
+            VolumeId(7),
+        );
+
+        let err = RuntimeJobHandle::begin_with_explicit_stores_checked(
+            &job,
+            RuntimeJobBeginRequest::new(
+                JobPayloadKind::Indexing,
+                "quicklook preview",
+                "/tmp/index-root",
+                1,
+                "visible:quicklook preview".to_string(),
+            ),
+            RuntimeJobBeginStores {
+                payload_catalog: Some(JobPayloadCatalog::new(&catalog_path)),
+                progress_store: Some(JobProgressStore::new(&progress_path)),
+            },
+            || Ok(()),
+        )
+        .expect_err("runtime begin should reject scheduled/catalog kind mismatch");
+
+        assert!(err
+            .to_string()
+            .contains("scheduled preview but began indexing"));
         assert!(!catalog_path.exists());
         assert!(!progress_path.exists());
     }
