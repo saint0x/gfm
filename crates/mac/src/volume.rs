@@ -3803,7 +3803,26 @@ fn marker_kind(path: &Path) -> Option<String> {
         .read_line(&mut value)
         .ok()?;
     let value = value.trim().to_ascii_lowercase();
-    (!value.is_empty()).then_some(value)
+    known_volume_marker(&value).then_some(value)
+}
+
+fn known_volume_marker(marker: &str) -> bool {
+    matches!(
+        marker,
+        "system"
+            | "internal"
+            | "external"
+            | "external-removable"
+            | "external-removable-read-only"
+            | "removable"
+            | "disk-image"
+            | "network"
+            | "network-smb"
+            | "network-afp"
+            | "network-nfs"
+            | "network-unreachable"
+            | "network-offline"
+    )
 }
 
 fn marker_fixture_path_allowed(path: &Path) -> bool {
@@ -4158,6 +4177,21 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         fs::write(root.join(VOLUME_MARKER), "network-unreachable\n").unwrap();
+
+        let descriptor = VolumeDescriptor::for_path(&root).unwrap();
+
+        assert_ne!(descriptor.kind, VolumeKind::Network);
+        assert_eq!(descriptor.reachable, Some(true));
+        assert!(!descriptor.source.contains("fixture-marker"));
+        assert!(!descriptor.stable_identity.starts_with("fixture-marker:"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn ignores_unknown_volume_marker_values_inside_fixture_roots() {
+        let root = unique_temp_dir("gfm-volume-unknown-marker");
+        fs::write(root.join(VOLUME_MARKER), "definitely-not-a-volume-kind\n").unwrap();
 
         let descriptor = VolumeDescriptor::for_path(&root).unwrap();
 

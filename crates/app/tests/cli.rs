@@ -13968,7 +13968,22 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
         )) && manifest_stderr.contains(&format!(
             "security-worker-admission\tworker=content index manifest search content\tpath={}",
             second_content.display()
+        )) && manifest_stderr.contains(&format!(
+            "content-index-manifest-volume-access\tworker=content index manifest search\trole=records\tpath={}",
+            records.display()
+        )) && manifest_stderr.contains(&format!(
+            "content-index-manifest-volume-access\tworker=content index manifest search\trole=manifest\tpath={}",
+            manifest.display()
+        )) && manifest_stderr.contains(&format!(
+            "content-index-manifest-archive-volume-access\tworker=content index manifest search content\tpath={}",
+            first_content.display()
+        )) && manifest_stderr.contains(&format!(
+            "content-index-manifest-archive-volume-access\tworker=content index manifest search content\tpath={}",
+            second_content.display()
         )) && manifest_stderr.contains("content-manifest-keys 1")
+            && manifest_stderr.contains("\tstable-id=")
+            && !manifest_stderr.contains("\tstable-id=-\t")
+            && manifest_stderr.contains("\treason=cached-volume-report")
             && manifest_stderr.contains("records-loaded 2")
             && manifest_stderr.contains("candidate-ids 2")
             && manifest_stderr.contains("full-hydration false"),
@@ -14100,9 +14115,24 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
         )) && manifest_session_stderr.contains(&format!(
             "security-worker-admission\tworker=content index manifest session content\tpath={}",
             second_content.display()
+        )) && manifest_session_stderr.contains(&format!(
+            "content-index-manifest-volume-access\tworker=content index manifest session\trole=records\tpath={}",
+            records.display()
+        )) && manifest_session_stderr.contains(&format!(
+            "content-index-manifest-volume-access\tworker=content index manifest session\trole=manifest\tpath={}",
+            manifest.display()
+        )) && manifest_session_stderr.contains(&format!(
+            "content-index-manifest-archive-volume-access\tworker=content index manifest session content\tpath={}",
+            first_content.display()
+        )) && manifest_session_stderr.contains(&format!(
+            "content-index-manifest-archive-volume-access\tworker=content index manifest session content\tpath={}",
+            second_content.display()
         )) && manifest_session_stderr.contains(
             "content-manifest-session-second\tcontent-archives=2\tcontent-keys=1\trecords-loaded=2"
         ) && manifest_session_stderr.contains("\tposting-cache-hits=0\tposting-cache-misses=0")
+            && manifest_session_stderr.contains("\tstable-id=")
+            && !manifest_session_stderr.contains("\tstable-id=-\t")
+            && manifest_session_stderr.contains("\treason=cached-volume-report")
             && manifest_session_stderr.contains("\trecord-cache-hits=0\trecord-cache-misses=0")
             && manifest_session_stderr.contains("\tresult-cache-hits=1\tresult-cache-misses=0"),
         "{manifest_session_stderr}"

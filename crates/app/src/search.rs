@@ -1459,17 +1459,6 @@ fn run_search_query_parse_cancellation_probe() -> Result<()> {
     }
 }
 
-fn preflight_content_archive_access_checked(
-    path: &Path,
-    worker: &str,
-    mut check_control: impl FnMut() -> Result<()>,
-) -> Result<ScopedAccessGuard> {
-    let volume_reports = ArchiveVolumeAccessReports::for_paths_checked([path], &mut check_control)?;
-    single_archive_access_guard(
-        volume_reports.preflight_access_checked(worker, &mut check_control)?,
-    )
-}
-
 #[derive(Clone)]
 struct ArchiveVolumeAccessReport {
     path: PathBuf,
@@ -1541,12 +1530,38 @@ impl ArchiveVolumeAccessReports {
                 .map(|volume| volume.id)
         })
     }
+
+    fn emit_admission_diagnostics(&self, prefix: &str, worker: &str) {
+        for entry in &self.entries {
+            eprintln!("{}", entry.as_tsv(prefix, worker));
+        }
+    }
 }
 
-fn single_archive_access_guard(mut guards: Vec<ScopedAccessGuard>) -> Result<ScopedAccessGuard> {
-    guards.pop().ok_or_else(|| {
-        GfmError::Format("archive access preflight did not produce a guard".to_string())
-    })
+impl ArchiveVolumeAccessReport {
+    fn as_tsv(&self, prefix: &str, worker: &str) -> String {
+        if let Some(volume) = self.volume_report.volume_for_path(&self.path) {
+            format!(
+                "{}\tworker={}\tpath={}\tvolume-id={}\tstable-id={}\tclass={}\tmount={}\treachable={}\tread-only={}\treason=cached-volume-report",
+                escape_tsv_field(prefix),
+                escape_tsv_field(worker),
+                escape_tsv_field(&self.path.to_string_lossy()),
+                volume.id.0,
+                escape_tsv_field(&volume.stable_identity),
+                volume.kind.as_str(),
+                volume.mount_state.as_str(),
+                format_optional_bool(volume.reachable),
+                volume.read_only,
+            )
+        } else {
+            format!(
+                "{}\tworker={}\tpath={}\tvolume-id=-\tstable-id=-\tclass=-\tmount=-\treachable=-\tread-only=-\treason=no-containing-volume",
+                escape_tsv_field(prefix),
+                escape_tsv_field(worker),
+                escape_tsv_field(&self.path.to_string_lossy()),
+            )
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -2550,6 +2565,7 @@ fn run_content_index_manifest_search(
     )?;
     let retry_access = search_retry_probe_access_report(retry_probe.as_deref())?;
     volume_reports.preflight_volumes(WORKER)?;
+    volume_reports.emit_admission_diagnostics(WORKER);
     if let Some(retry_access) = retry_access.as_ref() {
         retry_access.preflight_volume(WORKER)?;
     }
@@ -2630,6 +2646,7 @@ fn run_content_index_manifest_session(
     )?;
     let retry_access = search_retry_probe_access_report(retry_probe.as_deref())?;
     volume_reports.preflight_volumes(WORKER)?;
+    volume_reports.emit_admission_diagnostics(WORKER);
     if let Some(retry_access) = retry_access.as_ref() {
         retry_access.preflight_volume(WORKER)?;
     }
@@ -2894,6 +2911,12 @@ impl ContentIndexManifestVolumeAccessReports {
             .collect()
     }
 
+    fn emit_admission_diagnostics(&self, worker: &str) {
+        for entry in &self.entries {
+            eprintln!("{}", entry.as_tsv(worker));
+        }
+    }
+
     fn first_volume(&self) -> Option<VolumeId> {
         self.entries.iter().find_map(|entry| {
             entry
@@ -2901,6 +2924,32 @@ impl ContentIndexManifestVolumeAccessReports {
                 .volume_for_path(&entry.path)
                 .map(|volume| volume.id)
         })
+    }
+}
+
+impl ContentIndexManifestVolumeAccessReport {
+    fn as_tsv(&self, worker: &str) -> String {
+        if let Some(volume) = self.volume_report.volume_for_path(&self.path) {
+            format!(
+                "content-index-manifest-volume-access\tworker={}\trole={}\tpath={}\tvolume-id={}\tstable-id={}\tclass={}\tmount={}\treachable={}\tread-only={}\treason=cached-volume-report",
+                escape_tsv_field(worker),
+                self.role,
+                escape_tsv_field(&self.path.to_string_lossy()),
+                volume.id.0,
+                escape_tsv_field(&volume.stable_identity),
+                volume.kind.as_str(),
+                volume.mount_state.as_str(),
+                format_optional_bool(volume.reachable),
+                volume.read_only,
+            )
+        } else {
+            format!(
+                "content-index-manifest-volume-access\tworker={}\trole={}\tpath={}\tvolume-id=-\tstable-id=-\tclass=-\tmount=-\treachable=-\tread-only=-\treason=no-containing-volume",
+                escape_tsv_field(worker),
+                self.role,
+                escape_tsv_field(&self.path.to_string_lossy()),
+            )
+        }
     }
 }
 
@@ -2977,11 +3026,18 @@ fn preflight_content_index_manifest_search_access_checked(
     let manifest = ContentArchiveManifest::read_checked(manifest_path, &mut check_control)?;
     check_control()?;
     let content_worker = format!("{worker} content");
-    guards.extend(preflight_content_archives_access_checked(
-        &manifest.resolved_archive_paths(manifest_path),
-        &content_worker,
+    let archive_paths = manifest.resolved_archive_paths(manifest_path);
+    let archive_volume_reports = ArchiveVolumeAccessReports::for_paths_checked(
+        archive_paths.iter().map(PathBuf::as_path),
         &mut check_control,
-    )?);
+    )?;
+    archive_volume_reports.emit_admission_diagnostics(
+        "content-index-manifest-archive-volume-access",
+        &content_worker,
+    );
+    guards.extend(
+        archive_volume_reports.preflight_access_checked(&content_worker, &mut check_control)?,
+    );
     check_control()?;
     Ok(guards)
 }
@@ -3603,17 +3659,6 @@ fn preflight_sidecar_index_search_access_checked(
     Ok(guards)
 }
 
-fn preflight_content_archives_access_checked(
-    paths: &[PathBuf],
-    worker: &str,
-    mut check_control: impl FnMut() -> Result<()>,
-) -> Result<Vec<ScopedAccessGuard>> {
-    unique_search_paths(paths)
-        .into_iter()
-        .map(|path| preflight_content_archive_access_checked(path, worker, &mut check_control))
-        .collect()
-}
-
 fn unique_search_paths(paths: &[PathBuf]) -> Vec<&Path> {
     let mut seen = BTreeSet::new();
     paths
@@ -4188,7 +4233,7 @@ mod tests {
     }
 
     #[test]
-    fn content_archives_access_checked_honors_cancellation_between_paths() {
+    fn archive_volume_access_reports_honor_cancellation_between_paths() {
         let root = std::env::temp_dir().join(format!(
             "gfm-content-archives-access-cancel-{}",
             std::process::id()
@@ -4200,9 +4245,8 @@ mod tests {
         std::fs::write(&second, b"second").unwrap();
         let mut checks = 0usize;
 
-        let result = preflight_content_archives_access_checked(
-            &[first.clone(), second.clone()],
-            "content archives access",
+        let result = ArchiveVolumeAccessReports::for_paths_checked(
+            [first.as_path(), second.as_path()],
             || {
                 checks += 1;
                 if checks >= 4 {
