@@ -126,6 +126,12 @@ impl ParityCaptureProvenance {
                 "parity manifest approved mask set cannot be empty".to_string(),
             ));
         }
+        if !approved_mask_set_matches_macos_build(&self.approved_mask_set, &self.macos_build) {
+            return Err(GfmError::Format(format!(
+                "parity manifest approved mask set `{}` must match macOS build `{}`",
+                self.approved_mask_set, self.macos_build
+            )));
+        }
         if self.fixture_root.as_os_str().is_empty() {
             return Err(GfmError::Format(
                 "parity manifest fixture root cannot be empty".to_string(),
@@ -743,7 +749,21 @@ fn parse_manifest_profile(line_index: usize, fields: &[&str]) -> Result<Manifest
             line_index + 1
         )));
     }
+    if !approved_mask_set_matches_macos_build(&profile.approved_mask_set, &profile.macos_build) {
+        return Err(GfmError::Format(format!(
+            "parity gate manifest line {} has approved-mask-set `{}` that does not match macos-build `{}`",
+            line_index + 1,
+            profile.approved_mask_set,
+            profile.macos_build
+        )));
+    }
     Ok(profile)
+}
+
+fn approved_mask_set_matches_macos_build(mask_set: &str, macos_build: &str) -> bool {
+    mask_set
+        .split(|ch: char| !(ch.is_ascii_alphanumeric()))
+        .any(|token| token == macos_build)
 }
 
 fn is_valid_utc_capture_timestamp(value: &str) -> bool {
@@ -1348,6 +1368,54 @@ mod tests {
         assert!(err.to_string().contains("invalid captured-at `next-week`"));
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn versioned_parity_manifest_rejects_mismatched_approved_mask_build() {
+        let root = unique_temp_dir("gfm-parity-gate-mismatched-mask-build");
+        let err = parse_parity_gate_manifest(
+            "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25B999-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\tfinder.png\tgfm.png\t1\t1\t\t1440\t900\tactive\ticon\tfixtures/icon\n",
+            &root,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("line 2"));
+        assert!(err
+            .to_string()
+            .contains("approved-mask-set `macos-25B999-default`"));
+        assert!(err.to_string().contains("macos-build `25A354`"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn parity_capture_provenance_rejects_mismatched_approved_mask_build() {
+        let provenance = ParityCaptureProvenance {
+            macos_build: "25A354".to_string(),
+            hardware_profile: "macbookpro18,3".to_string(),
+            display_profile: "studio-display-p3".to_string(),
+            app_version: "0.1.0".to_string(),
+            fixture_manifest: "fixtures/manifest.tsv".to_string(),
+            captured_at: "2026-08-27T00:00:00Z".to_string(),
+            capture_command: "screencapture:-x".to_string(),
+            reviewer: "codex".to_string(),
+            signer: "codex".to_string(),
+            approved_mask_set: "macos-25B999-default".to_string(),
+            appearance: ParityAppearance::Dark,
+            scale: DisplayScale::Two,
+            color_profile: ColorProfile::DisplayP3,
+            window_size: PixelSize::new(1440, 900),
+            focus: ParityFocusState::Active,
+            view_mode: ParityViewMode::Icon,
+            fixture_root: PathBuf::from("fixtures/icon"),
+        };
+
+        let err = provenance.validate().unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("approved mask set `macos-25B999-default`"));
+        assert!(err.to_string().contains("macOS build `25A354`"));
     }
 
     #[test]
