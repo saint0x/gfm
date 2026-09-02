@@ -3268,6 +3268,11 @@ fn volume_network_state(
         .filter(|mount_table| mount_table.status == NativeVolumeStatus::Available)
         .and_then(|mount_table| mount_table.is_local)
         .or_else(|| {
+            mount_table_network_filesystem_state(mount_table)
+                .filter(|network| *network)
+                .map(|network| !network)
+        })
+        .or_else(|| {
             resource
                 .filter(|resource| resource.status == NativeVolumeStatus::Available)
                 .and_then(|resource| resource.is_local)
@@ -3301,6 +3306,11 @@ fn volume_local_state(
     mount_table
         .filter(|mount_table| mount_table.status == NativeVolumeStatus::Available)
         .and_then(|mount_table| mount_table.is_local)
+        .or_else(|| {
+            mount_table_network_filesystem_state(mount_table)
+                .filter(|network| *network)
+                .map(|network| !network)
+        })
         .or_else(|| {
             resource
                 .filter(|resource| resource.status == NativeVolumeStatus::Available)
@@ -3513,12 +3523,15 @@ fn classify_native_volume(
         }
     }
 
-    if resource.and_then(|resource| resource.is_local) == Some(false) {
-        return Some(VolumeKind::Network);
-    }
     let mount_table =
         mount_table.filter(|mount_table| mount_table.status == NativeVolumeStatus::Available);
     if mount_table.and_then(|mount_table| mount_table.is_local) == Some(false) {
+        return Some(VolumeKind::Network);
+    }
+    if mount_table_network_filesystem_state(mount_table) == Some(true) {
+        return Some(VolumeKind::Network);
+    }
+    if resource.and_then(|resource| resource.is_local) == Some(false) {
         return Some(VolumeKind::Network);
     }
     if resource.and_then(|resource| resource.is_removable) == Some(true) {
@@ -3544,6 +3557,19 @@ fn classify_native_volume(
         return Some(VolumeKind::Internal);
     }
     None
+}
+
+fn mount_table_network_filesystem_state(
+    mount_table: Option<&NativeVolumeMountTableEntry>,
+) -> Option<bool> {
+    let filesystem = mount_table
+        .filter(|mount_table| mount_table.status == NativeVolumeStatus::Available)
+        .and_then(|mount_table| mount_table.filesystem_type.as_deref())?
+        .to_ascii_lowercase();
+    Some(matches!(
+        filesystem.as_str(),
+        "smbfs" | "afpfs" | "nfs" | "webdav" | "davfs" | "sshfs"
+    ))
 }
 
 fn native_volume_evidence_present(
@@ -4250,6 +4276,69 @@ mod tests {
         );
 
         assert_eq!(kind, Some(VolumeKind::Network));
+    }
+
+    #[test]
+    fn classify_native_volume_uses_mount_table_network_filesystem() {
+        let mount_table = mount_table_entry(|entry| {
+            entry.filesystem_type = Some("smbfs".to_string());
+        });
+
+        let kind = classify_native_volume(
+            Path::new("/Volumes/Team Share"),
+            None,
+            None,
+            Some(&mount_table),
+        );
+
+        assert_eq!(kind, Some(VolumeKind::Network));
+    }
+
+    #[test]
+    fn volume_locality_uses_mount_table_network_filesystem_when_flag_missing() {
+        let mount_table = mount_table_entry(|entry| {
+            entry.filesystem_type = Some("nfs".to_string());
+        });
+
+        assert_eq!(
+            volume_local_state(None, None, None, Some(&mount_table), VolumeKind::Unknown),
+            Some(false)
+        );
+        assert!(volume_network_state(
+            None,
+            None,
+            None,
+            Some(&mount_table),
+            VolumeKind::Unknown
+        ));
+    }
+
+    #[test]
+    fn mount_table_local_filesystem_does_not_mask_url_resource_network_truth() {
+        let resource = resource_values(|values| {
+            values.is_local = Some(false);
+        });
+        let mount_table = mount_table_entry(|entry| {
+            entry.filesystem_type = Some("apfs".to_string());
+        });
+
+        assert!(volume_network_state(
+            None,
+            None,
+            Some(&resource),
+            Some(&mount_table),
+            VolumeKind::Unknown
+        ));
+        assert_eq!(
+            volume_local_state(
+                None,
+                None,
+                Some(&resource),
+                Some(&mount_table),
+                VolumeKind::Unknown
+            ),
+            Some(false)
+        );
     }
 
     #[test]
