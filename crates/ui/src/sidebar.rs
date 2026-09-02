@@ -165,8 +165,8 @@ impl SidebarCloudInvalidation {
     pub fn as_tsv(&self) -> String {
         format!(
             "sidebar-cloud-invalidation\t{}\tpath={}\tprevious={}\tcurrent={}\tprogress={}\tprogress-source={}\tprogress-reason={}\tinvalidate-row={}\treason={}",
-            self.row_id,
-            self.path.display(),
+            escape_field(&self.row_id),
+            escape_path_field(&self.path),
             self.previous.as_str(),
             self.current.as_str(),
             self.progress_milli
@@ -175,7 +175,7 @@ impl SidebarCloudInvalidation {
             format_optional_string(self.progress_source.as_deref()),
             format_optional_string(self.progress_reason.as_deref()),
             self.invalidate_row,
-            self.reason
+            escape_field(&self.reason)
         )
     }
 }
@@ -397,10 +397,13 @@ impl SidebarVolumeInvalidation {
     pub fn as_tsv(&self) -> String {
         format!(
             "sidebar-volume-invalidation\trow={}\tpath={}\tkind={}\tprevious-kind={}\tprevious-mount={}\tprevious-writable={}\tprevious-read-only={}\tprevious-network={}\tprevious-reachable={}\tprevious-ejectable={}\tprevious-removable={}\tprevious-case-sensitive={}\tprevious-case-preserving={}\tprevious-native-status={}\tprevious-native-reason={}\tprevious-resource-status={}\tprevious-resource-reason={}\tprevious-mount-status={}\tprevious-mount-reason={}\tcurrent-kind={}\tcurrent-mount={}\twritable={}\tread-only={}\tnetwork={}\treachable={}\tejectable={}\tremovable={}\tcase-sensitive={}\tcase-preserving={}\tcurrent-native-status={}\tcurrent-native-reason={}\tcurrent-resource-status={}\tcurrent-resource-reason={}\tcurrent-mount-status={}\tcurrent-mount-reason={}\tinvalidate-row={}\tinvalidate-section={}\tremove-row={}\tdisable-row={}\treason={}",
-            self.row_id.as_deref().unwrap_or("-"),
+            self.row_id
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "-".to_string()),
             self.path
                 .as_ref()
-                .map(|path| path.display().to_string())
+                .map(|path| escape_path_field(path))
                 .unwrap_or_else(|| "-".to_string()),
             self.kind.as_str(),
             self.previous_kind.map(SidebarVolumeKind::as_str).unwrap_or("-"),
@@ -475,7 +478,7 @@ impl SidebarVolumeInvalidation {
             self.invalidate_section,
             self.remove_row,
             self.disable_row,
-            self.reason
+            escape_field(&self.reason)
         )
     }
 }
@@ -602,6 +605,11 @@ fn escape_field(value: &str) -> String {
         .replace('\\', "\\\\")
         .replace('\t', "\\t")
         .replace('\n', "\\n")
+        .replace('\r', "\\r")
+}
+
+fn escape_path_field(path: &Path) -> String {
+    escape_field(&path.to_string_lossy())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -880,19 +888,19 @@ impl SidebarContract {
             self.width_px,
             self.row_height_px,
             self.section_header_height_px,
-            self.sections.join(",")
+            escape_field(&self.sections.join(","))
         ));
         lines.extend(self.rows.iter().map(|row| {
             format!(
                 "row\t{}\t{}\t{}\t{}\t{}\t{}\tdepth={}\tenabled={}\tselected={}\tejectable={}\tvirtual={}\tpath-state={}\tcloud={}\tcloud-progress={}\tcloud-progress-source={}\tcloud-progress-reason={}\tvolume-kind={}\tvolume-mount={}\tvolume-writable={}\tvolume-read-only={}\tvolume-network={}\tvolume-reachable={}\tvolume-ejectable={}\tvolume-removable={}\tvolume-case-sensitive={}\tvolume-case-preserving={}",
-                row.section,
-                row.id,
-                row.label,
-                row.role,
+                escape_field(row.section),
+                escape_field(&row.id),
+                escape_field(&row.label),
+                escape_field(row.role),
                 row.kind.as_str(),
                 row.path
                     .as_ref()
-                    .map(|path| path.display().to_string())
+                    .map(|path| escape_path_field(path))
                     .unwrap_or_else(|| "-".to_string()),
                 row.depth,
                 row.enabled,
@@ -1569,6 +1577,59 @@ mod tests {
     }
 
     #[test]
+    fn contract_tsv_escapes_control_characters_in_text_fields() {
+        let root =
+            std::env::temp_dir().join(format!("gfm-sidebar-control-fields-{}", std::process::id()));
+        let path = root.join("Team\tDocs").join("Draft\nFinal\rNotes");
+        let contract = SidebarContract {
+            width_px: SIDEBAR_WIDTH as u16,
+            row_height_px: ROW_HEIGHT as u16,
+            section_header_height_px: SECTION_HEADER_HEIGHT as u16,
+            sections: vec!["Favorites", "Locations\tCustom"],
+            rows: vec![SidebarItemSpec {
+                section: "Locations\tCustom",
+                id: "volume-team\tdocs".to_string(),
+                label: "Team\nDocs\rNow".to_string(),
+                role: "external\tvolume",
+                kind: SidebarItemKind::Location,
+                path: Some(path),
+                icon: "external",
+                depth: 0,
+                enabled: true,
+                selected: false,
+                ejectable: true,
+                virtual_item: false,
+                path_state: SidebarPathState::Available,
+                cloud_state: SidebarCloudState::None,
+                cloud_progress_milli: None,
+                cloud_progress_source: Some("provider\tcallback".to_string()),
+                cloud_progress_reason: Some("sync\nphase\rchanged".to_string()),
+                volume_kind: Some(SidebarVolumeKind::External),
+                volume_mount_state: Some(SidebarVolumeMountState::Mounted),
+                volume_writable: Some(true),
+                volume_read_only: Some(false),
+                volume_network: Some(false),
+                volume_reachable: Some(true),
+                volume_ejectable: Some(true),
+                volume_removable: Some(true),
+                volume_case_sensitive: Some(false),
+                volume_case_preserving: Some(true),
+            }],
+        };
+
+        let output = contract.as_tsv();
+
+        assert_eq!(output.lines().count(), 2, "{output}");
+        let row = output.lines().nth(1).unwrap();
+        assert_eq!(row.split('\t').count(), 27, "{row}");
+        assert!(row.contains("Locations\\tCustom\tvolume-team\\tdocs\tTeam\\nDocs\\rNow\t"));
+        assert!(row.contains("\texternal\\tvolume\tlocation\t"));
+        assert!(row.contains("Team\\tDocs/Draft\\nFinal\\rNotes\tdepth=0"));
+        assert!(row.contains("\tcloud-progress-source=provider\\tcallback\t"));
+        assert!(row.contains("\tcloud-progress-reason=sync\\nphase\\rchanged\t"));
+    }
+
+    #[test]
     fn path_state_distinguishes_missing_from_unavailable() {
         let root =
             std::env::temp_dir().join(format!("gfm-sidebar-path-state-{}", std::process::id()));
@@ -1862,6 +1923,86 @@ mod tests {
         assert!(tsv.contains("\tprevious-mount-reason=-\t"));
         assert!(tsv.contains("\tcurrent-native-status=available\t"));
         assert!(tsv.contains("\tcurrent-native-reason=-\t"));
+    }
+
+    #[test]
+    fn cloud_invalidation_tsv_escapes_control_characters_in_text_fields() {
+        let mut invalidation = SidebarCloudInvalidation::new(
+            "/Users/tester/Library/Mobile Documents/Team\tDocs\nDraft\rFinal",
+            SidebarCloudState::Waiting,
+            SidebarCloudState::Syncing,
+            Some(640),
+            true,
+            "provider\tinvalidated\nsidebar\rrow",
+        )
+        .with_progress_context(
+            Some("fileprovider\tcallback".to_string()),
+            Some("download\nprogress\rchanged".to_string()),
+        );
+        invalidation.row_id = "icloud\tdrive\nrow\rid".to_string();
+
+        let tsv = invalidation.as_tsv();
+
+        assert_eq!(tsv.lines().count(), 1, "{tsv}");
+        assert_eq!(tsv.split('\t').count(), 10, "{tsv}");
+        assert!(tsv.starts_with("sidebar-cloud-invalidation\ticloud\\tdrive\\nrow\\rid\tpath="));
+        assert!(tsv.contains("Team\\tDocs\\nDraft\\rFinal\tprevious=waiting\t"));
+        assert!(tsv.contains("\tprogress-source=fileprovider\\tcallback\t"));
+        assert!(tsv.contains("\tprogress-reason=download\\nprogress\\rchanged\t"));
+        assert!(tsv.ends_with("reason=sidebar-cloud-state-changed"));
+    }
+
+    #[test]
+    fn volume_invalidation_tsv_escapes_control_characters_in_text_fields() {
+        let mut previous = SidebarVolumeSpec::from_native_seed(
+            "diskarbitration:uuid:Team",
+            "Team",
+            "/Volumes/Team\tDocs",
+            true,
+        )
+        .with_platform_api_context(
+            Some("unavailable".to_string()),
+            Some("native\tbefore\ncallback\rfailed".to_string()),
+            Some("unavailable".to_string()),
+            Some("resource\tbefore\ncallback\rfailed".to_string()),
+            Some("missing".to_string()),
+            Some("mount\tbefore\ncallback\rfailed".to_string()),
+        );
+        previous.id = "volume-team\trow\nold\rid".to_string();
+        let mut current = SidebarVolumeSpec::from_native_seed(
+            "diskarbitration:uuid:Team",
+            "Team",
+            "/Volumes/Team\tDocs",
+            true,
+        )
+        .with_platform_api_context(
+            Some("available".to_string()),
+            Some("native\tafter\ncallback\rready".to_string()),
+            Some("available".to_string()),
+            Some("resource\tafter\ncallback\rready".to_string()),
+            Some("available".to_string()),
+            Some("mount\tafter\ncallback\rready".to_string()),
+        );
+        current.id = "volume-team\trow\nnew\rid".to_string();
+
+        let invalidation = SidebarVolumeInvalidation::from_event(
+            SidebarVolumeEventKind::DescriptionChanged,
+            Some(PathBuf::from("/Volumes/Team\tDocs\nDraft\rFinal")),
+            Some(&previous),
+            Some(&current),
+            true,
+            "volume\tapi\nstate\rchanged",
+        );
+        let tsv = invalidation.as_tsv();
+
+        assert_eq!(tsv.lines().count(), 1, "{tsv}");
+        assert_eq!(tsv.split('\t').count(), 41, "{tsv}");
+        assert!(tsv.contains("row=volume-team\\trow\\nnew\\rid\t"));
+        assert!(tsv.contains("path=/Volumes/Team\\tDocs\\nDraft\\rFinal\t"));
+        assert!(tsv.contains("\tprevious-native-reason=native\\tbefore\\ncallback\\rfailed\t"));
+        assert!(tsv.contains("\tcurrent-resource-reason=resource\\tafter\\ncallback\\rready\t"));
+        assert!(tsv.contains("\tcurrent-mount-reason=mount\\tafter\\ncallback\\rready\t"));
+        assert!(tsv.ends_with("reason=volume\\tapi\\nstate\\rchanged"));
     }
 
     #[test]

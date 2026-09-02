@@ -125,6 +125,44 @@ fn indexes_and_searches_real_files_from_binary() {
 }
 
 #[test]
+fn search_volume_access_escapes_control_characters_from_binary() {
+    let scratch = unique_temp_dir("gfm-cli-search-volume-access-escape");
+    let root = scratch.join("Search\tRoot\nVolume\rAccess");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("NeedleVisible.txt"), "visible").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["search", root.to_str().unwrap(), "needle"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.contains("NeedleVisible.txt"), "{stdout}");
+    let escaped_root = escape_test_tsv_field(&root.to_string_lossy());
+    assert!(
+        stderr.contains(&format!(
+            "search-root-volume-access\tworker=search\tpath={escaped_root}\tvolume-id="
+        )) && stderr.contains("\tstable-id=")
+            && !stderr.contains("\tstable-id=-\t")
+            && stderr.contains("\treason=cached-volume-report"),
+        "{stderr}"
+    );
+    for line in stderr.lines() {
+        if line.starts_with("search-root-volume-access\t") {
+            assert_eq!(line.split('\t').count(), 11, "{line}");
+        }
+    }
+
+    fs::remove_dir_all(scratch).unwrap();
+}
+
+#[test]
 fn index_retries_transient_failure_from_binary() {
     let root = unique_temp_dir("gfm-cli-index-retry-root");
     let index = unique_temp_path("gfm-cli-index-retry", "gfmidx");
@@ -704,6 +742,46 @@ fn lists_directory_entries_through_visible_worker_from_binary() {
     );
 
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn list_volume_access_escapes_control_characters_from_binary() {
+    let scratch = unique_temp_dir("gfm-cli-list-volume-access-escape");
+    let root = scratch.join("List\tRoot\nVolume\rAccess");
+    fs::create_dir_all(root.join("Folder")).unwrap();
+    fs::write(root.join("Visible.txt"), "listed").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("list")
+        .arg(&root)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.contains("Visible.txt"), "{stdout}");
+    assert!(stdout.contains("Folder"), "{stdout}");
+    let escaped_root = escape_test_tsv_field(&root.to_string_lossy());
+    assert!(
+        stderr.contains(&format!(
+            "directory-listing-volume-access\tworker=directory listing\trole=root\tpath={escaped_root}\tintent=read\tvolume-id="
+        )) && stderr.contains("\tstable-id=")
+            && !stderr.contains("\tstable-id=-\t")
+            && stderr.contains("\treason=cached-volume-report"),
+        "{stderr}"
+    );
+    for line in stderr.lines() {
+        if line.starts_with("directory-listing-volume-access\t") {
+            assert_eq!(line.split('\t').count(), 13, "{line}");
+        }
+    }
+
+    fs::remove_dir_all(scratch).unwrap();
 }
 
 #[test]
@@ -19996,6 +20074,14 @@ fn assert_operation_volume_access(
             && stderr.contains("\treason=cached-volume-report"),
         "{stderr}"
     );
+}
+
+fn escape_test_tsv_field(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {

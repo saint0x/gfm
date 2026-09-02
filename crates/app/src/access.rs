@@ -480,6 +480,7 @@ fn escape_field(value: &str) -> String {
         .replace('\\', "\\\\")
         .replace('\t', "\\t")
         .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 #[cfg(test)]
@@ -560,13 +561,13 @@ mod tests {
     #[test]
     fn missing_security_scope_access_line_escapes_control_characters_in_path() {
         let line = missing_security_scope_access_line(
-            Path::new("/Users/me/Documents/Reports\tQ3\nDraft.md"),
+            Path::new("/Users/me/Documents/Reports\tQ3\nDraft\rFinal.md"),
             true,
         );
 
         assert_eq!(line.lines().count(), 1, "{line}");
         assert!(line.starts_with(
-            "security-scope-access\t/Users/me/Documents/Reports\\tQ3\\nDraft.md\tstatus=missing\t"
+            "security-scope-access\t/Users/me/Documents/Reports\\tQ3\\nDraft\\rFinal.md\tstatus=missing\t"
         ));
         assert_eq!(line.split('\t').count(), 6, "{line}");
     }
@@ -574,7 +575,7 @@ mod tests {
     #[test]
     fn resolved_security_scope_access_line_escapes_control_characters_in_path() {
         let root = unique_temp_dir("gfm-access-resolved-bookmark-line");
-        let path = root.join("Documents\tQ3").join("Draft\nPlan.md");
+        let path = root.join("Documents\tQ3").join("Draft\nPlan\rFinal.md");
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, "plan").unwrap();
         let store = SecurityScopedBookmarkStore::new(root.join("bookmarks.tsv"));
@@ -591,7 +592,7 @@ mod tests {
 
         assert_eq!(line.lines().count(), 1, "{line}");
         assert!(
-            line.contains("Documents\\tQ3/Draft\\nPlan.md\tstatus=resolved\t"),
+            line.contains("Documents\\tQ3/Draft\\nPlan\\rFinal.md\tstatus=resolved\t"),
             "{line}"
         );
         assert_eq!(line.split('\t').count(), 7, "{line}");

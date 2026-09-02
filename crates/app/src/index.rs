@@ -1132,6 +1132,7 @@ fn escape_index_tsv_field(value: &str) -> String {
         .replace('\\', "\\\\")
         .replace('\t', "\\t")
         .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 fn first_access_report_volume<'a>(
@@ -1621,6 +1622,43 @@ mod tests {
 
         assert_eq!(result.err(), Some(GfmError::Cancelled));
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn index_volume_access_tsv_escapes_control_characters() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-index-volume-access-escape-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("Records\tOne\nTwo\r.gfmidx");
+        fs::write(&path, b"records").unwrap();
+        let mut volume = gfm_mac::VolumeDescriptor::for_path(&root).unwrap();
+        volume.stable_identity = "stable\tid\none\r".to_string();
+        let report = VolumeDiscoveryReport {
+            volumes: vec![volume],
+        };
+
+        let tsv = index_volume_access_tsv(
+            "index\tprefix",
+            "worker\nname\r",
+            Some("records\trole\r"),
+            &path,
+            AccessIntent::Read,
+            &report,
+        );
+
+        assert_eq!(tsv.lines().count(), 1, "{tsv}");
+        assert!(
+            tsv.starts_with("index\\tprefix\tworker=worker\\nname\\r\trole=records\\trole\\r\t")
+        );
+        assert!(tsv.contains("path="), "{tsv}");
+        assert!(tsv.contains("Records\\tOne\\nTwo\\r.gfmidx"), "{tsv}");
+        assert!(tsv.contains("stable-id=stable\\tid\\none\\r"), "{tsv}");
+        assert_eq!(tsv.split('\t').count(), 13, "{tsv}");
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
