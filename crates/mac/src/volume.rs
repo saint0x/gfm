@@ -2491,21 +2491,18 @@ fn native_volume_event_coalescing_key(event: &gfm_mac_sys::NativeVolumeEvent) ->
     description
         .volume_uuid
         .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .map(|value| format!("volume-uuid:{value}"))
+        .and_then(|value| native_volume_event_key_fragment("volume-uuid", value))
         .or_else(|| {
             description
                 .media_uuid
                 .as_deref()
-                .filter(|value| !value.trim().is_empty())
-                .map(|value| format!("media-uuid:{value}"))
+                .and_then(|value| native_volume_event_key_fragment("media-uuid", value))
         })
         .or_else(|| {
             description
                 .media_bsd_name
                 .as_deref()
-                .filter(|value| !value.trim().is_empty())
-                .map(|value| format!("bsd:{value}"))
+                .and_then(|value| native_volume_event_key_fragment("bsd", value))
         })
         .or_else(|| {
             description
@@ -2518,6 +2515,11 @@ fn native_volume_event_coalescing_key(event: &gfm_mac_sys::NativeVolumeEvent) ->
                 && description.status == NativeVolumeStatus::Unavailable)
                 .then(|| "global-unavailable".to_string())
         })
+}
+
+fn native_volume_event_key_fragment(prefix: &str, value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| format!("{prefix}:{value}"))
 }
 
 impl VolumeEventStateDrainReport {
@@ -6562,6 +6564,47 @@ mod tests {
         );
         fs::remove_dir_all(first).unwrap();
         fs::remove_dir_all(second).unwrap();
+    }
+
+    #[test]
+    fn coalescing_normalizes_native_identity_key_whitespace() {
+        let first = gfm_mac_sys::NativeVolumeEvent {
+            kind: gfm_mac_sys::NativeVolumeEventKind::Appeared,
+            description: native_description(|description| {
+                description.volume_uuid = Some("  WHITESPACE-VOLUME  ".to_string());
+                description.reason = Some("first-appeared".to_string());
+            }),
+        };
+        let second = gfm_mac_sys::NativeVolumeEvent {
+            kind: gfm_mac_sys::NativeVolumeEventKind::DescriptionChanged,
+            description: native_description(|description| {
+                description.volume_uuid = Some("WHITESPACE-VOLUME".to_string());
+                description.reason = Some("normalized-description".to_string());
+            }),
+        };
+        let distinct = gfm_mac_sys::NativeVolumeEvent {
+            kind: gfm_mac_sys::NativeVolumeEventKind::DescriptionChanged,
+            description: native_description(|description| {
+                description.media_bsd_name = Some(" disk9s1 ".to_string());
+                description.reason = Some("distinct-bsd-description".to_string());
+            }),
+        };
+
+        let coalesced = coalesce_native_volume_events_for_state(vec![first, second, distinct]);
+
+        assert_eq!(coalesced.len(), 2);
+        assert_eq!(
+            coalesced[0].kind,
+            gfm_mac_sys::NativeVolumeEventKind::DescriptionChanged
+        );
+        assert_eq!(
+            coalesced[0].description.reason.as_deref(),
+            Some("normalized-description")
+        );
+        assert_eq!(
+            coalesced[1].description.reason.as_deref(),
+            Some("distinct-bsd-description")
+        );
     }
 
     #[test]
