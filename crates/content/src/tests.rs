@@ -1039,6 +1039,34 @@ fn quarantine_blocks_repeated_timeout_failures() {
 }
 
 #[test]
+fn quarantine_decision_tsv_escapes_control_characters() {
+    let entry = QuarantineEntry {
+        path: PathBuf::from("/tmp/Reports\tQ3\nDraft\rFinal.pdf"),
+        cache_key: "cache\tkey\ncontent\rsha".to_string(),
+        kind: QuarantineFailureKind::Timeout,
+        reason: "worker\ttimeout\nwhile\rreading".to_string(),
+        failures: 2,
+    };
+    let tsv = QuarantineDecision::Quarantined(entry).as_tsv();
+
+    assert_eq!(tsv.lines().count(), 1, "{tsv}");
+    assert!(!tsv.contains('\r'), "{tsv}");
+    assert!(
+        tsv.contains("path=/tmp/Reports\\tQ3\\nDraft\\rFinal.pdf"),
+        "{tsv}"
+    );
+    assert!(
+        tsv.contains("reason=worker\\ttimeout\\nwhile\\rreading"),
+        "{tsv}"
+    );
+    assert!(
+        tsv.contains("cache-key=cache\\tkey\\ncontent\\rsha"),
+        "{tsv}"
+    );
+    assert_eq!(tsv.split('\t').count(), 6, "{tsv}");
+}
+
+#[test]
 fn quarantine_persists_crash_failures_across_restart() {
     let root = unique_temp_dir("gfm-content-crash-quarantine");
     let path = root.join("crash.docx");
@@ -1065,6 +1093,48 @@ fn quarantine_persists_crash_failures_across_restart() {
         reloaded.before_extract(&path, &fingerprint),
         QuarantineDecision::Quarantined(_)
     ));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn quarantine_store_round_trips_control_characters() {
+    let root = unique_temp_dir("gfm-content-quarantine-control-characters");
+    let path = root.join("Reports\tQ3\nDraft\rFinal.pdf");
+    let store = root.join("quarantine.gfmquarantine");
+    fs::write(&path, minimal_pdf("slow")).unwrap();
+    let fingerprint = ExtractionFingerprint::for_path(&path).unwrap();
+    let mut quarantine = ExtractionQuarantine::new(1);
+    let blocked = quarantine.record_failure(
+        &path,
+        &fingerprint,
+        QuarantineFailureKind::Timeout,
+        "worker\ttimeout\nwhile\rreading",
+    );
+
+    assert!(matches!(blocked, QuarantineDecision::Quarantined(_)));
+    quarantine.write(&store).unwrap();
+    let stored = fs::read_to_string(&store).unwrap();
+    assert_eq!(stored.lines().count(), 4, "{stored}");
+    assert!(
+        stored.contains("Reports\\tQ3\\nDraft\\rFinal.pdf"),
+        "{stored}"
+    );
+    assert!(
+        stored.contains("worker\\ttimeout\\nwhile\\rreading"),
+        "{stored}"
+    );
+
+    let reloaded = ExtractionQuarantine::read(&store).unwrap();
+
+    match reloaded.before_extract(&path, &fingerprint) {
+        QuarantineDecision::Quarantined(entry) => {
+            assert_eq!(entry.path, path);
+            assert_eq!(entry.kind, QuarantineFailureKind::Timeout);
+            assert_eq!(entry.reason, "worker\ttimeout\nwhile\rreading");
+            assert_eq!(entry.failures, 1);
+        }
+        QuarantineDecision::Allow => panic!("expected persisted quarantine entry"),
+    }
     fs::remove_dir_all(root).unwrap();
 }
 

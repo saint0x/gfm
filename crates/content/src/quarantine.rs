@@ -56,7 +56,7 @@ impl QuarantineDecision {
             Self::Allow => "quarantine\tallow".to_string(),
             Self::Quarantined(entry) => format!(
                 "quarantine\tblocked\tpath={}\treason={}\tfailures={}\tcache-key={}",
-                entry.path.display(),
+                escape_field(&entry.path.to_string_lossy()),
                 escape_field(&entry.reason),
                 entry.failures,
                 escape_field(&entry.cache_key)
@@ -323,6 +323,7 @@ fn escape_field(value: &str) -> String {
         .replace('\\', "\\\\")
         .replace('\t', "\\t")
         .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 fn unescape_field(value: &str) -> String {
@@ -333,6 +334,7 @@ fn unescape_field(value: &str) -> String {
             match chars.next() {
                 Some('t') => output.push('\t'),
                 Some('n') => output.push('\n'),
+                Some('r') => output.push('\r'),
                 Some('\\') => output.push('\\'),
                 Some(other) => {
                     output.push('\\');
@@ -398,4 +400,89 @@ fn quarantine_temp_path(path: &Path) -> PathBuf {
     );
     temp_name.push(suffix);
     path.with_file_name(temp_name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quarantine_decision_tsv_escapes_control_characters() {
+        let path = PathBuf::from("/tmp/GFM\tExtract\nDraft\rFinal.pdf");
+        let mut quarantine = ExtractionQuarantine::new(1);
+        let fingerprint = ExtractionFingerprint {
+            extractor_version: 7,
+            len: 42,
+            modified_ns: Some(99),
+        };
+
+        let decision = quarantine.record_failure(
+            &path,
+            &fingerprint,
+            QuarantineFailureKind::Corrupt,
+            "parser\tpanic\nwith\rcontrols",
+        );
+
+        let tsv = decision.as_tsv();
+        assert_eq!(tsv.lines().count(), 1, "{tsv}");
+        assert!(
+            tsv.contains("path=/tmp/GFM\\tExtract\\nDraft\\rFinal.pdf\t"),
+            "{tsv}"
+        );
+        assert!(
+            tsv.contains("reason=parser\\tpanic\\nwith\\rcontrols\t"),
+            "{tsv}"
+        );
+        assert!(
+            tsv.contains("cache-key=v7:/tmp/GFM\\tExtract\\nDraft\\rFinal.pdf:42:99"),
+            "{tsv}"
+        );
+    }
+
+    #[test]
+    fn quarantine_store_round_trips_carriage_returns() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-quarantine-control-paths-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let store = root.join("quarantine.tsv");
+        let path = root.join("GFM\tExtract").join("Draft\nFinal\r.pdf");
+        let mut quarantine = ExtractionQuarantine::new(1);
+        let fingerprint = ExtractionFingerprint {
+            extractor_version: 3,
+            len: 1024,
+            modified_ns: Some(12345),
+        };
+        quarantine.record_failure(
+            &path,
+            &fingerprint,
+            QuarantineFailureKind::Timeout,
+            "worker\ttimeout\nwhile\rparsing",
+        );
+
+        quarantine.write(&store).unwrap();
+        let text = fs::read_to_string(&store).unwrap();
+        let reloaded = ExtractionQuarantine::read(&store).unwrap();
+        let decision = reloaded.before_extract(&path, &fingerprint).as_tsv();
+
+        assert_eq!(text.lines().count(), 4, "{text}");
+        assert!(
+            text.contains("GFM\\tExtract/Draft\\nFinal\\r.pdf"),
+            "{text}"
+        );
+        assert!(
+            text.contains("worker\\ttimeout\\nwhile\\rparsing"),
+            "{text}"
+        );
+        assert!(decision.contains("path="), "{decision}");
+        assert!(decision.contains("Draft\\nFinal\\r.pdf"), "{decision}");
+        assert!(
+            decision.contains("reason=worker\\ttimeout\\nwhile\\rparsing"),
+            "{decision}"
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
 }
