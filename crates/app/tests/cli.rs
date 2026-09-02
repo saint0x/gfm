@@ -8379,6 +8379,18 @@ fn operation_volume_copy_policy_reports_descriptor_classes_from_binary() {
         )),
         "{stdout}"
     );
+    assert!(stdout.contains("\tsource-writable=true\t"), "{stdout}");
+    assert!(stdout.contains("\tdestination-writable=true\t"), "{stdout}");
+    assert!(stdout.contains("\tsource-read-only=false\t"), "{stdout}");
+    assert!(
+        stdout.contains("\tdestination-read-only=false\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tsource-reachable=true\t"), "{stdout}");
+    assert!(
+        stdout.contains("\tdestination-reachable=true\t"),
+        "{stdout}"
+    );
     assert!(stdout.contains("\tbuffer-bytes=65536\t"), "{stdout}");
     assert!(stdout.contains("\tdistinct-volumes=true\t"), "{stdout}");
     assert!(stdout.contains("\tvolumes=2"), "{stdout}");
@@ -8437,6 +8449,21 @@ fn operation_volume_copy_policy_reports_disk_image_as_slow_from_binary() {
     );
     assert!(
         !stdout.contains("\tdestination-volume-root=-\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tsource-writable=true\t"), "{stdout}");
+    assert!(
+        stdout.contains("\tdestination-writable=false\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tsource-read-only=false\t"), "{stdout}");
+    assert!(
+        stdout.contains("\tdestination-read-only=true\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tsource-reachable=true\t"), "{stdout}");
+    assert!(
+        stdout.contains("\tdestination-reachable=true\t"),
         "{stdout}"
     );
     assert!(stdout.contains("\tbuffer-bytes=65536\t"), "{stdout}");
@@ -8539,6 +8566,18 @@ fn operation_volume_copy_policy_prefers_native_write_truth_over_read_only_marker
     );
     assert!(stdout.contains("\tdestination-stable-id="), "{stdout}");
     assert!(!stdout.contains("\tdestination-stable-id=-\t"), "{stdout}");
+    assert!(stdout.contains("\tsource-writable=false\t"), "{stdout}");
+    assert!(stdout.contains("\tdestination-writable=true\t"), "{stdout}");
+    assert!(stdout.contains("\tsource-read-only=true\t"), "{stdout}");
+    assert!(
+        stdout.contains("\tdestination-read-only=false\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tsource-reachable=true\t"), "{stdout}");
+    assert!(
+        stdout.contains("\tdestination-reachable=true\t"),
+        "{stdout}"
+    );
     assert!(stdout.contains("\tbuffer-bytes=131072\t"), "{stdout}");
     assert!(
         !stderr.contains("read-only volume external")

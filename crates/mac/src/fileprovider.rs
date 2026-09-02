@@ -2381,6 +2381,14 @@ fn should_read_provider_xattrs(
     native_identity: &NativeFileProviderIdentity,
     has_path_hint: bool,
 ) -> bool {
+    if matches!(
+        native.status,
+        gfm_mac_sys::NativeFileProviderStatus::Missing
+            | gfm_mac_sys::NativeFileProviderStatus::Unavailable
+            | gfm_mac_sys::NativeFileProviderStatus::UnsupportedPath
+    ) {
+        return false;
+    }
     if native_resource_proves_local_only(native, native_identity) {
         return false;
     }
@@ -8125,6 +8133,30 @@ mod tests {
     }
 
     #[test]
+    fn native_url_failures_suppress_provider_xattr_reads() {
+        for status in [
+            NativeFileProviderStatus::Missing,
+            NativeFileProviderStatus::Unavailable,
+            NativeFileProviderStatus::UnsupportedPath,
+        ] {
+            let mut native = native_values();
+            native.status = status;
+            let native_identity = NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::Available,
+                item_identifier: Some("item".to_string()),
+                domain_identifier: Some("com.example.drive".to_string()),
+                reason: None,
+            };
+
+            assert!(!should_read_provider_xattrs(
+                &native,
+                &native_identity,
+                true
+            ));
+        }
+    }
+
+    #[test]
     fn native_identity_allows_filename_state_words_as_explicit_provider_hints() {
         let path = PathBuf::from("/tmp/Conflict.fileprovider");
         let hints = CloudHints {
@@ -8817,7 +8849,7 @@ mod tests {
             &identity_not_queried(),
             false
         ));
-        assert!(should_read_provider_xattrs(
+        assert!(!should_read_provider_xattrs(
             &missing_native,
             &identity_not_queried(),
             true
