@@ -251,7 +251,7 @@ impl SecurityScopedAccessReport {
     pub fn as_tsv(&self) -> String {
         format!(
             "security-scope\t{}\tintent={}\tscope={}\tprobe={}\tmode={}\taction={}\tbookmark-required={}\tcan-read={}\tcan-write={}\tleast-privilege={}\treason={}",
-            self.path.display(),
+            escape_path_field(&self.path),
             self.intent.as_str(),
             self.scope.as_str(),
             self.probe.as_str(),
@@ -331,7 +331,7 @@ impl SecurityWorkerAdmissionReport {
         format!(
             "security-worker-admission\tworker={}\tpath={}\tintent={}\tscope={}\tprobe={}\tmode={}\taccess-action={}\tworker-action={}\tcan-touch-filesystem={}\tbookmark-access={}\trefresh-on-permission-change={}\treason={}",
             escape_field(&self.worker),
-            self.access.path.display(),
+            escape_path_field(&self.access.path),
             self.access.intent.as_str(),
             self.access.scope.as_str(),
             self.access.probe.as_str(),
@@ -688,6 +688,10 @@ fn escape_field(value: &str) -> String {
         .replace('\n', "\\n")
 }
 
+fn escape_path_field(path: &Path) -> String {
+    escape_field(&path.to_string_lossy())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -948,6 +952,38 @@ mod tests {
         assert!(!report.bookmark_required);
         assert!(report.as_tsv().contains("\tprobe=unavailable\t"));
         assert!(!report.as_tsv().contains("\tprobe=unknown\t"));
+    }
+
+    #[test]
+    fn security_scope_tsv_escapes_control_characters_in_path_fields() {
+        let report = SecurityScopedAccessReport::blocked_before_filesystem_probe(
+            PathBuf::from("/Users/me/Documents/Reports\tQ3\nDraft.md"),
+            AccessIntent::Preview,
+            "preview worker volume access blocked: unreachable volume network",
+        );
+
+        let tsv = report.as_tsv();
+
+        assert_eq!(tsv.lines().count(), 1, "{tsv}");
+        assert!(tsv.starts_with(
+            "security-scope\t/Users/me/Documents/Reports\\tQ3\\nDraft.md\tintent=preview\t"
+        ));
+        assert_eq!(tsv.split('\t').count(), 12, "{tsv}");
+    }
+
+    #[test]
+    fn worker_admission_tsv_escapes_control_characters_in_path_fields() {
+        let report = SecurityScopedAccessReport::blocked_before_filesystem_probe(
+            PathBuf::from("/Users/me/Documents/Reports\tQ3\nDraft.md"),
+            AccessIntent::Preview,
+            "preview worker volume access blocked: unreachable volume network",
+        );
+
+        let tsv = report.worker_admission("preview\tworker").as_tsv();
+
+        assert_eq!(tsv.lines().count(), 1, "{tsv}");
+        assert!(tsv.contains("worker=preview\\tworker\tpath=/Users/me/Documents/Reports\\tQ3\\nDraft.md\tintent=preview"), "{tsv}");
+        assert_eq!(tsv.split('\t').count(), 13, "{tsv}");
     }
 
     #[test]
