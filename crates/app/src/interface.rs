@@ -504,8 +504,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "ui-sidebar-volume-topology-invalidation" => {
             let (previous_paths, current_paths) = split_sidebar_topology_paths(args)?;
-            let previous = VolumeDiscoveryReport::from_paths_checked(previous_paths)?;
-            let current = VolumeDiscoveryReport::from_paths_checked(current_paths)?;
+            let previous = VolumeDiscoveryReport::from_paths_policy_checked(previous_paths)?;
+            let current = VolumeDiscoveryReport::from_paths_policy_checked(current_paths)?;
             println!(
                 "{}",
                 sidebar_volume_topology_invalidation_tsv(&previous, &current)
@@ -535,8 +535,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "ui-sidebar-volume-state-invalidation requires an event kind after `--`",
             )?)?;
             let resolution = resolve_volume_event_path(kind, args.next().map(PathBuf::from))?;
-            let mut state =
-                VolumeEventState::new(VolumeDiscoveryReport::from_paths_checked(previous_paths)?);
+            let mut state = VolumeEventState::new(
+                VolumeDiscoveryReport::from_paths_policy_checked(previous_paths)?,
+            );
             let current = (kind != VolumeEventKind::Disappeared)
                 .then_some(resolution.descriptor)
                 .flatten();
@@ -968,12 +969,14 @@ fn runtime_operation_conflict_input(
 fn native_sidebar_volumes_checked(
     check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<SidebarVolumeSpec>> {
-    Ok(VolumeDiscoveryReport::discover_checked(check_control)?
-        .volumes
-        .iter()
-        .filter(|volume| volume.kind != VolumeKind::System)
-        .map(sidebar_volume_spec)
-        .collect())
+    Ok(
+        VolumeDiscoveryReport::discover_policy_checked(check_control)?
+            .volumes
+            .iter()
+            .filter(|volume| volume.kind != VolumeKind::System)
+            .map(sidebar_volume_spec)
+            .collect(),
+    )
 }
 
 fn sidebar_volume_spec(volume: &VolumeDescriptor) -> SidebarVolumeSpec {

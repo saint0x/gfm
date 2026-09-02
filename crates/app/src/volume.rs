@@ -72,7 +72,7 @@ pub(crate) fn resolve_volume_event_path(
             native_reason: None,
         }),
         Ok(true) => {
-            let descriptor = VolumeDescriptor::for_path(&path)?;
+            let descriptor = VolumeDescriptor::for_path_policy_checked(&path, || Ok(()))?;
             let native_status = native_status_for_event_descriptor(&descriptor);
             let native_reason = native_reason_for_event_descriptor(&descriptor);
             Ok(VolumeEventPathResolution {
@@ -212,6 +212,41 @@ mod tests {
         assert_eq!(
             native_status_for_event_descriptor(&descriptor),
             NativeVolumeStatus::Unavailable
+        );
+
+        std::fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn existing_volume_event_resolution_defers_capacity_reads() {
+        let path = std::env::temp_dir().join(format!(
+            "gfm-volume-event-policy-capacity-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(path.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+
+        let resolution =
+            resolve_volume_event_path(VolumeEventKind::DescriptionChanged, Some(path.clone()))
+                .expect("existing volume event path should resolve");
+        let descriptor = resolution
+            .descriptor
+            .as_ref()
+            .expect("existing volume event path should retain descriptor");
+
+        assert_eq!(descriptor.kind, gfm_mac::VolumeKind::External);
+        assert_eq!(
+            descriptor.capacity,
+            gfm_mac::VolumeCapacity {
+                total_bytes: 0,
+                available_bytes: 0
+            }
+        );
+        assert_eq!(
+            resolution.native_status,
+            descriptor
+                .native_status
+                .unwrap_or(NativeVolumeStatus::Available)
         );
 
         std::fs::remove_dir_all(path).unwrap();

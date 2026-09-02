@@ -716,13 +716,24 @@ pub struct VolumeDiscoveryReport {
 
 impl VolumeDiscoveryReport {
     pub fn discover_checked(mut check: impl FnMut() -> Result<()>) -> Result<Self> {
+        Self::discover_checked_with_capacity(&mut check, VolumeCapacityMode::Read)
+    }
+
+    pub fn discover_policy_checked(mut check: impl FnMut() -> Result<()>) -> Result<Self> {
+        Self::discover_checked_with_capacity(&mut check, VolumeCapacityMode::Defer)
+    }
+
+    fn discover_checked_with_capacity(
+        mut check: impl FnMut() -> Result<()>,
+        capacity_mode: VolumeCapacityMode,
+    ) -> Result<Self> {
         check()?;
         let mut paths = mounted_volume_paths_checked(&mut check)?;
         check()?;
         if paths.is_empty() {
             paths = fallback_volume_paths_checked(&mut check)?;
         }
-        Self::from_paths_checked_with_control(paths, check)
+        Self::from_paths_checked_with_capacity(paths, check, capacity_mode)
     }
 
     pub fn from_paths(paths: Vec<PathBuf>) -> Self {
@@ -738,9 +749,28 @@ impl VolumeDiscoveryReport {
         Self::from_paths_checked_with_control(paths, || Ok(()))
     }
 
+    pub fn from_paths_policy_checked(paths: Vec<PathBuf>) -> Result<Self> {
+        Self::from_paths_policy_checked_with_control(paths, || Ok(()))
+    }
+
     pub fn from_paths_checked_with_control(
         paths: Vec<PathBuf>,
         mut check: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        Self::from_paths_checked_with_capacity(paths, &mut check, VolumeCapacityMode::Read)
+    }
+
+    pub fn from_paths_policy_checked_with_control(
+        paths: Vec<PathBuf>,
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        Self::from_paths_checked_with_capacity(paths, &mut check, VolumeCapacityMode::Defer)
+    }
+
+    fn from_paths_checked_with_capacity(
+        paths: Vec<PathBuf>,
+        mut check: impl FnMut() -> Result<()>,
+        capacity_mode: VolumeCapacityMode,
     ) -> Result<Self> {
         check()?;
         let paths = unique_volume_paths(paths);
@@ -748,7 +778,11 @@ impl VolumeDiscoveryReport {
         let mut volumes = Vec::with_capacity(paths.len());
         for path in paths {
             check()?;
-            volumes.push(VolumeDescriptor::for_path_checked(path, &mut check)?);
+            volumes.push(VolumeDescriptor::for_path_checked_with_capacity(
+                path,
+                &mut check,
+                capacity_mode,
+            )?);
             check()?;
         }
         normalize_discovered_volumes(&mut volumes);
@@ -4565,6 +4599,24 @@ mod tests {
         assert_eq!(volume.capacity, VolumeCapacity::deferred());
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn path_list_policy_discovery_defers_capacity() {
+        let root = unique_temp_dir("gfm-volume-list-policy-capacity");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+
+        let report = VolumeDiscoveryReport::from_paths_policy_checked(vec![root.clone()])
+            .expect("policy path-list discovery should produce a volume report");
+        let volume = report
+            .volume_for_path(&root)
+            .expect("policy path-list discovery should retain volume identity");
+
+        assert_eq!(volume.path, root);
+        assert_eq!(volume.kind, VolumeKind::External);
+        assert_eq!(volume.capacity, VolumeCapacity::deferred());
+
+        fs::remove_dir_all(volume.path.clone()).unwrap();
     }
 
     #[test]
