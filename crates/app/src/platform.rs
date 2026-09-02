@@ -2759,7 +2759,8 @@ fn current_index_volume_descriptor_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Option<IndexVolumeDescriptor>> {
     check_control()?;
-    let report = VolumeDiscoveryReport::for_containing_path_checked(path, &mut check_control)?;
+    let report =
+        VolumeDiscoveryReport::for_containing_path_policy_checked(path, &mut check_control)?;
     check_control()?;
     let descriptor = report.volume_for_path(path).cloned();
     let parent_descriptor = report.volume_for_path(crate::parent_or_cwd(path));
@@ -2775,9 +2776,9 @@ fn current_index_volume_descriptor_checked(
     check_control()?;
     match path.try_exists() {
         Ok(true) => {
-            let descriptor = descriptor
-                .map(Ok)
-                .unwrap_or_else(|| VolumeDescriptor::for_path_checked(path, &mut check_control))?;
+            let descriptor = descriptor.map(Ok).unwrap_or_else(|| {
+                VolumeDescriptor::for_path_policy_checked(path, &mut check_control)
+            })?;
             check_control()?;
             Ok(Some(index_volume_descriptor(&descriptor)))
         }

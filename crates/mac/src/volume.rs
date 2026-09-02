@@ -121,6 +121,12 @@ pub struct VolumeCapacity {
     pub available_bytes: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VolumeCapacityMode {
+    Read,
+    Defer,
+}
+
 impl VolumeCapacity {
     fn read(path: &Path) -> Self {
         let total_bytes = fs2::total_space(path).unwrap_or(0);
@@ -128,6 +134,13 @@ impl VolumeCapacity {
         Self {
             total_bytes,
             available_bytes,
+        }
+    }
+
+    const fn deferred() -> Self {
+        Self {
+            total_bytes: 0,
+            available_bytes: 0,
         }
     }
 }
@@ -216,6 +229,21 @@ impl VolumeDescriptor {
         path: impl AsRef<Path>,
         mut check: impl FnMut() -> Result<()>,
     ) -> Result<Self> {
+        Self::for_path_checked_with_capacity(path, &mut check, VolumeCapacityMode::Read)
+    }
+
+    pub fn for_path_policy_checked(
+        path: impl AsRef<Path>,
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        Self::for_path_checked_with_capacity(path, &mut check, VolumeCapacityMode::Defer)
+    }
+
+    fn for_path_checked_with_capacity(
+        path: impl AsRef<Path>,
+        mut check: impl FnMut() -> Result<()>,
+        capacity_mode: VolumeCapacityMode,
+    ) -> Result<Self> {
         check()?;
         let path = path.as_ref().to_path_buf();
         check()?;
@@ -298,7 +326,10 @@ impl VolumeDescriptor {
         let mountable = native.as_ref().and_then(|native| native.volume_mountable);
         let apfs_container_uuid = apfs_container_uuid(native.as_ref(), mount_table.as_ref());
         let apfs_role = apfs_volume_role(native.as_ref());
-        let capacity = VolumeCapacity::read(&path);
+        let capacity = match capacity_mode {
+            VolumeCapacityMode::Read => VolumeCapacity::read(&path),
+            VolumeCapacityMode::Defer => VolumeCapacity::deferred(),
+        };
         let commands = command_policy(kind, mount_state, ejectable);
         let stable_identity = match marker.as_deref() {
             Some(marker) => marker_stable_identity(marker, id, &path),
@@ -700,6 +731,21 @@ impl VolumeDiscoveryReport {
         path: impl AsRef<Path>,
         mut check: impl FnMut() -> Result<()>,
     ) -> Result<Self> {
+        Self::for_containing_path_checked_with_capacity(path, &mut check, VolumeCapacityMode::Read)
+    }
+
+    pub fn for_containing_path_policy_checked(
+        path: impl AsRef<Path>,
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        Self::for_containing_path_checked_with_capacity(path, &mut check, VolumeCapacityMode::Defer)
+    }
+
+    fn for_containing_path_checked_with_capacity(
+        path: impl AsRef<Path>,
+        mut check: impl FnMut() -> Result<()>,
+        capacity_mode: VolumeCapacityMode,
+    ) -> Result<Self> {
         let path = path.as_ref();
         check()?;
         let mut paths = direct_containing_mounted_volume_paths_checked(path, &mut check)?;
@@ -718,7 +764,11 @@ impl VolumeDiscoveryReport {
         let mut volumes = Vec::with_capacity(paths.len());
         for path in paths {
             check()?;
-            volumes.push(VolumeDescriptor::for_path_checked(path, &mut check)?);
+            volumes.push(VolumeDescriptor::for_path_checked_with_capacity(
+                path,
+                &mut check,
+                capacity_mode,
+            )?);
         }
         check()?;
         normalize_discovered_volumes(&mut volumes);
@@ -4169,6 +4219,42 @@ mod tests {
         assert!(descriptor.as_tsv().contains("\tdevice-path="));
         assert!(descriptor.source.contains("mount-table=available"));
         assert!(descriptor.source.contains("url-resource=available"));
+    }
+
+    #[test]
+    fn policy_descriptor_defers_capacity_for_latency_sensitive_callers() {
+        let root = unique_temp_dir("gfm-volume-policy-capacity");
+
+        let full = VolumeDescriptor::for_path(&root).unwrap();
+        let policy = VolumeDescriptor::for_path_policy_checked(&root, || Ok(())).unwrap();
+
+        assert!(full.capacity.total_bytes > 0);
+        assert_eq!(policy.path, full.path);
+        assert_eq!(policy.id, full.id);
+        assert_eq!(policy.kind, full.kind);
+        assert_eq!(policy.native_status, full.native_status);
+        assert_eq!(policy.resource_status, full.resource_status);
+        assert_eq!(policy.mount_table_status, full.mount_table_status);
+        assert_eq!(policy.capacity, VolumeCapacity::deferred());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn containing_path_policy_discovery_defers_capacity() {
+        let root = unique_temp_dir("gfm-volume-containing-policy-capacity");
+        let nested = root.join("Project").join("Preview.pdf");
+        fs::create_dir_all(nested.parent().unwrap()).unwrap();
+        fs::write(&nested, "%PDF-1.7\n").unwrap();
+
+        let report =
+            VolumeDiscoveryReport::for_containing_path_policy_checked(&nested, || Ok(())).unwrap();
+        let volume = report.volume_for_path(&nested).unwrap();
+
+        assert!(nested.starts_with(&volume.path));
+        assert_eq!(volume.capacity, VolumeCapacity::deferred());
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

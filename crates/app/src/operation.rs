@@ -761,6 +761,7 @@ fn escape_operation_field(value: &str) -> String {
         .replace('\\', "\\\\")
         .replace('\t', "\\t")
         .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 fn operation_volume_copy_policy_report(operation: &Operation) -> Result<String> {
@@ -782,8 +783,8 @@ fn operation_volume_copy_policy_report(operation: &Operation) -> Result<String> 
             let destination_reachable = operation_volume_reachable_for_path(&report, to);
             format!(
                 "operation-volume-copy-policy\tsource={}\tdestination={}\tsource-class={}\tdestination-class={}\tsource-stable-id={}\tdestination-stable-id={}\tsource-label={}\tdestination-label={}\tsource-volume-root={}\tdestination-volume-root={}\tsource-writable={}\tdestination-writable={}\tsource-read-only={}\tdestination-read-only={}\tsource-reachable={}\tdestination-reachable={}\tbuffer-bytes={}\tfile-cloning={}\tdistinct-volumes={}\thard-links={}\tsparse-files={}\tvolumes={}",
-                from.display(),
-                to.display(),
+                escape_operation_field(&from.display().to_string()),
+                escape_operation_field(&to.display().to_string()),
                 operation_volume_class_name(policy.class_for_path(from)),
                 operation_volume_class_name(policy.class_for_path(to)),
                 source_identity,
@@ -1727,7 +1728,7 @@ fn operation_volume_report_checked(
     for path in operation_paths(operation) {
         check_control()?;
         let containing =
-            VolumeDiscoveryReport::for_containing_path_checked(path, &mut check_control)?;
+            VolumeDiscoveryReport::for_containing_path_policy_checked(path, &mut check_control)?;
         if let Some(volume) = containing.volume_for_path(path) {
             report.volumes.push(volume.clone());
         }
@@ -1900,16 +1901,17 @@ mod tests {
             },
             throughput: None,
             metadata_degradation: Some(OperationMetadataDegradation {
-                path: PathBuf::from("/Volumes/Backup/dir\talias.txt"),
+                path: PathBuf::from("/Volumes/Backup/dir\talias\r.txt"),
                 kind: OperationMetadataDegradationKind::HardLinkTopology,
-                detail: "hard-link topology was not preserved\nvolume lacks links".to_string(),
+                detail: "hard-link topology was not preserved\nvolume lacks links\rretry"
+                    .to_string(),
             }),
         };
 
         assert_eq!(
             operation_progress_event_line(&event).as_deref(),
             Some(
-                "operation-metadata-degradation\tpath=/Volumes/Backup/dir\\talias.txt\tkind=hard-link-topology\tdetail=hard-link topology was not preserved\\nvolume lacks links"
+                "operation-metadata-degradation\tpath=/Volumes/Backup/dir\\talias\\r.txt\tkind=hard-link-topology\tdetail=hard-link topology was not preserved\\nvolume lacks links\\rretry"
             )
         );
     }
@@ -1994,6 +1996,39 @@ mod tests {
         assert!(report.contains("\thard-links=true\t"));
         assert!(report.contains("\tsparse-files=true\t"));
         assert!(report.contains("\tvolumes="));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operation_volume_copy_policy_report_escapes_control_characters_in_paths() {
+        let root = unique_temp_dir("gfm-app-op-volume-policy-report-escape");
+        let network = root.join("Team\tShare\nOne\r");
+        let external = root.join("Backup\tDrive\nTwo\r");
+        fs::create_dir_all(&network).unwrap();
+        fs::create_dir_all(&external).unwrap();
+        fs::write(network.join(".gfm-volume-kind"), "network-smb\n").unwrap();
+        fs::write(external.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+        let source = network.join("source\tfile\none\r.bin");
+        let destination = external.join("destination\tfile\ntwo\r.bin");
+        let operation = Operation::Copy {
+            from: source.clone(),
+            to: destination.clone(),
+        };
+
+        let report = operation_volume_copy_policy_report(&operation).unwrap();
+
+        assert!(report.starts_with("operation-volume-copy-policy\t"));
+        assert!(report.contains("source="), "{report}");
+        assert!(
+            report.contains("\\tShare\\nOne\\r/source\\tfile\\none\\r.bin"),
+            "{report}"
+        );
+        assert!(
+            report.contains("\\tDrive\\nTwo\\r/destination\\tfile\\ntwo\\r.bin"),
+            "{report}"
+        );
+        assert_eq!(report.split('\t').count(), 23, "{report}");
 
         fs::remove_dir_all(root).unwrap();
     }
