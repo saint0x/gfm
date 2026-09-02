@@ -1658,7 +1658,7 @@ mod tests {
             .reason
             .as_deref()
             .unwrap_or_default()
-            .contains("path existence unavailable"));
+            .contains("path metadata unavailable"));
     }
 
     #[test]

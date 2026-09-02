@@ -815,10 +815,12 @@ fn run_filemanager_url_operation(
             );
         }
         NativePathUrl::Unavailable(reason) => {
-            let reason = reason.replace(
-                "path existence unavailable",
-                "path existence is unavailable",
-            );
+            let reason = reason
+                .replace(
+                    "path existence unavailable",
+                    "path existence is unavailable",
+                )
+                .replace("path metadata unavailable", "path metadata is unavailable");
             return operation_result(
                 NativeFileProviderOperationStatus::Unavailable,
                 format!("{label} failed because {reason}"),
@@ -1185,7 +1187,7 @@ mod tests {
             .reason
             .as_deref()
             .unwrap_or_default()
-            .contains("path existence unavailable"));
+            .contains("fileprovider path metadata unavailable"));
     }
 
     #[cfg(unix)]
@@ -1205,7 +1207,7 @@ mod tests {
             .reason
             .as_deref()
             .unwrap_or_default()
-            .contains("path existence unavailable"));
+            .contains("fileprovider identity path metadata unavailable"));
     }
 
     #[test]
@@ -1239,7 +1241,7 @@ mod tests {
             .reason
             .as_deref()
             .unwrap_or_default()
-            .contains("path existence is unavailable"));
+            .contains("path metadata is unavailable"));
     }
 
     #[test]

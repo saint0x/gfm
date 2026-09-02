@@ -264,7 +264,7 @@ mod tests {
             .reason
             .as_deref()
             .unwrap()
-            .contains("bookmark path existence unavailable"));
+            .contains("bookmark path metadata unavailable"));
     }
 
     #[test]

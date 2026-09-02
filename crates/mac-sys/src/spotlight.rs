@@ -285,6 +285,6 @@ mod tests {
             .reason
             .as_deref()
             .unwrap()
-            .contains("path existence unavailable"));
+            .contains("path metadata unavailable"));
     }
 }

@@ -111,6 +111,6 @@ mod tests {
             .reason
             .as_deref()
             .unwrap()
-            .contains("finder kind path existence unavailable"));
+            .contains("finder kind path metadata unavailable"));
     }
 }
