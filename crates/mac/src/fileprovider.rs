@@ -1459,8 +1459,14 @@ impl FileProviderStateObserver {
     }
 
     pub fn observe_once(&mut self) -> Result<FileProviderObservedInvalidation> {
-        let event = self.stream.recv()?;
-        self.apply_events([event])
+        let event =
+            next_fileprovider_observer_event(&mut self.pending_events, || self.stream.recv())?;
+        apply_single_fileprovider_observer_event_checked(
+            &mut self.snapshot,
+            &mut self.pending_events,
+            event,
+            || Ok(()),
+        )
     }
 
     pub fn drain_available(
@@ -1500,28 +1506,6 @@ impl FileProviderStateObserver {
         &self.snapshot
     }
 
-    fn apply_events(
-        &mut self,
-        events: impl IntoIterator<Item = FileEvent>,
-    ) -> Result<FileProviderObservedInvalidation> {
-        self.apply_events_checked(events, || Ok(()))
-    }
-
-    fn apply_events_checked(
-        &mut self,
-        events: impl IntoIterator<Item = FileEvent>,
-        mut check: impl FnMut() -> Result<()>,
-    ) -> Result<FileProviderObservedInvalidation> {
-        let (observed, snapshot) = FileProviderObservedInvalidation::evaluate_checked(
-            Some(&self.snapshot),
-            events,
-            &mut check,
-        )?;
-        check()?;
-        self.snapshot = snapshot;
-        Ok(observed)
-    }
-
     fn apply_drained_events_checked(
         &mut self,
         events: Vec<FileEvent>,
@@ -1534,6 +1518,26 @@ impl FileProviderStateObserver {
             check,
         )
     }
+}
+
+fn next_fileprovider_observer_event(
+    pending_events: &mut VecDeque<FileEvent>,
+    recv: impl FnOnce() -> Result<FileEvent>,
+) -> Result<FileEvent> {
+    match pending_events.pop_front() {
+        Some(event) => Ok(event),
+        None => recv(),
+    }
+}
+
+fn apply_single_fileprovider_observer_event_checked(
+    snapshot: &mut FileProviderStateSnapshot,
+    pending_events: &mut VecDeque<FileEvent>,
+    event: FileEvent,
+    check: impl FnMut() -> Result<()>,
+) -> Result<FileProviderObservedInvalidation> {
+    apply_fileprovider_observer_events_checked(snapshot, pending_events, vec![event], check)?
+        .ok_or_else(|| GfmError::Format("FileProvider observer single event was empty".to_string()))
 }
 
 fn apply_fileprovider_observer_events_checked(
@@ -4878,6 +4882,41 @@ mod tests {
     }
 
     #[test]
+    fn observer_single_event_restore_to_pending_when_application_is_cancelled() {
+        let root = unique_temp_dir();
+        let evicted = root.join("Remote.icloud-placeholder");
+        fs::write(&evicted, "placeholder").unwrap();
+        mark_evicted_fixture(&evicted);
+        let event = FileEvent::new(&evicted, FileEventKind::Metadata);
+        let mut snapshot = FileProviderStateSnapshot {
+            entries: Vec::new(),
+        };
+        let mut pending_events = VecDeque::new();
+        let mut checks = 0usize;
+
+        let err = apply_single_fileprovider_observer_event_checked(
+            &mut snapshot,
+            &mut pending_events,
+            event.clone(),
+            || {
+                checks += 1;
+                if checks >= 8 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert_eq!(snapshot.entries.len(), 0);
+        assert_eq!(pending_events.len(), 1);
+        assert_eq!(pending_events[0], event);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn observer_drained_events_restore_to_pending_when_publish_is_cancelled() {
         let root = unique_temp_dir();
         let evicted = root.join("Remote.icloud-placeholder");
@@ -4928,6 +4967,21 @@ mod tests {
         assert_eq!(pending_events.len(), 1);
         assert_eq!(pending_events[0], event);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn observer_next_event_prefers_restored_pending_before_blocking_stream() {
+        let pending = FileEvent::new("/tmp/pending-fileprovider-event", FileEventKind::Metadata);
+        let mut pending_events = VecDeque::from([pending.clone()]);
+        let event = next_fileprovider_observer_event(&mut pending_events, || {
+            Err(GfmError::Format(
+                "stream receive should not be reached".to_string(),
+            ))
+        })
+        .unwrap();
+
+        assert_eq!(event, pending);
+        assert!(pending_events.is_empty());
     }
 
     #[test]
