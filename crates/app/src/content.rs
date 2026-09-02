@@ -578,31 +578,36 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let journal = JobJournal::new(default_job_journal_path());
             let mut spec = ContentIndexJobSpec::new(&root, segment_dir, records, content);
             let spec_path = default_content_job_path();
-            if pressure.decide(Priority::Background, 1, 1).action == SchedulingAction::Defer {
-                let root_access_report = ForegroundContentIndexAccessReports::entry_checked(
-                    spec.root.clone(),
-                    AccessIntent::Index,
-                    || Ok(()),
-                )?;
-                preflight_content_input_denial_before_runtime(
-                    &root_access_report,
-                    "background content index",
-                )?;
-                let _access = ContentJobAccessReports::for_spec_path_write(&spec_path)?
-                    .access_checked("background content index", || Ok(()))?;
-            } else {
-                let access_reports =
-                    ContentJobAccessReports::for_spec(&spec, &spec_path, Some(journal.path()))?;
-                access_reports.preflight_volumes("background content index")?;
-                let volume = access_reports.first_volume().ok_or_else(|| {
-                    GfmError::Format(format!(
-                        "could not determine content index volume for {}",
-                        spec.root.display()
-                    ))
-                })?;
-                spec = spec.with_volume(volume);
-            }
+            let deferred_spec_access =
+                if pressure.decide(Priority::Background, 1, 1).action == SchedulingAction::Defer {
+                    let root_access_report = ForegroundContentIndexAccessReports::entry_checked(
+                        spec.root.clone(),
+                        AccessIntent::Index,
+                        || Ok(()),
+                    )?;
+                    preflight_content_input_denial_before_runtime(
+                        &root_access_report,
+                        "background content index",
+                    )?;
+                    Some(retain_deferred_background_content_job_spec_access_checked(
+                        &spec_path,
+                        || Ok(()),
+                    )?)
+                } else {
+                    let access_reports =
+                        ContentJobAccessReports::for_spec(&spec, &spec_path, Some(journal.path()))?;
+                    access_reports.preflight_volumes("background content index")?;
+                    let volume = access_reports.first_volume().ok_or_else(|| {
+                        GfmError::Format(format!(
+                            "could not determine content index volume for {}",
+                            spec.root.display()
+                        ))
+                    })?;
+                    spec = spec.with_volume(volume);
+                    None
+                };
             spec.write(&spec_path)?;
+            drop(deferred_spec_access);
             let outcome = run_content_job(&spec, &journal, pressure, &spec_path)?;
             if outcome.deferred {
                 eprintln!(
@@ -2161,6 +2166,29 @@ mod tests {
     }
 
     #[test]
+    fn deferred_content_job_spec_access_preflights_volume_before_access() {
+        let offline = unique_temp_dir("gfm-content-deferred-spec-offline");
+        fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let spec_path = offline.join("job.tsv");
+
+        let err =
+            match retain_deferred_background_content_job_spec_access_checked(&spec_path, || Ok(()))
+            {
+                Ok(_) => panic!("unreachable deferred job spec path was admitted before preflight"),
+                Err(err) => err,
+            };
+
+        assert!(
+            err.to_string().contains(
+                "background content index volume access blocked: unreachable volume network"
+            ),
+            "{err}"
+        );
+        assert!(!spec_path.exists());
+        fs::remove_dir_all(offline).unwrap();
+    }
+
+    #[test]
     fn content_job_reports_checked_can_cancel_between_outputs() {
         let root = unique_temp_dir("gfm-content-job-report-cancel");
         let spec = ContentIndexJobSpec::new(
@@ -2964,10 +2992,6 @@ impl ContentJobAccessReports {
         Ok(Self { entries })
     }
 
-    fn for_spec_path_write(spec_path: &Path) -> Result<ForegroundContentIndexAccessReport> {
-        Self::for_spec_path_write_checked(spec_path, || Ok(()))
-    }
-
     fn for_spec_path_write_checked(
         spec_path: &Path,
         mut check_control: impl FnMut() -> Result<()>,
@@ -3033,6 +3057,19 @@ fn retain_content_segments_access_checked(
         &mut check_control,
     )?;
     access_reports.access_checked(worker, &mut check_control)
+}
+
+fn retain_deferred_background_content_job_spec_access_checked(
+    spec_path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<ScopedAccessGuard> {
+    check_control()?;
+    let spec_access_report =
+        ContentJobAccessReports::for_spec_path_write_checked(spec_path, &mut check_control)?;
+    check_control()?;
+    spec_access_report.preflight_volume("background content index")?;
+    check_control()?;
+    spec_access_report.access_checked("background content index", &mut check_control)
 }
 
 #[cfg(test)]
