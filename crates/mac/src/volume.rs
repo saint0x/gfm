@@ -4765,7 +4765,7 @@ mod tests {
     }
 
     #[test]
-    fn descriptor_reports_platform_api_not_available_for_resource_or_mount_failures() {
+    fn descriptor_reports_platform_api_not_available_for_total_resource_or_mount_failures() {
         let root = unique_temp_dir("gfm-volume-platform-api-not-available");
         let mut descriptor = VolumeDescriptor::for_path(&root).unwrap();
 
