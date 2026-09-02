@@ -265,7 +265,7 @@ impl NativeIconInvalidationReport {
     pub fn as_tsv(&self) -> String {
         format!(
             "native-icon-invalidation\t{}\tprevious={}\tcurrent={}\tprevious-badges={}\tcurrent-badges={}\tprevious-cache={}\tcurrent-cache={}\tinvalidate-cache={}\treason={}",
-            self.path.display(),
+            escape_path_field(&self.path),
             self.previous.as_str(),
             self.current.as_str(),
             native_badges_tsv(&self.previous_badges),
@@ -276,6 +276,18 @@ impl NativeIconInvalidationReport {
             self.reason
         )
     }
+}
+
+fn escape_path_field(path: &Path) -> String {
+    escape_field(&path.to_string_lossy())
+}
+
+fn escape_field(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 impl NativeIconDescriptor {
@@ -812,6 +824,27 @@ mod tests {
             invalidation.as_tsv(),
             "native-icon-invalidation\t/tmp/Remote.icloud-placeholder\tprevious=downloaded\tcurrent=evicted\tprevious-badges=cloud-available-offline\tcurrent-badges=cloud\tprevious-cache=fileprovider:downloaded:cloud-available-offline\tcurrent-cache=fileprovider:evicted:cloud\tinvalidate-cache=true\treason=native-icon-badges-changed"
         );
+    }
+
+    #[test]
+    fn native_icon_invalidation_tsv_escapes_control_characters_in_path() {
+        let mut report = fileprovider_report(
+            CloudStorageState::Downloaded,
+            CloudStorageState::Evicted,
+            vec![CloudBadge::Cloud],
+            true,
+        );
+        report.path = PathBuf::from("/tmp/Reports\tQ3\nDraft\rIcon.icloud");
+
+        let invalidation = NativeIconInvalidationReport::from_fileprovider(&report);
+        let tsv = invalidation.as_tsv();
+
+        assert_eq!(tsv.lines().count(), 1, "{tsv}");
+        assert!(
+            tsv.contains("Reports\\tQ3\\nDraft\\rIcon.icloud\tprevious=downloaded\t"),
+            "{tsv}"
+        );
+        assert_eq!(tsv.split('\t').count(), 10, "{tsv}");
     }
 
     #[test]

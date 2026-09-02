@@ -249,7 +249,7 @@ impl SpotlightReconciliationReport {
             .unwrap_or_else(|| "-".to_string());
         let mut lines = vec![format!(
             "spotlight-reconciliation\t{}\t{}:{}\tprimary=filesystem\tspotlight={}\tfields={}\tenrichments={}\tconflicts={}\treason={}",
-            self.primary.path.display(),
+            escape_path_field(&self.primary.path),
             self.primary.id.volume.0,
             self.primary.id.node,
             self.snapshot.status.as_str(),
@@ -437,7 +437,7 @@ impl SpotlightIngestionPlan {
                 "decision\t{}:{}\t{}\taction={}\treason={}\tattributes={}",
                 decision.id.volume.0,
                 decision.id.node,
-                decision.path.display(),
+                escape_path_field(&decision.path),
                 decision.action.as_str(),
                 escape_field(&decision.reason),
                 decision.publishable_attributes.len(),
@@ -704,6 +704,11 @@ fn escape_field(value: &str) -> String {
         .replace('\\', "\\\\")
         .replace('\t', "\\t")
         .replace('\n', "\\n")
+        .replace('\r', "\\r")
+}
+
+fn escape_path_field(path: &Path) -> String {
+    escape_field(&path.to_string_lossy())
 }
 
 #[cfg(test)]

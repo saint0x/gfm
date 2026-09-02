@@ -235,6 +235,44 @@ fn ingestion_plan_reports_degraded_and_unavailable_health() {
         .all(|decision| decision.action == SpotlightIngestionAction::SkipUnavailable));
 }
 
+#[test]
+fn reconciliation_tsv_escapes_control_characters_in_primary_path() {
+    let primary = record("Reports\tQ3\nDraft\rSpotlight.md");
+    let snapshot = SpotlightSnapshot::missing(&primary.path, "mdls unavailable");
+    let report = SpotlightReconciliationReport::reconcile(primary, snapshot);
+    let tsv = report.as_tsv();
+    let first_line = tsv.lines().next().unwrap();
+
+    assert!(
+        first_line.contains("Reports\\tQ3\\nDraft\\rSpotlight.md\t1:9\t"),
+        "{tsv}"
+    );
+    assert_eq!(first_line.split('\t').count(), 9, "{tsv}");
+}
+
+#[test]
+fn ingestion_plan_tsv_escapes_control_characters_in_decision_path() {
+    let records = vec![record("Reports\tQ3\nDraft\rIngestion.md")];
+    let snapshot = parse_spotlight_fixture(
+        &records[0].path,
+        "kMDItemDisplayName\tDraft\rIngestion.md\n",
+    )
+    .unwrap();
+    let plan = SpotlightIngestionPlan::from_records(
+        &records,
+        &[snapshot],
+        &SpotlightIngestionPolicy::default(),
+    );
+    let tsv = plan.as_tsv();
+    let decision = tsv.lines().nth(1).unwrap();
+
+    assert!(
+        decision.contains("Reports\\tQ3\\nDraft\\rIngestion.md\taction="),
+        "{tsv}"
+    );
+    assert_eq!(decision.split('\t').count(), 6, "{tsv}");
+}
+
 fn record(name: &str) -> FileRecord {
     FileRecord {
         id: FileId::new(VolumeId(1), 9),
