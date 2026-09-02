@@ -231,11 +231,11 @@ impl TrashCommandSpec {
     fn as_tsv(&self) -> String {
         format!(
             "command\t{}\t{}\tenabled={}\tdestructive={}\tdisabled-reason={}",
-            self.id,
-            self.title,
+            escape_field(&self.id),
+            escape_field(&self.title),
             self.enabled,
             self.destructive,
-            self.disabled_reason.clone().unwrap_or_default()
+            escape_field(&self.disabled_reason.clone().unwrap_or_default())
         )
     }
 }
@@ -304,20 +304,32 @@ impl TrashRowSpec {
             self.id.node,
             kind_tsv(self.kind),
             self.y_px,
-            self.name,
-            self.path.display(),
+            escape_field(&self.name),
+            escape_path_field(&self.path),
             self.size,
             self.original_path
                 .as_ref()
-                .map(|path| path.display().to_string())
+                .map(|path| escape_path_field(path))
                 .unwrap_or_default(),
-            self.deleted_at.clone().unwrap_or_default(),
+            escape_field(&self.deleted_at.clone().unwrap_or_default()),
             self.selected,
             self.restore.enabled,
             self.delete_permanently.enabled,
-            self.permission_issue.clone().unwrap_or_default()
+            escape_field(&self.permission_issue.clone().unwrap_or_default())
         )
     }
+}
+
+fn escape_path_field(path: &std::path::Path) -> String {
+    escape_field(&path.to_string_lossy())
+}
+
+fn escape_field(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 pub fn render(contract: &TrashViewContract) -> impl IntoElement {
@@ -483,6 +495,45 @@ mod tests {
         assert!(tsv.contains("command\tempty-trash\tEmpty Trash\tenabled=true\tdestructive=true"));
         assert!(tsv.contains("row\t0\t1\t1\tfile\t0px\tNote.txt"));
         assert!(tsv.contains("original=/Users/me/Documents/Note.txt\tdeleted-at=100"));
+    }
+
+    #[test]
+    fn trash_view_tsv_escapes_control_characters_in_text_fields() {
+        let contract = TrashViewContract::from_records(
+            &[record(1, "Reports\tQ3\nDraft\rTrash.txt", FileKind::File)],
+            TrashViewOptions::default().with_metadata([(
+                "Reports\tQ3\nDraft\rTrash.txt".to_string(),
+                TrashEntryMetadata {
+                    original_path: Some(PathBuf::from(
+                        "/Users/me/Documents/Reports\tQ3\nDraft\rTrash.txt",
+                    )),
+                    deleted_at: Some("100\t200\n300".to_string()),
+                    can_restore: true,
+                    can_delete_permanently: false,
+                    permission_issue: Some("Full Disk Access\trequired\nbefore delete".to_string()),
+                },
+            )]),
+        );
+        let tsv = contract.as_tsv();
+        let row = tsv.lines().find(|line| line.starts_with("row\t")).unwrap();
+
+        assert_eq!(tsv.lines().count(), 3, "{tsv}");
+        assert!(
+            row.contains(
+                "Reports\\tQ3\\nDraft\\rTrash.txt\t/tmp/.Trash/Reports\\tQ3\\nDraft\\rTrash.txt\t"
+            ),
+            "{tsv}"
+        );
+        assert!(
+            row.contains("original=/Users/me/Documents/Reports\\tQ3\\nDraft\\rTrash.txt\t"),
+            "{tsv}"
+        );
+        assert!(row.contains("deleted-at=100\\t200\\n300\t"), "{tsv}");
+        assert!(
+            row.contains("permission=Full Disk Access\\trequired\\nbefore delete"),
+            "{tsv}"
+        );
+        assert_eq!(row.split('\t').count(), 15, "{tsv}");
     }
 
     fn record(node: u64, name: &str, kind: FileKind) -> FileRecord {

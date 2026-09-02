@@ -236,7 +236,7 @@ impl GalleryPreviewSpec {
             self.width_px,
             self.height_px,
             self.role.as_str(),
-            self.name
+            escape_field(&self.name)
         )
     }
 }
@@ -310,7 +310,7 @@ impl GalleryMetadataSpec {
             kind_tsv(self.kind),
             self.size,
             self.modified,
-            self.tags.join(",")
+            escape_field(&self.tags.join(","))
         )
     }
 }
@@ -334,7 +334,9 @@ impl GalleryQuickActionSpec {
     fn as_tsv(&self) -> String {
         format!(
             "quick-action\t{}\t{}\tenabled={}",
-            self.id, self.title, self.enabled
+            escape_field(&self.id),
+            escape_field(&self.title),
+            self.enabled
         )
     }
 }
@@ -386,10 +388,18 @@ impl GalleryFilmstripItemSpec {
             self.width_px,
             self.height_px,
             self.role.as_str(),
-            self.name,
+            escape_field(&self.name),
             self.selected
         )
     }
+}
+
+fn escape_field(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -693,6 +703,45 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn gallery_view_tsv_escapes_control_characters_in_text_fields() {
+        let selected = FileId::new(gfm_types::VolumeId(1), 1);
+        let contract = GalleryViewContract::from_records(
+            &[tagged_control(record(
+                1,
+                "Reports\tQ3\nDraft\rGallery.pdf",
+                FileKind::File,
+            ))],
+            GalleryViewOptions::default()
+                .with_viewport_items(1)
+                .with_selected(Some(selected)),
+        );
+        let tsv = contract.as_tsv();
+        let mut lines = tsv.lines();
+        let _header = lines.next().unwrap();
+        let preview = lines.next().unwrap();
+        let metadata = lines.next().unwrap();
+        let first_action = lines.next().unwrap();
+        let second_action = lines.next().unwrap();
+        let filmstrip = lines.next().unwrap();
+
+        assert_eq!(tsv.lines().count(), 6, "{tsv}");
+        assert!(
+            preview.contains("\tpdf-preview\tReports\\tQ3\\nDraft\\rGallery.pdf"),
+            "{tsv}"
+        );
+        assert!(metadata.contains("\ttags=Red\\tTag\\n"), "{tsv}");
+        assert_eq!(first_action.split('\t').count(), 4, "{tsv}");
+        assert_eq!(second_action.split('\t').count(), 4, "{tsv}");
+        assert!(
+            filmstrip.contains("\tpdf-preview\tReports\\tQ3\\nDraft\\rGallery.pdf\tselected=true"),
+            "{tsv}"
+        );
+        assert_eq!(preview.split('\t').count(), 8, "{tsv}");
+        assert_eq!(metadata.split('\t').count(), 7, "{tsv}");
+        assert_eq!(filmstrip.split('\t').count(), 10, "{tsv}");
+    }
+
     fn hidden(mut record: FileRecord) -> FileRecord {
         record.hidden = true;
         record
@@ -700,6 +749,11 @@ mod tests {
 
     fn tagged(mut record: FileRecord) -> FileRecord {
         record.tags = vec!["Red".to_string()];
+        record
+    }
+
+    fn tagged_control(mut record: FileRecord) -> FileRecord {
+        record.tags = vec!["Red\tTag\n".to_string()];
         record
     }
 

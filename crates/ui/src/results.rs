@@ -228,7 +228,7 @@ impl SearchResultsContract {
         let mut lines = Vec::with_capacity(1 + self.groups.len() + self.rows.len());
         lines.push(format!(
             "search-results\tquery={}\tscope={}\tgrouping={}\trow-height={}px\tviewport-rows={}\tscroll-row={}\tstage={}\tprogressive={}\ttotal={}\tvisible={}..{}",
-            self.query,
+            escape_field(&self.query),
             self.scope.as_str(),
             self.grouping.as_str(),
             self.row_height_px,
@@ -258,7 +258,10 @@ impl SearchResultsGroupSpec {
     fn as_tsv(&self) -> String {
         format!(
             "group\t{}\t{}\tcount={}\tfirst-row={}",
-            self.key, self.title, self.count, self.first_row
+            escape_field(&self.key),
+            escape_field(&self.title),
+            self.count,
+            self.first_row
         )
     }
 }
@@ -321,16 +324,16 @@ impl SearchResultRowSpec {
             self.id.node,
             kind_tsv(self.kind),
             self.y_px,
-            self.name,
-            self.path.display(),
-            self.parent,
+            escape_field(&self.name),
+            escape_path_field(&self.path),
+            escape_field(&self.parent),
             self.size,
             self.score,
             reason_tsv(&self.reason),
             self.stage.as_str(),
-            self.group_key,
+            escape_field(&self.group_key),
             self.selected,
-            self.snippet.clone().unwrap_or_default()
+            escape_field(self.snippet.as_deref().unwrap_or_default())
         )
     }
 }
@@ -420,6 +423,18 @@ fn group_key(hit: &SearchHit, grouping: SearchResultsGrouping) -> String {
             .unwrap_or_default(),
         SearchResultsGrouping::Reason => reason_tsv(&hit.reason).to_string(),
     }
+}
+
+fn escape_path_field(path: &std::path::Path) -> String {
+    escape_field(&path.to_string_lossy())
+}
+
+fn escape_field(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 fn group_title(key: &str, grouping: SearchResultsGrouping) -> String {
@@ -555,6 +570,44 @@ mod tests {
         assert!(tsv.contains("group\tfile\tDocuments\tcount=1\tfirst-row=0"));
         assert!(tsv.contains("row\t0\t1\t1\tfile\t0px\tPLAN.md"));
         assert!(tsv.contains("score=88\treason=exact-name\tstage=hot"));
+    }
+
+    #[test]
+    fn search_results_tsv_escapes_control_characters_in_text_fields() {
+        let contract = SearchResultsContract::from_batches(
+            vec![SearchResultsBatch::new(
+                SearchResultsStage::Hot,
+                vec![hit(
+                    1,
+                    "Reports\tQ3\nDraft\rSearch.txt",
+                    FileKind::File,
+                    88,
+                    MatchReason::Content,
+                )],
+            )],
+            SearchResultsOptions::new("Reports\tQ3\nDraft").with_viewport_rows(1),
+        );
+        let tsv = contract.as_tsv();
+        let mut lines = tsv.lines();
+        let header = lines.next().unwrap();
+        let group = lines.next().unwrap();
+        let row = lines.next().unwrap();
+
+        assert_eq!(tsv.lines().count(), 3, "{tsv}");
+        assert!(header.contains("query=Reports\\tQ3\\nDraft\t"), "{tsv}");
+        assert_eq!(header.split('\t').count(), 11, "{tsv}");
+        assert_eq!(group.split('\t').count(), 5, "{tsv}");
+        assert!(
+            row.contains(
+                "Reports\\tQ3\\nDraft\\rSearch.txt\t/tmp/Reports\\tQ3\\nDraft\\rSearch.txt\t"
+            ),
+            "{tsv}"
+        );
+        assert!(
+            row.contains("snippet=snippet for Reports\\tQ3\\nDraft\\rSearch.txt"),
+            "{tsv}"
+        );
+        assert_eq!(row.split('\t').count(), 16, "{tsv}");
     }
 
     fn hit(node: u64, name: &str, kind: FileKind, score: i64, reason: MatchReason) -> SearchHit {

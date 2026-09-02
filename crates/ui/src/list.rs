@@ -236,7 +236,7 @@ pub struct ListCellSpec {
 
 impl ListCellSpec {
     fn as_tsv(&self) -> String {
-        format!("{}={}", self.column.id(), self.text)
+        format!("{}={}", self.column.id(), escape_field(&self.text))
     }
 }
 
@@ -305,7 +305,7 @@ impl ListRowSpec {
             self.disclosed,
             self.selected,
             self.alternating,
-            self.name,
+            escape_field(&self.name),
             self.cells
                 .iter()
                 .map(ListCellSpec::as_tsv)
@@ -313,6 +313,14 @@ impl ListRowSpec {
                 .join("\t")
         )
     }
+}
+
+fn escape_field(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 pub fn render(contract: &ListViewContract) -> impl IntoElement {
@@ -535,6 +543,29 @@ mod tests {
         assert!(tsv.contains("name=Note.txt"));
     }
 
+    #[test]
+    fn list_view_tsv_escapes_control_characters_in_text_fields() {
+        let contract = ListViewContract::from_records(
+            &[tagged_control(record(
+                1,
+                "Reports\tQ3\nDraft\rList.txt",
+                FileKind::File,
+            ))],
+            ListViewOptions::default().with_viewport_rows(1),
+        );
+        let tsv = contract.as_tsv();
+        let row = tsv.lines().find(|line| line.starts_with("row\t")).unwrap();
+
+        assert_eq!(tsv.lines().count(), 7, "{tsv}");
+        assert!(row.contains("Reports\\tQ3\\nDraft\\rList.txt\t"), "{tsv}");
+        assert!(
+            row.contains("name=Reports\\tQ3\\nDraft\\rList.txt\t"),
+            "{tsv}"
+        );
+        assert!(row.contains("\ttags=Red\\tTag\\n"), "{tsv}");
+        assert_eq!(row.split('\t').count(), 17, "{tsv}");
+    }
+
     fn hidden(mut record: FileRecord) -> FileRecord {
         record.hidden = true;
         record
@@ -542,6 +573,11 @@ mod tests {
 
     fn tagged(mut record: FileRecord) -> FileRecord {
         record.tags = vec!["Red".to_string()];
+        record
+    }
+
+    fn tagged_control(mut record: FileRecord) -> FileRecord {
+        record.tags = vec!["Red\tTag\n".to_string()];
         record
     }
 
