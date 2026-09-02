@@ -4477,7 +4477,12 @@ fn ui_search_results_contract_runs_through_visible_worker_from_binary() {
         stderr.contains(&format!(
             "security-worker-admission\tworker=ui search\tpath={}\tintent=index",
             root.display()
-        )),
+        )) && stderr.contains(&format!(
+            "ui-search-volume-access\tworker=ui search\tpath={}\tintent=index",
+            root.display()
+        )) && stderr.contains("\tstable-id=")
+            && !stderr.contains("\tstable-id=-\t")
+            && stderr.contains("\treason=cached-volume-report"),
         "{stderr}"
     );
 

@@ -590,6 +590,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let access_report =
                 InterfaceAccessReport::new_checked(root.clone(), AccessIntent::Index, || Ok(()))?;
             access_report.preflight_volume("ui search")?;
+            eprintln!(
+                "{}",
+                access_report.as_tsv("ui-search-volume-access", "ui search")
+            );
             let volume = access_report.volume();
             let query_for_worker = query.clone();
             let batches = crate::runtime::run_volume_task_cancellable(
@@ -1199,6 +1203,45 @@ impl InterfaceAccessReport {
             .volume_for_path(&self.path)
             .map(|volume| volume.id)
     }
+
+    fn as_tsv(&self, prefix: &str, worker: &str) -> String {
+        if let Some(volume) = self.volume_report.volume_for_path(&self.path) {
+            format!(
+                "{}\tworker={}\tpath={}\tintent={}\tvolume-id={}\tstable-id={}\tclass={}\tmount={}\treachable={}\tread-only={}\treason=cached-volume-report",
+                escape_tsv_field(prefix),
+                escape_tsv_field(worker),
+                escape_tsv_field(&self.path.to_string_lossy()),
+                self.intent.as_str(),
+                volume.id.0,
+                escape_tsv_field(&volume.stable_identity),
+                volume.kind.as_str(),
+                volume.mount_state.as_str(),
+                format_optional_bool(volume.reachable),
+                volume.read_only,
+            )
+        } else {
+            format!(
+                "{}\tworker={}\tpath={}\tintent={}\tvolume-id=-\tstable-id=-\tclass=-\tmount=-\treachable=-\tread-only=-\treason=no-containing-volume",
+                escape_tsv_field(prefix),
+                escape_tsv_field(worker),
+                escape_tsv_field(&self.path.to_string_lossy()),
+                self.intent.as_str(),
+            )
+        }
+    }
+}
+
+fn format_optional_bool(value: Option<bool>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn escape_tsv_field(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
 }
 
 #[derive(Clone)]
