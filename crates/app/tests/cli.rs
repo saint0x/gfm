@@ -10397,6 +10397,49 @@ fn adaptive_extract_report_refuses_unreachable_volume_before_budgeted_extraction
 }
 
 #[test]
+fn adaptive_extract_report_reports_cached_volume_identity_from_binary() {
+    let root = unique_temp_dir("gfm-cli-extract-report-adaptive-volume-root");
+    let path = root.join("Small.txt");
+    fs::write(&path, "adaptive extraction volume marker").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "extract-report-adaptive",
+            path.to_str().unwrap(),
+            "nominal",
+            "nominal",
+            "ac",
+            "idle",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains(&format!(
+            "content-extraction-volume-access\tworker=adaptive content extraction\tpath={}\tintent=read",
+            path.display()
+        )) && stderr.contains("\tstable-id=")
+            && !stderr.contains("\tstable-id=-\t")
+            && stderr.contains("\treason=cached-volume-report"),
+        "{stderr}"
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("extract\tpath="), "{stdout}");
+    assert!(
+        stdout.contains("\tformat=text\tstatus=extracted\t"),
+        "{stdout}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn extract_report_refuses_missing_path_before_extraction_from_binary() {
     let path = unique_temp_path("gfm-cli-extract-missing-path", "txt");
 
