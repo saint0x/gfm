@@ -1346,11 +1346,16 @@ impl FileProviderObservedInvalidation {
         let mut event_count = 0;
         let mut event_kinds = BTreeSet::new();
         let mut paths = BTreeSet::new();
+        let mut expanded_events = BTreeSet::new();
         let previous_lookup = FileProviderSnapshotLookup::new(previous);
         for event in events {
             check()?;
             event_count += 1;
             event_kinds.insert(fileprovider_observed_event_kind(&event.kind));
+            let expansion_key = fileprovider_event_expansion_key(&event);
+            if !expanded_events.insert(expansion_key) {
+                continue;
+            }
             for path in paths_for_fileprovider_event_checked(&previous_lookup, &event, &mut check)?
             {
                 paths.insert(path);
@@ -1588,6 +1593,25 @@ fn fileprovider_observed_event_kind(kind: &FileEventKind) -> FileProviderObserve
         FileEventKind::Rename { .. } => FileProviderObservedEventKind::Rename,
         FileEventKind::Rescan => FileProviderObservedEventKind::Rescan,
         FileEventKind::Other => FileProviderObservedEventKind::Other,
+    }
+}
+
+fn fileprovider_event_expansion_key(event: &FileEvent) -> String {
+    match &event.kind {
+        FileEventKind::Create => format!("create\t{}", event.path.display()),
+        FileEventKind::Metadata => format!("metadata\t{}", event.path.display()),
+        FileEventKind::Modify => format!("modify\t{}", event.path.display()),
+        FileEventKind::Remove => format!("remove\t{}", event.path.display()),
+        FileEventKind::Rename { from, to } => {
+            format!(
+                "rename\t{}\t{}\t{}",
+                event.path.display(),
+                from.display(),
+                to.display()
+            )
+        }
+        FileEventKind::Rescan => format!("rescan\t{}", event.path.display()),
+        FileEventKind::Other => format!("other\t{}", event.path.display()),
     }
 }
 
@@ -5019,6 +5043,44 @@ mod tests {
         assert_eq!(snapshot.entries.len(), 1);
         assert_eq!(snapshot.entries[0].path, evicted);
         assert_eq!(snapshot.entries[0].state, CloudStorageState::Evicted);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn observed_fileprovider_invalidation_skips_duplicate_event_expansion_work() {
+        let root = unique_temp_dir();
+        let evicted = root.join("Remote.icloud-placeholder");
+        fs::write(&evicted, "placeholder").unwrap();
+        mark_evicted_fixture(&evicted);
+        let previous = FileProviderStateSnapshot {
+            entries: vec![FileProviderStateSnapshotEntry {
+                path: evicted.clone(),
+                state: CloudStorageState::Downloaded,
+                signature: None,
+            }],
+        };
+        let events = (0..64)
+            .map(|_| FileEvent::new(&evicted, FileEventKind::Metadata))
+            .collect::<Vec<_>>();
+        let mut checks = 0usize;
+
+        let (observed, snapshot) =
+            FileProviderObservedInvalidation::evaluate_checked(Some(&previous), events, || {
+                checks += 1;
+                if checks > 96 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            })
+            .expect("duplicate event expansion should stay inside the bounded check budget");
+
+        assert_eq!(observed.events, 64);
+        assert_eq!(observed.paths, vec![evicted.clone()]);
+        assert_eq!(observed.report.changes.len(), 1);
+        assert_eq!(snapshot.entries.len(), 1);
+        assert_eq!(snapshot.entries[0].path, evicted);
 
         fs::remove_dir_all(root).unwrap();
     }
