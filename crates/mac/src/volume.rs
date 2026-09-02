@@ -4288,6 +4288,15 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    fn volume_event_stream_with_pending(
+        events: impl IntoIterator<Item = gfm_mac_sys::NativeVolumeEvent>,
+    ) -> VolumeEventStream {
+        VolumeEventStream {
+            stream: gfm_mac_sys::NativeVolumeEventStream::detached(),
+            pending: Mutex::new(std::collections::VecDeque::from_iter(events)),
+        }
+    }
+
     #[cfg(unix)]
     use std::ffi::OsString;
     #[cfg(unix)]
@@ -6425,10 +6434,7 @@ mod tests {
                 description.volume_path = Some(root.clone());
             }),
         };
-        let stream = VolumeEventStream {
-            stream: gfm_mac_sys::NativeVolumeEventStream::start(),
-            pending: Mutex::new(std::collections::VecDeque::from([event])),
-        };
+        let stream = volume_event_stream_with_pending([event]);
         let mut checks = 0usize;
 
         let err = stream
@@ -6464,10 +6470,7 @@ mod tests {
                 description.volume_path = Some(root.clone());
             }),
         };
-        let stream = VolumeEventStream {
-            stream: gfm_mac_sys::NativeVolumeEventStream::start(),
-            pending: Mutex::new(std::collections::VecDeque::from([event])),
-        };
+        let stream = volume_event_stream_with_pending([event]);
         let mut checks = 0usize;
 
         let err = stream
@@ -6560,10 +6563,7 @@ mod tests {
         };
         let mut state =
             VolumeEventState::new(VolumeDiscoveryReport::from_paths(vec![root.clone()]));
-        let stream = VolumeEventStream {
-            stream: gfm_mac_sys::NativeVolumeEventStream::start(),
-            pending: Mutex::new(std::collections::VecDeque::from([appeared, changed])),
-        };
+        let stream = volume_event_stream_with_pending([appeared, changed]);
 
         let report = stream
             .drain_into_state_checked(&mut state, 2, || Ok(()))
@@ -6700,10 +6700,7 @@ mod tests {
             },
         ];
         let injected_events = events.len();
-        let stream = VolumeEventStream {
-            stream: gfm_mac_sys::NativeVolumeEventStream::start(),
-            pending: Mutex::new(std::collections::VecDeque::from(events)),
-        };
+        let stream = volume_event_stream_with_pending(events);
         let mut state = VolumeEventState::new(VolumeDiscoveryReport {
             volumes: Vec::new(),
         });
@@ -6747,10 +6744,7 @@ mod tests {
                 }),
             },
         ];
-        let stream = VolumeEventStream {
-            stream: gfm_mac_sys::NativeVolumeEventStream::start(),
-            pending: Mutex::new(std::collections::VecDeque::from(events)),
-        };
+        let stream = volume_event_stream_with_pending(events);
         let mut state = VolumeEventState::new(VolumeDiscoveryReport {
             volumes: Vec::new(),
         });

@@ -8,7 +8,7 @@ use gfm_mac_sys::{
     NativeFileProviderResourceValues, NativeUbiquitousDownloadingStatus,
 };
 use gfm_types::{FileEvent, FileEventKind, GfmError, Result};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::path::{Path, PathBuf};
@@ -819,6 +819,7 @@ pub struct FileProviderObservedInvalidation {
 pub struct FileProviderStateObserver {
     stream: FileEventStream,
     snapshot: FileProviderStateSnapshot,
+    pending_events: VecDeque<FileEvent>,
 }
 
 struct FileProviderSnapshotLookup<'a> {
@@ -1453,6 +1454,7 @@ impl FileProviderStateObserver {
             snapshot: snapshot.unwrap_or_else(|| FileProviderStateSnapshot {
                 entries: Vec::new(),
             }),
+            pending_events: VecDeque::new(),
         })
     }
 
@@ -1474,7 +1476,16 @@ impl FileProviderStateObserver {
         mut check: impl FnMut() -> Result<()>,
     ) -> Result<Option<FileProviderObservedInvalidation>> {
         let mut events = Vec::new();
+        while events.len() < max_events {
+            let Some(event) = self.pending_events.pop_front() else {
+                break;
+            };
+            events.push(event);
+        }
         for _ in 0..max_events {
+            if events.len() >= max_events {
+                break;
+            }
             check()?;
             match self.stream.try_recv() {
                 Some(Ok(event)) => events.push(event),
@@ -1482,11 +1493,7 @@ impl FileProviderStateObserver {
                 None => break,
             }
         }
-        check()?;
-        if events.is_empty() {
-            return Ok(None);
-        }
-        self.apply_events_checked(events, check).map(Some)
+        self.apply_drained_events_checked(events, check)
     }
 
     pub fn snapshot(&self) -> &FileProviderStateSnapshot {
@@ -1513,6 +1520,57 @@ impl FileProviderStateObserver {
         check()?;
         self.snapshot = snapshot;
         Ok(observed)
+    }
+
+    fn apply_drained_events_checked(
+        &mut self,
+        events: Vec<FileEvent>,
+        check: impl FnMut() -> Result<()>,
+    ) -> Result<Option<FileProviderObservedInvalidation>> {
+        apply_fileprovider_observer_events_checked(
+            &mut self.snapshot,
+            &mut self.pending_events,
+            events,
+            check,
+        )
+    }
+}
+
+fn apply_fileprovider_observer_events_checked(
+    snapshot: &mut FileProviderStateSnapshot,
+    pending_events: &mut VecDeque<FileEvent>,
+    events: Vec<FileEvent>,
+    mut check: impl FnMut() -> Result<()>,
+) -> Result<Option<FileProviderObservedInvalidation>> {
+    if events.is_empty() {
+        return Ok(None);
+    }
+    match FileProviderObservedInvalidation::evaluate_checked(
+        Some(snapshot),
+        events.iter().cloned(),
+        &mut check,
+    ) {
+        Ok((observed, next_snapshot)) => {
+            if let Err(err) = check() {
+                restore_fileprovider_observer_pending_events(pending_events, events);
+                return Err(err);
+            }
+            *snapshot = next_snapshot;
+            Ok(Some(observed))
+        }
+        Err(err) => {
+            restore_fileprovider_observer_pending_events(pending_events, events);
+            Err(err)
+        }
+    }
+}
+
+fn restore_fileprovider_observer_pending_events(
+    pending_events: &mut VecDeque<FileEvent>,
+    events: Vec<FileEvent>,
+) {
+    for event in events.into_iter().rev() {
+        pending_events.push_front(event);
     }
 }
 
@@ -4739,6 +4797,110 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(err, GfmError::Cancelled);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn observer_drained_events_restore_to_pending_when_application_is_cancelled() {
+        let root = unique_temp_dir();
+        let evicted = root.join("Remote.icloud-placeholder");
+        fs::write(&evicted, "placeholder").unwrap();
+        mark_evicted_fixture(&evicted);
+        let event = FileEvent::new(&evicted, FileEventKind::Metadata);
+        let mut snapshot = FileProviderStateSnapshot {
+            entries: Vec::new(),
+        };
+        let mut pending_events = VecDeque::new();
+        let mut checks = 0usize;
+
+        let err = apply_fileprovider_observer_events_checked(
+            &mut snapshot,
+            &mut pending_events,
+            vec![event.clone()],
+            || {
+                checks += 1;
+                if checks >= 8 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert_eq!(snapshot.entries.len(), 0);
+        assert_eq!(pending_events.len(), 1);
+        assert_eq!(pending_events[0], event);
+
+        let restored = pending_events.drain(..).collect::<Vec<_>>();
+        let observed = apply_fileprovider_observer_events_checked(
+            &mut snapshot,
+            &mut pending_events,
+            restored,
+            || Ok(()),
+        )
+        .unwrap()
+        .expect("restored FileProvider event should apply");
+
+        assert_eq!(observed.paths, vec![evicted.clone()]);
+        assert_eq!(snapshot.entries.len(), 1);
+        assert_eq!(snapshot.entries[0].path, evicted);
+        assert_eq!(snapshot.entries[0].state, CloudStorageState::Evicted);
+        assert!(pending_events.is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn observer_drained_events_restore_to_pending_when_publish_is_cancelled() {
+        let root = unique_temp_dir();
+        let evicted = root.join("Remote.icloud-placeholder");
+        fs::write(&evicted, "placeholder").unwrap();
+        mark_evicted_fixture(&evicted);
+        let event = FileEvent::new(&evicted, FileEventKind::Metadata);
+
+        let mut successful_checks = 0usize;
+        let mut baseline_snapshot = FileProviderStateSnapshot {
+            entries: Vec::new(),
+        };
+        let mut baseline_pending = VecDeque::new();
+        apply_fileprovider_observer_events_checked(
+            &mut baseline_snapshot,
+            &mut baseline_pending,
+            vec![event.clone()],
+            || {
+                successful_checks += 1;
+                Ok(())
+            },
+        )
+        .unwrap()
+        .expect("baseline event should apply");
+
+        let mut snapshot = FileProviderStateSnapshot {
+            entries: Vec::new(),
+        };
+        let mut pending_events = VecDeque::new();
+        let mut checks = 0usize;
+        let err = apply_fileprovider_observer_events_checked(
+            &mut snapshot,
+            &mut pending_events,
+            vec![event.clone()],
+            || {
+                checks += 1;
+                if checks >= successful_checks {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert_eq!(checks, successful_checks);
+        assert_eq!(snapshot.entries.len(), 0);
+        assert_eq!(pending_events.len(), 1);
+        assert_eq!(pending_events[0], event);
         fs::remove_dir_all(root).unwrap();
     }
 

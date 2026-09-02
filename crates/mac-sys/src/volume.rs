@@ -478,6 +478,16 @@ impl NativeVolumeEventStream {
         }
     }
 
+    pub fn detached() -> Self {
+        let (_event_tx, event_rx) = mpsc::channel();
+        Self {
+            receiver: event_rx,
+            run_loop: None,
+            stop: Arc::new(AtomicBool::new(false)),
+            thread: None,
+        }
+    }
+
     pub fn is_attached(&self) -> bool {
         self.run_loop.is_some()
     }
