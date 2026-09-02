@@ -919,7 +919,8 @@ pub(crate) fn run_content_search(
     query: String,
     extractor: Extractor,
 ) -> Result<(usize, Vec<SearchHit>)> {
-    let volume_report = VolumeDiscoveryReport::for_containing_path_checked(&root, || Ok(()))?;
+    let volume_report =
+        VolumeDiscoveryReport::for_containing_path_policy_checked(&root, || Ok(()))?;
     run_content_search_with_volume_report(root, query, extractor, volume_report)
 }
 
@@ -1656,6 +1657,8 @@ impl RecoverableContentJobs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gfm_content::ExtractionVolumeClass;
+    use gfm_mac::VolumeCapacity;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -1697,6 +1700,34 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(unique, vec![first, second]);
+    }
+
+    #[test]
+    fn content_search_budget_volume_report_defers_capacity_reads() {
+        let root = unique_temp_dir("gfm-content-search-policy-capacity");
+        fs::write(root.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+        let input = root.join("Clip.mov");
+        fs::write(&input, "external").unwrap();
+
+        let volume_report =
+            VolumeDiscoveryReport::for_containing_path_policy_checked(&input, || Ok(())).unwrap();
+        let volume = volume_report.volume_for_path(&input).unwrap();
+        let profile = extraction_budget_profile_from_volume_report(
+            &input,
+            SchedulingPressure::default(),
+            &volume_report,
+        );
+
+        assert_eq!(profile.volume, ExtractionVolumeClass::External);
+        assert_eq!(
+            volume.capacity,
+            VolumeCapacity {
+                total_bytes: 0,
+                available_bytes: 0
+            }
+        );
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

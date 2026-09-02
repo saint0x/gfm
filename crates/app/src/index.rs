@@ -29,7 +29,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .map(PathBuf::from)
                 .unwrap_or(std::env::current_dir().unwrap());
             let volume_report =
-                VolumeDiscoveryReport::for_containing_path_checked(&path, || Ok(()))?;
+                VolumeDiscoveryReport::for_containing_path_policy_checked(&path, || Ok(()))?;
             preflight_volume_access_scope_with_report(
                 &path,
                 AccessIntent::Read,
@@ -226,7 +226,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 || Ok(()),
             )?;
             state_access.preflight_volume()?;
-            let root_report = VolumeDiscoveryReport::for_containing_path_checked(&root, || Ok(()))?;
+            let root_report =
+                VolumeDiscoveryReport::for_containing_path_policy_checked(&root, || Ok(()))?;
             let volume = root_report.volume_for_path(&root).cloned().ok_or_else(|| {
                 GfmError::Format(format!(
                     "index-admission-state could not resolve containing volume for {}",
@@ -996,7 +997,7 @@ where
 {
     check_control()?;
     let volume_report =
-        VolumeDiscoveryReport::for_containing_path_checked(&path, &mut check_control)?;
+        VolumeDiscoveryReport::for_containing_path_policy_checked(&path, &mut check_control)?;
     check_control()?;
     preflight_volume_access_scope_with_report(&path, AccessIntent::Read, worker, &volume_report)?;
     check_control()?;
@@ -1029,7 +1030,7 @@ impl IndexPathAccessReport {
     ) -> Result<Self> {
         check_control()?;
         let volume_report =
-            VolumeDiscoveryReport::for_containing_path_checked(&path, &mut check_control)?;
+            VolumeDiscoveryReport::for_containing_path_policy_checked(&path, &mut check_control)?;
         check_control()?;
         Ok(Self {
             path,
@@ -1551,6 +1552,7 @@ fn event_marker(kind: &FileEventKind) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gfm_mac::VolumeCapacity;
 
     #[test]
     fn index_read_task_passes_runtime_token_to_reader() {
@@ -1637,6 +1639,38 @@ mod tests {
 
         assert_eq!(result.err(), Some(GfmError::Cancelled));
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn index_path_access_report_defers_volume_capacity_reads() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-index-path-policy-capacity-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+
+        let report = IndexPathAccessReport::new_checked(
+            root.clone(),
+            AccessIntent::Read,
+            "index path access",
+            || Ok(()),
+        )
+        .unwrap();
+        let volume = report.volume_report.volume_for_path(&root).unwrap();
+
+        assert_eq!(report.volume(), Some(volume.id));
+        assert_eq!(
+            volume.capacity,
+            VolumeCapacity {
+                total_bytes: 0,
+                available_bytes: 0
+            }
+        );
+        report.preflight_volume().unwrap();
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
