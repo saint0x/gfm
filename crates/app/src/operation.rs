@@ -1726,8 +1726,12 @@ fn operation_volume_report_checked(
     let mut report = VolumeDiscoveryReport {
         volumes: Vec::new(),
     };
+    let mut seen_paths = BTreeSet::new();
     for path in operation_paths(operation) {
         check_control()?;
+        if !seen_paths.insert(path.to_path_buf()) {
+            continue;
+        }
         let containing =
             VolumeDiscoveryReport::for_containing_path_policy_checked(path, &mut check_control)?;
         if let Some(volume) = containing.volume_for_path(path) {
@@ -3256,6 +3260,39 @@ mod tests {
 
         assert_eq!(result.err(), Some(GfmError::Cancelled));
         assert!(checks > 3);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operation_volume_report_checked_deduplicates_paths_before_discovery() {
+        let root = unique_temp_dir("gfm-app-op-volume-report-path-dedup");
+        let path = root.join("same.txt");
+        fs::write(&path, "content").unwrap();
+        let operation = Operation::Rename {
+            from: path.clone(),
+            to: path.clone(),
+        };
+        let single_path_operation = Operation::Delete { path: path.clone() };
+        let mut duplicate_checks = 0usize;
+        let mut single_path_checks = 0usize;
+
+        let report = operation_volume_report_checked(&operation, || {
+            duplicate_checks += 1;
+            Ok(())
+        })
+        .expect("duplicate operation paths should not repeat volume discovery");
+        operation_volume_report_checked(&single_path_operation, || {
+            single_path_checks += 1;
+            Ok(())
+        })
+        .expect("single operation path should discover volume");
+
+        assert_eq!(report.volumes.len(), 1);
+        assert!(report.volume_for_path(&path).is_some());
+        assert!(
+            duplicate_checks <= single_path_checks + 1,
+            "duplicate operation paths repeated volume discovery work; duplicate_checks={duplicate_checks}; single_path_checks={single_path_checks}"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
