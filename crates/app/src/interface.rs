@@ -456,6 +456,54 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             );
             println!("{}", invalidation.as_tsv());
         }
+        "ui-sidebar-volume-api-reason-invalidation" => {
+            let previous = SidebarVolumeSpec::from_native_seed(
+                "diskarbitration:uuid:UI-API-REASON",
+                "UI API Reason",
+                "/Volumes/UI API Reason",
+                true,
+            )
+            .with_volume_state(
+                SidebarVolumeKind::External,
+                SidebarVolumeMountState::Mounted,
+                false,
+                false,
+                Some(true),
+            )
+            .with_platform_api_context(
+                Some("available".to_string()),
+                Some("DiskArbitration available before sidebar refresh".to_string()),
+                Some("available".to_string()),
+                None,
+                Some("available".to_string()),
+                None,
+            );
+            let current = previous.clone().with_platform_api_context(
+                Some("available".to_string()),
+                Some("DiskArbitration refreshed during sidebar update".to_string()),
+                Some("available".to_string()),
+                None,
+                Some("available".to_string()),
+                None,
+            );
+            let invalidation = SidebarVolumeInvalidation::from_event(
+                SidebarVolumeEventKind::DescriptionChanged,
+                Some(PathBuf::from("/Volumes/UI API Reason")),
+                Some(&previous),
+                Some(&current),
+                true,
+                "volume-api-reason-changed",
+            )
+            .with_platform_statuses(
+                Some("available".to_string()),
+                Some("available".to_string()),
+                Some("available".to_string()),
+                Some("available".to_string()),
+                Some("available".to_string()),
+                Some("available".to_string()),
+            );
+            println!("{}", invalidation.as_tsv());
+        }
         "ui-sidebar-volume-state-invalidation" => {
             let mut previous_paths = Vec::new();
             loop {
