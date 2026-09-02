@@ -1053,7 +1053,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let kind = parse_preview_kind(args.next())?;
             let pressure = parse_required_scheduling_pressure(args, "preview volume scheduling")?;
             let base = preview_base_scheduling_policy(kind);
-            let report = VolumeDiscoveryReport::for_containing_path_checked(
+            let report = VolumeDiscoveryReport::for_containing_path_policy_checked(
                 absolute_preview_path(&path),
                 || Ok(()),
             )?;
@@ -2255,8 +2255,10 @@ fn preview_security_input_with_volume_checked(
 ) -> Result<PreviewSecurityInput> {
     let volume_path = absolute_preview_path(path);
     check_control()?;
-    let report =
-        VolumeDiscoveryReport::for_containing_path_checked(&volume_path, &mut check_control)?;
+    let report = VolumeDiscoveryReport::for_containing_path_policy_checked(
+        &volume_path,
+        &mut check_control,
+    )?;
     check_control()?;
     preflight_volume_access_scope_with_report(
         path,
@@ -2283,8 +2285,10 @@ impl PreviewAccessReport {
     fn new_checked(path: PathBuf, mut check_control: impl FnMut() -> Result<()>) -> Result<Self> {
         let volume_path = absolute_preview_path(&path);
         check_control()?;
-        let volume_report =
-            VolumeDiscoveryReport::for_containing_path_checked(&volume_path, &mut check_control)?;
+        let volume_report = VolumeDiscoveryReport::for_containing_path_policy_checked(
+            &volume_path,
+            &mut check_control,
+        )?;
         check_control()?;
         Ok(Self {
             path,
@@ -5144,7 +5148,7 @@ impl PlatformAccessReport {
     ) -> Result<Self> {
         check_control()?;
         let volume_report =
-            VolumeDiscoveryReport::for_containing_path_checked(&path, &mut check_control)?;
+            VolumeDiscoveryReport::for_containing_path_policy_checked(&path, &mut check_control)?;
         check_control()?;
         Ok(Self {
             path,
@@ -5577,6 +5581,34 @@ mod tests {
     }
 
     #[test]
+    fn preview_access_report_defers_volume_capacity_reads() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-preview-access-report-policy-capacity-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+        let path = root.join("Preview.pdf");
+        std::fs::write(&path, "%PDF-1.7\n").unwrap();
+
+        let report = PreviewAccessReport::new_checked(path.clone(), || Ok(())).unwrap();
+        let volume = report.volume_report.volume_for_path(&path).unwrap();
+
+        assert_eq!(report.volume(), Some(volume.id));
+        assert_eq!(
+            volume.capacity,
+            gfm_mac::VolumeCapacity {
+                total_bytes: 0,
+                available_bytes: 0
+            }
+        );
+        report.preflight_volume("preview access").unwrap();
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn preview_scheduling_uses_slow_volume_io_descriptor_policy() {
         let root =
             std::env::temp_dir().join(format!("gfm-preview-slow-volume-io-{}", std::process::id()));
@@ -5669,6 +5701,35 @@ mod tests {
 
         assert_eq!(result.err(), Some(GfmError::Cancelled));
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn platform_access_report_defers_volume_capacity_reads() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-platform-access-report-policy-capacity-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+        let path = root.join("state.tsv");
+        std::fs::write(&path, "state").unwrap();
+
+        let report =
+            PlatformAccessReport::new_checked(path.clone(), AccessIntent::Read, || Ok(())).unwrap();
+        let volume = report.volume_report.volume_for_path(&path).unwrap();
+
+        assert_eq!(report.volume(), Some(volume.id));
+        assert_eq!(
+            volume.capacity,
+            gfm_mac::VolumeCapacity {
+                total_bytes: 0,
+                available_bytes: 0
+            }
+        );
+        report.preflight_volume("platform access").unwrap();
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
