@@ -325,6 +325,9 @@ impl HostSchedulingPressureReport {
             native.low_power_status,
             native.low_power_enabled,
             native.low_power_reason,
+            native.power_source_status,
+            native.power_source_state,
+            native.power_source_reason,
         );
         Self {
             thermal_status,
@@ -391,18 +394,75 @@ fn map_thermal_signal(
 }
 
 fn map_low_power_signal(
-    status: gfm_mac_sys::NativeHostSignalStatus,
+    low_power_status: gfm_mac_sys::NativeHostSignalStatus,
     enabled: Option<bool>,
-    reason: Option<String>,
+    low_power_reason: Option<String>,
+    power_source_status: gfm_mac_sys::NativeHostSignalStatus,
+    power_source_state: Option<gfm_mac_sys::NativePowerSourceState>,
+    power_source_reason: Option<String>,
 ) -> (HostPressureSignalStatus, HostBatteryState, Option<String>) {
-    match (status, enabled) {
-        (gfm_mac_sys::NativeHostSignalStatus::Available, Some(true)) => (
+    if matches!(
+        (low_power_status, enabled),
+        (gfm_mac_sys::NativeHostSignalStatus::Available, Some(true))
+    ) {
+        return (
             HostPressureSignalStatus::Available,
             HostBatteryState::LowPower,
+            low_power_reason,
+        );
+    }
+
+    let power_source =
+        map_power_source_signal(power_source_status, power_source_state, power_source_reason);
+    if !matches!(
+        power_source.0,
+        HostPressureSignalStatus::Unavailable | HostPressureSignalStatus::Unsupported
+    ) {
+        return power_source;
+    }
+
+    match (low_power_status, enabled) {
+        (gfm_mac_sys::NativeHostSignalStatus::Available, Some(false)) => power_source,
+        (gfm_mac_sys::NativeHostSignalStatus::Unsupported, _) => (
+            HostPressureSignalStatus::Unsupported,
+            HostBatteryState::AcPower,
+            low_power_reason,
+        ),
+        _ => (
+            HostPressureSignalStatus::Unavailable,
+            HostBatteryState::AcPower,
+            low_power_reason,
+        ),
+    }
+}
+
+fn map_power_source_signal(
+    status: gfm_mac_sys::NativeHostSignalStatus,
+    state: Option<gfm_mac_sys::NativePowerSourceState>,
+    reason: Option<String>,
+) -> (HostPressureSignalStatus, HostBatteryState, Option<String>) {
+    match (status, state) {
+        (
+            gfm_mac_sys::NativeHostSignalStatus::Available,
+            Some(gfm_mac_sys::NativePowerSourceState::BatteryPower),
+        ) => (
+            HostPressureSignalStatus::Available,
+            HostBatteryState::Battery,
             reason,
         ),
-        (gfm_mac_sys::NativeHostSignalStatus::Available, Some(false)) => (
+        (
+            gfm_mac_sys::NativeHostSignalStatus::Available,
+            Some(gfm_mac_sys::NativePowerSourceState::AcPower),
+        ) => (
             HostPressureSignalStatus::Available,
+            HostBatteryState::AcPower,
+            reason,
+        ),
+        (
+            gfm_mac_sys::NativeHostSignalStatus::Unavailable,
+            Some(gfm_mac_sys::NativePowerSourceState::Offline),
+        ) => (
+            HostPressureSignalStatus::Unavailable,
             HostBatteryState::AcPower,
             reason,
         ),
@@ -524,6 +584,9 @@ mod tests {
             low_power_status: gfm_mac_sys::NativeHostSignalStatus::Available,
             low_power_enabled: Some(true),
             low_power_reason: None,
+            power_source_status: gfm_mac_sys::NativeHostSignalStatus::Available,
+            power_source_state: Some(gfm_mac_sys::NativePowerSourceState::AcPower),
+            power_source_reason: None,
         });
 
         assert_eq!(report.thermal_status, HostPressureSignalStatus::Available);
@@ -544,6 +607,43 @@ mod tests {
     }
 
     #[test]
+    fn maps_native_battery_power_to_scheduler_pressure() {
+        let report = HostSchedulingPressureReport::from_native(gfm_mac_sys::NativeHostPressure {
+            thermal_status: gfm_mac_sys::NativeHostSignalStatus::Available,
+            thermal_state: Some(gfm_mac_sys::NativeThermalState::Nominal),
+            thermal_reason: None,
+            low_power_status: gfm_mac_sys::NativeHostSignalStatus::Available,
+            low_power_enabled: Some(false),
+            low_power_reason: None,
+            power_source_status: gfm_mac_sys::NativeHostSignalStatus::Available,
+            power_source_state: Some(gfm_mac_sys::NativePowerSourceState::BatteryPower),
+            power_source_reason: None,
+        });
+
+        assert_eq!(report.battery_status, HostPressureSignalStatus::Available);
+        assert_eq!(report.battery_state, HostBatteryState::Battery);
+        assert_eq!(report.battery_reason, None);
+    }
+
+    #[test]
+    fn low_power_mode_overrides_ac_power_source() {
+        let report = HostSchedulingPressureReport::from_native(gfm_mac_sys::NativeHostPressure {
+            thermal_status: gfm_mac_sys::NativeHostSignalStatus::Available,
+            thermal_state: Some(gfm_mac_sys::NativeThermalState::Nominal),
+            thermal_reason: None,
+            low_power_status: gfm_mac_sys::NativeHostSignalStatus::Available,
+            low_power_enabled: Some(true),
+            low_power_reason: None,
+            power_source_status: gfm_mac_sys::NativeHostSignalStatus::Available,
+            power_source_state: Some(gfm_mac_sys::NativePowerSourceState::AcPower),
+            power_source_reason: None,
+        });
+
+        assert_eq!(report.battery_status, HostPressureSignalStatus::Available);
+        assert_eq!(report.battery_state, HostBatteryState::LowPower);
+    }
+
+    #[test]
     fn pressure_report_tsv_escapes_unavailable_signal_reasons() {
         let report = HostSchedulingPressureReport::from_native(gfm_mac_sys::NativeHostPressure {
             thermal_status: gfm_mac_sys::NativeHostSignalStatus::Unavailable,
@@ -552,6 +652,9 @@ mod tests {
             low_power_status: gfm_mac_sys::NativeHostSignalStatus::Unsupported,
             low_power_enabled: None,
             low_power_reason: Some("low power\tunsupported".to_string()),
+            power_source_status: gfm_mac_sys::NativeHostSignalStatus::Unsupported,
+            power_source_state: None,
+            power_source_reason: Some("power\tunsupported".to_string()),
         });
 
         let tsv = report.as_tsv();

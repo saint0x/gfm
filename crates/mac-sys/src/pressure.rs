@@ -1,11 +1,28 @@
+use core_foundation::base::TCFType;
+use core_foundation::string::CFString;
+use core_foundation_sys::array::{CFArrayGetCount, CFArrayGetValueAtIndex, CFArrayRef};
+use core_foundation_sys::base::{CFGetTypeID, CFRelease, CFTypeRef};
+use core_foundation_sys::dictionary::CFDictionaryRef;
+use core_foundation_sys::string::{CFStringGetTypeID, CFStringRef};
 use objc::runtime::{Class, Object, Sel};
+use std::ffi::c_void;
 
 #[link(name = "Foundation", kind = "framework")]
+extern "C" {}
+
+#[link(name = "IOKit", kind = "framework")]
 extern "C" {}
 
 #[link(name = "objc")]
 extern "C" {
     fn objc_msgSend();
+}
+
+extern "C" {
+    fn IOPSCopyPowerSourcesInfo() -> CFTypeRef;
+    fn IOPSCopyPowerSourcesList(blob: CFTypeRef) -> CFArrayRef;
+    fn IOPSGetPowerSourceDescription(blob: CFTypeRef, ps: CFTypeRef) -> CFDictionaryRef;
+    fn CFDictionaryGetValue(dictionary: CFDictionaryRef, key: *const c_void) -> *const c_void;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,6 +33,9 @@ pub struct NativeHostPressure {
     pub low_power_status: NativeHostSignalStatus,
     pub low_power_enabled: Option<bool>,
     pub low_power_reason: Option<String>,
+    pub power_source_status: NativeHostSignalStatus,
+    pub power_source_state: Option<NativePowerSourceState>,
+    pub power_source_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,6 +63,23 @@ pub enum NativeThermalState {
     Critical,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativePowerSourceState {
+    AcPower,
+    BatteryPower,
+    Offline,
+}
+
+impl NativePowerSourceState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AcPower => "ac",
+            Self::BatteryPower => "battery",
+            Self::Offline => "offline",
+        }
+    }
+}
+
 impl NativeThermalState {
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -63,11 +100,15 @@ pub fn copy_host_pressure() -> NativeHostPressure {
             low_power_status: NativeHostSignalStatus::Unsupported,
             low_power_enabled: None,
             low_power_reason: Some("NSProcessInfo processInfo is unavailable".to_string()),
+            power_source_status: NativeHostSignalStatus::Unsupported,
+            power_source_state: None,
+            power_source_reason: Some("NSProcessInfo processInfo is unavailable".to_string()),
         };
     };
 
     let (thermal_status, thermal_state, thermal_reason) = read_thermal_state(process_info);
     let (low_power_status, low_power_enabled, low_power_reason) = read_low_power_mode(process_info);
+    let (power_source_status, power_source_state, power_source_reason) = read_power_source_state();
 
     NativeHostPressure {
         thermal_status,
@@ -76,6 +117,9 @@ pub fn copy_host_pressure() -> NativeHostPressure {
         low_power_status,
         low_power_enabled,
         low_power_reason,
+        power_source_status,
+        power_source_state,
+        power_source_reason,
     }
 }
 
@@ -154,6 +198,126 @@ fn read_low_power_mode(
         Some(unsafe { send(process_info, selector) != 0 }),
         None,
     )
+}
+
+fn read_power_source_state() -> (
+    NativeHostSignalStatus,
+    Option<NativePowerSourceState>,
+    Option<String>,
+) {
+    let snapshot = unsafe { IOPSCopyPowerSourcesInfo() };
+    if snapshot.is_null() {
+        return (
+            NativeHostSignalStatus::Unavailable,
+            None,
+            Some("IOKit did not return a power-source snapshot".to_string()),
+        );
+    }
+
+    let sources = unsafe { IOPSCopyPowerSourcesList(snapshot) };
+    if sources.is_null() {
+        unsafe { CFRelease(snapshot) };
+        return (
+            NativeHostSignalStatus::Unavailable,
+            None,
+            Some("IOKit did not return a power-source list".to_string()),
+        );
+    }
+
+    let state = read_power_source_state_from_list(snapshot, sources);
+    unsafe {
+        CFRelease(sources as CFTypeRef);
+        CFRelease(snapshot);
+    }
+    state
+}
+
+fn read_power_source_state_from_list(
+    snapshot: CFTypeRef,
+    sources: CFArrayRef,
+) -> (
+    NativeHostSignalStatus,
+    Option<NativePowerSourceState>,
+    Option<String>,
+) {
+    let count = unsafe { CFArrayGetCount(sources) };
+    if count == 0 {
+        return (
+            NativeHostSignalStatus::Available,
+            Some(NativePowerSourceState::AcPower),
+            None,
+        );
+    }
+
+    let key = CFString::new("Power Source State");
+    let mut saw_ac = false;
+    let mut saw_offline = false;
+    let mut saw_unknown = false;
+    for index in 0..count {
+        let source = unsafe { CFArrayGetValueAtIndex(sources, index) as CFTypeRef };
+        if source.is_null() {
+            saw_unknown = true;
+            continue;
+        }
+        let description = unsafe { IOPSGetPowerSourceDescription(snapshot, source) };
+        if description.is_null() {
+            saw_unknown = true;
+            continue;
+        }
+        let value = unsafe { CFDictionaryGetValue(description, key.as_CFTypeRef()) as CFTypeRef };
+        match power_source_state_from_value(value) {
+            Some(NativePowerSourceState::BatteryPower) => {
+                return (
+                    NativeHostSignalStatus::Available,
+                    Some(NativePowerSourceState::BatteryPower),
+                    None,
+                );
+            }
+            Some(NativePowerSourceState::AcPower) => saw_ac = true,
+            Some(NativePowerSourceState::Offline) => saw_offline = true,
+            None => saw_unknown = true,
+        }
+    }
+
+    if saw_ac {
+        return (
+            NativeHostSignalStatus::Available,
+            Some(NativePowerSourceState::AcPower),
+            None,
+        );
+    }
+    if saw_offline {
+        return (
+            NativeHostSignalStatus::Unavailable,
+            Some(NativePowerSourceState::Offline),
+            Some("IOKit reports only offline power sources".to_string()),
+        );
+    }
+    if saw_unknown {
+        return (
+            NativeHostSignalStatus::Unavailable,
+            None,
+            Some("IOKit power-source state was missing or unknown".to_string()),
+        );
+    }
+    (
+        NativeHostSignalStatus::Unavailable,
+        None,
+        Some("IOKit power-source list had no readable descriptions".to_string()),
+    )
+}
+
+fn power_source_state_from_value(value: CFTypeRef) -> Option<NativePowerSourceState> {
+    if value.is_null() || unsafe { CFGetTypeID(value) } != unsafe { CFStringGetTypeID() } {
+        return None;
+    }
+    let state = unsafe { CFString::wrap_under_get_rule(value as CFStringRef) }.to_string();
+    match state.as_str() {
+        "AC Power" => Some(NativePowerSourceState::AcPower),
+        "Battery Power" => Some(NativePowerSourceState::BatteryPower),
+        "Off Line" => Some(NativePowerSourceState::Offline),
+        _ => None,
+    }
 }
 
 fn object_responds_to_selector(object: *mut Object, selector: Sel) -> bool {

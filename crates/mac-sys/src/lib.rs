@@ -22,7 +22,8 @@ pub use fileprovider::{
 };
 pub use finder::{copy_kind_string_for_path, NativeFinderKind, NativeFinderKindStatus};
 pub use pressure::{
-    copy_host_pressure, NativeHostPressure, NativeHostSignalStatus, NativeThermalState,
+    copy_host_pressure, NativeHostPressure, NativeHostSignalStatus, NativePowerSourceState,
+    NativeThermalState,
 };
 pub use spotlight::{
     read_spotlight_attributes, read_spotlight_attributes_batch, NativeSpotlightSnapshot,
