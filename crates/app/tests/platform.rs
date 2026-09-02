@@ -2188,6 +2188,25 @@ fn preview_volume_scheduling_throttles_network_prefetch_from_binary() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.starts_with("preview-volume-scheduling\tkind=thumbnail\t"));
     assert!(stdout.contains("\tvolume-kind=network\tremote=true\tslow=false\t"));
+    assert!(
+        stdout.contains("\tvolume-id=") && !stdout.contains("\tvolume-id=-\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\tstable-id=fixture-marker:network-smb:dev:"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(&format!("\tvolume-root={}\t", root.display())),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(&format!(
+            "\tvolume-label={}\t",
+            root.file_name().unwrap().to_string_lossy()
+        )),
+        "{stdout}"
+    );
     assert!(stdout.contains("\tmax-visible=8\tmax-prefetch=0\t"));
     assert!(stdout.contains("\tcancel-offscreen=true\n"));
 
@@ -2391,6 +2410,25 @@ fn preview_volume_scheduling_disables_prefetch_on_network_volume_from_binary() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.starts_with("preview-volume-scheduling\tkind=thumbnail\t"));
     assert!(stdout.contains("\tvolume-kind=network\tremote=true\tslow=false\t"));
+    assert!(
+        stdout.contains("\tvolume-id=") && !stdout.contains("\tvolume-id=-\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\tstable-id=fixture-marker:network:dev:"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(&format!("\tvolume-root={}\t", root.display())),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(&format!(
+            "\tvolume-label={}\t",
+            root.file_name().unwrap().to_string_lossy()
+        )),
+        "{stdout}"
+    );
     assert!(stdout.contains("\tmax-visible=8\tmax-prefetch=0\tcancel-offscreen=true\n"));
     assert!(
         stdout.contains(&format!("\tpath={}\t", path.display())),

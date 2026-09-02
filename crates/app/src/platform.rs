@@ -1009,14 +1009,18 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             let policy =
                 preview_scheduling_policy_from_volume_report(&path, base, pressure, &report);
-            let (volume_kind, remote, slow) = preview_volume_scheduling_facts(&path, &report);
+            let facts = preview_volume_scheduling_facts(&path, &report);
             println!(
-                "preview-volume-scheduling\tkind={}\tpath={}\tvolume-kind={}\tremote={}\tslow={}\tmax-visible={}\tmax-prefetch={}\tcancel-offscreen={}",
+                "preview-volume-scheduling\tkind={}\tpath={}\tvolume-kind={}\tremote={}\tslow={}\tvolume-id={}\tstable-id={}\tvolume-root={}\tvolume-label={}\tmax-visible={}\tmax-prefetch={}\tcancel-offscreen={}",
                 kind.as_str(),
-                path.display(),
-                volume_kind,
-                remote,
-                slow,
+                escape_platform_tsv_field(&path.to_string_lossy()),
+                facts.volume_kind,
+                facts.remote,
+                facts.slow,
+                facts.volume_id,
+                facts.stable_id,
+                facts.volume_root,
+                facts.volume_label,
                 policy.max_visible,
                 policy.max_prefetch,
                 policy.cancel_offscreen
@@ -2148,19 +2152,41 @@ fn volume_reports_slow_for_preview(volume: &VolumeDescriptor) -> bool {
                 .is_some_and(|protocol| protocol.eq_ignore_ascii_case("usb"))))
 }
 
+struct PreviewVolumeSchedulingFacts {
+    volume_kind: &'static str,
+    remote: bool,
+    slow: bool,
+    volume_id: String,
+    stable_id: String,
+    volume_root: String,
+    volume_label: String,
+}
+
 fn preview_volume_scheduling_facts(
     path: &Path,
     report: &VolumeDiscoveryReport,
-) -> (&'static str, bool, bool) {
+) -> PreviewVolumeSchedulingFacts {
     let volume_path = absolute_preview_path(path);
     let Some(volume) = report.volume_for_path(&volume_path) else {
-        return ("unknown", false, true);
+        return PreviewVolumeSchedulingFacts {
+            volume_kind: "unknown",
+            remote: false,
+            slow: true,
+            volume_id: "-".to_string(),
+            stable_id: "-".to_string(),
+            volume_root: "-".to_string(),
+            volume_label: "-".to_string(),
+        };
     };
-    (
-        volume.kind.as_str(),
-        volume_descriptor_is_remote_for_preview(volume),
-        volume_reports_slow_for_preview(volume),
-    )
+    PreviewVolumeSchedulingFacts {
+        volume_kind: volume.kind.as_str(),
+        remote: volume_descriptor_is_remote_for_preview(volume),
+        slow: volume_reports_slow_for_preview(volume),
+        volume_id: volume.id.0.to_string(),
+        stable_id: escape_platform_tsv_field(&volume.stable_identity),
+        volume_root: escape_platform_tsv_field(&volume.path.to_string_lossy()),
+        volume_label: escape_platform_tsv_field(&volume.label),
+    }
 }
 
 fn volume_event_operation_policy_invalidation_tsv(
