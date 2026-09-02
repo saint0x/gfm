@@ -24,7 +24,7 @@ use gfm_store::{
 use gfm_types::{
     ContentPositions, ContentPosting, FileId, FileKind, GfmError, Result, SearchHit, VolumeId,
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -3120,6 +3120,65 @@ impl SidecarVolumeAccessReports {
                 .map(|volume| volume.id)
         })
     }
+
+    fn admitted_volume_summary(&self) -> SidecarAdmittedVolumeSummary {
+        let mut volumes = BTreeMap::new();
+        for entry in &self.entries {
+            if let Some(volume) = entry.volume_report.volume_for_path(&entry.path) {
+                volumes
+                    .entry(volume.id.0)
+                    .or_insert_with(|| SidecarAdmittedVolume {
+                        id: volume.id.0,
+                        stable_id: volume.stable_identity.clone(),
+                        root: volume.path.to_string_lossy().into_owned(),
+                        label: volume.label.clone(),
+                        class: volume.kind.as_str(),
+                    });
+            }
+        }
+        SidecarAdmittedVolumeSummary {
+            volumes: volumes.into_values().collect(),
+        }
+    }
+}
+
+struct SidecarAdmittedVolume {
+    id: u64,
+    stable_id: String,
+    root: String,
+    label: String,
+    class: &'static str,
+}
+
+struct SidecarAdmittedVolumeSummary {
+    volumes: Vec<SidecarAdmittedVolume>,
+}
+
+impl SidecarAdmittedVolumeSummary {
+    fn empty() -> Self {
+        Self {
+            volumes: Vec::new(),
+        }
+    }
+
+    fn as_tsv_fields(&self) -> String {
+        format!(
+            "admitted-volume-count={}\tadmitted-volume-ids={}\tadmitted-volume-classes={}\tadmitted-volume-roots={}\tadmitted-volume-labels={}\tadmitted-volume-stable-ids={}",
+            self.volumes.len(),
+            self.join(|volume| volume.id.to_string()),
+            self.join(|volume| volume.class.to_string()),
+            self.join(|volume| volume.root.clone()),
+            self.join(|volume| volume.label.clone()),
+            self.join(|volume| volume.stable_id.clone())
+        )
+    }
+
+    fn join(&self, value: impl Fn(&SidecarAdmittedVolume) -> String) -> String {
+        if self.volumes.is_empty() {
+            return "-".to_string();
+        }
+        escape_tsv_field(&self.volumes.iter().map(value).collect::<Vec<_>>().join(","))
+    }
 }
 
 impl SidecarVolumeAccessReport {
@@ -3260,8 +3319,10 @@ fn run_sidecar_index_search(
                 &cancellation,
             )?;
             let hydration = &report.hydration;
+            let volume_summary = volume_reports.admitted_volume_summary();
             let diagnostics = format!(
-            "columns-indexed {} records-loaded {} records-missing {} candidate-ids {} full-hydration {} metadata-keys {} prefix-keys {} substring-keys {} fuzzy-keys {} prefix-archive-keys {} substring-archive-keys {} fuzzy-archive-keys {} content-keys {} content-cache-hits {} content-cache-misses {} metadata-budget {} substring-budget {} content-budget {}",
+            "{}\tcolumns-indexed {} records-loaded {} records-missing {} candidate-ids {} full-hydration {} metadata-keys {} prefix-keys {} substring-keys {} fuzzy-keys {} prefix-archive-keys {} substring-archive-keys {} fuzzy-archive-keys {} content-keys {} content-cache-hits {} content-cache-misses {} metadata-budget {} substring-budget {} content-budget {}",
+            volume_summary.as_tsv_fields(),
             hydration.columns_applied,
             hydration.records_loaded,
             hydration.records_missing,
@@ -3356,12 +3417,14 @@ fn run_sidecar_index_session(
                         "sidecar-session-first",
                         &session,
                         &first,
+                        Some(&volume_reports),
                         budget,
                     ),
                     format_sidecar_session_report(
                         "sidecar-session-second",
                         &session,
                         &second,
+                        Some(&volume_reports),
                         budget,
                     ),
                 ],
@@ -3408,6 +3471,7 @@ fn run_sidecar_index_session_provider_invalidation(
                 "sidecar-session-provider-first",
                 &session,
                 &first,
+                Some(&volume_reports),
                 budget,
             )];
             let mut hits = first.search.hits;
@@ -3424,6 +3488,7 @@ fn run_sidecar_index_session_provider_invalidation(
                 "sidecar-session-provider-second",
                 &session,
                 &second,
+                Some(&volume_reports),
                 budget,
             ));
             hits.extend(second.search.hits);
@@ -3448,6 +3513,7 @@ fn run_sidecar_index_session_provider_invalidation(
                 "sidecar-session-provider-third",
                 &session,
                 &third,
+                Some(&volume_reports),
                 budget,
             ));
             hits.extend(third.search.hits);
@@ -3510,7 +3576,12 @@ fn run_sidecar_index_budget(
                 &cancellation,
             )?;
             Ok(SidecarSearchOutput {
-                diagnostics: format_sidecar_budget_report(&session, &report, budget),
+                diagnostics: format_sidecar_budget_report(
+                    &session,
+                    &report,
+                    Some(&volume_reports),
+                    budget,
+                ),
                 hits: report.search.hits,
             })
         },
@@ -3577,6 +3648,7 @@ fn run_sidecar_index_volume_scope(
                     "sidecar-volume-scope",
                     &session,
                     &report,
+                    Some(&volume_reports),
                     budget,
                 ),
                 hits: report.search.hits,
@@ -3733,11 +3805,16 @@ fn format_sidecar_session_report(
     label: &str,
     session: &SidecarIndexQuerySession,
     report: &SidecarQuerySessionReport,
+    volume_reports: Option<&SidecarVolumeAccessReports>,
     budget: SearchLookupBudget,
 ) -> String {
     let hydration = &report.hydration;
+    let volume_summary = volume_reports
+        .map(SidecarVolumeAccessReports::admitted_volume_summary)
+        .unwrap_or_else(SidecarAdmittedVolumeSummary::empty);
     format!(
-        "{label}\trecords-indexed={}\tcolumns-indexed={}\trecords-loaded={}\trecords-missing={}\tcandidate-ids={}\tfull-hydration={}\tmetadata-keys={}\tprefix-keys={}\tsubstring-keys={}\tfuzzy-keys={}\tcontent-keys={}\tcontent-cache-hits={}\tcontent-cache-misses={}\trecord-cache-hits={}\trecord-cache-misses={}\tresult-cache-hits={}\tresult-cache-misses={}\tmetadata-budget={}\tprefix-budget={}\tsubstring-budget={}\tfuzzy-key-budget={}\tfuzzy-term-budget={}\tfuzzy-candidate-budget={}\tcontent-budget={}\tprefix-archive-keys={}\tsubstring-archive-keys={}\tfuzzy-archive-keys={}\tprefix-lookup-requests={}\tprefix-lookup-ids={}\tprefix-cache-hits={}\tprefix-cache-misses={}\tsubstring-lookup-requests={}\tsubstring-lookup-ids={}\tsubstring-cache-hits={}\tsubstring-cache-misses={}\tfuzzy-lookup-requests={}\tfuzzy-lookup-terms={}\tfuzzy-cache-hits={}\tfuzzy-cache-misses={}",
+        "{label}\t{}\trecords-indexed={}\tcolumns-indexed={}\trecords-loaded={}\trecords-missing={}\tcandidate-ids={}\tfull-hydration={}\tmetadata-keys={}\tprefix-keys={}\tsubstring-keys={}\tfuzzy-keys={}\tcontent-keys={}\tcontent-cache-hits={}\tcontent-cache-misses={}\trecord-cache-hits={}\trecord-cache-misses={}\tresult-cache-hits={}\tresult-cache-misses={}\tmetadata-budget={}\tprefix-budget={}\tsubstring-budget={}\tfuzzy-key-budget={}\tfuzzy-term-budget={}\tfuzzy-candidate-budget={}\tcontent-budget={}\tprefix-archive-keys={}\tsubstring-archive-keys={}\tfuzzy-archive-keys={}\tprefix-lookup-requests={}\tprefix-lookup-ids={}\tprefix-cache-hits={}\tprefix-cache-misses={}\tsubstring-lookup-requests={}\tsubstring-lookup-ids={}\tsubstring-cache-hits={}\tsubstring-cache-misses={}\tfuzzy-lookup-requests={}\tfuzzy-lookup-terms={}\tfuzzy-cache-hits={}\tfuzzy-cache-misses={}",
+        volume_summary.as_tsv_fields(),
         session.indexed_records(),
         hydration.columns_applied,
         hydration.records_loaded,
@@ -3783,11 +3860,16 @@ fn format_sidecar_session_report(
 fn format_sidecar_budget_report(
     session: &SidecarIndexQuerySession,
     report: &SidecarQuerySessionReport,
+    volume_reports: Option<&SidecarVolumeAccessReports>,
     budget: SearchLookupBudget,
 ) -> String {
     let hydration = &report.hydration;
+    let volume_summary = volume_reports
+        .map(SidecarVolumeAccessReports::admitted_volume_summary)
+        .unwrap_or_else(SidecarAdmittedVolumeSummary::empty);
     format!(
-        "sidecar-budget\tcolumns-indexed={}\trecords-loaded={}\trecords-missing={}\tcandidate-ids={}\tfull-hydration={}\tmetadata-keys={}\tprefix-keys={}\tsubstring-keys={}\tfuzzy-keys={}\tcontent-keys={}\tcontent-cache-hits={}\tcontent-cache-misses={}\tmetadata-budget={}\tcontent-budget={}\tprefix-archive-keys={}\tsubstring-archive-keys={}\tfuzzy-archive-keys={}\tprefix-terms={}\tprefix-lookup-requests={}\tprefix-lookup-ids={}\tprefix-candidate-ids={}\tprefix-cache-hits={}\tprefix-cache-misses={}\tprefix-cutoff-terms={}\tprefix-truncated-terms={}\tsubstring-terms={}\tsubstring-grams={}\tsubstring-lookup-requests={}\tsubstring-lookup-ids={}\tsubstring-candidate-ids={}\tsubstring-cache-hits={}\tsubstring-cache-misses={}\tsubstring-cutoff-terms={}\tsubstring-term-truncated-grams={}\tsubstring-truncated-grams={}\tfuzzy-terms={}\tfuzzy-keys-read={}\tfuzzy-lookup-requests={}\tfuzzy-lookup-terms={}\tfuzzy-candidate-terms={}\tfuzzy-verified-candidates={}\tfuzzy-cache-hits={}\tfuzzy-cache-misses={}\tfuzzy-key-truncated-terms={}\tfuzzy-term-truncated-keys={}\tfuzzy-candidate-truncated-terms={}",
+        "sidecar-budget\t{}\tcolumns-indexed={}\trecords-loaded={}\trecords-missing={}\tcandidate-ids={}\tfull-hydration={}\tmetadata-keys={}\tprefix-keys={}\tsubstring-keys={}\tfuzzy-keys={}\tcontent-keys={}\tcontent-cache-hits={}\tcontent-cache-misses={}\tmetadata-budget={}\tcontent-budget={}\tprefix-archive-keys={}\tsubstring-archive-keys={}\tfuzzy-archive-keys={}\tprefix-terms={}\tprefix-lookup-requests={}\tprefix-lookup-ids={}\tprefix-candidate-ids={}\tprefix-cache-hits={}\tprefix-cache-misses={}\tprefix-cutoff-terms={}\tprefix-truncated-terms={}\tsubstring-terms={}\tsubstring-grams={}\tsubstring-lookup-requests={}\tsubstring-lookup-ids={}\tsubstring-candidate-ids={}\tsubstring-cache-hits={}\tsubstring-cache-misses={}\tsubstring-cutoff-terms={}\tsubstring-term-truncated-grams={}\tsubstring-truncated-grams={}\tfuzzy-terms={}\tfuzzy-keys-read={}\tfuzzy-lookup-requests={}\tfuzzy-lookup-terms={}\tfuzzy-candidate-terms={}\tfuzzy-verified-candidates={}\tfuzzy-cache-hits={}\tfuzzy-cache-misses={}\tfuzzy-key-truncated-terms={}\tfuzzy-term-truncated-keys={}\tfuzzy-candidate-truncated-terms={}",
+        volume_summary.as_tsv_fields(),
         hydration.columns_applied,
         hydration.records_loaded,
         hydration.records_missing,
@@ -3839,7 +3921,8 @@ fn format_sidecar_budget_report(
 
 fn print_empty_sidecar_session_report(label: &str, budget: SearchLookupBudget) {
     eprintln!(
-        "{label}\trecords-indexed=0\tcolumns-indexed=0\trecords-loaded=0\trecords-missing=0\tcandidate-ids=0\tfull-hydration=false\tmetadata-keys=0\tprefix-keys=0\tsubstring-keys=0\tfuzzy-keys=0\tcontent-keys=0\tcontent-cache-hits=0\tcontent-cache-misses=0\trecord-cache-hits=0\trecord-cache-misses=0\tresult-cache-hits=0\tresult-cache-misses=0\tmetadata-budget={}\tprefix-budget={}\tsubstring-budget={}\tfuzzy-key-budget={}\tfuzzy-term-budget={}\tfuzzy-candidate-budget={}\tcontent-budget={}\tprefix-archive-keys=0\tsubstring-archive-keys=0\tfuzzy-archive-keys=0\tprefix-lookup-requests=0\tprefix-lookup-ids=0\tprefix-cache-hits=0\tprefix-cache-misses=0\tsubstring-lookup-requests=0\tsubstring-lookup-ids=0\tsubstring-cache-hits=0\tsubstring-cache-misses=0\tfuzzy-lookup-requests=0\tfuzzy-lookup-terms=0\tfuzzy-cache-hits=0\tfuzzy-cache-misses=0",
+        "{label}\t{}\trecords-indexed=0\tcolumns-indexed=0\trecords-loaded=0\trecords-missing=0\tcandidate-ids=0\tfull-hydration=false\tmetadata-keys=0\tprefix-keys=0\tsubstring-keys=0\tfuzzy-keys=0\tcontent-keys=0\tcontent-cache-hits=0\tcontent-cache-misses=0\trecord-cache-hits=0\trecord-cache-misses=0\tresult-cache-hits=0\tresult-cache-misses=0\tmetadata-budget={}\tprefix-budget={}\tsubstring-budget={}\tfuzzy-key-budget={}\tfuzzy-term-budget={}\tfuzzy-candidate-budget={}\tcontent-budget={}\tprefix-archive-keys=0\tsubstring-archive-keys=0\tfuzzy-archive-keys=0\tprefix-lookup-requests=0\tprefix-lookup-ids=0\tprefix-cache-hits=0\tprefix-cache-misses=0\tsubstring-lookup-requests=0\tsubstring-lookup-ids=0\tsubstring-cache-hits=0\tsubstring-cache-misses=0\tfuzzy-lookup-requests=0\tfuzzy-lookup-terms=0\tfuzzy-cache-hits=0\tfuzzy-cache-misses=0",
+        SidecarAdmittedVolumeSummary::empty().as_tsv_fields(),
         budget.max_metadata_ids_per_term,
         budget.max_prefix_ids_per_term,
         budget.max_substring_ids_per_gram,
