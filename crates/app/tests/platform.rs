@@ -6943,6 +6943,50 @@ fn reports_api_reason_topology_index_invalidation_from_binary() {
 }
 
 #[test]
+fn reports_api_reason_topology_runtime_fanout_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-topology-api-reason-runtime-fanout")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("volume-topology-runtime-fanout\tchanges=1\n"));
+    assert!(stdout.contains(
+        "volume-event-runtime-fanout\tkind=description-changed\tpath=/Volumes/API Reason\t"
+    ));
+    assert!(stdout.contains("\tsidebar=true\toperation-policy=true\tindex-admission=true\t"));
+    assert!(stdout.contains("\trescan-index=true\tcancel-index-jobs=true\t"));
+    assert!(stdout.contains("\tsidebar-row=true\tsidebar-section=true\t"));
+    assert!(stdout.contains("\treason=volume-api-reason-changed\n"));
+    assert!(stdout.contains(
+        "volume-event-index-invalidation\tkind=description-changed\tpath=/Volumes/API Reason\t"
+    ));
+    assert!(stdout.contains("\tapi-status-changed=false\t"));
+    assert!(stdout.contains("\tapi-reason-changed=true\t"));
+    assert!(stdout.contains("sidebar-volume-invalidation\trow=volume-"));
+    assert!(stdout.contains("\tcurrent-native-status=unavailable\t"));
+    assert!(
+        stdout.contains("\tcurrent-native-reason=DiskArbitration denied during topology refresh\t")
+    );
+    assert!(
+        stdout.contains("volume-event-operation-policy-invalidation\tkind=description-changed\t")
+    );
+    assert!(stdout.contains("\tprevious-slow="));
+    assert!(stdout.contains("\tcurrent-slow="));
+    assert!(stdout.contains("\tinvalidate-policy=true\treason=volume-api-reason-changed\n"));
+    assert!(stdout.contains("\nvolume-job-cancellation\tvolume="));
+    assert!(!stdout.contains("\nvolume-job-cancellation\tvolume=-\t"));
+    assert!(stdout.contains("\tclass=background\tcancelled=1\n"));
+    assert!(stdout.contains("cancelled-job\t1\tbackground\tbackground\tindex invalidated volume"));
+    assert!(!stdout.contains("render visible volume previews"));
+}
+
+#[test]
 fn reports_api_status_volume_invalidation_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("volume-api-status-invalidation")

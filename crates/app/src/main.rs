@@ -982,6 +982,8 @@ fn print_usage() {
   gfm volume-apfs-metadata-index-invalidation
   gfm volume-event-runtime-invalidation <appeared|description-changed|disappeared|unavailable> [path]
   gfm volume-event-runtime-fanout <previous-paths...> -- <appeared|description-changed|disappeared|unavailable> [path]
+  gfm volume-topology-runtime-fanout <previous-paths...> -- <current-paths...>
+  gfm volume-topology-api-reason-runtime-fanout
   gfm volume-topology-diff <previous-paths...> -- <current-paths...>
   gfm volume-topology-index-invalidation <previous-paths...> -- <current-paths...>
   gfm volume-topology-case-sensitivity <previous:true|false> <current:true|false>

@@ -797,6 +797,20 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 println!("{line}");
             }
         }
+        "volume-topology-runtime-fanout" => {
+            let (previous_paths, current_paths) = split_topology_paths(args)?;
+            let previous = VolumeDiscoveryReport::from_paths_checked(previous_paths)?;
+            let current = VolumeDiscoveryReport::from_paths_checked(current_paths)?;
+            for line in volume_topology_runtime_fanout(&previous, &current) {
+                println!("{line}");
+            }
+        }
+        "volume-topology-api-reason-runtime-fanout" => {
+            let (previous, current) = topology_api_reason_reports()?;
+            for line in volume_topology_runtime_fanout(&previous, &current) {
+                println!("{line}");
+            }
+        }
         "volume-operation"
         | "volume-operation-cancel-before-probe"
         | "volume-operation-cancel-after-access" => {
@@ -1973,6 +1987,141 @@ fn volume_event_runtime_fanout_summary(
         sidebar.invalidate_section,
         escape_field(&platform.reason)
     )
+}
+
+fn volume_topology_runtime_fanout(
+    previous: &VolumeDiscoveryReport,
+    current: &VolumeDiscoveryReport,
+) -> Vec<String> {
+    let diff = VolumeTopologyDiff::evaluate(previous, current);
+    let mut lines = vec![format!(
+        "volume-topology-runtime-fanout\tchanges={}",
+        diff.changes.len()
+    )];
+    for change in &diff.changes {
+        let previous_volume = previous
+            .volumes
+            .iter()
+            .find(|volume| volume.stable_identity == change.stable_identity);
+        let current_volume = current
+            .volumes
+            .iter()
+            .find(|volume| volume.stable_identity == change.stable_identity);
+        let kind = match change.kind {
+            VolumeTopologyChangeKind::Connected => VolumeEventKind::Appeared,
+            VolumeTopologyChangeKind::Disconnected => VolumeEventKind::Disappeared,
+            VolumeTopologyChangeKind::Changed => VolumeEventKind::DescriptionChanged,
+        };
+        let platform = volume_event_invalidation_from_topology_change(change, kind);
+        let previous_index = previous_volume.map(index_volume_descriptor);
+        let current_index = current_volume.map(index_volume_descriptor);
+        let index = VolumeEventIndexInvalidationReport::from_event(
+            index_volume_event_kind(kind),
+            platform.path.clone(),
+            previous_index.as_ref(),
+            current_index.as_ref(),
+            platform.invalidate_index_admission,
+            platform.rescan_index,
+        );
+        let previous_sidebar = previous_volume.map(sidebar_volume_spec);
+        let current_sidebar = current_volume.map(sidebar_volume_spec);
+        let sidebar = SidebarVolumeInvalidation::from_event(
+            sidebar_volume_event_kind(kind),
+            platform.path.clone(),
+            previous_sidebar.as_ref(),
+            current_sidebar.as_ref(),
+            platform.invalidate_sidebar,
+            platform.reason.clone(),
+        )
+        .with_platform_statuses(
+            volume_status_string(platform.previous_native_status),
+            volume_status_string(platform.previous_resource_status),
+            volume_status_string(platform.previous_mount_table_status),
+            volume_status_string(platform.current_native_status),
+            volume_status_string(platform.current_resource_status),
+            volume_status_string(platform.current_mount_table_status),
+        );
+
+        lines.push(volume_event_runtime_fanout_summary(
+            &platform, &index, &sidebar,
+        ));
+        lines.push(index.as_tsv());
+        lines.push(sidebar.as_tsv());
+        lines.push(volume_event_operation_policy_invalidation_tsv(
+            &platform,
+            previous_volume,
+            current_volume,
+        ));
+        if let Some(cancellation) = runtime_volume_cancellation(&index) {
+            lines.push(cancellation.as_tsv());
+        } else {
+            lines.push(format!(
+                "volume-job-cancellation\tvolume=-\tclass=background\tcancelled=0\treason={}",
+                if index.cancel_index_jobs {
+                    "missing-volume-id"
+                } else {
+                    "index-jobs-still-valid"
+                }
+            ));
+        }
+    }
+    lines
+}
+
+fn volume_event_invalidation_from_topology_change(
+    change: &gfm_mac::VolumeTopologyChange,
+    kind: VolumeEventKind,
+) -> VolumeEventInvalidationReport {
+    VolumeEventInvalidationReport {
+        kind,
+        native_status: change
+            .current_native_status
+            .or(change.previous_native_status)
+            .unwrap_or(gfm_mac::NativeVolumeStatus::Available),
+        path: Some(change.path.clone()),
+        previous_kind: change.previous_kind,
+        previous_mount_state: change.previous_mount_state,
+        previous_read_only: change.previous_read_only,
+        previous_writable: change.previous_writable,
+        previous_network: change.previous_network,
+        previous_reachable: change.previous_reachable,
+        previous_ejectable: change.previous_ejectable,
+        previous_removable: change.previous_removable,
+        previous_case_sensitive: change.previous_case_sensitive,
+        previous_case_preserving: change.previous_case_preserving,
+        previous_native_status: change.previous_native_status,
+        previous_native_reason: change.previous_native_reason.clone(),
+        previous_resource_status: change.previous_resource_status,
+        previous_resource_reason: change.previous_resource_reason.clone(),
+        previous_mount_table_status: change.previous_mount_table_status,
+        previous_mount_table_reason: change.previous_mount_table_reason.clone(),
+        current_kind: change.current_kind,
+        current_mount_state: change.current_mount_state,
+        current_read_only: change.current_read_only,
+        current_writable: change.current_writable,
+        current_network: change.current_network,
+        current_reachable: change.current_reachable,
+        current_ejectable: change.current_ejectable,
+        current_removable: change.current_removable,
+        current_case_sensitive: change.current_case_sensitive,
+        current_case_preserving: change.current_case_preserving,
+        current_native_status: change.current_native_status,
+        current_native_reason: change.current_native_reason.clone(),
+        current_resource_status: change.current_resource_status,
+        current_resource_reason: change.current_resource_reason.clone(),
+        current_mount_table_status: change.current_mount_table_status,
+        current_mount_table_reason: change.current_mount_table_reason.clone(),
+        stable_identity_changed: false,
+        filesystem_identity_changed: false,
+        apfs_metadata_changed: false,
+        mount_table_changed: false,
+        filesystem_traits_changed: false,
+        invalidate_sidebar: change.invalidate_sidebar,
+        invalidate_operation_policy: change.invalidate_operation_policy,
+        invalidate_index_admission: change.invalidate_index_admission,
+        rescan_index: change.rescan_index,
+        reason: change.reason.clone(),
+    }
 }
 
 fn preview_security_input_with_volume_checked(
