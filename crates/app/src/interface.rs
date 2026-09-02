@@ -14,7 +14,7 @@ use gfm_mac::{
     FileProviderObservedInvalidation, FileProviderStateReport, FileProviderStateSnapshot,
     MountState, PermissionOnboardingPlan, SecurityAccessMode, SecurityDecisionAction,
     SecurityWorkerAction, SecurityWorkerAdmissionReport, VolumeDescriptor, VolumeDiscoveryReport,
-    VolumeEventKind, VolumeEventState, VolumeKind,
+    VolumeEventKind, VolumeEventState, VolumeKind, VolumeTopologyChangeKind, VolumeTopologyDiff,
 };
 use gfm_ops::{ConflictPolicy, Operation, OperationConflictReport};
 use gfm_types::{DirectoryPage, FileEvent, FileEventKind, FileKind, GfmError, Result, VolumeId};
@@ -504,6 +504,22 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             );
             println!("{}", invalidation.as_tsv());
         }
+        "ui-sidebar-volume-topology-invalidation" => {
+            let (previous_paths, current_paths) = split_sidebar_topology_paths(args)?;
+            let previous = VolumeDiscoveryReport::from_paths_checked(previous_paths)?;
+            let current = VolumeDiscoveryReport::from_paths_checked(current_paths)?;
+            println!(
+                "{}",
+                sidebar_volume_topology_invalidation_tsv(&previous, &current)
+            );
+        }
+        "ui-sidebar-volume-topology-api-reason-invalidation" => {
+            let (previous, current) = sidebar_volume_topology_api_reason_reports()?;
+            println!(
+                "{}",
+                sidebar_volume_topology_invalidation_tsv(&previous, &current)
+            );
+        }
         "ui-sidebar-volume-state-invalidation" => {
             let mut previous_paths = Vec::new();
             loop {
@@ -990,6 +1006,105 @@ fn sidebar_volume_spec(volume: &VolumeDescriptor) -> SidebarVolumeSpec {
         volume_status_string(volume.mount_table_status),
         volume.mount_table_reason.clone(),
     )
+}
+
+fn sidebar_volume_topology_invalidation_tsv(
+    previous: &VolumeDiscoveryReport,
+    current: &VolumeDiscoveryReport,
+) -> String {
+    let diff = VolumeTopologyDiff::evaluate(previous, current);
+    let mut lines = vec![diff.as_tsv()];
+    for change in &diff.changes {
+        let previous = previous
+            .volumes
+            .iter()
+            .find(|volume| volume.stable_identity == change.stable_identity)
+            .map(sidebar_volume_spec);
+        let current = current
+            .volumes
+            .iter()
+            .find(|volume| volume.stable_identity == change.stable_identity)
+            .map(sidebar_volume_spec);
+        let kind = match change.kind {
+            VolumeTopologyChangeKind::Connected => VolumeEventKind::Appeared,
+            VolumeTopologyChangeKind::Disconnected => VolumeEventKind::Disappeared,
+            VolumeTopologyChangeKind::Changed => VolumeEventKind::DescriptionChanged,
+        };
+        lines.push(
+            SidebarVolumeInvalidation::from_event(
+                sidebar_volume_event_kind(kind),
+                Some(change.path.clone()),
+                previous.as_ref(),
+                current.as_ref(),
+                change.invalidate_sidebar,
+                change.reason.clone(),
+            )
+            .with_platform_statuses(
+                volume_status_string(change.previous_native_status),
+                volume_status_string(change.previous_resource_status),
+                volume_status_string(change.previous_mount_table_status),
+                volume_status_string(change.current_native_status),
+                volume_status_string(change.current_resource_status),
+                volume_status_string(change.current_mount_table_status),
+            )
+            .as_tsv(),
+        );
+    }
+    lines.join("\n")
+}
+
+fn sidebar_volume_topology_api_reason_reports(
+) -> Result<(VolumeDiscoveryReport, VolumeDiscoveryReport)> {
+    let mut previous = VolumeDescriptor::for_path("/")?;
+    previous.stable_identity = "diskarbitration:uuid:UI-API-REASON-TOPOLOGY".to_string();
+    previous.label = "UI API Reason Topology".to_string();
+    previous.path = PathBuf::from("/Volumes/UI API Reason Topology");
+    previous.kind = VolumeKind::External;
+    previous.read_only = false;
+    previous.writable = true;
+    previous.ejectable = true;
+    previous.native_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+    previous.native_reason =
+        Some("DiskArbitration unavailable before sidebar topology refresh".to_string());
+    previous.resource_status = Some(gfm_mac::NativeVolumeStatus::Available);
+    previous.resource_reason = None;
+    previous.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Available);
+    previous.mount_table_reason = None;
+    let mut current = previous.clone();
+    current.native_reason =
+        Some("DiskArbitration denied during sidebar topology refresh".to_string());
+    Ok((
+        VolumeDiscoveryReport {
+            volumes: vec![previous],
+        },
+        VolumeDiscoveryReport {
+            volumes: vec![current],
+        },
+    ))
+}
+
+fn split_sidebar_topology_paths(
+    args: &mut impl Iterator<Item = String>,
+) -> Result<(Vec<PathBuf>, Vec<PathBuf>)> {
+    let mut previous = Vec::new();
+    let mut current = Vec::new();
+    let mut seen_separator = false;
+    for arg in args {
+        if arg == "--" {
+            seen_separator = true;
+        } else if seen_separator {
+            current.push(PathBuf::from(arg));
+        } else {
+            previous.push(PathBuf::from(arg));
+        }
+    }
+    if !seen_separator {
+        return Err(GfmError::Format(
+            "ui-sidebar-volume-topology-invalidation requires `--` between previous and current paths"
+                .to_string(),
+        ));
+    }
+    Ok((previous, current))
 }
 
 fn sidebar_volume_kind(kind: VolumeKind) -> SidebarVolumeKind {

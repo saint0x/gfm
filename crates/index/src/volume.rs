@@ -763,25 +763,13 @@ impl VolumeInvalidationReport {
         let current_mount_status = current.and_then(|volume| volume.mount_status.clone());
         let current_mount_reason = current.and_then(|volume| volume.mount_reason.clone());
         let api_status_changed =
-            known_optional_value_lost_or_changed(&previous_native_status, &current_native_status)
-                || known_optional_value_lost_or_changed(
-                    &previous_resource_status,
-                    &current_resource_status,
-                )
-                || known_optional_value_lost_or_changed(
-                    &previous_mount_status,
-                    &current_mount_status,
-                );
+            optional_api_value_changed(&previous_native_status, &current_native_status)
+                || optional_api_value_changed(&previous_resource_status, &current_resource_status)
+                || optional_api_value_changed(&previous_mount_status, &current_mount_status);
         let api_reason_changed =
-            known_optional_value_lost_or_changed(&previous_native_reason, &current_native_reason)
-                || known_optional_value_lost_or_changed(
-                    &previous_resource_reason,
-                    &current_resource_reason,
-                )
-                || known_optional_value_lost_or_changed(
-                    &previous_mount_reason,
-                    &current_mount_reason,
-                );
+            optional_api_value_changed(&previous_native_reason, &current_native_reason)
+                || optional_api_value_changed(&previous_resource_reason, &current_resource_reason)
+                || optional_api_value_changed(&previous_mount_reason, &current_mount_reason);
         let apfs_metadata_changed = apfs_metadata_changed(previous.as_ref(), current.as_ref());
         let filesystem_identity_changed =
             filesystem_identity_changed(previous.as_ref(), current.as_ref());
@@ -1191,29 +1179,29 @@ impl VolumeEventIndexInvalidationReport {
             &previous.and_then(|volume| volume.case_preserving),
             &current.and_then(|volume| volume.case_preserving),
         );
-        let native_status_changed = known_optional_value_lost_or_changed(
+        let native_status_changed = optional_api_value_changed(
             &previous.and_then(|volume| volume.native_status.clone()),
             &current.and_then(|volume| volume.native_status.clone()),
         );
-        let resource_status_changed = known_optional_value_lost_or_changed(
+        let resource_status_changed = optional_api_value_changed(
             &previous.and_then(|volume| volume.resource_status.clone()),
             &current.and_then(|volume| volume.resource_status.clone()),
         );
-        let mount_status_changed = known_optional_value_lost_or_changed(
+        let mount_status_changed = optional_api_value_changed(
             &previous.and_then(|volume| volume.mount_status.clone()),
             &current.and_then(|volume| volume.mount_status.clone()),
         );
         let api_status_changed =
             native_status_changed || resource_status_changed || mount_status_changed;
-        let native_reason_changed = known_optional_value_lost_or_changed(
+        let native_reason_changed = optional_api_value_changed(
             &previous.and_then(|volume| volume.native_reason.clone()),
             &current.and_then(|volume| volume.native_reason.clone()),
         );
-        let resource_reason_changed = known_optional_value_lost_or_changed(
+        let resource_reason_changed = optional_api_value_changed(
             &previous.and_then(|volume| volume.resource_reason.clone()),
             &current.and_then(|volume| volume.resource_reason.clone()),
         );
-        let mount_reason_changed = known_optional_value_lost_or_changed(
+        let mount_reason_changed = optional_api_value_changed(
             &previous.and_then(|volume| volume.mount_reason.clone()),
             &current.and_then(|volume| volume.mount_reason.clone()),
         );
@@ -1452,6 +1440,10 @@ impl VolumeEventIndexInvalidationReport {
 
 fn known_optional_value_lost_or_changed<T: Eq>(previous: &Option<T>, current: &Option<T>) -> bool {
     matches!((previous, current), (Some(_), None) | (Some(_), Some(_))) && previous != current
+}
+
+fn optional_api_value_changed<T: Eq>(previous: &Option<T>, current: &Option<T>) -> bool {
+    previous != current && (previous.is_some() || current.is_some())
 }
 
 fn filesystem_identity_changed(
@@ -1714,6 +1706,36 @@ mod tests {
     }
 
     #[test]
+    fn volume_invalidation_reports_newly_known_api_unavailable_status() {
+        let previous = external_volume("/Volumes/Api Newly Known");
+        let current = external_volume("/Volumes/Api Newly Known")
+            .with_native_status("unavailable")
+            .with_native_reason("DiskArbitration unavailable after refresh")
+            .with_resource_status("available")
+            .with_mount_status("available");
+
+        let report = VolumeInvalidationReport::evaluate(Some(&previous), Some(&current));
+
+        assert!(report.api_status_changed);
+        assert!(report.api_reason_changed);
+        assert!(report.invalidate_sidebar);
+        assert!(report.invalidate_operation_policy);
+        assert!(report.invalidate_index_admission);
+        assert!(report.rescan_index);
+        assert!(report.cancel_index_jobs);
+        assert!(report.clear_fsevents_cursor);
+        assert_eq!(report.reason, "volume-api-status-changed");
+        let tsv = report.as_tsv();
+        assert!(tsv.contains("\tprevious-native-status=-\t"), "{tsv}");
+        assert!(
+            tsv.contains("\tcurrent-native-status=unavailable\t"),
+            "{tsv}"
+        );
+        assert!(tsv.contains("\tapi-status-changed=true\t"), "{tsv}");
+        assert!(tsv.contains("\tapi-reason-changed=true\t"), "{tsv}");
+    }
+
+    #[test]
     fn volume_event_index_invalidation_reports_api_reason_changes_without_status_changes() {
         let previous = external_volume("/Volumes/Api Event")
             .with_native_status("unavailable")
@@ -1748,6 +1770,44 @@ mod tests {
             tsv.contains("\treason=volume-event-api-reason-changed"),
             "{tsv}"
         );
+    }
+
+    #[test]
+    fn volume_event_index_invalidation_reports_newly_known_api_reason() {
+        let previous = external_volume("/Volumes/Api Event Newly Known")
+            .with_native_status("unavailable")
+            .with_resource_status("available")
+            .with_mount_status("available");
+        let current = external_volume("/Volumes/Api Event Newly Known")
+            .with_native_status("unavailable")
+            .with_native_reason("DiskArbitration denied after event refresh")
+            .with_resource_status("available")
+            .with_mount_status("available");
+
+        let report = VolumeEventIndexInvalidationReport::from_event(
+            IndexVolumeEventKind::DescriptionChanged,
+            Some(PathBuf::from("/Volumes/Api Event Newly Known")),
+            Some(&previous),
+            Some(&current),
+            false,
+            false,
+        );
+
+        assert!(!report.api_status_changed);
+        assert!(report.api_reason_changed);
+        assert!(report.invalidate_index_admission);
+        assert!(report.rescan_index);
+        assert!(report.cancel_index_jobs);
+        assert!(report.clear_fsevents_cursor);
+        assert_eq!(report.reason, "volume-event-api-reason-changed");
+        let tsv = report.as_tsv();
+        assert!(tsv.contains("\tprevious-native-reason=-\t"), "{tsv}");
+        assert!(
+            tsv.contains("\tcurrent-native-reason=DiskArbitration denied after event refresh\t"),
+            "{tsv}"
+        );
+        assert!(tsv.contains("\tapi-status-changed=false\t"), "{tsv}");
+        assert!(tsv.contains("\tapi-reason-changed=true\t"), "{tsv}");
     }
 
     #[test]

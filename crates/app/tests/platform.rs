@@ -7470,6 +7470,41 @@ fn sidebar_volume_api_reason_change_invalidates_row_from_binary() {
 }
 
 #[test]
+fn sidebar_volume_topology_api_reason_change_invalidates_row_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("ui-sidebar-volume-topology-api-reason-invalidation")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("volume-topology-diff\tcount=1\n"));
+    assert!(stdout.contains("volume-topology\tchanged\t"));
+    assert!(stdout.contains("\tstable-id=diskarbitration:uuid:UI-API-REASON-TOPOLOGY\t"));
+    assert!(stdout.contains("\tsidebar=true\toperation-policy=true\tindex-admission=true\t"));
+    assert!(stdout.contains("\treason=volume-api-reason-changed\n"));
+    assert!(stdout.contains("sidebar-volume-invalidation\trow=volume-"));
+    assert!(stdout.contains("\tpath=/Volumes/UI API Reason Topology\t"));
+    assert!(stdout.contains("\tkind=description-changed\t"));
+    assert!(stdout.contains("\tprevious-native-status=unavailable\t"));
+    assert!(stdout.contains(
+        "\tprevious-native-reason=DiskArbitration unavailable before sidebar topology refresh\t"
+    ));
+    assert!(stdout.contains("\tcurrent-native-status=unavailable\t"));
+    assert!(stdout.contains(
+        "\tcurrent-native-reason=DiskArbitration denied during sidebar topology refresh\t"
+    ));
+    assert!(stdout.contains("\tinvalidate-row=true\t"));
+    assert!(stdout.contains("\tinvalidate-section=true\t"));
+    assert!(stdout.contains("\tdisable-row=true\t"));
+    assert!(stdout.ends_with("reason=volume-api-reason-changed\n"));
+}
+
+#[test]
 fn reports_unavailable_volume_event_invalidation_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("volume-event-invalidation")
