@@ -1908,6 +1908,7 @@ fn parity_gate_and_review_use_governed_masks_from_binary() {
     fs::write(&expected, [0, 0, 0, 255, 10, 10, 10, 255]).unwrap();
     fs::write(&actual, [0, 0, 0, 255, 9, 10, 10, 255]).unwrap();
     fs::write(&mask, "1\t0\t1\t1\tOS-owned sidebar clock repaint\n").unwrap();
+    write_capture_provenance_artifacts(&root, "fixtures/toolbar");
     fs::write(
         &manifest,
         format!(
@@ -21298,6 +21299,12 @@ fn worker_admission_count(stderr: &str, worker: &str, path: &std::path::Path) ->
                 && line.split('\t').any(|field| field == expected_path)
         })
         .count()
+}
+
+fn write_capture_provenance_artifacts(root: &Path, fixture_root: &str) {
+    fs::create_dir_all(root.join("fixtures")).unwrap();
+    fs::write(root.join("fixtures/manifest.tsv"), "surface\tfixture\n").unwrap();
+    fs::create_dir_all(root.join(fixture_root)).unwrap();
 }
 
 #[cfg(unix)]

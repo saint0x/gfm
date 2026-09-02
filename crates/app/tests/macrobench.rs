@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -516,6 +516,7 @@ fn runs_parity_gate_from_binary_manifest() {
     let root = unique_temp_dir("gfm-cli-parity-gate");
     fs::write(root.join("expected.rgba"), [0, 0, 0, 255, 10, 10, 10, 255]).unwrap();
     fs::write(root.join("actual.rgba"), [0, 0, 0, 255, 9, 10, 10, 255]).unwrap();
+    write_capture_provenance_artifacts(&root, "fixtures/toolbar");
     fs::write(
         root.join("mask.tsv"),
         "1\t0\t1\t1\tOS-owned toolbar repaint\n",
@@ -557,10 +558,40 @@ fn runs_parity_gate_from_binary_manifest() {
 }
 
 #[test]
+fn parity_gate_rejects_missing_fixture_manifest_from_binary() {
+    let root = unique_temp_dir("gfm-cli-parity-gate-missing-fixture-manifest");
+    fs::write(root.join("expected.rgba"), [0, 0, 0, 255]).unwrap();
+    fs::write(root.join("actual.rgba"), [0, 0, 0, 255]).unwrap();
+    fs::create_dir_all(root.join("fixtures/toolbar")).unwrap();
+    fs::write(
+        root.join("gate.tsv"),
+        "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\texpected.rgba\tactual.rgba\t1\t1\t\t1040\t720\tactive\ticon\tfixtures/toolbar\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["parity-gate", root.join("gate.tsv").to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("parity-gate\t"), "{stdout}");
+    assert!(
+        stderr.contains("requires captured fixture manifest file"),
+        "{stderr}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn parity_gate_rejects_identical_capture_artifacts_from_binary() {
     let root = unique_temp_dir("gfm-cli-parity-gate-identical-artifacts");
     let manifest = root.join("gate.tsv");
     fs::write(root.join("capture.rgba"), [0, 0, 0, 255]).unwrap();
+    write_capture_provenance_artifacts(&root, "fixtures/toolbar");
     fs::write(
         &manifest,
         "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\tcapture.rgba\tcapture.rgba\t1\t1\t\t1040\t720\tactive\ticon\tfixtures/toolbar\n",
@@ -842,6 +873,7 @@ fn writes_parity_review_bundle_from_binary_manifest() {
     let review = root.join("review");
     fs::write(root.join("expected.rgba"), [0, 0, 0, 255, 10, 10, 10, 255]).unwrap();
     fs::write(root.join("actual.rgba"), [0, 0, 0, 255, 9, 10, 10, 255]).unwrap();
+    write_capture_provenance_artifacts(&root, "fixtures/text");
     fs::write(
         root.join("gate.tsv"),
         "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttext\texpected.rgba\tactual.rgba\t2\t1\t\t1040\t720\tactive\tlist\tfixtures/text\n",
@@ -904,6 +936,7 @@ fn parity_routes_escape_control_character_paths_in_operator_rows_from_binary() {
     let review = root.join("review\tbundle");
     fs::write(root.join("expected.rgba"), [0, 0, 0, 255]).unwrap();
     fs::write(root.join("actual.rgba"), [0, 0, 0, 255]).unwrap();
+    write_capture_provenance_artifacts(&root, "fixtures/text");
     fs::write(
         &manifest,
         "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttext\texpected.rgba\tactual.rgba\t1\t1\t\t1040\t720\tactive\tlist\tfixtures/text\n",
@@ -1058,4 +1091,10 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()));
     fs::create_dir_all(&path).unwrap();
     path
+}
+
+fn write_capture_provenance_artifacts(root: &Path, fixture_root: &str) {
+    fs::create_dir_all(root.join("fixtures")).unwrap();
+    fs::write(root.join("fixtures/manifest.tsv"), "surface\tfixture\n").unwrap();
+    fs::create_dir_all(root.join(fixture_root)).unwrap();
 }
