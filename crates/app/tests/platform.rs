@@ -1130,6 +1130,43 @@ fn reports_security_worker_admission_fanout_from_binary() {
 }
 
 #[test]
+fn security_worker_admission_fanout_counts_read_intent_as_extraction_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-security-worker-read-fanout-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let path = root.join("Document.pdf");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("security-worker-admission-fanout")
+        .arg(&path)
+        .arg("document parser")
+        .arg("read")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with(
+        "security-worker-admission-fanout\tworkers=1\tworker-families=index:0,preview:0,thumbnail:0,extraction:1,operation:0,other:0\tblocked-worker-families=index:0,preview:0,thumbnail:0,extraction:1,operation:0,other:0\t"
+    ));
+    assert!(stdout.contains("\tdeny=1\t"));
+    assert!(stdout.contains("\tcan-touch-filesystem=0\t"));
+    assert!(stdout.contains("\tfirst-blocked-worker=document parser\t"));
+    assert!(stdout.contains("\tintent=read\t"));
+    assert!(stdout.contains("unreachable volume network"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn security_worker_admission_fanout_refuses_unavailable_volume_api_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-security-worker-fanout-unavailable-{}",

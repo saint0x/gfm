@@ -4902,11 +4902,14 @@ impl WorkerAdmissionFamily {
         if worker.contains("index") || worker.contains("search") {
             return Self::Index;
         }
+        if worker.contains("metadata") || worker.contains("other") {
+            return Self::Other;
+        }
         match admission.access.intent {
             AccessIntent::Index => Self::Index,
             AccessIntent::Preview => Self::Preview,
             AccessIntent::Operate | AccessIntent::Write => Self::Operation,
-            AccessIntent::Read => Self::Other,
+            AccessIntent::Read => Self::Extraction,
         }
     }
 }
