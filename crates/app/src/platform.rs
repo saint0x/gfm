@@ -4310,12 +4310,10 @@ fn evaluate_fileprovider_observed_invalidation_checked(
     check_control()?;
     let state_probe = write_probe_existing_ancestor(state_path, worker)?;
     check_control()?;
-    let mut access = vec![PlatformAccessReport::new_checked(
-        state_probe,
-        AccessIntent::Write,
-        &mut check_control,
-    )?
-    .access_checked(worker, &mut check_control)?];
+    let state_access_report =
+        PlatformAccessReport::new_checked(state_probe, AccessIntent::Write, &mut check_control)?;
+    state_access_report.preflight_volume(worker)?;
+    let mut access = vec![state_access_report.access_checked(worker, &mut check_control)?];
     check_control()?;
     let previous = if fileprovider_state_file_exists(state_path, worker)? {
         Some(FileProviderStateSnapshot::read_checked(
@@ -4993,10 +4991,16 @@ fn retain_fileprovider_event_access_checked(
         unique_fileprovider_paths(paths.iter().map(PathBuf::as_path))
             .into_iter()
             .map(|path| {
-                PlatformAccessReport::new_checked(path.to_path_buf(), AccessIntent::Read, || Ok(()))
+                PlatformAccessReport::new_checked(
+                    path.to_path_buf(),
+                    AccessIntent::Read,
+                    &mut check_control,
+                )
             })
             .collect::<Result<Vec<_>>>()?,
     );
+    reports.preflight_volumes(worker)?;
+    check_control()?;
     reports.access_checked(worker, check_control)
 }
 
@@ -6917,6 +6921,67 @@ mod tests {
             Err(err) => err,
         };
         assert_eq!(err, GfmError::Cancelled);
+    }
+
+    #[test]
+    fn fileprovider_observed_invalidation_refuses_unreachable_state_before_access() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-platform-fileprovider-observed-state-offline-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let state_path = root.join("state.tsv");
+        let event = FileEvent::new(
+            std::env::temp_dir().join("gfm-platform-fileprovider-observed-state-item"),
+            FileEventKind::Modify,
+        );
+
+        let err = evaluate_fileprovider_observed_invalidation_checked(
+            &state_path,
+            event,
+            "fileprovider observed invalidation",
+            || Ok(()),
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, GfmError::Permission { .. }));
+        assert!(err.to_string().contains(
+            "fileprovider observed invalidation volume access blocked: unreachable volume network"
+        ));
+        assert!(!state_path.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fileprovider_event_access_checked_refuses_unreachable_event_path_before_access() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-platform-fileprovider-event-offline-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let event_path = root.join("Remote.icloud");
+        std::fs::write(&event_path, "not available").unwrap();
+        let event = FileEvent::new(event_path, FileEventKind::Modify);
+
+        let err = match retain_fileprovider_event_access_checked(
+            &event,
+            None,
+            "fileprovider event",
+            || Ok(()),
+        ) {
+            Ok(_) => panic!("unreachable FileProvider event path was admitted"),
+            Err(err) => err,
+        };
+
+        assert!(matches!(err, GfmError::Permission { .. }));
+        assert!(
+            err.to_string()
+                .contains("fileprovider event volume access blocked: unreachable volume network"),
+            "{err}"
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
