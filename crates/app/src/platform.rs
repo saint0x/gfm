@@ -2924,6 +2924,13 @@ fn previous_index_volume_descriptor_from_args(
     if let Some(reachable) = optional_platform_bool(args.next(), "previous reachable")? {
         previous = previous.with_reachable(Some(reachable));
     }
+    if let Some(removable) = optional_platform_bool(args.next(), "previous removable")? {
+        previous = previous.with_removable(Some(removable));
+    }
+    if let Some(case_preserving) = optional_platform_bool(args.next(), "previous case-preserving")?
+    {
+        previous = previous.with_case_preserving(Some(case_preserving));
+    }
     Ok(previous)
 }
 
@@ -5213,6 +5220,8 @@ mod tests {
                 "unavailable",
                 "mount table unavailable",
                 "false",
+                "true",
+                "false",
             ]
             .into_iter()
             .map(str::to_string),
@@ -5223,8 +5232,10 @@ mod tests {
         assert_eq!(previous.reachable, Some(false));
         assert_eq!(previous.writable, Some(true));
         assert_eq!(previous.ejectable, Some(true));
+        assert_eq!(previous.removable, Some(true));
         assert_eq!(previous.mountable, Some(false));
         assert_eq!(previous.case_sensitive, Some(true));
+        assert_eq!(previous.case_preserving, Some(false));
         assert_eq!(
             previous.stable_identity.as_deref(),
             Some("diskarbitration:uuid:WORK")
@@ -5381,6 +5392,73 @@ mod tests {
         assert_eq!(report.reason, "volume-reachability-changed");
         assert!(tsv.contains("\tprevious-reachable=false\t"));
         assert!(tsv.contains("\tcurrent-reachable=true\t"));
+    }
+
+    #[test]
+    fn volume_invalidation_uses_previous_arg_media_and_case_preserving_context() {
+        let previous = previous_index_volume_descriptor_from_args(
+            IndexVolumeDescriptor::new(
+                "Shuttle",
+                "/Volumes/Shuttle",
+                IndexVolumeClass::External,
+                IndexMountState::Mounted,
+            ),
+            &mut [
+                "-",
+                "-",
+                "-",
+                "-",
+                "-",
+                "-",
+                "fs=apfs|removable=0|case-preserving=0",
+                "-",
+                "-",
+                "-",
+                "-",
+                "-",
+                "-",
+                "available",
+                "-",
+                "available",
+                "-",
+                "available",
+                "-",
+                "-",
+                "false",
+                "false",
+            ]
+            .into_iter()
+            .map(str::to_string),
+        )
+        .unwrap();
+        let current = IndexVolumeDescriptor::new(
+            "Shuttle",
+            "/Volumes/Shuttle",
+            IndexVolumeClass::External,
+            IndexMountState::Mounted,
+        )
+        .with_native_status("available")
+        .with_resource_status("available")
+        .with_mount_status("available")
+        .with_removable(Some(true))
+        .with_case_preserving(Some(true))
+        .with_filesystem_signature("fs=apfs|removable=1|case-preserving=1");
+
+        let report = VolumeInvalidationReport::evaluate(Some(&previous), Some(&current));
+        let tsv = report.as_tsv();
+
+        assert_eq!(report.previous_removable, Some(false));
+        assert_eq!(report.current_removable, Some(true));
+        assert_eq!(report.previous_case_preserving, Some(false));
+        assert_eq!(report.current_case_preserving, Some(true));
+        assert!(report.invalidate_index_admission);
+        assert!(report.rescan_index);
+        assert!(report.cancel_index_jobs);
+        assert_eq!(report.reason, "volume-removable-media-changed");
+        assert!(tsv.contains("\tprevious-removable=false\t"));
+        assert!(tsv.contains("\tcurrent-removable=true\t"));
+        assert!(tsv.contains("\tprevious-case-preserving=false\t"));
+        assert!(tsv.contains("\tcurrent-case-preserving=true\t"));
     }
 
     #[test]
