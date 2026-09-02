@@ -1681,6 +1681,16 @@ fn run_ui_fileprovider_observed_invalidation(
     state_path: PathBuf,
     event: FileEvent,
 ) -> Result<FileProviderObservedInvalidation> {
+    run_ui_fileprovider_observed_invalidation_with_cancel_after_event_access(
+        state_path, event, false,
+    )
+}
+
+fn run_ui_fileprovider_observed_invalidation_with_cancel_after_event_access(
+    state_path: PathBuf,
+    event: FileEvent,
+    cancel_after_event_access: bool,
+) -> Result<FileProviderObservedInvalidation> {
     const WORKER: &str = "ui fileprovider sidebar observed invalidation";
     let state_probe = write_probe_existing_ancestor(&state_path, WORKER)?;
     let state_access_report =
@@ -1718,8 +1728,14 @@ fn run_ui_fileprovider_observed_invalidation(
             )?;
             access.extend(event_access_reports.access_checked(WORKER, || cancellation.check())?);
             cancellation.check()?;
-            let (observed, snapshot) =
-                FileProviderObservedInvalidation::evaluate(previous.as_ref(), [event])?;
+            if cancel_after_event_access {
+                cancellation.cancel();
+            }
+            let (observed, snapshot) = FileProviderObservedInvalidation::evaluate_checked(
+                previous.as_ref(),
+                [event],
+                || cancellation.check(),
+            )?;
             if ui_fileprovider_snapshot_changed(previous.as_ref(), &snapshot) {
                 snapshot.write_checked(&state_path, || cancellation.check())?;
             }
@@ -2820,6 +2836,30 @@ mod tests {
         let result = read_ui_fileprovider_sidebar_state_cancel_after_access(path);
 
         assert_eq!(result.err(), Some(GfmError::Cancelled));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn ui_fileprovider_observed_invalidation_can_cancel_after_event_access_before_native_read() {
+        let root = env::temp_dir().join(format!(
+            "gfm-interface-fileprovider-observed-cancel-after-access-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let state_path = root.join("fileprovider-state.tsv");
+        let provider_path = root.join("Remote.icloud");
+        fs::write(&provider_path, "remote").unwrap();
+        let event = FileEvent::new(provider_path, FileEventKind::Metadata);
+
+        let result = run_ui_fileprovider_observed_invalidation_with_cancel_after_event_access(
+            state_path.clone(),
+            event,
+            true,
+        );
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert!(!state_path.exists());
         let _ = fs::remove_dir_all(root);
     }
 
