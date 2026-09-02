@@ -2456,6 +2456,7 @@ fn coalesce_native_volume_events_for_state(
     events: Vec<gfm_mac_sys::NativeVolumeEvent>,
 ) -> Vec<gfm_mac_sys::NativeVolumeEvent> {
     let mut key_index = BTreeMap::new();
+    let mut disappeared_index = BTreeMap::new();
     let mut retained = Vec::with_capacity(events.len());
     for event in events {
         let Some(key) = native_volume_event_coalescing_key(&event) else {
@@ -2465,7 +2466,11 @@ fn coalesce_native_volume_events_for_state(
         if event.kind == gfm_mac_sys::NativeVolumeEventKind::Disappeared {
             if let Some(index) = key_index.remove(&key) {
                 retained[index] = event;
+                disappeared_index.insert(key, index);
+            } else if let Some(index) = disappeared_index.get(&key).copied() {
+                retained[index] = event;
             } else {
+                disappeared_index.insert(key, retained.len());
                 retained.push(event);
             }
             continue;
@@ -2473,6 +2478,7 @@ fn coalesce_native_volume_events_for_state(
         if let Some(index) = key_index.get(&key).copied() {
             retained[index] = event;
         } else {
+            disappeared_index.remove(&key);
             key_index.insert(key, retained.len());
             retained.push(event);
         }
@@ -6715,6 +6721,92 @@ mod tests {
         assert_eq!(
             coalesced[1].kind,
             gfm_mac_sys::NativeVolumeEventKind::Appeared
+        );
+    }
+
+    #[test]
+    fn coalescing_suppresses_duplicate_disappeared_events_without_losing_reason() {
+        let root = PathBuf::from("/Volumes/Noisy Gone");
+        let first = gfm_mac_sys::NativeVolumeEvent {
+            kind: gfm_mac_sys::NativeVolumeEventKind::Disappeared,
+            description: native_description(|description| {
+                description.volume_uuid = Some("NOISY-GONE-VOLUME".to_string());
+                description.volume_path = Some(root.clone());
+                description.reason = Some("first-disappeared".to_string());
+            }),
+        };
+        let second = gfm_mac_sys::NativeVolumeEvent {
+            kind: gfm_mac_sys::NativeVolumeEventKind::Disappeared,
+            description: native_description(|description| {
+                description.volume_uuid = Some("NOISY-GONE-VOLUME".to_string());
+                description.volume_path = Some(root.clone());
+                description.reason = Some("final-disappeared".to_string());
+            }),
+        };
+
+        let coalesced = coalesce_native_volume_events_for_state(vec![first, second]);
+
+        assert_eq!(coalesced.len(), 1);
+        assert_eq!(
+            coalesced[0].kind,
+            gfm_mac_sys::NativeVolumeEventKind::Disappeared
+        );
+        assert_eq!(
+            coalesced[0].description.reason.as_deref(),
+            Some("final-disappeared")
+        );
+    }
+
+    #[test]
+    fn coalescing_preserves_remount_after_duplicate_disappeared_events() {
+        let root = PathBuf::from("/Volumes/Noisy Remount");
+        let first_disappeared = gfm_mac_sys::NativeVolumeEvent {
+            kind: gfm_mac_sys::NativeVolumeEventKind::Disappeared,
+            description: native_description(|description| {
+                description.volume_uuid = Some("NOISY-REMOUNT-VOLUME".to_string());
+                description.volume_path = Some(root.clone());
+                description.reason = Some("first-disappeared".to_string());
+            }),
+        };
+        let final_disappeared = gfm_mac_sys::NativeVolumeEvent {
+            kind: gfm_mac_sys::NativeVolumeEventKind::Disappeared,
+            description: native_description(|description| {
+                description.volume_uuid = Some("NOISY-REMOUNT-VOLUME".to_string());
+                description.volume_path = Some(root.clone());
+                description.reason = Some("final-disappeared".to_string());
+            }),
+        };
+        let appeared = gfm_mac_sys::NativeVolumeEvent {
+            kind: gfm_mac_sys::NativeVolumeEventKind::Appeared,
+            description: native_description(|description| {
+                description.volume_uuid = Some("NOISY-REMOUNT-VOLUME".to_string());
+                description.volume_path = Some(root.clone());
+                description.reason = Some("appeared-after-noise".to_string());
+            }),
+        };
+
+        let coalesced = coalesce_native_volume_events_for_state(vec![
+            first_disappeared,
+            final_disappeared,
+            appeared,
+        ]);
+
+        assert_eq!(coalesced.len(), 2);
+        assert_eq!(
+            coalesced[0].kind,
+            gfm_mac_sys::NativeVolumeEventKind::Disappeared
+        );
+        assert_eq!(
+            coalesced[0].description.reason.as_deref(),
+            Some("final-disappeared")
+        );
+        assert_eq!(
+            coalesced[1].kind,
+            gfm_mac_sys::NativeVolumeEventKind::Appeared
+        );
+        assert_eq!(
+            coalesced[1].description.reason.as_deref(),
+            Some("appeared-after-noise")
         );
     }
 
