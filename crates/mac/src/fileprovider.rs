@@ -2988,11 +2988,13 @@ fn materialization_reason_for_state(
         || native_has_ubiquitous_materialization_evidence(&hints.native)
     {
         return Some(match state {
-            CloudStorageState::Downloaded => "native-url-resource-materialized".to_string(),
-            CloudStorageState::Evicted => "native-url-resource-remote-placeholder".to_string(),
-            CloudStorageState::Downloading => "native-url-resource-downloading".to_string(),
-            CloudStorageState::Uploading => "native-url-resource-uploading".to_string(),
-            CloudStorageState::Waiting => "native-url-resource-waiting".to_string(),
+            CloudStorageState::Downloaded => native_downloaded_reason(&hints.native).to_string(),
+            CloudStorageState::Evicted => native_remote_placeholder_reason(&hints.native)
+                .unwrap_or("native-url-resource-remote-placeholder")
+                .to_string(),
+            CloudStorageState::Downloading => native_downloading_reason(&hints.native).to_string(),
+            CloudStorageState::Uploading => native_uploading_reason(&hints.native).to_string(),
+            CloudStorageState::Waiting => native_waiting_reason(&hints.native).to_string(),
             CloudStorageState::Conflict => "native-url-resource-conflict".to_string(),
             CloudStorageState::Offline => hints
                 .native
@@ -3040,6 +3042,85 @@ fn materialization_reason_for_state(
         CloudStorageState::Offline => Some("provider-offline".to_string()),
         CloudStorageState::Unknown => Some("unknown-provider-state".to_string()),
         CloudStorageState::Removed => Some("fileprovider-item-removed".to_string()),
+    }
+}
+
+fn native_downloaded_reason(values: &NativeFileProviderResourceValues) -> &'static str {
+    if values.is_downloaded == Some(true) {
+        "native-url-resource-is-downloaded"
+    } else if matches!(
+        values.downloading_status,
+        Some(NativeUbiquitousDownloadingStatus::Downloaded)
+    ) {
+        "native-url-resource-downloading-status-downloaded"
+    } else if matches!(
+        values.downloading_status,
+        Some(NativeUbiquitousDownloadingStatus::Current)
+    ) {
+        "native-url-resource-downloading-status-current"
+    } else if values.percent_downloaded_milli == Some(100_000) {
+        "native-url-resource-download-complete"
+    } else if values.is_uploaded == Some(true) {
+        "native-url-resource-is-uploaded"
+    } else if values.percent_uploaded_milli == Some(100_000) {
+        "native-url-resource-upload-complete"
+    } else {
+        "native-url-resource-materialized"
+    }
+}
+
+fn native_remote_placeholder_reason(
+    values: &NativeFileProviderResourceValues,
+) -> Option<&'static str> {
+    if matches!(
+        values.downloading_status,
+        Some(NativeUbiquitousDownloadingStatus::NotDownloaded)
+    ) {
+        Some("native-url-resource-downloading-status-not-downloaded")
+    } else if values.is_downloaded == Some(false) {
+        Some("native-url-resource-is-downloaded-false")
+    } else if values.percent_downloaded_milli == Some(0) {
+        Some("native-url-resource-zero-download-progress")
+    } else if native_has_unallocated_placeholder_evidence(values) {
+        Some("native-url-resource-unallocated-placeholder")
+    } else {
+        None
+    }
+}
+
+fn native_downloading_reason(values: &NativeFileProviderResourceValues) -> &'static str {
+    if values.is_downloading == Some(true) {
+        "native-url-resource-is-downloading"
+    } else if values
+        .percent_downloaded_milli
+        .is_some_and(|percent| percent > 0 && percent < 100_000)
+    {
+        "native-url-resource-partial-download-progress"
+    } else {
+        "native-url-resource-downloading"
+    }
+}
+
+fn native_uploading_reason(values: &NativeFileProviderResourceValues) -> &'static str {
+    if values.is_uploading == Some(true) {
+        "native-url-resource-is-uploading"
+    } else if values
+        .percent_uploaded_milli
+        .is_some_and(|percent| percent < 100_000)
+    {
+        "native-url-resource-partial-upload-progress"
+    } else {
+        "native-url-resource-uploading"
+    }
+}
+
+fn native_waiting_reason(values: &NativeFileProviderResourceValues) -> &'static str {
+    if values.download_requested == Some(true) {
+        "native-url-resource-download-requested"
+    } else if values.is_uploaded == Some(false) {
+        "native-url-resource-upload-pending"
+    } else {
+        "native-url-resource-waiting"
     }
 }
 
@@ -7066,7 +7147,7 @@ mod tests {
         );
         assert_eq!(
             report.materialization_reason.as_deref(),
-            Some("native-url-resource-remote-placeholder")
+            Some("native-url-resource-downloading-status-not-downloaded")
         );
         assert_eq!(report.progress.direction, CloudTransferDirection::Download);
         assert_eq!(report.progress.percent_milli, Some(0));
@@ -7109,7 +7190,7 @@ mod tests {
         );
         assert_eq!(
             report.materialization_reason.as_deref(),
-            Some("native-url-resource-remote-placeholder")
+            Some("native-url-resource-downloading-status-not-downloaded")
         );
     }
 
@@ -7142,6 +7223,10 @@ mod tests {
         assert_eq!(
             report.materialization_source,
             CloudMaterializationSource::NativeUrlResource
+        );
+        assert_eq!(
+            report.materialization_reason.as_deref(),
+            Some("native-url-resource-zero-download-progress")
         );
         assert_eq!(report.progress.percent_milli, Some(0));
     }
@@ -7345,7 +7430,7 @@ mod tests {
         );
         assert_eq!(
             report.materialization_reason.as_deref(),
-            Some("native-url-resource-remote-placeholder")
+            Some("native-url-resource-unallocated-placeholder")
         );
     }
 
@@ -7380,6 +7465,10 @@ mod tests {
             report.materialization_source,
             CloudMaterializationSource::NativeUrlResource
         );
+        assert_eq!(
+            report.materialization_reason.as_deref(),
+            Some("native-url-resource-unallocated-placeholder")
+        );
     }
 
     #[test]
@@ -7410,6 +7499,10 @@ mod tests {
         assert_eq!(
             report.materialization_source,
             CloudMaterializationSource::NativeUrlResource
+        );
+        assert_eq!(
+            report.materialization_reason.as_deref(),
+            Some("native-url-resource-downloading-status-current")
         );
     }
 
