@@ -4606,7 +4606,7 @@ fn worker_admission_fanout_summary(
     let first_blocked_volume =
         first_blocked.and_then(|_| report.volume_report.volume_for_path(&report.volume_path));
     format!(
-        "security-worker-admission-fanout\tworkers={}\tworker-families={}\tblocked-worker-families={}\tstart={}\tprompt={}\tmetadata-only={}\tdeny={}\tcan-touch-filesystem={}\tbookmark-access={}\trefresh-on-permission-change={}\tany-blocked={}\tall-blocked={}\trefresh-required={}\tfirst-blocked-worker={}\tfirst-blocked-action={}\tfirst-blocked-scope={}\tfirst-blocked-probe={}\tfirst-blocked-reason={}\tfirst-blocked-volume-id={}\tfirst-blocked-volume-class={}\tfirst-blocked-volume-root={}\tfirst-blocked-volume-label={}\tfirst-blocked-volume-stable-id={}\tfirst-refresh-worker={}\tfirst-refresh-scope={}",
+        "security-worker-admission-fanout\tworkers={}\tworker-families={}\tblocked-worker-families={}\tstart={}\tprompt={}\tmetadata-only={}\tdeny={}\tcan-touch-filesystem={}\tbookmark-access={}\trefresh-on-permission-change={}\tany-blocked={}\tall-blocked={}\trefresh-required={}\tfirst-blocked-worker={}\tfirst-blocked-action={}\tfirst-blocked-scope={}\tfirst-blocked-probe={}\tfirst-blocked-reason={}\tfirst-blocked-volume-id={}\tfirst-blocked-volume-class={}\tfirst-blocked-volume-root={}\tfirst-blocked-volume-label={}\tfirst-blocked-volume-stable-id={}\tfirst-blocked-volume-native-status={}\tfirst-blocked-volume-native-reason={}\tfirst-blocked-volume-resource-status={}\tfirst-blocked-volume-resource-reason={}\tfirst-blocked-volume-mount-status={}\tfirst-blocked-volume-mount-reason={}\tfirst-refresh-worker={}\tfirst-refresh-scope={}",
         admissions.len(),
         families.as_tsv_value(),
         families.blocked_as_tsv_value(),
@@ -4649,6 +4649,24 @@ fn worker_admission_fanout_summary(
             .unwrap_or_else(|| "-".to_string()),
         first_blocked_volume
             .map(|volume| escape_field(&volume.stable_identity))
+            .unwrap_or_else(|| "-".to_string()),
+        first_blocked_volume
+            .map(|volume| format_platform_optional_status(volume.native_status))
+            .unwrap_or_else(|| "-".to_string()),
+        first_blocked_volume
+            .map(|volume| format_platform_optional_string(volume.native_reason.as_deref()))
+            .unwrap_or_else(|| "-".to_string()),
+        first_blocked_volume
+            .map(|volume| format_platform_optional_status(volume.resource_status))
+            .unwrap_or_else(|| "-".to_string()),
+        first_blocked_volume
+            .map(|volume| format_platform_optional_string(volume.resource_reason.as_deref()))
+            .unwrap_or_else(|| "-".to_string()),
+        first_blocked_volume
+            .map(|volume| format_platform_optional_status(volume.mount_table_status))
+            .unwrap_or_else(|| "-".to_string()),
+        first_blocked_volume
+            .map(|volume| format_platform_optional_string(volume.mount_table_reason.as_deref()))
             .unwrap_or_else(|| "-".to_string()),
         first_refresh
             .map(|admission| escape_field(&admission.worker))
@@ -5241,6 +5259,12 @@ mod tests {
         volume.label = "blocked\tvolume\rlabel".to_string();
         volume.stable_identity = "diskarbitration:uuid:BLOCKED\nVOLUME\rID".to_string();
         volume.kind = gfm_mac::VolumeKind::Network;
+        volume.native_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        volume.native_reason = Some("native\tbridge\nlost\r".to_string());
+        volume.resource_status = Some(gfm_mac::NativeVolumeStatus::Available);
+        volume.resource_reason = Some("resource\tok".to_string());
+        volume.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        volume.mount_table_reason = Some("mount\nsnapshot\rstale".to_string());
         let report = crate::access::WorkerAdmissionsVolumeGateReport {
             admissions: vec![admission],
             volume_path: path,
@@ -5276,6 +5300,15 @@ mod tests {
             ),
             "{summary}"
         );
+        assert!(summary.contains(
+            "\tfirst-blocked-volume-native-status=unavailable\tfirst-blocked-volume-native-reason=native\\tbridge\\nlost\\r\t"
+        ));
+        assert!(summary.contains(
+            "\tfirst-blocked-volume-resource-status=available\tfirst-blocked-volume-resource-reason=resource\\tok\t"
+        ));
+        assert!(summary.contains(
+            "\tfirst-blocked-volume-mount-status=unavailable\tfirst-blocked-volume-mount-reason=mount\\nsnapshot\\rstale\t"
+        ));
         assert!(
             summary.contains("\tfirst-refresh-worker=preview\\tworker\\rfast\t"),
             "{summary}"

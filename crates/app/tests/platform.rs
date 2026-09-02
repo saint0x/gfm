@@ -1043,6 +1043,14 @@ fn reports_security_worker_admission_fanout_from_binary() {
         !stdout.contains("\tfirst-blocked-volume-stable-id=-\t"),
         "{stdout}"
     );
+    assert!(stdout.contains("\tfirst-blocked-volume-native-status=unavailable\t"));
+    assert!(stdout.contains(
+        "\tfirst-blocked-volume-native-reason=DiskArbitration did not return a disk for "
+    ));
+    assert!(stdout.contains("\tfirst-blocked-volume-resource-status=available\t"));
+    assert!(stdout.contains("\tfirst-blocked-volume-resource-reason=-\t"));
+    assert!(stdout.contains("\tfirst-blocked-volume-mount-status=available\t"));
+    assert!(stdout.contains("\tfirst-blocked-volume-mount-reason=-\t"));
     assert!(stdout.contains("\tfirst-refresh-worker=index worker\t"));
     assert!(stdout.contains("\tfirst-refresh-scope=none\n"));
     for (worker, intent) in [
@@ -1148,6 +1156,15 @@ fn security_worker_admission_fanout_refuses_unavailable_volume_api_from_binary()
         !stdout.contains("\tfirst-blocked-volume-stable-id=-\t"),
         "{stdout}"
     );
+    assert!(stdout.contains(
+        "\tfirst-blocked-volume-native-status=unavailable\tfirst-blocked-volume-native-reason=DiskArbitration unavailable during refresh\t"
+    ));
+    assert!(stdout.contains(
+        "\tfirst-blocked-volume-resource-status=unavailable\tfirst-blocked-volume-resource-reason=URL resource values unavailable during refresh\t"
+    ));
+    assert!(stdout.contains(
+        "\tfirst-blocked-volume-mount-status=unavailable\tfirst-blocked-volume-mount-reason=mount table unavailable during refresh\t"
+    ));
     assert!(stdout.contains("\tfirst-refresh-worker=index worker\t"));
     assert!(stdout.contains("\tfirst-refresh-scope=none\n"));
     assert_eq!(
@@ -1167,17 +1184,17 @@ fn security_worker_admission_fanout_refuses_unavailable_volume_api_from_binary()
     );
     assert_eq!(
         stdout.matches("native-status=unavailable").count(),
-        6,
+        7,
         "{stdout}"
     );
     assert_eq!(
         stdout.matches("resource-status=unavailable").count(),
-        6,
+        7,
         "{stdout}"
     );
     assert_eq!(
         stdout.matches("mount-status=unavailable").count(),
-        6,
+        7,
         "{stdout}"
     );
     assert!(!stdout.contains("\tprobe=unknown\t"), "{stdout}");
