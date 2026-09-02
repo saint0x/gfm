@@ -221,6 +221,27 @@ impl VolumeDescriptor {
             && self.mount_table_status == Some(NativeVolumeStatus::Unavailable)
     }
 
+    pub fn reports_slow_volume_io(&self) -> bool {
+        if self.network || self.reachable == Some(false) {
+            return false;
+        }
+        if self.kind == VolumeKind::DiskImage {
+            return true;
+        }
+        if !matches!(self.kind, VolumeKind::External | VolumeKind::Removable) {
+            return false;
+        }
+        let protocol = self.device_protocol.as_deref().unwrap_or_default();
+        let media_kind = self.media_kind.as_deref().unwrap_or_default();
+        let media_type = self.media_type.as_deref().unwrap_or_default();
+        self.resource_automounted == Some(true)
+            || self.removable
+                && (contains_ascii_case_insensitive(protocol, "usb")
+                    || contains_ascii_case_insensitive(protocol, "firewire")
+                    || contains_ascii_case_insensitive(media_kind, "removable")
+                    || contains_ascii_case_insensitive(media_type, "removable"))
+    }
+
     pub fn for_path(path: impl AsRef<Path>) -> Result<Self> {
         Self::for_path_checked(path, || Ok(()))
     }
@@ -3297,6 +3318,14 @@ fn volume_api_reason_changed(previous: &VolumeDescriptor, current: &VolumeDescri
             != normalized_event_reason_option(current.resource_reason.as_deref())
         || normalized_event_reason_option(previous.mount_table_reason.as_deref())
             != normalized_event_reason_option(current.mount_table_reason.as_deref())
+}
+
+fn contains_ascii_case_insensitive(haystack: &str, needle: &str) -> bool {
+    !needle.is_empty()
+        && haystack
+            .as_bytes()
+            .windows(needle.len())
+            .any(|window| window.eq_ignore_ascii_case(needle.as_bytes()))
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -6444,6 +6473,54 @@ mod tests {
         let diff = VolumeTopologyDiff::evaluate(&previous, &current);
 
         assert!(diff.changes.is_empty(), "{:?}", diff.changes);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_descriptor_reports_slow_volume_io_for_usb_removable_media() {
+        let root = unique_temp_dir("gfm-volume-slow-io-usb-removable");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let mut volume = VolumeDescriptor::for_path(&root).unwrap();
+        volume.kind = VolumeKind::External;
+        volume.removable = true;
+        volume.device_protocol = Some("USB 3.2".to_string());
+        volume.media_kind = Some("Solid State".to_string());
+        volume.media_type = Some("Generic".to_string());
+
+        assert!(volume.reports_slow_volume_io());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_descriptor_reports_slow_volume_io_for_automounted_external_media() {
+        let root = unique_temp_dir("gfm-volume-slow-io-automounted");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let mut volume = VolumeDescriptor::for_path(&root).unwrap();
+        volume.kind = VolumeKind::External;
+        volume.removable = false;
+        volume.resource_automounted = Some(true);
+        volume.device_protocol = Some("PCI-Express".to_string());
+
+        assert!(volume.reports_slow_volume_io());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_descriptor_keeps_network_and_unreachable_media_out_of_slow_io() {
+        let root = unique_temp_dir("gfm-volume-slow-io-network");
+        fs::write(root.join(VOLUME_MARKER), "network-unreachable\n").unwrap();
+        let mut volume = VolumeDescriptor::for_path(&root).unwrap();
+        volume.kind = VolumeKind::External;
+        volume.network = true;
+        volume.reachable = Some(false);
+        volume.removable = true;
+        volume.device_protocol = Some("USB 3.2".to_string());
+        volume.resource_automounted = Some(true);
+
+        assert!(!volume.reports_slow_volume_io());
 
         fs::remove_dir_all(root).unwrap();
     }

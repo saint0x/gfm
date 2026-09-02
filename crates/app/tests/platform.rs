@@ -7442,6 +7442,34 @@ fn sidebar_volume_description_event_api_status_reason_from_binary() {
 }
 
 #[test]
+fn sidebar_volume_api_reason_change_invalidates_row_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("ui-sidebar-volume-api-reason-invalidation")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("sidebar-volume-invalidation\trow=volume-"));
+    assert!(stdout.contains("\tpath=/Volumes/UI API Reason\t"));
+    assert!(stdout.contains("\tkind=description-changed\t"));
+    assert!(stdout.contains("\tprevious-native-status=available\t"));
+    assert!(stdout
+        .contains("\tprevious-native-reason=DiskArbitration available before sidebar refresh\t"));
+    assert!(stdout.contains("\tcurrent-native-status=available\t"));
+    assert!(stdout
+        .contains("\tcurrent-native-reason=DiskArbitration refreshed during sidebar update\t"));
+    assert!(stdout.contains("\tinvalidate-row=true\t"));
+    assert!(stdout.contains("\tinvalidate-section=true\t"));
+    assert!(stdout.contains("\tdisable-row=false\t"));
+    assert!(stdout.ends_with("reason=volume-api-reason-changed\n"));
+}
+
+#[test]
 fn reports_unavailable_volume_event_invalidation_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("volume-event-invalidation")

@@ -2224,18 +2224,7 @@ fn preview_conservative_volume_policy(
 }
 
 fn volume_reports_slow_for_preview(volume: &VolumeDescriptor) -> bool {
-    if volume_descriptor_is_remote_for_preview(volume) {
-        return false;
-    }
-    matches!(
-        volume.kind,
-        gfm_mac::VolumeKind::DiskImage | gfm_mac::VolumeKind::Removable
-    ) || (volume.kind == gfm_mac::VolumeKind::External
-        && (volume.resource_automounted == Some(true)
-            || volume
-                .device_protocol
-                .as_deref()
-                .is_some_and(|protocol| protocol.eq_ignore_ascii_case("usb"))))
+    !volume_descriptor_is_remote_for_preview(volume) && volume.reports_slow_volume_io()
 }
 
 struct PreviewVolumeSchedulingFacts {
@@ -2362,27 +2351,7 @@ fn option_bool_tsv(value: Option<bool>) -> String {
 }
 
 fn volume_reports_slow_for_operation_policy(volume: &VolumeDescriptor) -> bool {
-    if volume.network || volume.reachable == Some(false) {
-        return false;
-    }
-    if volume.kind == gfm_mac::VolumeKind::DiskImage {
-        return true;
-    }
-    if !matches!(
-        volume.kind,
-        gfm_mac::VolumeKind::External | gfm_mac::VolumeKind::Removable
-    ) {
-        return false;
-    }
-    let protocol = volume.device_protocol.as_deref().unwrap_or_default();
-    let media_kind = volume.media_kind.as_deref().unwrap_or_default();
-    let media_type = volume.media_type.as_deref().unwrap_or_default();
-    volume.resource_automounted == Some(true)
-        || volume.removable
-            && (protocol.eq_ignore_ascii_case("usb")
-                || protocol.eq_ignore_ascii_case("firewire")
-                || media_kind.to_ascii_lowercase().contains("removable")
-                || media_type.to_ascii_lowercase().contains("removable"))
+    volume.reports_slow_volume_io()
 }
 
 fn volume_case_sensitivity_invalidation(
@@ -5208,6 +5177,44 @@ mod tests {
 
         assert_eq!(result.err(), Some(GfmError::Cancelled));
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn preview_scheduling_uses_slow_volume_io_descriptor_policy() {
+        let root =
+            std::env::temp_dir().join(format!("gfm-preview-slow-volume-io-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("Image.png");
+        std::fs::write(&path, "image fixture").unwrap();
+        let mut volume = VolumeDescriptor::for_path(&root).unwrap();
+        volume.kind = gfm_mac::VolumeKind::External;
+        volume.removable = true;
+        volume.device_protocol = Some("USB 3.2".to_string());
+        let report = VolumeDiscoveryReport {
+            volumes: vec![volume],
+        };
+        let base = PreviewSchedulingPolicy {
+            max_visible: 16,
+            max_prefetch: 8,
+            cancel_offscreen: false,
+        };
+
+        let policy = preview_scheduling_policy_from_volume_report(
+            &path,
+            base,
+            SchedulingPressure::default(),
+            &report,
+        );
+        let facts = preview_volume_scheduling_facts(&path, &report);
+
+        assert_eq!(policy.max_visible, 8);
+        assert_eq!(policy.max_prefetch, 0);
+        assert!(policy.cancel_offscreen);
+        assert!(facts.slow);
+        assert!(!facts.remote);
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

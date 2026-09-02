@@ -1786,44 +1786,11 @@ fn operation_volume_class_for_descriptor(
     volume: &gfm_mac::VolumeDescriptor,
 ) -> OperationVolumeClass {
     match operation_volume_class_for_kind(volume.kind) {
-        OperationVolumeClass::External if slow_operation_volume(volume) => {
+        OperationVolumeClass::External if volume.reports_slow_volume_io() => {
             OperationVolumeClass::Slow
         }
         class => class,
     }
-}
-
-fn slow_operation_volume(volume: &gfm_mac::VolumeDescriptor) -> bool {
-    if volume.network || volume.reachable == Some(false) {
-        return false;
-    }
-    if volume.kind == VolumeKind::DiskImage {
-        return true;
-    }
-    if !matches!(volume.kind, VolumeKind::External | VolumeKind::Removable) {
-        return false;
-    }
-    let protocol = volume
-        .device_protocol
-        .as_deref()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    let media_kind = volume
-        .media_kind
-        .as_deref()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    let media_type = volume
-        .media_type
-        .as_deref()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    volume.resource_automounted == Some(true)
-        || volume.removable
-            && (protocol.contains("usb")
-                || protocol.contains("firewire")
-                || media_kind.contains("removable")
-                || media_type.contains("removable"))
 }
 
 fn operation_volume(operation: &Operation, report: &VolumeDiscoveryReport) -> Option<VolumeId> {
@@ -2210,7 +2177,7 @@ mod tests {
         let source = removable.join("source.bin");
         let destination = local.join("destination.bin");
         let mut report = VolumeDiscoveryReport::from_paths(vec![removable.clone()]);
-        report.volumes[0].device_protocol = Some("USB".to_string());
+        report.volumes[0].device_protocol = Some("USB 3.2".to_string());
         report.volumes[0].media_kind = Some("Removable Media".to_string());
         report.volumes[0].media_type = Some("Generic".to_string());
         report.volumes[0].removable = true;
@@ -2302,7 +2269,7 @@ mod tests {
         let source = network.join("source.bin");
         let destination = local.join("destination.bin");
         let mut report = VolumeDiscoveryReport::from_paths(vec![network.clone()]);
-        report.volumes[0].device_protocol = Some("USB".to_string());
+        report.volumes[0].device_protocol = Some("USB 3.2".to_string());
         report.volumes[0].removable = true;
         let operation = Operation::Copy {
             from: source.clone(),

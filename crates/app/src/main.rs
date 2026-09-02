@@ -456,7 +456,7 @@ fn index_volume_class(volume: &VolumeDescriptor) -> IndexVolumeClass {
     match volume.kind {
         VolumeKind::System => IndexVolumeClass::System,
         VolumeKind::Internal => IndexVolumeClass::Internal,
-        VolumeKind::External | VolumeKind::Removable if index_volume_reports_slow(volume) => {
+        VolumeKind::External | VolumeKind::Removable if volume.reports_slow_volume_io() => {
             IndexVolumeClass::Slow
         }
         VolumeKind::External | VolumeKind::Removable => IndexVolumeClass::External,
@@ -464,35 +464,6 @@ fn index_volume_class(volume: &VolumeDescriptor) -> IndexVolumeClass {
         VolumeKind::Network => IndexVolumeClass::Network,
         VolumeKind::Unknown => IndexVolumeClass::Unknown,
     }
-}
-
-fn index_volume_reports_slow(volume: &VolumeDescriptor) -> bool {
-    if volume.network || volume.reachable == Some(false) {
-        return false;
-    }
-    if volume.kind == VolumeKind::DiskImage {
-        return true;
-    }
-    if !matches!(volume.kind, VolumeKind::External | VolumeKind::Removable) {
-        return false;
-    }
-    let protocol = volume.device_protocol.as_deref().unwrap_or_default();
-    let media_kind = volume.media_kind.as_deref().unwrap_or_default();
-    let media_type = volume.media_type.as_deref().unwrap_or_default();
-    volume.resource_automounted == Some(true)
-        || volume.removable
-            && (protocol.eq_ignore_ascii_case("usb")
-                || protocol.eq_ignore_ascii_case("firewire")
-                || contains_ascii_case_insensitive(media_kind, "removable")
-                || contains_ascii_case_insensitive(media_type, "removable"))
-}
-
-fn contains_ascii_case_insensitive(haystack: &str, needle: &str) -> bool {
-    !needle.is_empty()
-        && haystack
-            .as_bytes()
-            .windows(needle.len())
-            .any(|window| window.eq_ignore_ascii_case(needle.as_bytes()))
 }
 
 fn index_mount_state(state: MountState) -> IndexMountState {
@@ -1413,7 +1384,7 @@ mod tests {
         let mut volume = VolumeDescriptor::for_path(&root).unwrap();
         volume.kind = VolumeKind::External;
         volume.removable = true;
-        volume.device_protocol = Some("USB".to_string());
+        volume.device_protocol = Some("USB 3.2".to_string());
 
         let descriptor = index_volume_descriptor(&volume);
 
@@ -1460,7 +1431,7 @@ mod tests {
         volume.network = true;
         volume.reachable = Some(false);
         volume.removable = true;
-        volume.device_protocol = Some("USB".to_string());
+        volume.device_protocol = Some("USB 3.2".to_string());
 
         let descriptor = index_volume_descriptor(&volume);
 
