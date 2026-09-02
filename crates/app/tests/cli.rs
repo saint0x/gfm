@@ -2,10 +2,10 @@ use flate2::{write::GzEncoder, Compression};
 use gfm_content::extractor_version_for_path;
 use gfm_store::{
     content_manifest_promotion_journal_path, read_records, write_content_postings,
-    ContentArchiveManifest, ContentArchiveManifestEntry, ContentManifestPromotionJournal,
-    ContentMergeTier, MetadataField, MetadataPosting,
+    write_content_segment, ContentArchiveManifest, ContentArchiveManifestEntry,
+    ContentManifestPromotionJournal, ContentMergeTier, MetadataField, MetadataPosting,
 };
-use gfm_types::{ContentPosting, FileId, VolumeId};
+use gfm_types::{ContentPosting, ContentSegment, FileId, VolumeId};
 use std::fs;
 use std::io::{Cursor, Write};
 use std::path::Path;
@@ -15076,6 +15076,436 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
     fs::remove_file(manifest_ids_retry_catalog).unwrap();
     fs::remove_file(manifest_ids_retry_progress).unwrap();
     fs::remove_file(manifest_ids_retry_probe).unwrap();
+}
+
+#[test]
+fn content_manifest_rows_escape_control_character_paths_from_binary() {
+    let root = unique_temp_dir("gfm-cli-content-manifest-row-control-root");
+    let manifest = root.join("content.gfmmanifest");
+    let active = root.join("Active\tArchive\nDraft\rFinal.gfmcontent");
+    let retired = root.join("Retired\tArchive\nDraft\rFinal.gfmcontent");
+    let promoted = root.join("Promoted\tArchive\nDraft\rFinal.gfmcontent");
+    let missing = root.join("Missing\tArchive\nDraft\rFinal.gfmcontent");
+    for (path, term, id) in [
+        (&active, "activeneedle", 1),
+        (&retired, "retiredneedle", 2),
+        (&promoted, "promotedneedle", 3),
+    ] {
+        write_content_postings(
+            path,
+            &[ContentPosting {
+                term: term.to_string(),
+                ids: vec![FileId::new(VolumeId(1), id)],
+                positions: vec![],
+            }],
+        )
+        .unwrap();
+    }
+    ContentArchiveManifest::new(vec![ContentArchiveManifestEntry {
+        tier: ContentMergeTier::Hot,
+        path: active.clone(),
+    }])
+    .unwrap()
+    .write(&manifest)
+    .unwrap();
+
+    let cleanup_plan_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-cleanup-plan",
+            manifest.to_str().unwrap(),
+            "0",
+            "0",
+            "10",
+            retired.to_str().unwrap(),
+            active.to_str().unwrap(),
+            missing.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        cleanup_plan_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&cleanup_plan_output.stderr)
+    );
+    let cleanup_plan_stdout = String::from_utf8(cleanup_plan_output.stdout).unwrap();
+    assert_eq!(
+        cleanup_plan_stdout.lines().count(),
+        3,
+        "{cleanup_plan_stdout}"
+    );
+    assert!(!cleanup_plan_stdout.contains('\r'), "{cleanup_plan_stdout}");
+    assert!(
+        cleanup_plan_stdout.contains(&format!(
+            "cleanup\t{}",
+            escape_test_tsv_field(&retired.to_string_lossy())
+        )),
+        "{cleanup_plan_stdout}"
+    );
+    assert!(
+        cleanup_plan_stdout.contains(&format!(
+            "active\t{}",
+            escape_test_tsv_field(&active.to_string_lossy())
+        )),
+        "{cleanup_plan_stdout}"
+    );
+    assert!(
+        cleanup_plan_stdout.contains(&format!(
+            "missing\t{}",
+            escape_test_tsv_field(&missing.to_string_lossy())
+        )),
+        "{cleanup_plan_stdout}"
+    );
+
+    let promote_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-manifest-promote",
+            manifest.to_str().unwrap(),
+            &format!("warm:{}", promoted.display()),
+            active.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        promote_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&promote_output.stderr)
+    );
+    let promote_stdout = String::from_utf8(promote_output.stdout).unwrap();
+    assert_eq!(promote_stdout.lines().count(), 1, "{promote_stdout}");
+    assert!(!promote_stdout.contains('\r'), "{promote_stdout}");
+    assert!(
+        promote_stdout.contains(&format!(
+            "retire\t{}",
+            escape_test_tsv_field(&active.to_string_lossy())
+        )),
+        "{promote_stdout}"
+    );
+
+    let inspect_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["content-manifest-inspect", manifest.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        inspect_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&inspect_output.stderr)
+    );
+    let inspect_stdout = String::from_utf8(inspect_output.stdout).unwrap();
+    assert_eq!(inspect_stdout.lines().count(), 2, "{inspect_stdout}");
+    assert!(!inspect_stdout.contains('\r'), "{inspect_stdout}");
+    assert!(
+        inspect_stdout.contains(&format!(
+            "archive\twarm\t{}\t{}",
+            escape_test_tsv_field(&promoted.to_string_lossy()),
+            escape_test_tsv_field(&promoted.to_string_lossy())
+        )),
+        "{inspect_stdout}"
+    );
+
+    let cleanup_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-manifest-cleanup",
+            manifest.to_str().unwrap(),
+            active.to_str().unwrap(),
+            promoted.to_str().unwrap(),
+            missing.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        cleanup_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&cleanup_output.stderr)
+    );
+    let cleanup_stdout = String::from_utf8(cleanup_output.stdout).unwrap();
+    assert_eq!(cleanup_stdout.lines().count(), 3, "{cleanup_stdout}");
+    assert!(!cleanup_stdout.contains('\r'), "{cleanup_stdout}");
+    assert!(
+        cleanup_stdout.contains(&format!(
+            "removed\t{}",
+            escape_test_tsv_field(&active.to_string_lossy())
+        )),
+        "{cleanup_stdout}"
+    );
+    assert!(
+        cleanup_stdout.contains(&format!(
+            "active\t{}",
+            escape_test_tsv_field(&promoted.to_string_lossy())
+        )),
+        "{cleanup_stdout}"
+    );
+    assert!(
+        cleanup_stdout.contains(&format!(
+            "missing\t{}",
+            escape_test_tsv_field(&missing.to_string_lossy())
+        )),
+        "{cleanup_stdout}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn content_maintenance_rows_escape_control_character_paths_from_binary() {
+    let root = unique_temp_dir("gfm-cli-content-maintenance-row-control-root");
+    let manifest = root.join("content.gfmmanifest");
+    let active = root.join("Active\tArchive\nDraft\rFinal.gfmcontent");
+    let segment = root.join("Segment\tArchive\nDraft\rFinal.gfmcontent");
+    let output = root.join("Published\tArchive\nDraft\rFinal.gfmcontent");
+    write_content_postings(
+        &active,
+        &[ContentPosting {
+            term: "activeneedle".to_string(),
+            ids: vec![FileId::new(VolumeId(1), 1)],
+            positions: vec![],
+        }],
+    )
+    .unwrap();
+    write_content_segment(
+        &segment,
+        &ContentSegment {
+            postings: vec![ContentPosting {
+                term: "segmentneedle".to_string(),
+                ids: vec![FileId::new(VolumeId(1), 2)],
+                positions: vec![],
+            }],
+            tombstones: Vec::new(),
+        },
+    )
+    .unwrap();
+    ContentArchiveManifest::new(vec![ContentArchiveManifestEntry {
+        tier: ContentMergeTier::Hot,
+        path: active.clone(),
+    }])
+    .unwrap()
+    .write(&manifest)
+    .unwrap();
+
+    let maintenance_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-maintain-segments",
+            manifest.to_str().unwrap(),
+            output.to_str().unwrap(),
+            segment.to_str().unwrap(),
+            segment.to_str().unwrap(),
+            segment.to_str().unwrap(),
+            segment.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        maintenance_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&maintenance_output.stderr)
+    );
+    let stdout = String::from_utf8(maintenance_output.stdout).unwrap();
+    assert!(!stdout.contains('\r'), "{stdout}");
+    assert!(
+        stdout.contains(&format!(
+            "published\t{}",
+            escape_test_tsv_field(&output.to_string_lossy())
+        )),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(&format!(
+            "merged-segment\t{}",
+            escape_test_tsv_field(&segment.to_string_lossy())
+        )),
+        "{stdout}"
+    );
+    for line in stdout.lines() {
+        assert_eq!(line.split('\t').count(), 2, "{stdout}");
+    }
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn content_segment_rows_escape_control_character_paths_from_binary() {
+    let root = unique_temp_dir("gfm-cli-content-segment-row-control-root");
+    let records = root.join("Records\tIndex\nDraft\r.gfmidx");
+    let segment = root.join("Segment\tArchive\nDraft\r.gfmseg");
+    let content = root.join("Content\tArchive\nDraft\r.gfmcontent");
+    let tiered_content = root.join("Tiered\tArchive\nDraft\r.gfmcontent");
+    let manifest = root.join("Manifest\tArchive\nDraft\r.gfmmanifest");
+    let maintained_content = root.join("Maintained\tArchive\nDraft\r.gfmcontent");
+    fs::write(
+        root.join("segment-control.md"),
+        "the body has segmentcontrolneedle",
+    )
+    .unwrap();
+
+    let index_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["index", root.to_str().unwrap(), records.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        index_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&index_output.stderr)
+    );
+
+    let segment_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-content-segment",
+            root.to_str().unwrap(),
+            segment.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        segment_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&segment_output.stderr)
+    );
+
+    let tiered_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "compact-content-tiered",
+            tiered_content.to_str().unwrap(),
+            segment.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        tiered_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&tiered_output.stderr)
+    );
+    let tiered_stdout = String::from_utf8(tiered_output.stdout).unwrap();
+    assert_eq!(tiered_stdout.lines().count(), 1, "{tiered_stdout}");
+    assert!(!tiered_stdout.contains('\r'), "{tiered_stdout}");
+    assert!(
+        tiered_stdout.contains(&format!(
+            "retain\t{}",
+            escape_test_tsv_field(&segment.to_string_lossy())
+        )),
+        "{tiered_stdout}"
+    );
+
+    let compact_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "compact-content",
+            content.to_str().unwrap(),
+            segment.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        compact_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compact_output.stderr)
+    );
+
+    let manifest_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-manifest-write",
+            manifest.to_str().unwrap(),
+            &format!("hot:{}", content.display()),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        manifest_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&manifest_output.stderr)
+    );
+
+    let footprint_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-footprint",
+            records.to_str().unwrap(),
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            manifest.to_str().unwrap(),
+            segment.to_str().unwrap(),
+            segment.to_str().unwrap(),
+            segment.to_str().unwrap(),
+            segment.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        footprint_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&footprint_output.stderr)
+    );
+    let footprint_stdout = String::from_utf8(footprint_output.stdout).unwrap();
+    assert!(!footprint_stdout.contains('\r'), "{footprint_stdout}");
+    assert!(
+        footprint_stdout.contains(&format!(
+            "merge-segment\t{}",
+            escape_test_tsv_field(&segment.to_string_lossy())
+        )),
+        "{footprint_stdout}"
+    );
+
+    let plan_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-compaction-plan",
+            records.to_str().unwrap(),
+            manifest.to_str().unwrap(),
+            "saturated",
+            "nominal",
+            "ac",
+            "idle",
+            segment.to_str().unwrap(),
+            segment.to_str().unwrap(),
+            segment.to_str().unwrap(),
+            segment.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        plan_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&plan_output.stderr)
+    );
+    let plan_stdout = String::from_utf8(plan_output.stdout).unwrap();
+    assert!(!plan_stdout.contains('\r'), "{plan_stdout}");
+    assert!(
+        plan_stdout.contains(&format!(
+            "merge-segment\t{}",
+            escape_test_tsv_field(&segment.to_string_lossy())
+        )),
+        "{plan_stdout}"
+    );
+
+    let maintenance_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "content-maintain-segments",
+            manifest.to_str().unwrap(),
+            maintained_content.to_str().unwrap(),
+            segment.to_str().unwrap(),
+            segment.to_str().unwrap(),
+            segment.to_str().unwrap(),
+            segment.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        maintenance_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&maintenance_output.stderr)
+    );
+    let maintenance_stdout = String::from_utf8(maintenance_output.stdout).unwrap();
+    assert!(!maintenance_stdout.contains('\r'), "{maintenance_stdout}");
+    assert!(
+        maintenance_stdout.contains(&format!(
+            "published\t{}",
+            escape_test_tsv_field(&maintained_content.to_string_lossy())
+        )) && maintenance_stdout.contains(&format!(
+            "merged-segment\t{}",
+            escape_test_tsv_field(&segment.to_string_lossy())
+        )),
+        "{maintenance_stdout}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]

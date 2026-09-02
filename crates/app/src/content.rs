@@ -457,7 +457,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 outcome.tier
             );
             for segment in outcome.retained_segments {
-                println!("retain\t{}", segment.display());
+                println!("retain\t{}", escape_content_tsv_path(&segment));
             }
         }
         "content-maintain-segments" => {
@@ -835,10 +835,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 report.compaction.tombstone_segments
             );
             for path in report.compaction.merge_segments {
-                println!("merge-segment\t{}", path.display());
+                println!("merge-segment\t{}", escape_content_tsv_path(&path));
             }
             for path in report.compaction.retained_segments {
-                println!("retain-segment\t{}", path.display());
+                println!("retain-segment\t{}", escape_content_tsv_path(&path));
             }
         }
         "index-compaction-plan" => {
@@ -896,10 +896,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 report.bytes_per_record
             );
             for path in report.compaction.merge_segments {
-                println!("merge-segment\t{}", path.display());
+                println!("merge-segment\t{}", escape_content_tsv_path(&path));
             }
             for path in report.compaction.retained_segments {
-                println!("retain-segment\t{}", path.display());
+                println!("retain-segment\t{}", escape_content_tsv_path(&path));
             }
         }
         _ => return Ok(false),
@@ -1008,6 +1008,10 @@ fn escape_content_tsv_field(value: &str) -> String {
         .replace('\t', "\\t")
         .replace('\n', "\\n")
         .replace('\r', "\\r")
+}
+
+fn escape_content_tsv_path(path: &Path) -> String {
+    escape_content_tsv_field(&path.to_string_lossy())
 }
 
 fn run_extraction_report(
@@ -2256,6 +2260,16 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn content_tsv_path_helper_escapes_control_characters() {
+        let path = PathBuf::from("/tmp/Content\\Rows/Segment\tDraft\nFinal\r.gfmseg");
+
+        assert_eq!(
+            escape_content_tsv_path(&path),
+            "/tmp/Content\\\\Rows/Segment\\tDraft\\nFinal\\r.gfmseg"
+        );
+    }
+
     fn unique_temp_dir(prefix: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
             "{}-{}-{}",
@@ -3302,12 +3316,12 @@ fn print_content_maintenance_report(report: ContentMaintenanceReport) {
         report.tombstone_segments
     );
     if let Some(path) = report.published_archive {
-        println!("published\t{}", path.display());
+        println!("published\t{}", escape_content_tsv_path(&path));
     }
     for path in report.merged_segments {
-        println!("merged-segment\t{}", path.display());
+        println!("merged-segment\t{}", escape_content_tsv_path(&path));
     }
     for path in report.retained_segments {
-        println!("retain-segment\t{}", path.display());
+        println!("retain-segment\t{}", escape_content_tsv_path(&path));
     }
 }

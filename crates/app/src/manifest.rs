@@ -226,13 +226,13 @@ fn render_manifest_cleanup(
     );
     let mut lines = Vec::new();
     for path in report.removed_archives {
-        lines.push(format!("removed\t{}", path.display()));
+        lines.push(format!("removed\t{}", escape_manifest_tsv_path(&path)));
     }
     for path in report.active_archives {
-        lines.push(format!("active\t{}", path.display()));
+        lines.push(format!("active\t{}", escape_manifest_tsv_path(&path)));
     }
     for path in report.missing_archives {
-        lines.push(format!("missing\t{}", path.display()));
+        lines.push(format!("missing\t{}", escape_manifest_tsv_path(&path)));
     }
     Ok((summary, lines))
 }
@@ -262,16 +262,16 @@ fn render_cleanup_plan(
     );
     let mut lines = Vec::new();
     for path in plan.cleanup_archives {
-        lines.push(format!("cleanup\t{}", path.display()));
+        lines.push(format!("cleanup\t{}", escape_manifest_tsv_path(&path)));
     }
     for path in plan.deferred_archives {
-        lines.push(format!("defer\t{}", path.display()));
+        lines.push(format!("defer\t{}", escape_manifest_tsv_path(&path)));
     }
     for path in plan.active_archives {
-        lines.push(format!("active\t{}", path.display()));
+        lines.push(format!("active\t{}", escape_manifest_tsv_path(&path)));
     }
     for path in plan.missing_archives {
-        lines.push(format!("missing\t{}", path.display()));
+        lines.push(format!("missing\t{}", escape_manifest_tsv_path(&path)));
     }
     Ok((summary, lines))
 }
@@ -699,8 +699,8 @@ fn run_manifest_inspect(manifest_path: PathBuf) -> Result<Vec<String>> {
                 lines.push(format!(
                     "archive\t{}\t{}\t{}",
                     content_tier_name(entry.tier),
-                    entry.path.display(),
-                    path.display()
+                    escape_manifest_tsv_path(&entry.path),
+                    escape_manifest_tsv_path(&path)
                 ));
             }
             Ok(lines)
@@ -772,7 +772,7 @@ fn run_manifest_recover(
                     report
                         .quarantined_manifest_path
                         .as_ref()
-                        .map(|path| path.display().to_string())
+                        .map(|path| escape_manifest_tsv_path(path))
                         .unwrap_or_else(|| "-".to_string())
                 ),
                 report.after.as_tsv(),
@@ -814,10 +814,13 @@ fn run_manifest_promotion(
         );
         let mut lines = Vec::new();
         for path in promotion.retired_archives {
-            lines.push(format!("retire\t{}", path.display()));
+            lines.push(format!("retire\t{}", escape_manifest_tsv_path(&path)));
         }
         for path in promotion.missing_retirements {
-            lines.push(format!("missing-retirement\t{}", path.display()));
+            lines.push(format!(
+                "missing-retirement\t{}",
+                escape_manifest_tsv_path(&path)
+            ));
         }
         Ok((summary, lines))
     })
@@ -1058,11 +1061,27 @@ fn format_content_archive_health(label: &str, archives: &[ContentArchiveHealth])
                 "{}\t{}\t{}\t{}",
                 label,
                 content_tier_name(archive.entry.tier),
-                archive.resolved_path.display(),
-                archive.detail.as_deref().unwrap_or("-")
+                escape_manifest_tsv_path(&archive.resolved_path),
+                archive
+                    .detail
+                    .as_deref()
+                    .map(escape_manifest_tsv_field)
+                    .unwrap_or_else(|| "-".to_string())
             )
         })
         .collect()
+}
+
+fn escape_manifest_tsv_path(path: &Path) -> String {
+    escape_manifest_tsv_field(&path.to_string_lossy())
+}
+
+fn escape_manifest_tsv_field(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 #[cfg(test)]
@@ -1246,6 +1265,20 @@ mod tests {
 
         assert_eq!(result.err(), Some(GfmError::Cancelled));
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn manifest_tsv_helpers_escape_path_fields() {
+        let path = PathBuf::from("/tmp/Manifest\\Rows/Archive\tDraft\nFinal\r.gfmcontent");
+
+        assert_eq!(
+            escape_manifest_tsv_path(&path),
+            "/tmp/Manifest\\\\Rows/Archive\\tDraft\\nFinal\\r.gfmcontent"
+        );
+        assert_eq!(
+            escape_manifest_tsv_field("detail\tbad\nrow\r\\"),
+            "detail\\tbad\\nrow\\r\\\\"
+        );
     }
 
     fn manifest_entry(path: PathBuf) -> ContentArchiveManifestEntry {
