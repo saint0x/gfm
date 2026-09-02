@@ -18,18 +18,18 @@ use core_foundation_sys::url::CFURLRef;
 use core_foundation_sys::uuid::{CFUUIDCreateString, CFUUIDRef};
 use libc::{c_void, statfs, MNT_LOCAL, MNT_NOWAIT, MNT_RDONLY};
 use objc::runtime::{Object, Sel, BOOL};
+use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::ptr;
-use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc, Mutex, OnceLock,
 };
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 type DASessionRef = *const c_void;
 type DADiskRef = *const c_void;
@@ -65,6 +65,10 @@ const VOLUME_EVENT_STARTUP_TIMEOUT: Duration = Duration::from_secs(2);
 const VOLUME_OPERATION_CALLBACK_TIMEOUT_SECONDS: f64 = 0.5;
 const VOLUME_OPERATION_CALLBACK_TIMEOUT_MILLIS: u64 =
     (VOLUME_OPERATION_CALLBACK_TIMEOUT_SECONDS * 1000.0) as u64;
+const VOLUME_OPERATION_CONTEXT_RETENTION: Duration = Duration::from_secs(60);
+static NEXT_VOLUME_OPERATION_CONTEXT_ID: AtomicU64 = AtomicU64::new(1);
+static VOLUME_OPERATION_CONTEXTS: OnceLock<Mutex<HashMap<u64, NativeVolumeOperationContext>>> =
+    OnceLock::new();
 
 #[link(name = "DiskArbitration", kind = "framework")]
 extern "C" {
@@ -393,8 +397,9 @@ pub struct NativeVolumeEventShutdown {
 
 struct NativeVolumeOperationContext {
     operation: NativeVolumeOperation,
-    run_loop: CFRunLoopRef,
+    run_loop: usize,
     sender: mpsc::Sender<NativeVolumeOperationResult>,
+    created_at: Instant,
 }
 
 impl NativeVolumeEventStream {
@@ -660,6 +665,59 @@ fn send_volume_event(context: *mut c_void, kind: NativeVolumeEventKind, disk: DA
     });
 }
 
+fn volume_operation_contexts() -> &'static Mutex<HashMap<u64, NativeVolumeOperationContext>> {
+    VOLUME_OPERATION_CONTEXTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn register_volume_operation_context(
+    operation: NativeVolumeOperation,
+    run_loop: CFRunLoopRef,
+    sender: mpsc::Sender<NativeVolumeOperationResult>,
+) -> u64 {
+    let now = Instant::now();
+    cleanup_expired_volume_operation_contexts(now);
+    let mut id = NEXT_VOLUME_OPERATION_CONTEXT_ID.fetch_add(1, Ordering::Relaxed);
+    if id == 0 {
+        id = NEXT_VOLUME_OPERATION_CONTEXT_ID.fetch_add(1, Ordering::Relaxed);
+    }
+    let context = NativeVolumeOperationContext {
+        operation,
+        run_loop: run_loop as usize,
+        sender,
+        created_at: now,
+    };
+    volume_operation_contexts()
+        .lock()
+        .expect("volume operation context registry poisoned")
+        .insert(id, context);
+    id
+}
+
+fn take_volume_operation_context(id: u64) -> Option<NativeVolumeOperationContext> {
+    volume_operation_contexts()
+        .lock()
+        .expect("volume operation context registry poisoned")
+        .remove(&id)
+}
+
+#[cfg(test)]
+fn volume_operation_context_is_pending(id: u64) -> bool {
+    volume_operation_contexts()
+        .lock()
+        .expect("volume operation context registry poisoned")
+        .contains_key(&id)
+}
+
+fn cleanup_expired_volume_operation_contexts(now: Instant) {
+    volume_operation_contexts()
+        .lock()
+        .expect("volume operation context registry poisoned")
+        .retain(|_, context| {
+            now.checked_duration_since(context.created_at)
+                .is_none_or(|age| age < VOLUME_OPERATION_CONTEXT_RETENTION)
+        });
+}
+
 pub fn submit_volume_operation(
     path: &Path,
     operation: NativeVolumeOperation,
@@ -700,12 +758,8 @@ pub fn submit_volume_operation(
 
     let run_loop = unsafe { CFRunLoopGetCurrent() };
     let (tx, rx) = mpsc::channel();
-    let context = Rc::new(NativeVolumeOperationContext {
-        operation,
-        run_loop,
-        sender: tx,
-    });
-    let callback_context = Rc::into_raw(Rc::clone(&context)) as *mut c_void;
+    let context_id = register_volume_operation_context(operation, run_loop, tx);
+    let callback_context = context_id as usize as *mut c_void;
     unsafe {
         DASessionScheduleWithRunLoop(session, run_loop, kCFRunLoopDefaultMode);
     }
@@ -799,12 +853,8 @@ pub fn submit_volume_mount_by_bsd_name(bsd_name: &str) -> NativeVolumeOperationR
 
     let run_loop = unsafe { CFRunLoopGetCurrent() };
     let (tx, rx) = mpsc::channel();
-    let context = Rc::new(NativeVolumeOperationContext {
-        operation,
-        run_loop,
-        sender: tx,
-    });
-    let callback_context = Rc::into_raw(Rc::clone(&context)) as *mut c_void;
+    let context_id = register_volume_operation_context(operation, run_loop, tx);
+    let callback_context = context_id as usize as *mut c_void;
     unsafe {
         DASessionScheduleWithRunLoop(session, run_loop, kCFRunLoopDefaultMode);
         DADiskMount(
@@ -882,7 +932,10 @@ unsafe extern "C" fn volume_operation_callback(
     if context.is_null() {
         return;
     }
-    let context = Rc::from_raw(context as *const NativeVolumeOperationContext);
+    let context_id = context as usize as u64;
+    let Some(context) = take_volume_operation_context(context_id) else {
+        return;
+    };
     let (status, dissenter_status, reason) = if dissenter.is_null() {
         (
             NativeVolumeOperationStatus::Succeeded,
@@ -903,8 +956,8 @@ unsafe extern "C" fn volume_operation_callback(
         dissenter_status,
         reason,
     });
-    CFRunLoopStop(context.run_loop);
-    CFRunLoopWakeUp(context.run_loop);
+    CFRunLoopStop(context.run_loop as CFRunLoopRef);
+    CFRunLoopWakeUp(context.run_loop as CFRunLoopRef);
 }
 
 #[cfg(test)]
@@ -1905,43 +1958,39 @@ mod tests {
     }
 
     #[test]
-    fn volume_operation_timeout_retains_callback_context_as_submitted() {
+    fn volume_operation_timeout_keeps_callback_context_pending_as_submitted() {
         let (tx, rx) = mpsc::channel();
-        let context = Rc::new(NativeVolumeOperationContext {
-            operation: NativeVolumeOperation::Eject,
-            run_loop: unsafe { CFRunLoopGetCurrent() },
-            sender: tx,
-        });
-        let callback_context = Rc::into_raw(Rc::clone(&context));
+        let context_id = register_volume_operation_context(
+            NativeVolumeOperation::Eject,
+            unsafe { CFRunLoopGetCurrent() },
+            tx,
+        );
 
         let result = finish_volume_operation_context(rx, NativeVolumeOperation::Eject);
 
         assert_eq!(result.operation, NativeVolumeOperation::Eject);
         assert_eq!(result.status, NativeVolumeOperationStatus::Submitted);
         assert_eq!(result.reason, Some(volume_operation_submitted_reason()));
-        assert_eq!(Rc::strong_count(&context), 2);
-        unsafe {
-            drop(Rc::from_raw(callback_context));
-        }
-        assert_eq!(Rc::strong_count(&context), 1);
+        assert!(volume_operation_context_is_pending(context_id));
+        assert!(take_volume_operation_context(context_id).is_some());
     }
 
     #[test]
-    fn volume_operation_callback_result_wins_and_releases_callback_context() {
+    fn volume_operation_callback_result_wins_and_consumes_callback_context() {
         let (tx, rx) = mpsc::channel();
-        let context = Rc::new(NativeVolumeOperationContext {
-            operation: NativeVolumeOperation::Unmount,
-            run_loop: unsafe { CFRunLoopGetCurrent() },
-            sender: tx,
-        });
-        let callback_context = Rc::into_raw(Rc::clone(&context)) as *mut c_void;
-        assert_eq!(Rc::strong_count(&context), 2);
+        let context_id = register_volume_operation_context(
+            NativeVolumeOperation::Unmount,
+            unsafe { CFRunLoopGetCurrent() },
+            tx,
+        );
+        let callback_context = context_id as usize as *mut c_void;
+        assert!(volume_operation_context_is_pending(context_id));
 
         unsafe {
             volume_operation_callback(ptr::null(), ptr::null(), callback_context);
         }
 
-        assert_eq!(Rc::strong_count(&context), 1);
+        assert!(!volume_operation_context_is_pending(context_id));
         let result = finish_volume_operation_context(rx, NativeVolumeOperation::Unmount);
 
         assert_eq!(result.operation, NativeVolumeOperation::Unmount);
@@ -1950,6 +1999,33 @@ mod tests {
             result.reason.as_deref(),
             Some("diskarbitration-operation-succeeded")
         );
+    }
+
+    #[test]
+    fn volume_operation_context_cleanup_drops_abandoned_pending_context() {
+        let (tx, _rx) = mpsc::channel();
+        let now = Instant::now();
+        let context_id = register_volume_operation_context(
+            NativeVolumeOperation::Mount,
+            unsafe { CFRunLoopGetCurrent() },
+            tx,
+        );
+        {
+            let mut contexts = volume_operation_contexts()
+                .lock()
+                .expect("volume operation context registry poisoned");
+            contexts
+                .get_mut(&context_id)
+                .expect("registered context")
+                .created_at = now - VOLUME_OPERATION_CONTEXT_RETENTION - Duration::from_secs(1);
+        }
+
+        cleanup_expired_volume_operation_contexts(now);
+
+        assert!(!volume_operation_context_is_pending(context_id));
+        unsafe {
+            volume_operation_callback(ptr::null(), ptr::null(), context_id as usize as *mut c_void);
+        }
     }
 
     #[cfg(unix)]
