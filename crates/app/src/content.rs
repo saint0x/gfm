@@ -2320,6 +2320,31 @@ mod tests {
     }
 
     #[test]
+    fn optional_recovery_store_exists_checked_can_cancel_after_existence_probe() {
+        let root = unique_temp_dir("gfm-optional-recovery-exists-post-probe-cancel");
+        let store = root.join("journal.tsv");
+        fs::write(&store, "job\tstate\n").unwrap();
+        let mut checks = 0usize;
+
+        let result = optional_recovery_store_exists_checked(
+            &store,
+            "background content recovery journal",
+            || {
+                checks += 1;
+                if checks > 1 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        );
+
+        assert_eq!(result, Err(GfmError::Cancelled));
+        assert_eq!(checks, 2);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn content_volume_access_tsv_escapes_control_characters() {
         let root = unique_temp_dir("gfm-content-volume-access-escape");
         let path = root
@@ -2536,18 +2561,15 @@ impl OptionalRecoveryStoreAccessReports {
     }
 }
 
-fn optional_recovery_store_exists(path: &Path, worker: &str) -> Result<bool> {
-    path.try_exists()
-        .map_err(|err| GfmError::io(path, format!("{worker} existence unavailable: {err}")))
-}
-
 fn optional_recovery_store_exists_checked(
     path: &Path,
     worker: &str,
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<bool> {
     check_control()?;
-    let exists = optional_recovery_store_exists(path, worker)?;
+    let exists = path
+        .try_exists()
+        .map_err(|err| GfmError::io(path, format!("{worker} existence unavailable: {err}")))?;
     check_control()?;
     Ok(exists)
 }
