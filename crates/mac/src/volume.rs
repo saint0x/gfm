@@ -362,16 +362,14 @@ impl VolumeDescriptor {
             VolumeCapacityMode::Defer => VolumeCapacity::deferred(),
         };
         let commands = command_policy(kind, mount_state, ejectable);
-        let stable_identity = match marker.as_deref() {
-            Some(marker) => marker_stable_identity(marker, id, &path),
-            None => stable_identity(
-                id,
-                &path,
-                native.as_ref(),
-                resource.as_ref(),
-                mount_table.as_ref(),
-            ),
-        };
+        let stable_identity = marker_aware_stable_identity(
+            id,
+            &path,
+            marker.as_deref(),
+            native.as_ref(),
+            resource.as_ref(),
+            mount_table.as_ref(),
+        );
         let source = marker
             .map(|marker| format!("fixture-marker:{marker}"))
             .unwrap_or_else(|| volume_source(native.as_ref()));
@@ -3526,15 +3524,15 @@ fn volume_network_state(
     mount_table: Option<&NativeVolumeMountTableEntry>,
     kind: VolumeKind,
 ) -> bool {
-    if let Some(network) = marker_network(marker) {
-        return network;
-    }
     if native
         .filter(|native| native.status == NativeVolumeStatus::Available)
         .and_then(|native| native.volume_network)
         == Some(true)
     {
         return true;
+    }
+    if let Some(network) = marker_network(marker) {
+        return network;
     }
     mount_table
         .filter(|mount_table| mount_table.status == NativeVolumeStatus::Available)
@@ -3565,15 +3563,15 @@ fn volume_local_state(
     mount_table: Option<&NativeVolumeMountTableEntry>,
     kind: VolumeKind,
 ) -> Option<bool> {
-    if let Some(network) = marker_network(marker) {
-        return Some(!network);
-    }
     if native
         .filter(|native| native.status == NativeVolumeStatus::Available)
         .and_then(|native| native.volume_network)
         == Some(true)
     {
         return Some(false);
+    }
+    if let Some(network) = marker_network(marker) {
+        return Some(!network);
     }
     mount_table
         .filter(|mount_table| mount_table.status == NativeVolumeStatus::Available)
@@ -3603,15 +3601,15 @@ fn volume_removable_state(
     resource: Option<&NativeVolumeResourceValues>,
     kind: VolumeKind,
 ) -> bool {
-    if let Some(removable) = marker_removable(marker) {
-        return removable;
-    }
     if native
         .filter(|native| native.status == NativeVolumeStatus::Available)
         .and_then(|native| native.media_removable)
         == Some(true)
     {
         return true;
+    }
+    if let Some(removable) = marker_removable(marker) {
+        return removable;
     }
     resource
         .filter(|resource| resource.status == NativeVolumeStatus::Available)
@@ -3634,15 +3632,15 @@ fn volume_ejectable_state(
     removable: bool,
     network: bool,
 ) -> bool {
-    if let Some(ejectable) = marker_ejectable(marker) {
-        return ejectable;
-    }
     if native
         .filter(|native| native.status == NativeVolumeStatus::Available)
         .and_then(|native| native.media_ejectable)
         == Some(true)
     {
         return true;
+    }
+    if let Some(ejectable) = marker_ejectable(marker) {
+        return ejectable;
     }
     resource
         .filter(|resource| resource.status == NativeVolumeStatus::Available)
@@ -3727,6 +3725,9 @@ fn classify_volume(
     resource: Option<&NativeVolumeResourceValues>,
     mount_table: Option<&NativeVolumeMountTableEntry>,
 ) -> VolumeKind {
+    if let Some(kind) = classify_positive_native_volume(path, native, resource, mount_table) {
+        return kind;
+    }
     match marker {
         Some("network")
         | Some("network-smb")
@@ -3754,6 +3755,50 @@ fn classify_volume(
     VolumeKind::Unknown
 }
 
+fn classify_positive_native_volume(
+    path: &Path,
+    native: Option<&NativeVolumeDescription>,
+    resource: Option<&NativeVolumeResourceValues>,
+    mount_table: Option<&NativeVolumeMountTableEntry>,
+) -> Option<VolumeKind> {
+    let native = native.filter(|native| native.status == NativeVolumeStatus::Available);
+    let resource = resource.filter(|resource| resource.status == NativeVolumeStatus::Available);
+    if path == Path::new("/") {
+        return Some(VolumeKind::System);
+    }
+    if native.and_then(|native| native.volume_network) == Some(true) {
+        return Some(VolumeKind::Network);
+    }
+    if native.is_some_and(native_disk_image_evidence) {
+        return Some(VolumeKind::DiskImage);
+    }
+
+    let mount_table =
+        mount_table.filter(|mount_table| mount_table.status == NativeVolumeStatus::Available);
+    if mount_table.and_then(|mount_table| mount_table.is_local) == Some(false) {
+        return Some(VolumeKind::Network);
+    }
+    if mount_table_network_filesystem_state(mount_table) == Some(true) {
+        return Some(VolumeKind::Network);
+    }
+    if resource.and_then(|resource| resource.is_local) == Some(false) {
+        return Some(VolumeKind::Network);
+    }
+    if resource.and_then(|resource| resource.is_removable) == Some(true)
+        || native.and_then(|native| native.media_removable) == Some(true)
+    {
+        return Some(VolumeKind::Removable);
+    }
+    if resource.and_then(|resource| resource.is_ejectable) == Some(true)
+        || resource.and_then(|resource| resource.is_internal) == Some(false)
+        || native.and_then(|native| native.device_internal) == Some(false)
+        || native.and_then(|native| native.media_ejectable) == Some(true)
+    {
+        return Some(VolumeKind::External);
+    }
+    None
+}
+
 fn classify_native_volume(
     path: &Path,
     native: Option<&NativeVolumeDescription>,
@@ -3771,28 +3816,8 @@ fn classify_native_volume(
     if native.and_then(|native| native.volume_network) == Some(true) {
         return Some(VolumeKind::Network);
     }
-    if let Some(native) = native {
-        let protocol = native
-            .device_protocol
-            .as_deref()
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-        let media_kind = native
-            .media_kind
-            .as_deref()
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-        let volume_kind = native
-            .volume_kind
-            .as_deref()
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-        if protocol.contains("disk image")
-            || media_kind.contains("disk image")
-            || volume_kind.contains("disk image")
-        {
-            return Some(VolumeKind::DiskImage);
-        }
+    if native.is_some_and(native_disk_image_evidence) {
+        return Some(VolumeKind::DiskImage);
     }
 
     let mount_table =
@@ -3829,6 +3854,27 @@ fn classify_native_volume(
         return Some(VolumeKind::Internal);
     }
     None
+}
+
+fn native_disk_image_evidence(native: &NativeVolumeDescription) -> bool {
+    let protocol = native
+        .device_protocol
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let media_kind = native
+        .media_kind
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let volume_kind = native
+        .volume_kind
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    protocol.contains("disk image")
+        || media_kind.contains("disk image")
+        || volume_kind.contains("disk image")
 }
 
 fn mount_table_network_filesystem_state(
@@ -3945,6 +3991,28 @@ fn stable_identity(
         }
     }
     format!("dev:{}:{}", id.0, escape_field(&path.display().to_string()))
+}
+
+fn marker_aware_stable_identity(
+    id: VolumeId,
+    path: &Path,
+    marker: Option<&str>,
+    native: Option<&NativeVolumeDescription>,
+    resource: Option<&NativeVolumeResourceValues>,
+    mount_table: Option<&NativeVolumeMountTableEntry>,
+) -> String {
+    let native_stable_identity = stable_identity(id, path, native, resource, mount_table);
+    match (
+        marker,
+        host_stable_identity_from_native_sources(&native_stable_identity),
+    ) {
+        (Some(_), true) | (None, _) => native_stable_identity,
+        (Some(marker), false) => marker_stable_identity(marker, id, path),
+    }
+}
+
+fn host_stable_identity_from_native_sources(identity: &str) -> bool {
+    identity.starts_with("diskarbitration:")
 }
 
 fn mounted_volume_paths_checked(mut check: impl FnMut() -> Result<()>) -> Result<Vec<PathBuf>> {
@@ -4585,6 +4653,23 @@ mod tests {
     }
 
     #[test]
+    fn classify_volume_prefers_positive_native_truth_before_fixture_marker() {
+        let native = native_description(|description| {
+            description.volume_network = Some(true);
+        });
+
+        let kind = classify_volume(
+            Path::new("/Volumes/Team Share"),
+            Some("internal"),
+            Some(&native),
+            None,
+            None,
+        );
+
+        assert_eq!(kind, VolumeKind::Network);
+    }
+
+    #[test]
     fn classify_native_volume_uses_mount_table_locality() {
         let mount_table = mount_table_entry(|entry| {
             entry.is_local = Some(false);
@@ -4911,6 +4996,31 @@ mod tests {
     }
 
     #[test]
+    fn volume_network_state_prefers_positive_diskarbitration_truth_before_marker() {
+        let native = native_description(|description| {
+            description.volume_network = Some(true);
+        });
+
+        assert!(volume_network_state(
+            Some("internal"),
+            Some(&native),
+            None,
+            None,
+            VolumeKind::Internal,
+        ));
+        assert_eq!(
+            volume_local_state(
+                Some("internal"),
+                Some(&native),
+                None,
+                None,
+                VolumeKind::Internal,
+            ),
+            Some(false)
+        );
+    }
+
+    #[test]
     fn volume_local_state_prefers_positive_diskarbitration_network_truth() {
         let native = native_description(|description| {
             description.volume_network = Some(true);
@@ -4987,6 +5097,28 @@ mod tests {
             Some(&native),
             Some(&resource),
             VolumeKind::Internal,
+        ));
+    }
+
+    #[test]
+    fn volume_media_state_prefers_positive_diskarbitration_truth_before_marker() {
+        let native = native_description(|description| {
+            description.media_removable = Some(true);
+            description.media_ejectable = Some(true);
+        });
+
+        assert!(volume_removable_state(
+            Some("internal"),
+            Some(&native),
+            None,
+            VolumeKind::Internal,
+        ));
+        assert!(volume_ejectable_state(
+            Some("internal"),
+            Some(&native),
+            None,
+            false,
+            false,
         ));
     }
 
@@ -8618,6 +8750,63 @@ mod tests {
         );
 
         assert_eq!(identity, "url-resource:uuid:RESOURCE-UUID");
+    }
+
+    #[test]
+    fn marker_aware_stable_identity_prefers_native_identity_before_fixture_marker() {
+        let native = native_description(|description| {
+            description.volume_uuid = Some("NATIVE-VOLUME-UUID".to_string());
+        });
+        let identity = marker_aware_stable_identity(
+            VolumeId(7),
+            Path::new("/Volumes/Native"),
+            Some("network-smb"),
+            Some(&native),
+            None,
+            None,
+        );
+
+        assert_eq!(identity, "diskarbitration:uuid:NATIVE-VOLUME-UUID");
+        assert!(!identity.starts_with("fixture-marker:"));
+    }
+
+    #[test]
+    fn marker_aware_stable_identity_uses_marker_when_native_identity_is_path_derived() {
+        let identity = marker_aware_stable_identity(
+            VolumeId(7),
+            Path::new("/tmp/gfm-volume-fixture"),
+            Some("network-smb"),
+            None,
+            None,
+            None,
+        );
+
+        assert_eq!(
+            identity,
+            "fixture-marker:network-smb:dev:7:/tmp/gfm-volume-fixture"
+        );
+    }
+
+    #[test]
+    fn marker_aware_stable_identity_uses_marker_when_native_identity_is_mount_derived() {
+        let mount_table = mount_table_entry(|entry| {
+            entry.mounted_from = Some("/dev/disk3s1".to_string());
+            entry.mount_point = Some(PathBuf::from("/"));
+        });
+
+        let identity = marker_aware_stable_identity(
+            VolumeId(7),
+            Path::new("/tmp/gfm-volume-fixture"),
+            Some("network-smb"),
+            None,
+            None,
+            Some(&mount_table),
+        );
+
+        assert_eq!(
+            identity,
+            "fixture-marker:network-smb:dev:7:/tmp/gfm-volume-fixture"
+        );
     }
 
     #[test]
