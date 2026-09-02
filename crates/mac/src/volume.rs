@@ -2313,7 +2313,7 @@ impl VolumeEventStream {
 impl VolumeEventStateDrainReport {
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume-events-state-drain\tattached={}\tmax={}\tinput={}\tapplied={}\tresulting-volumes={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\n{}",
+            "volume-events-state-drain\tattached={}\tmax={}\tinput={}\tapplied={}\tresulting-volumes={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\n{}",
             self.attached,
             self.max_events,
             self.batch.input_events,
@@ -2323,6 +2323,8 @@ impl VolumeEventStateDrainReport {
             self.batch.invalidate_operation_policy,
             self.batch.invalidate_index_admission,
             self.batch.rescan_index,
+            self.batch.cancel_index_jobs,
+            self.batch.clear_fsevents_cursor,
             self.batch.as_tsv()
         )
     }

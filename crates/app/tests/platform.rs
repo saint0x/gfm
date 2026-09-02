@@ -6555,7 +6555,9 @@ fn drains_volume_event_stream_into_state_from_binary() {
     assert!(stdout.starts_with("volume-events-state-drain\tattached="));
     assert!(stdout.contains("\tmax=0\tinput=0\tapplied=0\tresulting-volumes=1\t"));
     assert!(stdout.contains("\tsidebar=false\toperation-policy=false\t"));
-    assert!(stdout.contains("\tindex-admission=false\trescan-index=false\n"));
+    assert!(stdout.contains(
+        "\tindex-admission=false\trescan-index=false\tcancel-index-jobs=false\tclear-fsevents-cursor=false\n"
+    ));
     assert!(
         stdout.contains("\nvolume-event-state-batch\tinput=0\tapplied=0\tresulting-volumes=1\t")
     );
