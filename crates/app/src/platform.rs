@@ -4269,14 +4269,15 @@ fn evaluate_fileprovider_state_invalidation_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<FileProviderStateInvalidationReport> {
     check_control()?;
-    let previous = if fileprovider_state_file_exists(state_path, worker)? {
-        Some(FileProviderStateSnapshot::read_checked(
-            state_path,
-            &mut check_control,
-        )?)
-    } else {
-        None
-    };
+    let previous =
+        if fileprovider_state_file_exists_checked(state_path, worker, &mut check_control)? {
+            Some(FileProviderStateSnapshot::read_checked(
+                state_path,
+                &mut check_control,
+            )?)
+        } else {
+            None
+        };
     check_control()?;
     let (report, snapshot) = FileProviderStateInvalidationReport::evaluate_checked(
         previous.as_ref(),
@@ -4315,14 +4316,15 @@ fn evaluate_fileprovider_observed_invalidation_checked(
     state_access_report.preflight_volume(worker)?;
     let mut access = vec![state_access_report.access_checked(worker, &mut check_control)?];
     check_control()?;
-    let previous = if fileprovider_state_file_exists(state_path, worker)? {
-        Some(FileProviderStateSnapshot::read_checked(
-            state_path,
-            &mut check_control,
-        )?)
-    } else {
-        None
-    };
+    let previous =
+        if fileprovider_state_file_exists_checked(state_path, worker, &mut check_control)? {
+            Some(FileProviderStateSnapshot::read_checked(
+                state_path,
+                &mut check_control,
+            )?)
+        } else {
+            None
+        };
     check_control()?;
     access.extend(retain_fileprovider_event_access_checked(
         &event,
@@ -4528,14 +4530,17 @@ pub(crate) fn run_fileprovider_observer_probe(
             let _state_access =
                 state_access_reports.access_checked(&state_worker, || cancellation.check())?;
             cancellation.check()?;
-            let previous = if fileprovider_state_file_exists(&state_path, &state_worker)? {
-                Some(FileProviderStateSnapshot::read_checked(
-                    &state_path,
-                    || cancellation.check(),
-                )?)
-            } else {
-                None
-            };
+            let previous =
+                if fileprovider_state_file_exists_checked(&state_path, &state_worker, || {
+                    cancellation.check()
+                })? {
+                    Some(FileProviderStateSnapshot::read_checked(
+                        &state_path,
+                        || cancellation.check(),
+                    )?)
+                } else {
+                    None
+                };
             cancellation.check()?;
             let previous_for_publish = previous.clone();
             let mut observer =
@@ -5176,10 +5181,21 @@ fn preflight_write_target_volume(path: &Path, worker: &str) -> Result<()> {
     )
 }
 
-fn fileprovider_state_file_exists(path: &Path, worker: &str) -> Result<bool> {
+fn fileprovider_state_file_exists_checked(
+    path: &Path,
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<bool> {
+    check_control()?;
     match std::fs::metadata(path) {
-        Ok(metadata) => Ok(metadata.is_file()),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Ok(metadata) => {
+            check_control()?;
+            Ok(metadata.is_file())
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            check_control()?;
+            Ok(false)
+        }
         Err(err) => Err(GfmError::io(
             path,
             format!("{worker} state metadata unavailable: {err}"),
@@ -6904,6 +6920,50 @@ mod tests {
 
         assert!(report.changes.is_empty());
         assert!(!state_path.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fileprovider_state_file_exists_checked_honors_pre_cancelled_control() {
+        let state_path = std::env::temp_dir()
+            .join(format!(
+                "gfm-platform-state-exists-pre-cancelled-{}",
+                std::process::id()
+            ))
+            .join("state.tsv");
+
+        let err = fileprovider_state_file_exists_checked(&state_path, "fileprovider state", || {
+            Err(GfmError::Cancelled)
+        })
+        .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert!(!state_path.exists());
+    }
+
+    #[test]
+    fn fileprovider_state_file_exists_checked_can_cancel_after_metadata_probe() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-platform-state-exists-post-metadata-cancelled-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let state_path = root.join("state.tsv");
+        std::fs::write(&state_path, "path\tstate\n").unwrap();
+        let mut checks = 0usize;
+
+        let err = fileprovider_state_file_exists_checked(&state_path, "fileprovider state", || {
+            checks += 1;
+            if checks > 1 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert_eq!(checks, 2);
         std::fs::remove_dir_all(root).unwrap();
     }
 
