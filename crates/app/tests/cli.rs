@@ -535,6 +535,15 @@ fn index_preflight_refreshes_permission_state_from_binary() {
             && stderr.contains("\treason="),
         "{stderr}"
     );
+    assert!(
+        stderr.contains("\tfirst-change-scope=")
+            && !stderr.contains("\tfirst-change-scope=-")
+            && stderr.contains("\tfirst-change-kind=")
+            && stderr.contains("\tfirst-change-current=")
+            && stderr.contains("\tfirst-change-path=")
+            && stderr.contains("\tfirst-change-reason="),
+        "{stderr}"
+    );
     assert!(stderr.contains("refresh-workers=true"), "{stderr}");
     assert_worker_admitted(&stderr, "index", &root);
     assert!(stderr.contains("security-scope\t"), "{stderr}");
@@ -988,6 +997,15 @@ fn operation_preflight_refreshes_permission_state_from_binary() {
         "{stderr}"
     );
     assert!(
+        stderr.contains("\tfirst-change-scope=")
+            && !stderr.contains("\tfirst-change-scope=-")
+            && stderr.contains("\tfirst-change-kind=")
+            && stderr.contains("\tfirst-change-current=")
+            && stderr.contains("\tfirst-change-path=")
+            && stderr.contains("\tfirst-change-reason="),
+        "{stderr}"
+    );
+    assert!(
         stderr.contains("security-worker-admission\tworker=copy source\t")
             && stderr.contains("\tworker-action=start\t")
             && stderr.contains("\tcan-touch-filesystem=true\t"),
@@ -1193,6 +1211,15 @@ fn worker_preflights_refresh_permission_state_before_content_and_preview_from_bi
             stderr.contains(&format!(
                 "permission-refresh\taudience=workers\tsubject={subject}\t"
             )),
+            "{stderr}"
+        );
+        assert!(
+            stderr.contains("\tfirst-change-scope=")
+                && !stderr.contains("\tfirst-change-scope=-")
+                && stderr.contains("\tfirst-change-kind=")
+                && stderr.contains("\tfirst-change-current=")
+                && stderr.contains("\tfirst-change-path=")
+                && stderr.contains("\tfirst-change-reason="),
             "{stderr}"
         );
         assert!(stderr.contains("\trefresh-workers=true\t"), "{stderr}");

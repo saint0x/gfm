@@ -48,14 +48,8 @@ pub(crate) fn refresh_permission_state(
         return Ok(None);
     }
     eprintln!(
-        "permission-refresh\taudience={}\tsubject={}\tinitialized={}\tchanged={}\trefresh-ui={}\trefresh-workers={}\trefresh-operations={}",
-        audience.as_str(),
-        escape_field(subject),
-        report.initialized,
-        report.changed.len(),
-        report.refresh_ui,
-        report.refresh_workers,
-        report.refresh_operations
+        "{}",
+        permission_refresh_summary_line(audience, subject, &report)
     );
     for line in permission_refresh_change_lines(audience, subject, &report.changed) {
         eprintln!("{line}");
@@ -308,6 +302,47 @@ fn permission_refresh_change_lines(
         .collect()
 }
 
+fn permission_refresh_summary_line(
+    audience: PermissionRefreshAudience,
+    subject: &str,
+    report: &PermissionStateInvalidationReport,
+) -> String {
+    let first = report.changed.first();
+    format!(
+        "permission-refresh\taudience={}\tsubject={}\tinitialized={}\tchanged={}\trefresh-ui={}\trefresh-workers={}\trefresh-operations={}\tfirst-change-scope={}\tfirst-change-kind={}\tfirst-change-previous={}\tfirst-change-current={}\tfirst-change-path={}\tfirst-change-reason={}",
+        audience.as_str(),
+        escape_field(subject),
+        report.initialized,
+        report.changed.len(),
+        report.refresh_ui,
+        report.refresh_workers,
+        report.refresh_operations,
+        first
+            .map(|change| escape_field(change.scope.as_str()))
+            .unwrap_or_else(|| "-".to_string()),
+        first
+            .map(|change| escape_field(change.kind.as_str()))
+            .unwrap_or_else(|| "-".to_string()),
+        first
+            .map(|change| {
+                change
+                    .previous
+                    .map(|state| escape_field(state.as_str()))
+                    .unwrap_or_else(|| "-".to_string())
+            })
+            .unwrap_or_else(|| "-".to_string()),
+        first
+            .map(|change| escape_field(change.current.as_str()))
+            .unwrap_or_else(|| "-".to_string()),
+        first
+            .map(|change| escape_field(&change.path.to_string_lossy()))
+            .unwrap_or_else(|| "-".to_string()),
+        first
+            .map(|change| escape_field(&change.reason))
+            .unwrap_or_else(|| "-".to_string())
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -356,6 +391,28 @@ mod tests {
         assert_eq!(
             lines[0],
             "permission-refresh-change\taudience=workers\tsubject=index\\trecords\tscope=documents\tkind=revoked\tprevious=granted\tcurrent=denied\tpath=/Users/me/Documents/reports\\t2026\treason=macOS denied\\nread access"
+        );
+    }
+
+    #[test]
+    fn permission_refresh_summary_line_exposes_first_change_for_worker_admission() {
+        let current = PermissionStateSnapshot {
+            readiness: vec![PermissionReadiness {
+                scope: PermissionScope::Documents,
+                path: PathBuf::from("/Users/me/Documents/reports\t2026"),
+                state: PermissionState::Denied,
+                reason: "macOS denied\nread access".to_string(),
+            }],
+        };
+        let report = PermissionStateInvalidationReport::evaluate(None, &current);
+
+        assert_eq!(
+            permission_refresh_summary_line(
+                PermissionRefreshAudience::Workers,
+                "preview\tdecode",
+                &report,
+            ),
+            "permission-refresh\taudience=workers\tsubject=preview\\tdecode\tinitialized=true\tchanged=1\trefresh-ui=true\trefresh-workers=true\trefresh-operations=true\tfirst-change-scope=documents\tfirst-change-kind=initialized\tfirst-change-previous=-\tfirst-change-current=denied\tfirst-change-path=/Users/me/Documents/reports\\t2026\tfirst-change-reason=macOS denied\\nread access"
         );
     }
 
