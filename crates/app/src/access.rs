@@ -52,8 +52,10 @@ pub(crate) fn worker_admission_volume_gate_report_checked(
     check_control()?;
     let worker = worker.into();
     let volume_path = absolute_volume_probe_path(path);
-    let volume_report =
-        VolumeDiscoveryReport::for_containing_path_checked(&volume_path, &mut check_control)?;
+    let volume_report = VolumeDiscoveryReport::for_containing_path_policy_checked(
+        &volume_path,
+        &mut check_control,
+    )?;
     check_control()?;
     let admission = worker_admission_with_volume_report_for_probe(
         path,
@@ -145,8 +147,10 @@ pub(crate) fn worker_admissions_volume_gate_report_checked(
     check_control()?;
     let subject = worker_admission_fanout_subject(requests);
     let volume_path = absolute_volume_probe_path(path);
-    let volume_report =
-        VolumeDiscoveryReport::for_containing_path_checked(&volume_path, &mut check_control)?;
+    let volume_report = VolumeDiscoveryReport::for_containing_path_policy_checked(
+        &volume_path,
+        &mut check_control,
+    )?;
     check_control()?;
     let admissions = worker_admissions_with_volume_report(path, requests, &volume_report);
     if admissions.iter().all(worker_admission_blocked_by_volume) {
@@ -223,8 +227,10 @@ pub(crate) fn preflight_access_scope_checked(
 ) -> Result<ScopedAccessGuard> {
     check_control()?;
     let volume_path = absolute_volume_probe_path(path);
-    let volume_report =
-        VolumeDiscoveryReport::for_containing_path_checked(&volume_path, &mut check_control)?;
+    let volume_report = VolumeDiscoveryReport::for_containing_path_policy_checked(
+        &volume_path,
+        &mut check_control,
+    )?;
     check_control()?;
     preflight_access_scope_checked_with_volume_report(
         path,
@@ -243,10 +249,10 @@ pub(crate) fn preflight_access_scope_checked_with_volume_report(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<ScopedAccessGuard> {
     check_control()?;
-    let _ = refresh_permission_state(PermissionRefreshAudience::Workers, worker)?;
-    check_control()?;
     let volume_path = absolute_volume_probe_path(path);
     preflight_volume_access_in_report(path, &volume_path, intent, worker, volume_report)?;
+    check_control()?;
+    let _ = refresh_permission_state(PermissionRefreshAudience::Workers, worker)?;
     check_control()?;
     let report = SecurityScopedAccessReport::evaluate(path, intent);
     check_control()?;
@@ -289,8 +295,10 @@ fn preflight_volume_access_checked(
 ) -> Result<()> {
     check_control()?;
     let volume_path = absolute_volume_probe_path(path);
-    let report =
-        VolumeDiscoveryReport::for_containing_path_checked(&volume_path, &mut check_control)?;
+    let report = VolumeDiscoveryReport::for_containing_path_policy_checked(
+        &volume_path,
+        &mut check_control,
+    )?;
     check_control()?;
     preflight_volume_access_in_report(path, &volume_path, intent, worker, &report)
 }
@@ -535,10 +543,10 @@ fn escape_field(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gfm_mac::{VolumeDescriptor, VolumeKind};
+    use gfm_mac::{VolumeCapacity, VolumeDescriptor, VolumeKind};
     use std::fs;
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
     static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -820,6 +828,13 @@ mod tests {
             .expect("cached containing volume");
         assert!(!volume.stable_identity.is_empty());
         assert_eq!(volume.mount_state, gfm_mac::MountState::Mounted);
+        assert_eq!(
+            volume.capacity,
+            VolumeCapacity {
+                total_bytes: 0,
+                available_bytes: 0
+            }
+        );
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -1154,6 +1169,43 @@ mod tests {
         assert!(err.to_string().contains("native-status=unavailable"));
         assert!(err.to_string().contains("resource-status=unavailable"));
         assert!(err.to_string().contains("mount-status=unavailable"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn access_preflight_blocks_unavailable_volume_before_permission_refresh_checkpoint() {
+        let root = unique_temp_dir("gfm-access-preflight-before-refresh");
+        let file = root.join("Missing.pdf");
+        let mut volume = VolumeDescriptor::for_path(&root).unwrap();
+        volume.kind = VolumeKind::Network;
+        volume.reachable = Some(true);
+        volume.native_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        volume.resource_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        volume.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        let report = VolumeDiscoveryReport {
+            volumes: vec![volume],
+        };
+        let checkpoints = AtomicUsize::new(0);
+
+        let err = match preflight_access_scope_checked_with_volume_report(
+            &file,
+            AccessIntent::Preview,
+            "preview worker",
+            &report,
+            || {
+                checkpoints.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            },
+        ) {
+            Ok(_) => panic!("unavailable volume must block before permission refresh"),
+            Err(err) => err,
+        };
+
+        assert!(matches!(err, GfmError::Permission { .. }));
+        assert_eq!(checkpoints.load(Ordering::SeqCst), 1);
+        assert!(err.to_string().contains("unavailable volume network"));
+        assert!(!file.exists());
 
         fs::remove_dir_all(root).unwrap();
     }

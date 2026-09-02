@@ -71,7 +71,7 @@ pub(crate) fn refresh_permission_state_at_path_checked(
     let probe_path = write_probe_existing_ancestor_checked(path, &mut check_control)?;
     check_control()?;
     let report =
-        VolumeDiscoveryReport::for_containing_path_checked(&probe_path, &mut check_control)?;
+        VolumeDiscoveryReport::for_containing_path_policy_checked(&probe_path, &mut check_control)?;
     check_control()?;
     refresh_permission_state_at_path_with_report_checked(path, &probe_path, &report, check_control)
 }
