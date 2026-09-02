@@ -2068,9 +2068,9 @@ impl FileProviderStateReport {
         check()?;
         let path = path.as_ref().to_path_buf();
         check()?;
-        ensure_fileprovider_read_path(&path)?;
+        let path_exists = ensure_fileprovider_read_path(&path)?;
         check()?;
-        Self::from_path_checked(path, check)
+        Self::from_path_with_known_existence_checked(path, path_exists, check)
     }
 
     pub fn from_path(path: PathBuf) -> Result<Self> {
@@ -2083,6 +2083,17 @@ impl FileProviderStateReport {
         let hints = CloudHints::read_checked(&path, &mut check)?;
         check()?;
         Self::from_hints_checked(path, hints)
+    }
+
+    fn from_path_with_known_existence_checked(
+        path: PathBuf,
+        path_exists: bool,
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        check()?;
+        let hints = CloudHints::read_checked(&path, &mut check)?;
+        check()?;
+        Self::from_hints_with_known_existence_checked(path, hints, path_exists)
     }
 
     pub fn from_path_with_native_identity(path: PathBuf) -> Result<Self> {
@@ -2109,6 +2120,22 @@ impl FileProviderStateReport {
     fn from_hints_checked(path: PathBuf, hints: CloudHints) -> Result<Self> {
         let domain = domain_for_path(&path, &hints);
         let storage_state = storage_state_for_path_checked(&path, domain, &hints)?;
+        Ok(Self::from_classified_hints(
+            path,
+            domain,
+            storage_state,
+            hints,
+        ))
+    }
+
+    fn from_hints_with_known_existence_checked(
+        path: PathBuf,
+        hints: CloudHints,
+        path_exists: bool,
+    ) -> Result<Self> {
+        let domain = domain_for_path(&path, &hints);
+        let storage_state =
+            storage_state_for_path_with_known_existence(&path, domain, &hints, path_exists)?;
         Ok(Self::from_classified_hints(
             path,
             domain,
@@ -2220,10 +2247,10 @@ impl FileProviderStateReport {
     }
 }
 
-fn ensure_fileprovider_read_path(path: &Path) -> Result<()> {
+fn ensure_fileprovider_read_path(path: &Path) -> Result<bool> {
     match path.try_exists() {
-        Ok(true) => Ok(()),
-        Ok(false) if is_evicted_placeholder_path(path) => Ok(()),
+        Ok(true) => Ok(true),
+        Ok(false) if is_evicted_placeholder_path(path) => Ok(false),
         Ok(false) => Err(GfmError::io(path, "path does not exist")),
         Err(err) => Err(GfmError::io(
             path,
@@ -2520,7 +2547,7 @@ fn storage_state_for_path(
     domain: FileProviderDomain,
     hints: &CloudHints,
 ) -> CloudStorageState {
-    storage_state_for_path_with_probe(path, domain, hints, false)
+    storage_state_for_path_with_probe(path, domain, hints, false, None)
         .unwrap_or(CloudStorageState::Unknown)
 }
 
@@ -2529,7 +2556,16 @@ fn storage_state_for_path_checked(
     domain: FileProviderDomain,
     hints: &CloudHints,
 ) -> Result<CloudStorageState> {
-    storage_state_for_path_with_probe(path, domain, hints, true)
+    storage_state_for_path_with_probe(path, domain, hints, true, None)
+}
+
+fn storage_state_for_path_with_known_existence(
+    path: &Path,
+    domain: FileProviderDomain,
+    hints: &CloudHints,
+    path_exists: bool,
+) -> Result<CloudStorageState> {
+    storage_state_for_path_with_probe(path, domain, hints, true, Some(path_exists))
 }
 
 fn storage_state_for_path_with_probe(
@@ -2537,6 +2573,7 @@ fn storage_state_for_path_with_probe(
     domain: FileProviderDomain,
     hints: &CloudHints,
     report_probe_errors: bool,
+    known_path_exists: Option<bool>,
 ) -> Result<CloudStorageState> {
     if domain == FileProviderDomain::Local {
         return Ok(CloudStorageState::LocalOnly);
@@ -2628,7 +2665,10 @@ fn storage_state_for_path_with_probe(
     {
         CloudStorageState::Unknown
     } else {
-        match path.try_exists() {
+        match known_path_exists
+            .map(Ok)
+            .unwrap_or_else(|| path.try_exists())
+        {
             Ok(true) => CloudStorageState::Downloaded,
             Ok(false) => CloudStorageState::Unknown,
             Err(err) if report_probe_errors => {
@@ -5492,6 +5532,45 @@ mod tests {
         let err = FileProviderStateReport::read_path(&path).unwrap_err();
 
         assert!(err.to_string().contains("path existence unavailable"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn known_existence_storage_fallback_avoids_second_path_probe() {
+        let path = PathBuf::from(OsString::from_vec(
+            b"/tmp/gfm-fileprovider-known-existence\0path".to_vec(),
+        ));
+        let hints = CloudHints {
+            native: native_values(),
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::NotQueried,
+                item_identifier: None,
+                domain_identifier: None,
+                reason: None,
+            },
+            xattrs: Vec::new(),
+            xattr_values: Vec::new(),
+            provider_identifier: None,
+            source: "native-url-resource".to_string(),
+        };
+
+        let downloaded = storage_state_for_path_with_known_existence(
+            &path,
+            FileProviderDomain::ICloudDrive,
+            &hints,
+            true,
+        )
+        .unwrap();
+        let unknown = storage_state_for_path_with_known_existence(
+            &path,
+            FileProviderDomain::ICloudDrive,
+            &hints,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(downloaded, CloudStorageState::Downloaded);
+        assert_eq!(unknown, CloudStorageState::Unknown);
     }
 
     #[cfg(unix)]
@@ -8848,6 +8927,36 @@ mod tests {
         assert!(!report.source.split('+').any(|source| source == "xattr"));
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn checked_state_read_reuses_known_path_existence_for_materialization_fallback() {
+        let mut native = native_values();
+        native.has_unresolved_conflicts = Some(false);
+        let hints = CloudHints {
+            native,
+            native_identity: identity_not_queried(),
+            xattrs: vec!["com.apple.fileprovider.state".to_string()],
+            xattr_values: Vec::new(),
+            provider_identifier: None,
+            source: "native-url-resource+xattr".to_string(),
+        };
+        let path = PathBuf::from(OsString::from_vec(
+            b"/tmp/gfm-fileprovider-known-existence\0path".to_vec(),
+        ));
+
+        let report =
+            FileProviderStateReport::from_hints_with_known_existence_checked(path, hints, true)
+                .unwrap();
+
+        assert_eq!(report.domain, FileProviderDomain::FileProvider);
+        assert_eq!(report.storage_state, CloudStorageState::Downloaded);
+        assert_eq!(report.materialization, CloudMaterialization::Materialized);
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::XattrFallback
+        );
     }
 
     #[test]

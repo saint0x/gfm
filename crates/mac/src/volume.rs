@@ -6566,7 +6566,7 @@ mod tests {
         };
 
         let report = stream
-            .drain_into_state_checked(&mut state, 8, || Ok(()))
+            .drain_into_state_checked(&mut state, 2, || Ok(()))
             .unwrap();
         let tsv = report.as_tsv();
 
@@ -6699,6 +6699,7 @@ mod tests {
                 }),
             },
         ];
+        let injected_events = events.len();
         let stream = VolumeEventStream {
             stream: gfm_mac_sys::NativeVolumeEventStream::start(),
             pending: Mutex::new(std::collections::VecDeque::from(events)),
@@ -6708,7 +6709,7 @@ mod tests {
         });
 
         let report = stream
-            .drain_into_state_checked(&mut state, 8, || Ok(()))
+            .drain_into_state_checked(&mut state, injected_events, || Ok(()))
             .unwrap();
         let tsv = report.as_tsv();
 
