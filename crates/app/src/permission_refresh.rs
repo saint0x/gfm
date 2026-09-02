@@ -267,7 +267,7 @@ fn preflight_permission_state_write_target_volume_checked(
     check_control()?;
     let volume_path = crate::parent_or_cwd(path);
     let report =
-        VolumeDiscoveryReport::for_containing_path_checked(volume_path, &mut check_control)?;
+        VolumeDiscoveryReport::for_containing_path_policy_checked(volume_path, &mut check_control)?;
     check_control()?;
     preflight_permission_state_volume_with_report(path, volume_path, &report)
 }

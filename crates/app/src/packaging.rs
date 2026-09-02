@@ -440,7 +440,7 @@ fn preflight_write_target_volume_checked(
     check_control()?;
     let volume_path = crate::parent_or_cwd(path);
     let volume_report =
-        VolumeDiscoveryReport::for_containing_path_checked(volume_path, &mut check_control)?;
+        VolumeDiscoveryReport::for_containing_path_policy_checked(volume_path, &mut check_control)?;
     check_control()?;
     preflight_volume_access_scope_with_report(
         volume_path,

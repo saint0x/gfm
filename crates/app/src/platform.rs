@@ -5108,7 +5108,8 @@ fn write_probe_existing_ancestor(path: &Path, worker: &str) -> Result<PathBuf> {
 
 fn preflight_write_target_volume(path: &Path, worker: &str) -> Result<()> {
     let volume_path = crate::parent_or_cwd(path);
-    let volume_report = VolumeDiscoveryReport::for_containing_path_checked(volume_path, || Ok(()))?;
+    let volume_report =
+        VolumeDiscoveryReport::for_containing_path_policy_checked(volume_path, || Ok(()))?;
     preflight_volume_access_scope_with_report(
         volume_path,
         AccessIntent::Write,

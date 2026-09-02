@@ -127,7 +127,8 @@ pub(crate) fn run_adaptive_extraction_worker_cancellable(
     cancellation: &Cancellation,
 ) -> Result<String> {
     cancellation.check()?;
-    let report = VolumeDiscoveryReport::for_containing_path_checked(path, || cancellation.check())?;
+    let report =
+        VolumeDiscoveryReport::for_containing_path_policy_checked(path, || cancellation.check())?;
     run_adaptive_extraction_worker_cancellable_with_volume_report(
         path,
         pressure,
@@ -704,7 +705,8 @@ fn preflight_worker_scratch_volume_checked(
 ) -> Result<()> {
     check_control()?;
     let temp_dir = env::temp_dir();
-    let report = VolumeDiscoveryReport::for_containing_path_checked(&temp_dir, &mut check_control)?;
+    let report =
+        VolumeDiscoveryReport::for_containing_path_policy_checked(&temp_dir, &mut check_control)?;
     check_control()?;
     preflight_volume_access_scope_with_report(
         &temp_dir,
@@ -812,7 +814,7 @@ fn preflight_write_target_volume_checked(
     check_control()?;
     let volume_path = crate::parent_or_cwd(path);
     let volume_report =
-        VolumeDiscoveryReport::for_containing_path_checked(volume_path, &mut check_control)?;
+        VolumeDiscoveryReport::for_containing_path_policy_checked(volume_path, &mut check_control)?;
     check_control()?;
     preflight_volume_access_scope_with_report(
         volume_path,
@@ -954,6 +956,7 @@ fn job_user_activity_arg(value: JobUserActivity) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gfm_mac::VolumeCapacity;
     use std::fs;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -1102,13 +1105,47 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn extraction_budget_profile_checked_defers_volume_capacity_reads() {
+        let root = unique_temp_dir("gfm-extract-volume-policy-capacity");
+        fs::write(root.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+        let input = root.join("Clip.mov");
+        fs::write(&input, "external").unwrap();
+
+        let mut checks = 0;
+        let report = VolumeDiscoveryReport::for_containing_path_policy_checked(&input, || {
+            checks += 1;
+            Ok(())
+        })
+        .unwrap();
+        let volume = report.volume_for_path(&input).unwrap();
+        let profile = extraction_budget_profile_from_volume_report(
+            &input,
+            SchedulingPressure::default(),
+            &report,
+        );
+
+        assert!(checks > 0);
+        assert_eq!(profile.volume, ExtractionVolumeClass::External);
+        assert_eq!(
+            volume.capacity,
+            VolumeCapacity {
+                total_bytes: 0,
+                available_bytes: 0
+            }
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
     fn extraction_budget_profile_checked(
         root: &Path,
         pressure: SchedulingPressure,
         mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<ExtractionBudgetProfile> {
         check_control()?;
-        let report = VolumeDiscoveryReport::for_containing_path_checked(root, &mut check_control)?;
+        let report =
+            VolumeDiscoveryReport::for_containing_path_policy_checked(root, &mut check_control)?;
         check_control()?;
         Ok(extraction_budget_profile_from_volume_report(
             root, pressure, &report,
