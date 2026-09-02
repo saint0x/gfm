@@ -106,6 +106,12 @@ pub struct SidebarItemSpec {
     pub volume_removable: Option<bool>,
     pub volume_case_sensitive: Option<bool>,
     pub volume_case_preserving: Option<bool>,
+    pub volume_native_status: Option<String>,
+    pub volume_native_reason: Option<String>,
+    pub volume_resource_status: Option<String>,
+    pub volume_resource_reason: Option<String>,
+    pub volume_mount_status: Option<String>,
+    pub volume_mount_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -892,7 +898,7 @@ impl SidebarContract {
         ));
         lines.extend(self.rows.iter().map(|row| {
             format!(
-                "row\t{}\t{}\t{}\t{}\t{}\t{}\tdepth={}\tenabled={}\tselected={}\tejectable={}\tvirtual={}\tpath-state={}\tcloud={}\tcloud-progress={}\tcloud-progress-source={}\tcloud-progress-reason={}\tvolume-kind={}\tvolume-mount={}\tvolume-writable={}\tvolume-read-only={}\tvolume-network={}\tvolume-reachable={}\tvolume-ejectable={}\tvolume-removable={}\tvolume-case-sensitive={}\tvolume-case-preserving={}",
+                "row\t{}\t{}\t{}\t{}\t{}\t{}\tdepth={}\tenabled={}\tselected={}\tejectable={}\tvirtual={}\tpath-state={}\tcloud={}\tcloud-progress={}\tcloud-progress-source={}\tcloud-progress-reason={}\tvolume-kind={}\tvolume-mount={}\tvolume-writable={}\tvolume-read-only={}\tvolume-network={}\tvolume-reachable={}\tvolume-ejectable={}\tvolume-removable={}\tvolume-case-sensitive={}\tvolume-case-preserving={}\tvolume-native-status={}\tvolume-native-reason={}\tvolume-resource-status={}\tvolume-resource-reason={}\tvolume-mount-status={}\tvolume-mount-reason={}",
                 escape_field(row.section),
                 escape_field(&row.id),
                 escape_field(&row.label),
@@ -943,7 +949,13 @@ impl SidebarContract {
                     .unwrap_or_else(|| "-".to_string()),
                 row.volume_case_preserving
                     .map(|value| value.to_string())
-                    .unwrap_or_else(|| "-".to_string())
+                    .unwrap_or_else(|| "-".to_string()),
+                format_optional_string(row.volume_native_status.as_deref()),
+                format_optional_string(row.volume_native_reason.as_deref()),
+                format_optional_string(row.volume_resource_status.as_deref()),
+                format_optional_string(row.volume_resource_reason.as_deref()),
+                format_optional_string(row.volume_mount_status.as_deref()),
+                format_optional_string(row.volume_mount_reason.as_deref())
             )
         }));
         lines.join("\n")
@@ -1318,6 +1330,12 @@ struct RowDescriptor {
     volume_removable: Option<bool>,
     volume_case_sensitive: Option<bool>,
     volume_case_preserving: Option<bool>,
+    volume_native_status: Option<String>,
+    volume_native_reason: Option<String>,
+    volume_resource_status: Option<String>,
+    volume_resource_reason: Option<String>,
+    volume_mount_status: Option<String>,
+    volume_mount_reason: Option<String>,
 }
 
 impl RowDescriptor {
@@ -1352,6 +1370,12 @@ impl RowDescriptor {
             volume_removable: None,
             volume_case_sensitive: None,
             volume_case_preserving: None,
+            volume_native_status: None,
+            volume_native_reason: None,
+            volume_resource_status: None,
+            volume_resource_reason: None,
+            volume_mount_status: None,
+            volume_mount_reason: None,
         }
     }
 
@@ -1395,6 +1419,12 @@ impl RowDescriptor {
         self.volume_removable = Some(volume.removable);
         self.volume_case_sensitive = volume.case_sensitive;
         self.volume_case_preserving = volume.case_preserving;
+        self.volume_native_status = volume.native_status.clone();
+        self.volume_native_reason = volume.native_reason.clone();
+        self.volume_resource_status = volume.resource_status.clone();
+        self.volume_resource_reason = volume.resource_reason.clone();
+        self.volume_mount_status = volume.mount_status.clone();
+        self.volume_mount_reason = volume.mount_reason.clone();
         self
     }
 }
@@ -1428,6 +1458,12 @@ fn row(descriptor: RowDescriptor) -> SidebarItemSpec {
         volume_removable: descriptor.volume_removable,
         volume_case_sensitive: descriptor.volume_case_sensitive,
         volume_case_preserving: descriptor.volume_case_preserving,
+        volume_native_status: descriptor.volume_native_status,
+        volume_native_reason: descriptor.volume_native_reason,
+        volume_resource_status: descriptor.volume_resource_status,
+        volume_resource_reason: descriptor.volume_resource_reason,
+        volume_mount_status: descriptor.volume_mount_status,
+        volume_mount_reason: descriptor.volume_mount_reason,
     }
 }
 
@@ -1614,6 +1650,12 @@ mod tests {
                 volume_removable: Some(true),
                 volume_case_sensitive: Some(false),
                 volume_case_preserving: Some(true),
+                volume_native_status: Some("unavailable".to_string()),
+                volume_native_reason: Some("DiskArbitration\tlate\nstatus\r".to_string()),
+                volume_resource_status: Some("available".to_string()),
+                volume_resource_reason: None,
+                volume_mount_status: Some("unavailable".to_string()),
+                volume_mount_reason: Some("mount table\tstale\nstatus\r".to_string()),
             }],
         };
 
@@ -1621,12 +1663,15 @@ mod tests {
 
         assert_eq!(output.lines().count(), 2, "{output}");
         let row = output.lines().nth(1).unwrap();
-        assert_eq!(row.split('\t').count(), 27, "{row}");
+        assert_eq!(row.split('\t').count(), 33, "{row}");
         assert!(row.contains("Locations\\tCustom\tvolume-team\\tdocs\tTeam\\nDocs\\rNow\t"));
         assert!(row.contains("\texternal\\tvolume\tlocation\t"));
         assert!(row.contains("Team\\tDocs/Draft\\nFinal\\rNotes\tdepth=0"));
         assert!(row.contains("\tcloud-progress-source=provider\\tcallback\t"));
         assert!(row.contains("\tcloud-progress-reason=sync\\nphase\\rchanged\t"));
+        assert!(row.contains("\tvolume-native-reason=DiskArbitration\\tlate\\nstatus\\r\t"));
+        assert!(row.contains("\tvolume-resource-reason=-\t"));
+        assert!(row.contains("\tvolume-mount-reason=mount table\\tstale\\nstatus\\r"));
     }
 
     #[test]
@@ -1759,7 +1804,15 @@ mod tests {
                     true,
                     Some(false),
                 )
-                .with_volume_media_state(false, Some(true), Some(true))],
+                .with_volume_media_state(false, Some(true), Some(true))
+                .with_platform_api_context(
+                    Some("unavailable".to_string()),
+                    Some("DiskArbitration\tlate\nstatus\r".to_string()),
+                    Some("available".to_string()),
+                    None,
+                    Some("unavailable".to_string()),
+                    Some("mount table\tstale\nstatus\r".to_string()),
+                )],
             },
         );
 
@@ -1777,10 +1830,25 @@ mod tests {
         assert_eq!(row.volume_network, Some(true));
         assert_eq!(row.volume_reachable, Some(false));
         assert_eq!(row.volume_case_sensitive, Some(true));
+        assert_eq!(row.volume_native_status.as_deref(), Some("unavailable"));
+        assert_eq!(
+            row.volume_native_reason.as_deref(),
+            Some("DiskArbitration\tlate\nstatus\r")
+        );
+        assert_eq!(row.volume_resource_status.as_deref(), Some("available"));
+        assert_eq!(row.volume_resource_reason, None);
+        assert_eq!(row.volume_mount_status.as_deref(), Some("unavailable"));
+        assert_eq!(
+            row.volume_mount_reason.as_deref(),
+            Some("mount table\tstale\nstatus\r")
+        );
         assert_eq!(row.path_state, SidebarPathState::Unavailable);
         assert!(!row.enabled);
         assert!(contract.as_tsv().contains(
             "\tvolume-kind=network\tvolume-mount=stale\tvolume-writable=false\tvolume-read-only=true\tvolume-network=true\tvolume-reachable=false\tvolume-ejectable=true\tvolume-removable=false\tvolume-case-sensitive=true\tvolume-case-preserving=true"
+        ));
+        assert!(contract.as_tsv().contains(
+            "\tvolume-native-status=unavailable\tvolume-native-reason=DiskArbitration\\tlate\\nstatus\\r\tvolume-resource-status=available\tvolume-resource-reason=-\tvolume-mount-status=unavailable\tvolume-mount-reason=mount table\\tstale\\nstatus\\r"
         ));
     }
 
