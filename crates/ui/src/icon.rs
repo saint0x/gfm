@@ -246,8 +246,8 @@ impl IconCellSpec {
             kind_tsv(self.kind),
             self.x_px,
             self.y_px,
-            self.name,
-            self.path.display(),
+            escape_field(&self.name),
+            escape_path_field(&self.path),
             self.icon_role.as_str(),
             self.column,
             self.label_lines,
@@ -259,6 +259,18 @@ impl IconCellSpec {
                 .join(",")
         )
     }
+}
+
+fn escape_path_field(path: &std::path::Path) -> String {
+    escape_field(&path.to_string_lossy())
+}
+
+fn escape_field(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -519,6 +531,26 @@ mod tests {
         ));
         assert!(tsv.contains("cell\t0\t1\t1\tdir\t0x0\tFolder"));
         assert!(tsv.contains("cell\t1\t1\t2\tfile\t112x0\tNote.txt"));
+    }
+
+    #[test]
+    fn icon_cell_tsv_escapes_control_characters_in_name_and_path() {
+        let contract = IconViewContract::from_records(
+            &[record(1, "Reports\tQ3\nDraft\rIcon.txt", FileKind::File)],
+            IconViewOptions::default()
+                .with_columns(1)
+                .with_viewport_rows(1),
+        );
+        let tsv = contract.as_tsv();
+        let cell = tsv.lines().nth(1).unwrap();
+
+        assert!(
+            cell.contains(
+                "Reports\\tQ3\\nDraft\\rIcon.txt\t/tmp/Reports\\tQ3\\nDraft\\rIcon.txt\t"
+            ),
+            "{tsv}"
+        );
+        assert_eq!(cell.split('\t').count(), 13, "{tsv}");
     }
 
     fn hidden(mut record: FileRecord) -> FileRecord {
