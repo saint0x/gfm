@@ -2599,7 +2599,19 @@ impl VolumeOperationReport {
         let (
             kind,
             mount,
+            writable,
+            read_only,
+            network,
+            reachable,
+            ejectable,
+            removable,
+            case_sensitive,
+            case_preserving,
+            mountable,
             stable_identity,
+            bsd_name,
+            apfs_container_uuid,
+            apfs_role,
             volume_native_status,
             volume_native_reason,
             volume_resource_status,
@@ -2613,7 +2625,19 @@ impl VolumeOperationReport {
                 (
                     volume.kind.as_str(),
                     volume.mount_state.as_str(),
+                    volume.writable,
+                    volume.read_only,
+                    volume.network,
+                    volume.reachable,
+                    volume.ejectable,
+                    volume.removable,
+                    volume.case_sensitive,
+                    volume.case_preserving,
+                    volume.mountable,
                     escape_field(&volume.stable_identity),
+                    volume.bsd_name.clone(),
+                    volume.apfs_container_uuid.clone(),
+                    volume.apfs_role,
                     volume
                         .native_status
                         .map(NativeVolumeStatus::as_str)
@@ -2634,7 +2658,19 @@ impl VolumeOperationReport {
             .unwrap_or((
                 "-",
                 "-",
+                false,
+                false,
+                false,
+                None,
+                false,
+                false,
+                None,
+                None,
+                None,
                 "-".to_string(),
+                None,
+                None,
+                None,
                 "-",
                 "-".to_string(),
                 "-",
@@ -2643,7 +2679,7 @@ impl VolumeOperationReport {
                 "-".to_string(),
             ));
         format!(
-            "volume-operation\t{}\tpath={}\tdisposition={}\tnative-status={}\tdissenter-status={}\tvolume-kind={}\tmount={}\tstable-id={}\tvolume-native-status={}\tvolume-native-reason={}\tvolume-resource-status={}\tvolume-resource-reason={}\tvolume-mount-status={}\tvolume-mount-reason={}\treason={}",
+            "volume-operation\t{}\tpath={}\tdisposition={}\tnative-status={}\tdissenter-status={}\tvolume-kind={}\tmount={}\tvolume-writable={}\tvolume-read-only={}\tvolume-network={}\tvolume-reachable={}\tvolume-ejectable={}\tvolume-removable={}\tvolume-case-sensitive={}\tvolume-case-preserving={}\tvolume-mountable={}\tstable-id={}\tbsd={}\tapfs-container-uuid={}\tapfs-role={}\tvolume-native-status={}\tvolume-native-reason={}\tvolume-resource-status={}\tvolume-resource-reason={}\tvolume-mount-status={}\tvolume-mount-reason={}\treason={}",
             self.operation.as_str(),
             self.path.display(),
             self.disposition.as_str(),
@@ -2655,7 +2691,19 @@ impl VolumeOperationReport {
                 .unwrap_or_else(|| "-".to_string()),
             kind,
             mount,
+            optional_bool(self.volume.as_ref().map(|_| writable)),
+            optional_bool(self.volume.as_ref().map(|_| read_only)),
+            optional_bool(self.volume.as_ref().map(|_| network)),
+            optional_bool(reachable),
+            optional_bool(self.volume.as_ref().map(|_| ejectable)),
+            optional_bool(self.volume.as_ref().map(|_| removable)),
+            optional_bool(case_sensitive),
+            optional_bool(case_preserving),
+            optional_bool(mountable),
             stable_identity,
+            optional_string(bsd_name.as_deref()),
+            optional_string(apfs_container_uuid.as_deref()),
+            apfs_role.map(ApfsVolumeRole::as_str).unwrap_or("-"),
             volume_native_status,
             escape_field(&volume_native_reason),
             volume_resource_status,
@@ -4861,6 +4909,13 @@ mod tests {
         assert!(report
             .as_tsv()
             .contains("\tvolume-kind=external\tmount=mounted\t"));
+        assert!(report.as_tsv().contains("\tvolume-writable=true\t"));
+        assert!(report.as_tsv().contains("\tvolume-read-only=false\t"));
+        assert!(report.as_tsv().contains("\tvolume-network=false\t"));
+        assert!(report.as_tsv().contains("\tvolume-reachable=true\t"));
+        assert!(report.as_tsv().contains("\tvolume-ejectable=true\t"));
+        assert!(report.as_tsv().contains("\tvolume-removable=true\t"));
+        assert!(report.as_tsv().contains("\tvolume-mountable="));
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -4913,6 +4968,11 @@ mod tests {
         volume.resource_reason = Some("".to_string());
         volume.mount_table_status = Some(NativeVolumeStatus::Available);
         volume.mount_table_reason = Some("\n".to_string());
+        volume.case_sensitive = Some(false);
+        volume.case_preserving = Some(true);
+        volume.bsd_name = Some("disk9s1".to_string());
+        volume.apfs_container_uuid = Some("APFS-CONTAINER".to_string());
+        volume.apfs_role = Some(ApfsVolumeRole::Data);
 
         let report = VolumeOperationReport::with_volume(
             VolumeOperation::Eject,
@@ -4924,6 +4984,11 @@ mod tests {
         );
         let tsv = report.as_tsv();
 
+        assert!(tsv.contains("\tvolume-case-sensitive=false\t"));
+        assert!(tsv.contains("\tvolume-case-preserving=true\t"));
+        assert!(tsv.contains("\tbsd=disk9s1\t"));
+        assert!(tsv.contains("\tapfs-container-uuid=APFS-CONTAINER\t"));
+        assert!(tsv.contains("\tapfs-role=data\t"));
         assert!(tsv.contains("\tvolume-native-status=unavailable\t"));
         assert!(tsv.contains("\tvolume-native-reason=DiskArbitration unavailable\\tuntil retry\t"));
         assert!(tsv.contains("\tvolume-resource-status=unavailable\t"));

@@ -7192,11 +7192,16 @@ fn reports_volume_event_runtime_fanout_from_binary() {
     assert!(stdout.contains("\tprevious-read-only=false\t"));
     assert!(stdout.contains("\tprevious-network=false\t"));
     assert!(stdout.contains("\tprevious-reachable=true\t"));
+    assert!(stdout.contains("\tprevious-removable=true\t"));
+    assert!(stdout.contains("\tprevious-case-preserving=true\t"));
     assert!(stdout.contains("\tprevious-slow="));
     assert!(stdout.contains("\tcurrent-class=-\tcurrent-mount=-\t"));
-    assert!(stdout.contains(
-        "\tcurrent-read-only=-\tcurrent-network=-\tcurrent-reachable=-\tcurrent-slow=-\t"
-    ));
+    assert!(stdout.contains("\tcurrent-read-only=-\t"));
+    assert!(stdout.contains("\tcurrent-network=-\t"));
+    assert!(stdout.contains("\tcurrent-reachable=-\t"));
+    assert!(stdout.contains("\tcurrent-removable=-\t"));
+    assert!(stdout.contains("\tcurrent-case-preserving=-\t"));
+    assert!(stdout.contains("\tcurrent-slow=-\t"));
     assert!(stdout.contains("\tinvalidate-policy=true\treason=volume-event-disappeared\n"));
     assert!(stdout.contains("\nvolume-job-cancellation\tvolume="));
     assert!(stdout.contains("\tclass=background\tcancelled=1\n"));
@@ -7237,6 +7242,8 @@ fn reports_volume_event_runtime_fanout_from_binary() {
     assert!(kept_stdout.contains("\tcurrent-read-only=false\t"));
     assert!(kept_stdout.contains("\tcurrent-network=false\t"));
     assert!(kept_stdout.contains("\tcurrent-reachable=true\t"));
+    assert!(kept_stdout.contains("\tcurrent-removable=true\t"));
+    assert!(kept_stdout.contains("\tcurrent-case-preserving=true\t"));
     assert!(kept_stdout.contains("\tcurrent-slow=false\t"));
     assert!(kept_stdout.contains("\tinvalidate-policy=true\treason=volume-event-appeared\n"));
     assert!(kept_stdout.ends_with(
@@ -7269,6 +7276,13 @@ fn reports_volume_operation_refusal_from_binary() {
     assert!(stdout.starts_with("volume-operation\teject\t"));
     assert!(stdout.contains("\tdisposition=refused\tnative-status=-\tdissenter-status=-\t"));
     assert!(stdout.contains("\tvolume-kind=external\tmount=mounted\t"));
+    assert!(stdout.contains("\tvolume-writable=true\t"));
+    assert!(stdout.contains("\tvolume-read-only=false\t"));
+    assert!(stdout.contains("\tvolume-network=false\t"));
+    assert!(stdout.contains("\tvolume-reachable=true\t"));
+    assert!(stdout.contains("\tvolume-ejectable=true\t"));
+    assert!(stdout.contains("\tvolume-removable=true\t"));
+    assert!(stdout.contains("\tvolume-mountable="));
     assert!(stdout.contains("\tvolume-native-status="));
     assert!(stdout.contains("\tvolume-native-reason="));
     assert!(stdout.contains("\tvolume-resource-status="));
@@ -7306,6 +7320,8 @@ fn reports_volume_unmount_operation_refusal_from_binary() {
     assert!(stdout.starts_with("volume-operation\tunmount\t"));
     assert!(stdout.contains("\tdisposition=refused\tnative-status=-\tdissenter-status=-\t"));
     assert!(stdout.contains("\tvolume-kind=external\tmount=mounted\t"));
+    assert!(stdout.contains("\tvolume-ejectable=true\t"));
+    assert!(stdout.contains("\tvolume-removable=true\t"));
     assert!(stdout.contains("\treason=fixture-volume-native-operation-disabled\n"));
 
     let _ = std::fs::remove_dir_all(root);
@@ -7473,6 +7489,9 @@ fn volume_operation_reports_missing_path_from_binary() {
     assert!(stdout.starts_with("volume-operation\teject\t"));
     assert!(stdout.contains("\tdisposition=missing\tnative-status=-\t"));
     assert!(stdout.contains("\tvolume-kind=-\tmount=-\t"));
+    assert!(stdout.contains("\tvolume-writable=-\t"));
+    assert!(stdout.contains("\tvolume-removable=-\t"));
+    assert!(stdout.contains("\tvolume-case-preserving=-\t"));
     assert!(stdout.contains("\treason=volume-path-missing\n"));
 }
 
