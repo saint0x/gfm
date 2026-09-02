@@ -823,6 +823,21 @@ pub struct FileProviderStateObserver {
     pending_events: VecDeque<FileEvent>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum FileProviderEventExpansionKey {
+    Create(PathBuf),
+    Metadata(PathBuf),
+    Modify(PathBuf),
+    Remove(PathBuf),
+    Rename {
+        path: PathBuf,
+        from: PathBuf,
+        to: PathBuf,
+    },
+    Rescan(PathBuf),
+    Other(PathBuf),
+}
+
 struct FileProviderSnapshotLookup<'a> {
     snapshot: Option<&'a FileProviderStateSnapshot>,
     states: BTreeMap<&'a Path, CloudStorageState>,
@@ -1596,22 +1611,19 @@ fn fileprovider_observed_event_kind(kind: &FileEventKind) -> FileProviderObserve
     }
 }
 
-fn fileprovider_event_expansion_key(event: &FileEvent) -> String {
+fn fileprovider_event_expansion_key(event: &FileEvent) -> FileProviderEventExpansionKey {
     match &event.kind {
-        FileEventKind::Create => format!("create\t{}", event.path.display()),
-        FileEventKind::Metadata => format!("metadata\t{}", event.path.display()),
-        FileEventKind::Modify => format!("modify\t{}", event.path.display()),
-        FileEventKind::Remove => format!("remove\t{}", event.path.display()),
-        FileEventKind::Rename { from, to } => {
-            format!(
-                "rename\t{}\t{}\t{}",
-                event.path.display(),
-                from.display(),
-                to.display()
-            )
-        }
-        FileEventKind::Rescan => format!("rescan\t{}", event.path.display()),
-        FileEventKind::Other => format!("other\t{}", event.path.display()),
+        FileEventKind::Create => FileProviderEventExpansionKey::Create(event.path.clone()),
+        FileEventKind::Metadata => FileProviderEventExpansionKey::Metadata(event.path.clone()),
+        FileEventKind::Modify => FileProviderEventExpansionKey::Modify(event.path.clone()),
+        FileEventKind::Remove => FileProviderEventExpansionKey::Remove(event.path.clone()),
+        FileEventKind::Rename { from, to } => FileProviderEventExpansionKey::Rename {
+            path: event.path.clone(),
+            from: from.clone(),
+            to: to.clone(),
+        },
+        FileEventKind::Rescan => FileProviderEventExpansionKey::Rescan(event.path.clone()),
+        FileEventKind::Other => FileProviderEventExpansionKey::Other(event.path.clone()),
     }
 }
 
@@ -5083,6 +5095,31 @@ mod tests {
         assert_eq!(snapshot.entries[0].path, evicted);
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fileprovider_event_expansion_key_is_typed_by_event_kind() {
+        let root = PathBuf::from("/tmp/gfm-fileprovider-event-key");
+        let old = root.join("Old.icloud");
+        let new = root.join("New.icloud");
+        let metadata = FileEvent::new(&new, FileEventKind::Metadata);
+        let duplicate_metadata = FileEvent::new(&new, FileEventKind::Metadata);
+        let rename = FileEvent::new(
+            &new,
+            FileEventKind::Rename {
+                from: old,
+                to: new.clone(),
+            },
+        );
+
+        assert_eq!(
+            fileprovider_event_expansion_key(&metadata),
+            fileprovider_event_expansion_key(&duplicate_metadata)
+        );
+        assert_ne!(
+            fileprovider_event_expansion_key(&metadata),
+            fileprovider_event_expansion_key(&rename)
+        );
     }
 
     #[test]
