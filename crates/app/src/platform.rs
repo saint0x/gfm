@@ -4664,18 +4664,49 @@ fn preview_cache_key_for_path_kind(
         return Ok(key);
     }
     cancellation.check()?;
-    let file_id = match path.try_exists() {
-        Ok(true) => record_for_path_checked(path, None, false, || cancellation.check())?.id,
-        Ok(false) => FileId::new(VolumeId(0), 0),
+    let file_id = preview_cache_file_id_for_path_checked(path, || cancellation.check())?;
+    cancellation.check()?;
+    Ok(PreviewRequestKey::new(file_id, path.to_path_buf(), kind))
+}
+
+fn preview_cache_file_id_for_path_checked(
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<FileId> {
+    check_control()?;
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            check_control()?;
+            return Ok(FileId::new(VolumeId(0), 0));
+        }
         Err(err) => {
             return Err(GfmError::io(
                 path,
-                format!("preview cache key path existence unavailable: {err}"),
+                format!("preview cache key path metadata unavailable: {err}"),
             ))
         }
     };
-    cancellation.check()?;
-    Ok(PreviewRequestKey::new(file_id, path.to_path_buf(), kind))
+    check_control()?;
+    Ok(preview_cache_file_id_from_metadata(&metadata))
+}
+
+#[cfg(unix)]
+fn preview_cache_file_id_from_metadata(metadata: &std::fs::Metadata) -> FileId {
+    use std::os::unix::fs::MetadataExt;
+
+    FileId::new(VolumeId(metadata.dev()), metadata.ino())
+}
+
+#[cfg(not(unix))]
+fn preview_cache_file_id_from_metadata(metadata: &std::fs::Metadata) -> FileId {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    metadata.len().hash(&mut hasher);
+    metadata.modified().ok().hash(&mut hasher);
+    FileId::new(VolumeId(0), hasher.finish())
 }
 
 fn drain_fileprovider_observer_probe(
@@ -6595,6 +6626,69 @@ mod tests {
         .expect_err("pre-cancelled preview cache key resolution should not touch the path");
 
         assert_eq!(err, GfmError::Cancelled);
+    }
+
+    #[test]
+    fn preview_cache_file_id_for_missing_path_uses_stable_missing_sentinel() {
+        let path = std::env::temp_dir()
+            .join(format!(
+                "gfm-platform-preview-cache-missing-key-{}",
+                std::process::id()
+            ))
+            .join("missing.png");
+
+        let id = preview_cache_file_id_for_path_checked(&path, || Ok(()))
+            .expect("missing preview cache path should still produce a stable cache key");
+
+        assert_eq!(id, FileId::new(VolumeId(0), 0));
+        assert!(!path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn preview_cache_file_id_for_existing_path_comes_from_single_metadata_probe() {
+        use std::os::unix::fs::MetadataExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "gfm-platform-preview-cache-existing-key-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("thumbnail-source.png");
+        std::fs::write(&path, "thumbnail").unwrap();
+        let metadata = std::fs::symlink_metadata(&path).unwrap();
+
+        let id = preview_cache_file_id_for_path_checked(&path, || Ok(()))
+            .expect("existing preview cache path should use metadata identity");
+
+        assert_eq!(id, FileId::new(VolumeId(metadata.dev()), metadata.ino()));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn preview_cache_file_id_for_path_checked_can_cancel_after_metadata_probe() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-platform-preview-cache-key-post-metadata-cancel-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("thumbnail-source.png");
+        std::fs::write(&path, "thumbnail").unwrap();
+        let mut checks = 0usize;
+
+        let err = preview_cache_file_id_for_path_checked(&path, || {
+            checks += 1;
+            if checks > 1 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert_eq!(checks, 2);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
