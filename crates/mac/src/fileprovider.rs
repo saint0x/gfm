@@ -14,6 +14,7 @@ use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
 const ICLOUD_DRIVE_COMPONENT: &str = "com~apple~CloudDocs";
+const FILEPROVIDER_CACHED_ROOT_COMPONENT: &str = "CloudStorage";
 const MAX_PROVIDER_XATTR_VALUE_BYTES: usize = 4096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1658,16 +1659,24 @@ fn observable_fileprovider_path_from_hints(path: &Path, hints: &CloudHints) -> b
 
 fn weak_path_hint_without_provider_evidence(hints: &CloudHints) -> bool {
     path_only_provider_hint(&hints.source)
+        && !explicit_provider_root_hint(&hints.source)
         && hints.xattrs.is_empty()
         && !native_has_fileprovider_values(&hints.native)
         && !native_provider_state_unavailable(hints)
         && hints.native_identity.status != NativeFileProviderIdentityStatus::Available
 }
 
+fn explicit_provider_root_hint(source: &str) -> bool {
+    source
+        .split('+')
+        .any(|source| matches!(source, "fileprovider-cache-path" | "icloud-path"))
+}
+
 fn strong_provider_path_hint(path: &Path) -> bool {
     path_components(path)
         .iter()
         .any(|component| component == ICLOUD_DRIVE_COMPONENT)
+        || is_fileprovider_cached_path(path)
         || is_evicted_placeholder_path(path)
 }
 
@@ -2357,6 +2366,9 @@ fn provider_path_sources(path: &Path) -> Vec<String> {
     if path.extension().and_then(|value| value.to_str()) == Some("icloud") {
         sources.push("icloud-extension".to_string());
     }
+    if is_fileprovider_cached_path(path) {
+        sources.push("fileprovider-cache-path".to_string());
+    }
     let name = file_name_lower(path);
     if name.contains("icloud") || name.contains("fileprovider") {
         sources.push("fixture-name".to_string());
@@ -2396,6 +2408,7 @@ fn should_query_native_fileprovider_identity(path: &Path, hints: &CloudHints) ->
             .xattrs
             .iter()
             .any(|attr| attr.contains("fileprovider") || attr.contains("ubiquit"))
+        || is_fileprovider_cached_path(path)
         || path_components(path)
             .iter()
             .any(|component| component == ICLOUD_DRIVE_COMPONENT)
@@ -2432,6 +2445,7 @@ fn domain_for_path(path: &Path, hints: &CloudHints) -> FileProviderDomain {
     {
         FileProviderDomain::ICloudDrive
     } else if hints.native_identity.status == NativeFileProviderIdentityStatus::Available
+        || is_fileprovider_cached_path(path)
         || hints
             .xattrs
             .iter()
@@ -2790,7 +2804,9 @@ fn path_only_provider_hint(source: &str) -> bool {
     let mut saw_path_hint = false;
     for source in source.split('+') {
         match source {
-            "fixture-name" | "icloud-extension" | "icloud-path" => saw_path_hint = true,
+            "fileprovider-cache-path" | "fixture-name" | "icloud-extension" | "icloud-path" => {
+                saw_path_hint = true;
+            }
             "filesystem" => {}
             _ => return false,
         }
@@ -3371,6 +3387,12 @@ fn path_components(path: &Path) -> Vec<String> {
         .collect()
 }
 
+fn is_fileprovider_cached_path(path: &Path) -> bool {
+    path_components(path).windows(2).any(|components| {
+        components[0] == "Library" && components[1] == FILEPROVIDER_CACHED_ROOT_COMPONENT
+    })
+}
+
 fn file_name_lower(path: &Path) -> String {
     path.file_name()
         .and_then(|value| value.to_str())
@@ -3650,6 +3672,38 @@ mod tests {
         let report = FileProviderStateReport::from_hints(path, hints);
 
         assert_eq!(report.domain, FileProviderDomain::ICloudDrive);
+        assert_eq!(report.storage_state, CloudStorageState::Unknown);
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::PathFallback
+        );
+        assert_eq!(
+            report.materialization_confidence,
+            CloudMaterializationConfidence::PathFallback
+        );
+        assert_eq!(
+            report.materialization_reason.as_deref(),
+            Some("unknown-provider-state")
+        );
+        assert_eq!(report.commands.download, CloudCommandState::Disabled);
+        assert_eq!(report.commands.evict, CloudCommandState::Disabled);
+    }
+
+    #[test]
+    fn reports_cloudstorage_cached_path_as_fileprovider_path_fallback() {
+        let path = PathBuf::from("/Users/test/Library/CloudStorage/ExampleDrive-account/Report.md");
+        let hints = CloudHints {
+            native: native_values(),
+            native_identity: identity_not_queried(),
+            xattrs: Vec::new(),
+            xattr_values: Vec::new(),
+            provider_identifier: None,
+            source: "fileprovider-cache-path".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.domain, FileProviderDomain::FileProvider);
         assert_eq!(report.storage_state, CloudStorageState::Unknown);
         assert_eq!(
             report.materialization_source,
@@ -4774,6 +4828,28 @@ mod tests {
     }
 
     #[test]
+    fn cloudstorage_cached_path_is_strong_observable_provider_hint() {
+        let path =
+            PathBuf::from("/Users/test/Library/CloudStorage/ExampleDrive-account/Observed.md");
+        let hints = CloudHints {
+            native: native_values(),
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::NotQueried,
+                item_identifier: None,
+                domain_identifier: None,
+                reason: Some("hot path skipped native manager identity".to_string()),
+            },
+            xattrs: Vec::new(),
+            xattr_values: Vec::new(),
+            provider_identifier: None,
+            source: "fileprovider-cache-path".to_string(),
+        };
+
+        assert!(strong_provider_path_hint(&path));
+        assert!(observable_fileprovider_path_from_hints(&path, &hints));
+    }
+
+    #[test]
     fn observable_strong_provider_hint_is_suppressed_by_native_local_false() {
         let path = PathBuf::from("/tmp/Remote.icloud");
         let mut native = native_values();
@@ -5276,6 +5352,14 @@ mod tests {
             PathBuf::from("/Users/test/Library/Mobile Documents/com~apple~CloudDocs/Remote.md");
         assert!(should_query_native_fileprovider_identity(
             &explicit_icloud_container,
+            &hints
+        ));
+
+        let explicit_fileprovider_cache =
+            PathBuf::from("/Users/test/Library/CloudStorage/ExampleDrive/Remote.md");
+        assert!(is_fileprovider_cached_path(&explicit_fileprovider_cache));
+        assert!(should_query_native_fileprovider_identity(
+            &explicit_fileprovider_cache,
             &hints
         ));
 
