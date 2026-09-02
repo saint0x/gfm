@@ -6752,6 +6752,8 @@ fn sidebar_volume_description_event_api_status_reason_from_binary() {
     assert!(stdout.contains("\tpath=/Volumes/UI API Description\t"));
     assert!(stdout.contains("\tkind=description-changed\t"));
     assert!(stdout.contains("\tcurrent-kind=external\tcurrent-mount=mounted\t"));
+    assert!(stdout.contains("\tcase-sensitive=true\t"));
+    assert!(stdout.contains("\tcase-preserving=true\t"));
     assert!(stdout.contains("\tcurrent-native-status=unavailable\t"));
     assert!(stdout.contains("\tcurrent-native-reason=DiskArbitration unavailable during refresh\t"));
     assert!(stdout.contains("\tcurrent-resource-status=unavailable\t"));
@@ -7332,6 +7334,8 @@ fn reports_volume_event_runtime_fanout_from_binary() {
     assert!(stdout.contains("\tcurrent-volume=-\t"));
     assert!(stdout.contains("sidebar-volume-invalidation\trow=volume-"));
     assert!(stdout.contains("\tkind=disappeared\t"));
+    assert!(stdout.contains("\tprevious-case-sensitive=false\t"));
+    assert!(stdout.contains("\tcase-sensitive=-\t"));
     assert!(stdout.contains("\tremove-row=true\t"));
     assert!(stdout.contains("volume-event-operation-policy-invalidation\tkind=disappeared\t"));
     assert!(stdout.contains("\tprevious-class="));

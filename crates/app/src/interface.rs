@@ -404,6 +404,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             descriptor.label = "UI API Description".to_string();
             descriptor.path = PathBuf::from("/Volumes/UI API Description");
             descriptor.kind = VolumeKind::External;
+            descriptor.case_sensitive = Some(true);
+            descriptor.case_preserving = Some(true);
             descriptor.native_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
             descriptor.native_reason =
                 Some("DiskArbitration unavailable during refresh".to_string());
@@ -905,7 +907,11 @@ fn sidebar_volume_spec(volume: &VolumeDescriptor) -> SidebarVolumeSpec {
         volume.network,
         volume.reachable,
     )
-    .with_volume_media_state(volume.removable, volume.case_preserving)
+    .with_volume_media_state(
+        volume.removable,
+        volume.case_sensitive,
+        volume.case_preserving,
+    )
     .with_platform_api_context(
         volume_status_string(volume.native_status),
         volume.native_reason.clone(),
