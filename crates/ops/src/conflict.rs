@@ -124,11 +124,11 @@ impl OperationConflictReport {
             self.operation,
             self.source
                 .as_ref()
-                .map(|path| path.display().to_string())
+                .map(|path| escape_field(&path.display().to_string()))
                 .unwrap_or_else(|| "-".to_string()),
             self.target
                 .as_ref()
-                .map(|path| path.display().to_string())
+                .map(|path| escape_field(&path.display().to_string()))
                 .unwrap_or_else(|| "-".to_string()),
             self.target_exists,
             self.target_kind.as_str(),
@@ -139,9 +139,17 @@ impl OperationConflictReport {
                 .collect::<Vec<_>>()
                 .join(","),
             self.blocks_operation,
-            self.reason
+            escape_field(&self.reason)
         )
     }
+}
+
+fn escape_field(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -331,6 +339,46 @@ mod tests {
             report.reason,
             "destination-conflict-requires-user-resolution"
         );
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn conflict_report_tsv_escapes_control_character_paths() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-conflict-report-escape-{}\tSource\nTarget\rSlash\\",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let source = root.join("source\tfile.txt");
+        let target = root.join("target\nfile.txt");
+        std::fs::write(&source, "new").unwrap();
+        std::fs::write(&target, "old").unwrap();
+
+        let report = OperationConflictReport::evaluate(
+            &Operation::Copy {
+                from: source.clone(),
+                to: target.clone(),
+            },
+            ConflictPolicy::Fail,
+        )
+        .unwrap();
+        let tsv = report.as_tsv();
+        let escaped_source = escape_field(&source.display().to_string());
+        let escaped_target = escape_field(&target.display().to_string());
+
+        assert!(
+            tsv.contains(&format!("\tsource={escaped_source}\t")),
+            "{tsv}"
+        );
+        assert!(
+            tsv.contains(&format!("\ttarget={escaped_target}\t")),
+            "{tsv}"
+        );
+        assert!(!tsv.contains('\n'), "{tsv}");
+        assert!(!tsv.contains('\r'), "{tsv}");
+        assert!(tsv.ends_with("reason=destination-conflict-requires-user-resolution"));
 
         let _ = std::fs::remove_dir_all(root);
     }
