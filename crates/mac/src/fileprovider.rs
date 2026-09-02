@@ -2646,6 +2646,9 @@ fn storage_state_for_path_with_probe(
         if let Some(state) = native_storage_state(&hints.native) {
             return Ok(state);
         }
+        if native_has_provider_zero_byte_materialization_evidence(hints) {
+            return Ok(CloudStorageState::Downloaded);
+        }
         if hints.native.is_ubiquitous == Some(true) {
             return Ok(CloudStorageState::Unknown);
         }
@@ -2715,7 +2718,9 @@ fn storage_state_for_path_with_probe(
         )
     {
         CloudStorageState::Waiting
-    } else if native_has_allocated_file_materialization_evidence(&hints.native) {
+    } else if native_has_allocated_file_materialization_evidence(&hints.native)
+        || native_has_provider_zero_byte_materialization_evidence(hints)
+    {
         CloudStorageState::Downloaded
     } else if (hints.native_identity.status == NativeFileProviderIdentityStatus::Available
         && !native_has_ubiquitous_materialization_evidence(&hints.native))
@@ -3002,12 +3007,31 @@ fn native_has_allocated_file_materialization_evidence(
         .is_some_and(|size| size > 0 && allocated.is_some_and(|allocated| allocated > 0))
 }
 
+fn native_has_provider_zero_byte_materialization_evidence(hints: &CloudHints) -> bool {
+    if hints.native.status != gfm_mac_sys::NativeFileProviderStatus::Available
+        || xattr_storage_state(hints).is_some()
+    {
+        return false;
+    }
+    if hints.native.is_ubiquitous != Some(true)
+        && hints.native_identity.status != NativeFileProviderIdentityStatus::Available
+    {
+        return false;
+    }
+    let allocated = hints
+        .native
+        .total_file_allocated_size_bytes
+        .or(hints.native.file_allocated_size_bytes);
+    hints.native.file_size_bytes == Some(0) && allocated == Some(0)
+}
+
 fn native_allocated_file_materialization_reports_state(
     state: CloudStorageState,
     hints: &CloudHints,
 ) -> bool {
     state == CloudStorageState::Downloaded
-        && native_has_allocated_file_materialization_evidence(&hints.native)
+        && (native_has_allocated_file_materialization_evidence(&hints.native)
+            || native_has_provider_zero_byte_materialization_evidence(hints))
         && xattr_storage_state(hints).is_none()
 }
 
@@ -3220,6 +3244,8 @@ fn native_downloaded_reason(values: &NativeFileProviderResourceValues) -> &'stat
         "native-url-resource-is-uploaded"
     } else if values.percent_uploaded_milli == Some(100_000) {
         "native-url-resource-upload-complete"
+    } else if values.file_size_bytes == Some(0) {
+        "native-url-resource-zero-byte-materialized"
     } else if native_has_allocated_file_materialization_evidence(values) {
         "native-url-resource-allocated-materialized"
     } else {
@@ -3317,7 +3343,7 @@ fn progress_for_state(state: CloudStorageState, hints: &CloudHints) -> CloudTran
                     complete: true,
                     indeterminate: false,
                     source: "native-url-resource",
-                    reason: Some("native-url-resource-allocated-materialized".to_string()),
+                    reason: Some(native_downloaded_reason(&hints.native).to_string()),
                 }
             } else {
                 CloudTransferProgress::complete(CloudTransferDirection::Download, "materialized")
@@ -6045,6 +6071,53 @@ mod tests {
     }
 
     #[test]
+    fn provider_identity_with_native_zero_byte_file_marks_materialized() {
+        let root = unique_temp_dir();
+        let path = root.join("EmptyProviderItem.txt");
+        fs::write(&path, "").unwrap();
+        let mut native = native_values();
+        native.has_unresolved_conflicts = Some(false);
+        native.is_downloading = Some(false);
+        native.is_uploading = Some(false);
+        native.file_size_bytes = Some(0);
+        native.file_allocated_size_bytes = Some(0);
+        let hints = CloudHints {
+            native,
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::Available,
+                item_identifier: Some("item-empty".to_string()),
+                domain_identifier: Some("com.example.drive.account".to_string()),
+                reason: None,
+            },
+            xattrs: Vec::new(),
+            xattr_values: Vec::new(),
+            provider_identifier: Some("com.example.drive.account".to_string()),
+            source: "native-url-resource+nsfileprovidermanager".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.domain, FileProviderDomain::FileProvider);
+        assert_eq!(report.storage_state, CloudStorageState::Downloaded);
+        assert_eq!(report.materialization, CloudMaterialization::Materialized);
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::NativeUrlResource
+        );
+        assert_eq!(
+            report.materialization_reason.as_deref(),
+            Some("native-url-resource-zero-byte-materialized")
+        );
+        assert_eq!(report.progress.source, "native-url-resource");
+        assert_eq!(
+            report.progress.reason.as_deref(),
+            Some("native-url-resource-zero-byte-materialized")
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn native_allocated_file_evidence_preserves_explicit_placeholder_xattr() {
         let root = unique_temp_dir();
         let path = root.join("ProviderItem.txt");
@@ -6084,6 +6157,42 @@ mod tests {
         assert_eq!(
             report.materialization_reason.as_deref(),
             Some("remote-placeholder")
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn generic_local_zero_byte_file_with_native_allocation_stays_local_without_provider_domain() {
+        let root = unique_temp_dir();
+        let path = root.join("EmptyLocal.txt");
+        fs::write(&path, "").unwrap();
+        let mut native = native_values();
+        native.has_unresolved_conflicts = Some(false);
+        native.is_downloading = Some(false);
+        native.is_uploading = Some(false);
+        native.file_size_bytes = Some(0);
+        native.file_allocated_size_bytes = Some(0);
+        let hints = CloudHints {
+            native,
+            native_identity: identity_not_queried(),
+            xattrs: Vec::new(),
+            xattr_values: Vec::new(),
+            provider_identifier: None,
+            source: "native-url-resource".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.domain, FileProviderDomain::Local);
+        assert_eq!(report.storage_state, CloudStorageState::LocalOnly);
+        assert_eq!(
+            report.materialization,
+            CloudMaterialization::NotProviderBacked
+        );
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::Filesystem
         );
 
         fs::remove_dir_all(root).unwrap();
@@ -8130,6 +8239,44 @@ mod tests {
         assert_eq!(
             report.materialization_reason.as_deref(),
             Some("native-url-resource-downloading-status-current")
+        );
+    }
+
+    #[test]
+    fn native_ubiquitous_zero_byte_file_without_current_status_marks_materialized() {
+        let path = PathBuf::from("/tmp/Empty.dat");
+        let mut native = native_values();
+        native.is_ubiquitous = Some(true);
+        native.has_unresolved_conflicts = Some(false);
+        native.is_downloading = Some(false);
+        native.is_uploading = Some(false);
+        native.file_size_bytes = Some(0);
+        native.file_allocated_size_bytes = Some(0);
+        let hints = CloudHints {
+            native,
+            native_identity: identity_not_queried(),
+            xattrs: Vec::new(),
+            xattr_values: Vec::new(),
+            provider_identifier: None,
+            source: "native-url-resource".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.domain, FileProviderDomain::ICloudDrive);
+        assert_eq!(report.storage_state, CloudStorageState::Downloaded);
+        assert_eq!(report.materialization, CloudMaterialization::Materialized);
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::NativeUrlResource
+        );
+        assert_eq!(
+            report.materialization_reason.as_deref(),
+            Some("native-url-resource-zero-byte-materialized")
+        );
+        assert_eq!(
+            report.progress.reason.as_deref(),
+            Some("native-url-resource-zero-byte-materialized")
         );
     }
 
