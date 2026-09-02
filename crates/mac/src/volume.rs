@@ -1172,22 +1172,43 @@ impl VolumeTopologyDiff {
     pub fn evaluate(previous: &VolumeDiscoveryReport, current: &VolumeDiscoveryReport) -> Self {
         let previous = normalized_volume_map(&previous.volumes);
         let current = normalized_volume_map(&current.volumes);
+        let current_by_path = volume_map_by_path(current.values().copied());
+        let mut matched_current = BTreeSet::new();
         let mut changes = Vec::new();
 
         for (stable_identity, previous_volume) in &previous {
             match current.get(stable_identity) {
                 Some(current_volume) => {
+                    matched_current.insert((*stable_identity).clone());
                     if let Some(change) =
                         VolumeTopologyChange::changed(previous_volume, current_volume)
                     {
                         changes.push(change);
                     }
                 }
-                None => changes.push(VolumeTopologyChange::disconnected(previous_volume)),
+                None => {
+                    if let Some(current_volume) =
+                        current_by_path
+                            .get(&previous_volume.path)
+                            .filter(|current_volume| {
+                                !matched_current.contains(&current_volume.stable_identity)
+                                    && !previous.contains_key(&current_volume.stable_identity)
+                            })
+                    {
+                        matched_current.insert(current_volume.stable_identity.clone());
+                        if let Some(change) =
+                            VolumeTopologyChange::changed(previous_volume, current_volume)
+                        {
+                            changes.push(change);
+                        }
+                    } else {
+                        changes.push(VolumeTopologyChange::disconnected(previous_volume));
+                    }
+                }
             }
         }
         for (stable_identity, current_volume) in &current {
-            if !previous.contains_key(stable_identity) {
+            if !matched_current.contains(stable_identity) {
                 changes.push(VolumeTopologyChange::connected(current_volume));
             }
         }
@@ -1238,7 +1259,9 @@ pub struct VolumeEventInvalidationReport {
     pub previous_network: Option<bool>,
     pub previous_reachable: Option<bool>,
     pub previous_ejectable: Option<bool>,
+    pub previous_removable: Option<bool>,
     pub previous_case_sensitive: Option<bool>,
+    pub previous_case_preserving: Option<bool>,
     pub previous_native_status: Option<NativeVolumeStatus>,
     pub previous_native_reason: Option<String>,
     pub previous_resource_status: Option<NativeVolumeStatus>,
@@ -1252,7 +1275,9 @@ pub struct VolumeEventInvalidationReport {
     pub current_network: Option<bool>,
     pub current_reachable: Option<bool>,
     pub current_ejectable: Option<bool>,
+    pub current_removable: Option<bool>,
     pub current_case_sensitive: Option<bool>,
+    pub current_case_preserving: Option<bool>,
     pub current_native_status: Option<NativeVolumeStatus>,
     pub current_native_reason: Option<String>,
     pub current_resource_status: Option<NativeVolumeStatus>,
@@ -1460,8 +1485,11 @@ impl VolumeEventInvalidationReport {
                     previous_network: previous.map(|descriptor| descriptor.network),
                     previous_reachable: previous.and_then(|descriptor| descriptor.reachable),
                     previous_ejectable: previous.map(|descriptor| descriptor.ejectable),
+                    previous_removable: previous.map(|descriptor| descriptor.removable),
                     previous_case_sensitive: previous
                         .and_then(|descriptor| descriptor.case_sensitive),
+                    previous_case_preserving: previous
+                        .and_then(|descriptor| descriptor.case_preserving),
                     previous_native_status: previous
                         .and_then(|descriptor| descriptor.native_status),
                     previous_native_reason: previous.and_then(|descriptor| {
@@ -1484,8 +1512,11 @@ impl VolumeEventInvalidationReport {
                     current_network: current.map(|descriptor| descriptor.network),
                     current_reachable: current.and_then(|descriptor| descriptor.reachable),
                     current_ejectable: current.map(|descriptor| descriptor.ejectable),
+                    current_removable: current.map(|descriptor| descriptor.removable),
                     current_case_sensitive: current
                         .and_then(|descriptor| descriptor.case_sensitive),
+                    current_case_preserving: current
+                        .and_then(|descriptor| descriptor.case_preserving),
                     current_native_status: current.and_then(|descriptor| descriptor.native_status),
                     current_native_reason: current.and_then(|descriptor| {
                         normalized_event_reason_option(descriptor.native_reason.as_deref())
@@ -1528,11 +1559,13 @@ impl VolumeEventInvalidationReport {
                 let current_network = current.map(|descriptor| descriptor.network);
                 let current_reachable = current.and_then(|descriptor| descriptor.reachable);
                 let current_ejectable = current.map(|descriptor| descriptor.ejectable);
+                let current_removable = current.map(|descriptor| descriptor.removable);
                 let previous_read_only = previous.map(|descriptor| descriptor.read_only);
                 let previous_writable = previous.map(|descriptor| descriptor.writable);
                 let previous_network = previous.map(|descriptor| descriptor.network);
                 let previous_reachable = previous.and_then(|descriptor| descriptor.reachable);
                 let previous_ejectable = previous.map(|descriptor| descriptor.ejectable);
+                let previous_removable = previous.map(|descriptor| descriptor.removable);
                 let flags = VolumeEventIdentityFlags::from_descriptors(previous, current);
                 let topology_reason = previous
                     .zip(current)
@@ -1561,8 +1594,11 @@ impl VolumeEventInvalidationReport {
                     previous_network,
                     previous_reachable,
                     previous_ejectable,
+                    previous_removable,
                     previous_case_sensitive: previous
                         .and_then(|descriptor| descriptor.case_sensitive),
+                    previous_case_preserving: previous
+                        .and_then(|descriptor| descriptor.case_preserving),
                     previous_native_status: previous
                         .and_then(|descriptor| descriptor.native_status),
                     previous_native_reason: previous.and_then(|descriptor| {
@@ -1585,8 +1621,11 @@ impl VolumeEventInvalidationReport {
                     current_network,
                     current_reachable,
                     current_ejectable,
+                    current_removable,
                     current_case_sensitive: current
                         .and_then(|descriptor| descriptor.case_sensitive),
+                    current_case_preserving: current
+                        .and_then(|descriptor| descriptor.case_preserving),
                     current_native_status: current.and_then(|descriptor| descriptor.native_status),
                     current_native_reason: current.and_then(|descriptor| {
                         normalized_event_reason_option(descriptor.native_reason.as_deref())
@@ -1678,8 +1717,14 @@ impl VolumeEventInvalidationReport {
             previous_ejectable: (kind == VolumeEventKind::Disappeared)
                 .then(|| descriptor.map(|descriptor| descriptor.ejectable))
                 .flatten(),
+            previous_removable: (kind == VolumeEventKind::Disappeared)
+                .then(|| descriptor.map(|descriptor| descriptor.removable))
+                .flatten(),
             previous_case_sensitive: (kind == VolumeEventKind::Disappeared)
                 .then(|| descriptor.and_then(|descriptor| descriptor.case_sensitive))
+                .flatten(),
+            previous_case_preserving: (kind == VolumeEventKind::Disappeared)
+                .then(|| descriptor.and_then(|descriptor| descriptor.case_preserving))
                 .flatten(),
             previous_native_status: (kind == VolumeEventKind::Disappeared)
                 .then(|| descriptor.and_then(|descriptor| descriptor.native_status))
@@ -1734,8 +1779,14 @@ impl VolumeEventInvalidationReport {
             current_ejectable: (kind != VolumeEventKind::Disappeared)
                 .then(|| descriptor.map(|descriptor| descriptor.ejectable))
                 .flatten(),
+            current_removable: (kind != VolumeEventKind::Disappeared)
+                .then(|| descriptor.map(|descriptor| descriptor.removable))
+                .flatten(),
             current_case_sensitive: (kind != VolumeEventKind::Disappeared)
                 .then(|| descriptor.and_then(|descriptor| descriptor.case_sensitive))
+                .flatten(),
+            current_case_preserving: (kind != VolumeEventKind::Disappeared)
+                .then(|| descriptor.and_then(|descriptor| descriptor.case_preserving))
                 .flatten(),
             current_native_status: (kind != VolumeEventKind::Disappeared)
                 .then(|| descriptor.and_then(|descriptor| descriptor.native_status))
@@ -1782,7 +1833,7 @@ impl VolumeEventInvalidationReport {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume-event-invalidation\tkind={}\tnative-status={}\tpath={}\tprevious-kind={}\tprevious-mount={}\tprevious-read-only={}\tprevious-writable={}\tprevious-network={}\tprevious-reachable={}\tprevious-ejectable={}\tprevious-case-sensitive={}\tprevious-native-status={}\tprevious-native-reason={}\tprevious-resource-status={}\tprevious-resource-reason={}\tprevious-mount-status={}\tprevious-mount-reason={}\tcurrent-kind={}\tcurrent-mount={}\tcurrent-read-only={}\tcurrent-writable={}\tcurrent-network={}\tcurrent-reachable={}\tcurrent-ejectable={}\tcurrent-case-sensitive={}\tcurrent-native-status={}\tcurrent-native-reason={}\tcurrent-resource-status={}\tcurrent-resource-reason={}\tcurrent-mount-status={}\tcurrent-mount-reason={}\tstable-identity-changed={}\tfilesystem-identity-changed={}\tapfs-metadata-changed={}\tmount-table-changed={}\tfilesystem-traits-changed={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\treason={}",
+            "volume-event-invalidation\tkind={}\tnative-status={}\tpath={}\tprevious-kind={}\tprevious-mount={}\tprevious-read-only={}\tprevious-writable={}\tprevious-network={}\tprevious-reachable={}\tprevious-ejectable={}\tprevious-removable={}\tprevious-case-sensitive={}\tprevious-case-preserving={}\tprevious-native-status={}\tprevious-native-reason={}\tprevious-resource-status={}\tprevious-resource-reason={}\tprevious-mount-status={}\tprevious-mount-reason={}\tcurrent-kind={}\tcurrent-mount={}\tcurrent-read-only={}\tcurrent-writable={}\tcurrent-network={}\tcurrent-reachable={}\tcurrent-ejectable={}\tcurrent-removable={}\tcurrent-case-sensitive={}\tcurrent-case-preserving={}\tcurrent-native-status={}\tcurrent-native-reason={}\tcurrent-resource-status={}\tcurrent-resource-reason={}\tcurrent-mount-status={}\tcurrent-mount-reason={}\tstable-identity-changed={}\tfilesystem-identity-changed={}\tapfs-metadata-changed={}\tmount-table-changed={}\tfilesystem-traits-changed={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\treason={}",
             self.kind.as_str(),
             self.native_status.as_str(),
             self.path
@@ -1796,9 +1847,11 @@ impl VolumeEventInvalidationReport {
             optional_bool(self.previous_network),
             optional_bool(self.previous_reachable),
             optional_bool(self.previous_ejectable),
+            optional_bool(self.previous_removable),
             self.previous_case_sensitive
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string()),
+            optional_bool(self.previous_case_preserving),
             self.previous_native_status
                 .map(NativeVolumeStatus::as_str)
                 .unwrap_or("-"),
@@ -1818,9 +1871,11 @@ impl VolumeEventInvalidationReport {
             optional_bool(self.current_network),
             optional_bool(self.current_reachable),
             optional_bool(self.current_ejectable),
+            optional_bool(self.current_removable),
             self.current_case_sensitive
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string()),
+            optional_bool(self.current_case_preserving),
             self.current_native_status
                 .map(NativeVolumeStatus::as_str)
                 .unwrap_or("-"),
@@ -2799,6 +2854,19 @@ fn normalized_volume_map(volumes: &[VolumeDescriptor]) -> BTreeMap<String, &Volu
         .collect()
 }
 
+fn volume_map_by_path<'a>(
+    volumes: impl IntoIterator<Item = &'a VolumeDescriptor>,
+) -> BTreeMap<PathBuf, &'a VolumeDescriptor> {
+    let mut volumes: Vec<_> = volumes.into_iter().collect();
+    volumes.sort_by(|left, right| compare_volume_descriptors(left, right));
+    let mut seen = BTreeSet::new();
+    volumes
+        .into_iter()
+        .filter(|volume| seen.insert(volume.path.clone()))
+        .map(|volume| (volume.path.clone(), volume))
+        .collect()
+}
+
 fn unique_volume_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
     let mut seen = BTreeSet::new();
     paths
@@ -2833,6 +2901,8 @@ fn topology_change_reason(
 ) -> Option<&'static str> {
     if previous.path != current.path {
         Some("volume-path-changed")
+    } else if previous.stable_identity != current.stable_identity {
+        Some("volume-identity-changed")
     } else if previous.mount_state != current.mount_state {
         Some("mount-state-changed")
     } else if previous.kind != current.kind {
@@ -5297,6 +5367,41 @@ mod tests {
     }
 
     #[test]
+    fn topology_diff_pairs_same_path_when_stable_identity_changes() {
+        let root = unique_temp_dir("gfm-volume-topology-stable-identity");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let mut previous_volume = VolumeDescriptor::for_path(&root).unwrap();
+        previous_volume.stable_identity = "diskarbitration:uuid:OLD".to_string();
+        previous_volume.volume_uuid = Some("OLD".to_string());
+        let mut current_volume = previous_volume.clone();
+        current_volume.stable_identity = "diskarbitration:uuid:NEW".to_string();
+        current_volume.volume_uuid = Some("NEW".to_string());
+        let previous = VolumeDiscoveryReport {
+            volumes: vec![previous_volume],
+        };
+        let current = VolumeDiscoveryReport {
+            volumes: vec![current_volume],
+        };
+
+        let diff = VolumeTopologyDiff::evaluate(&previous, &current);
+
+        assert_eq!(diff.changes.len(), 1);
+        let change = &diff.changes[0];
+        assert_eq!(change.kind, VolumeTopologyChangeKind::Changed);
+        assert_eq!(change.reason, "volume-identity-changed");
+        assert_eq!(change.stable_identity, "diskarbitration:uuid:NEW");
+        assert!(change.invalidate_sidebar);
+        assert!(change.invalidate_operation_policy);
+        assert!(change.invalidate_index_admission);
+        assert!(change.rescan_index);
+        assert!(diff
+            .as_tsv()
+            .contains("\tprevious-kind=external\tcurrent-kind=external\t"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn topology_diff_invalidates_policy_for_bsd_identity_number_changes() {
         let root = unique_temp_dir("gfm-volume-topology-bsd-identity");
         fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
@@ -5479,7 +5584,8 @@ mod tests {
         assert!(change.invalidate_index_admission);
         assert!(change.rescan_index);
         let tsv = diff.as_tsv();
-        assert!(tsv.contains("\tprevious-removable=false\tcurrent-removable=true\t"));
+        assert!(tsv.contains("\tprevious-removable=false\t"));
+        assert!(tsv.contains("\tcurrent-removable=true\t"));
         assert!(tsv.contains("\tprevious-ejectable=true\tcurrent-ejectable=true\t"));
 
         fs::remove_dir_all(root).unwrap();
@@ -6111,11 +6217,20 @@ mod tests {
         assert_eq!(report.reason, "volume-media-truth-changed");
         assert_eq!(report.previous_kind, Some(VolumeKind::External));
         assert_eq!(report.current_kind, Some(VolumeKind::External));
+        assert_eq!(report.previous_removable, Some(false));
+        assert_eq!(report.current_removable, Some(true));
+        assert_eq!(report.previous_case_preserving, Some(true));
+        assert_eq!(report.current_case_preserving, Some(true));
         assert!(report.invalidate_sidebar);
         assert!(report.invalidate_operation_policy);
         assert!(report.invalidate_index_admission);
         assert!(report.rescan_index);
-        assert!(report.as_tsv().contains(
+        let tsv = report.as_tsv();
+        assert!(tsv.contains("\tprevious-removable=false\t"));
+        assert!(tsv.contains("\tcurrent-removable=true\t"));
+        assert!(tsv.contains("\tprevious-case-preserving=true\t"));
+        assert!(tsv.contains("\tcurrent-case-preserving=true\t"));
+        assert!(tsv.contains(
             "\tsidebar=true\toperation-policy=true\tindex-admission=true\trescan-index=true\t"
         ));
 
@@ -6816,6 +6931,8 @@ mod tests {
         assert_eq!(transition.invalidation.previous_network, Some(true));
         assert_eq!(transition.invalidation.previous_reachable, Some(true));
         assert_eq!(transition.invalidation.previous_ejectable, Some(true));
+        assert_eq!(transition.invalidation.previous_removable, Some(false));
+        assert_eq!(transition.invalidation.previous_case_preserving, Some(true));
         assert_eq!(
             transition.invalidation.current_mount_state,
             Some(MountState::Unmounted)
@@ -6825,6 +6942,8 @@ mod tests {
         assert_eq!(transition.invalidation.current_network, None);
         assert_eq!(transition.invalidation.current_reachable, None);
         assert_eq!(transition.invalidation.current_ejectable, None);
+        assert_eq!(transition.invalidation.current_removable, None);
+        assert_eq!(transition.invalidation.current_case_preserving, None);
         assert!(transition.invalidation.invalidate_index_admission);
         let tsv = transition.invalidation.as_tsv();
         assert!(tsv.contains("\tprevious-read-only=false\t"));
@@ -6832,11 +6951,15 @@ mod tests {
         assert!(tsv.contains("\tprevious-network=true\t"));
         assert!(tsv.contains("\tprevious-reachable=true\t"));
         assert!(tsv.contains("\tprevious-ejectable=true\t"));
+        assert!(tsv.contains("\tprevious-removable=false\t"));
+        assert!(tsv.contains("\tprevious-case-preserving=true\t"));
         assert!(tsv.contains("\tcurrent-read-only=-\t"));
         assert!(tsv.contains("\tcurrent-writable=-\t"));
         assert!(tsv.contains("\tcurrent-network=-\t"));
         assert!(tsv.contains("\tcurrent-reachable=-\t"));
         assert!(tsv.contains("\tcurrent-ejectable=-\t"));
+        assert!(tsv.contains("\tcurrent-removable=-\t"));
+        assert!(tsv.contains("\tcurrent-case-preserving=-\t"));
         assert!(state.report().volumes.is_empty());
     }
 
@@ -6865,22 +6988,30 @@ mod tests {
         assert_eq!(transition.invalidation.previous_network, Some(false));
         assert_eq!(transition.invalidation.previous_reachable, Some(true));
         assert_eq!(transition.invalidation.previous_ejectable, Some(true));
+        assert_eq!(transition.invalidation.previous_removable, Some(true));
+        assert_eq!(transition.invalidation.previous_case_preserving, Some(true));
         assert_eq!(transition.invalidation.current_read_only, Some(false));
         assert_eq!(transition.invalidation.current_writable, Some(true));
         assert_eq!(transition.invalidation.current_network, Some(false));
         assert_eq!(transition.invalidation.current_reachable, Some(false));
         assert_eq!(transition.invalidation.current_ejectable, Some(true));
+        assert_eq!(transition.invalidation.current_removable, Some(true));
+        assert_eq!(transition.invalidation.current_case_preserving, Some(true));
         let tsv = transition.invalidation.as_tsv();
         assert!(tsv.contains("\tprevious-read-only=false\t"));
         assert!(tsv.contains("\tprevious-writable=true\t"));
         assert!(tsv.contains("\tprevious-network=false\t"));
         assert!(tsv.contains("\tprevious-reachable=true\t"));
         assert!(tsv.contains("\tprevious-ejectable=true\t"));
+        assert!(tsv.contains("\tprevious-removable=true\t"));
+        assert!(tsv.contains("\tprevious-case-preserving=true\t"));
         assert!(tsv.contains("\tcurrent-read-only=false\t"));
         assert!(tsv.contains("\tcurrent-writable=true\t"));
         assert!(tsv.contains("\tcurrent-network=false\t"));
         assert!(tsv.contains("\tcurrent-reachable=false\t"));
         assert!(tsv.contains("\tcurrent-ejectable=true\t"));
+        assert!(tsv.contains("\tcurrent-removable=true\t"));
+        assert!(tsv.contains("\tcurrent-case-preserving=true\t"));
         assert_eq!(state.report().volumes, vec![current]);
 
         fs::remove_dir_all(root).unwrap();

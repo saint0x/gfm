@@ -6512,6 +6512,10 @@ fn reports_volume_event_transition_removable_media_from_binary() {
     assert!(stdout.contains("\tpath=/Volumes/Removable Event\t"));
     assert!(stdout.contains("\tprevious-kind=external\tprevious-mount=mounted\t"));
     assert!(stdout.contains("\tcurrent-kind=external\tcurrent-mount=mounted\t"));
+    assert!(stdout.contains("\tprevious-removable=false\t"));
+    assert!(stdout.contains("\tcurrent-removable=true\t"));
+    assert!(stdout.contains("\tprevious-case-preserving=true\t"));
+    assert!(stdout.contains("\tcurrent-case-preserving=true\t"));
     assert!(stdout.contains("\tsidebar=true\toperation-policy=true\tindex-admission=true\t"));
     assert!(stdout.ends_with("reason=volume-media-truth-changed\n"));
 }
