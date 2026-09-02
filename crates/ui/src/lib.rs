@@ -268,6 +268,12 @@ pub struct PermissionRefreshContract {
     pub refresh_ui: bool,
     pub refresh_workers: bool,
     pub refresh_operations: bool,
+    pub first_change_scope: Option<String>,
+    pub first_change_kind: Option<String>,
+    pub first_change_previous: Option<String>,
+    pub first_change_current: Option<String>,
+    pub first_change_path: Option<String>,
+    pub first_change_reason: Option<String>,
     pub changes: Vec<PermissionRefreshChangeContract>,
 }
 
@@ -295,24 +301,69 @@ impl PermissionRefreshContract {
             refresh_ui,
             refresh_workers,
             refresh_operations,
+            first_change_scope: None,
+            first_change_kind: None,
+            first_change_previous: None,
+            first_change_current: None,
+            first_change_path: None,
+            first_change_reason: None,
             changes: Vec::new(),
         }
     }
 
     pub fn with_changes(mut self, changes: Vec<PermissionRefreshChangeContract>) -> Self {
         self.changed = changes.len();
+        if let Some(first) = changes.first() {
+            self.first_change_scope = Some(first.scope.clone());
+            self.first_change_kind = Some(first.kind.clone());
+            self.first_change_previous = Some(first.previous.clone());
+            self.first_change_current = Some(first.current.clone());
+            self.first_change_path = Some(first.path.clone());
+            self.first_change_reason = Some(first.reason.clone());
+        } else {
+            self.first_change_scope = None;
+            self.first_change_kind = None;
+            self.first_change_previous = None;
+            self.first_change_current = None;
+            self.first_change_path = None;
+            self.first_change_reason = None;
+        }
         self.changes = changes;
         self
     }
 
     pub fn as_tsv(&self) -> String {
         let mut lines = vec![format!(
-            "permission-refresh\taudience=ui\tinitialized={}\tchanged={}\trefresh-ui={}\trefresh-workers={}\trefresh-operations={}",
+            "permission-refresh\taudience=ui\tinitialized={}\tchanged={}\trefresh-ui={}\trefresh-workers={}\trefresh-operations={}\tfirst-change-scope={}\tfirst-change-kind={}\tfirst-change-previous={}\tfirst-change-current={}\tfirst-change-path={}\tfirst-change-reason={}",
             self.initialized,
             self.changed,
             self.refresh_ui,
             self.refresh_workers,
-            self.refresh_operations
+            self.refresh_operations,
+            self.first_change_scope
+                .as_deref()
+                .map(escape_contract_field)
+                .unwrap_or_else(|| "-".to_string()),
+            self.first_change_kind
+                .as_deref()
+                .map(escape_contract_field)
+                .unwrap_or_else(|| "-".to_string()),
+            self.first_change_previous
+                .as_deref()
+                .map(escape_contract_field)
+                .unwrap_or_else(|| "-".to_string()),
+            self.first_change_current
+                .as_deref()
+                .map(escape_contract_field)
+                .unwrap_or_else(|| "-".to_string()),
+            self.first_change_path
+                .as_deref()
+                .map(escape_contract_field)
+                .unwrap_or_else(|| "-".to_string()),
+            self.first_change_reason
+                .as_deref()
+                .map(escape_contract_field)
+                .unwrap_or_else(|| "-".to_string())
         )];
         lines.extend(
             self.changes
@@ -1398,6 +1449,9 @@ mod tests {
         assert!(contract
             .as_tsv()
             .contains("\npermission-refresh\taudience=ui\tinitialized=false\tchanged=1\t"));
+        assert!(contract
+            .as_tsv()
+            .contains("\tfirst-change-scope=desktop\tfirst-change-kind=granted\tfirst-change-previous=denied\tfirst-change-current=granted\tfirst-change-path=/Users/me/Desktop\tfirst-change-reason=macOS granted read access"));
         assert!(contract.as_tsv().contains(
             "\npermission-refresh-change\tscope=desktop\tkind=granted\tprevious=denied\tcurrent=granted\t"
         ));

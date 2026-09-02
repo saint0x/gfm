@@ -654,7 +654,8 @@ fn reports_removed_permission_scope_in_ui_refresh_compare_contract_from_binary()
     assert_eq!(
         stdout,
         format!(
-            "permission-refresh\taudience=ui\tinitialized=false\tchanged=1\trefresh-ui=true\trefresh-workers=true\trefresh-operations=true\npermission-refresh-change\tscope=documents\tkind=removed\tprevious=granted\tcurrent=unavailable\tpath={}\treason=permission scope no longer reported by permission onboarding\n",
+            "permission-refresh\taudience=ui\tinitialized=false\tchanged=1\trefresh-ui=true\trefresh-workers=true\trefresh-operations=true\tfirst-change-scope=documents\tfirst-change-kind=removed\tfirst-change-previous=granted\tfirst-change-current=unavailable\tfirst-change-path={}\tfirst-change-reason=permission scope no longer reported by permission onboarding\npermission-refresh-change\tscope=documents\tkind=removed\tprevious=granted\tcurrent=unavailable\tpath={}\treason=permission scope no longer reported by permission onboarding\n",
+            documents.display(),
             documents.display()
         )
     );
