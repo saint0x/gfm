@@ -1367,6 +1367,7 @@ pub struct VolumeEventState {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VolumeEventStateTransition {
+    pub applied: bool,
     pub previous: Option<VolumeDescriptor>,
     pub current: Option<VolumeDescriptor>,
     pub invalidation: VolumeEventInvalidationReport,
@@ -1952,6 +1953,15 @@ impl VolumeEventInvalidationReport {
             escape_field(&self.reason)
         )
     }
+
+    fn without_fanout(mut self, reason: &str) -> Self {
+        self.invalidate_sidebar = false;
+        self.invalidate_operation_policy = false;
+        self.invalidate_index_admission = false;
+        self.rescan_index = false;
+        self.reason = reason.to_string();
+        self
+    }
 }
 
 fn normalized_event_reason(reason: Option<&str>, fallback: &str) -> String {
@@ -1986,6 +1996,23 @@ fn description_change_invalidates_policy(reason: &str) -> bool {
         reason,
         "volume-label-changed" | "volume-event-description-changed"
     )
+}
+
+fn volume_event_transition_applies(
+    kind: VolumeEventKind,
+    previous: Option<&VolumeDescriptor>,
+    current: Option<&VolumeDescriptor>,
+) -> bool {
+    match kind {
+        VolumeEventKind::Appeared | VolumeEventKind::DescriptionChanged => match current {
+            Some(current) => previous
+                .map(|previous| topology_change_reason(previous, current).is_some())
+                .unwrap_or(true),
+            None => false,
+        },
+        VolumeEventKind::Disappeared => previous.is_some(),
+        VolumeEventKind::Unavailable => true,
+    }
 }
 
 impl VolumeEventState {
@@ -2077,8 +2104,17 @@ impl VolumeEventState {
             current.as_ref(),
             native_reason,
         );
-        self.apply_state_change(kind, path.as_deref(), previous.as_ref(), current.clone());
+        let applied = volume_event_transition_applies(kind, previous.as_ref(), current.as_ref());
+        let invalidation = if applied {
+            invalidation
+        } else {
+            invalidation.without_fanout("volume-event-state-unchanged")
+        };
+        if applied {
+            self.apply_state_change(kind, path.as_deref(), previous.as_ref(), current.clone());
+        }
         VolumeEventStateTransition {
+            applied,
             previous,
             current,
             invalidation,
@@ -2195,7 +2231,10 @@ impl VolumeEventStateBatchReport {
     ) -> Self {
         Self {
             input_events,
-            applied_events: transitions.len(),
+            applied_events: transitions
+                .iter()
+                .filter(|transition| transition.applied)
+                .count(),
             resulting_volumes,
             invalidate_sidebar: transitions
                 .iter()
@@ -6697,6 +6736,7 @@ mod tests {
             None,
         );
 
+        assert!(transition.applied);
         assert_eq!(transition.previous, None);
         assert_eq!(transition.current.as_ref(), Some(&descriptor));
         assert_eq!(
@@ -6759,6 +6799,128 @@ mod tests {
 
         fs::remove_dir_all(previous_root).unwrap();
         fs::remove_dir_all(appeared_root).unwrap();
+    }
+
+    #[test]
+    fn volume_event_state_batch_suppresses_duplicate_native_events() {
+        let root = unique_temp_dir("gfm-volume-event-state-batch-duplicate");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let descriptor = VolumeDescriptor::for_path(&root).unwrap();
+        let mut state = VolumeEventState::new(VolumeDiscoveryReport {
+            volumes: vec![descriptor.clone()],
+        });
+        let events = vec![
+            VolumeEventReport {
+                kind: VolumeEventKind::Appeared,
+                native_status: NativeVolumeStatus::Available,
+                path: Some(root.clone()),
+                descriptor: Some(descriptor.clone()),
+                reason: None,
+            },
+            VolumeEventReport {
+                kind: VolumeEventKind::DescriptionChanged,
+                native_status: NativeVolumeStatus::Available,
+                path: Some(root.clone()),
+                descriptor: Some(descriptor.clone()),
+                reason: None,
+            },
+        ];
+
+        let batch = state.apply_events_checked(events, || Ok(())).unwrap();
+
+        assert_eq!(batch.input_events, 2);
+        assert_eq!(batch.applied_events, 0);
+        assert_eq!(batch.resulting_volumes, 1);
+        assert!(!batch.invalidate_sidebar);
+        assert!(!batch.invalidate_operation_policy);
+        assert!(!batch.invalidate_index_admission);
+        assert!(!batch.rescan_index);
+        assert!(!batch.cancel_index_jobs);
+        assert!(!batch.clear_fsevents_cursor);
+        assert!(batch
+            .transitions
+            .iter()
+            .all(|transition| !transition.applied));
+        assert!(batch
+            .transitions
+            .iter()
+            .all(|transition| transition.invalidation.reason == "volume-event-state-unchanged"));
+        assert_eq!(state.report().volumes, vec![descriptor]);
+        assert!(batch
+            .as_tsv()
+            .starts_with("volume-event-state-batch\tinput=2\tapplied=0\tresulting-volumes=1\t"));
+        assert!(batch.as_tsv().contains(
+            "\tsidebar=false\toperation-policy=false\tindex-admission=false\trescan-index=false\t"
+        ));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_event_state_ignores_capacity_only_drift_for_duplicate_events() {
+        let root = unique_temp_dir("gfm-volume-event-state-capacity-only");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let previous = VolumeDescriptor::for_path(&root).unwrap();
+        let mut current = previous.clone();
+        current.capacity = VolumeCapacity {
+            total_bytes: current.capacity.total_bytes,
+            available_bytes: current.capacity.available_bytes.saturating_sub(4096),
+        };
+        let mut state = VolumeEventState::new(VolumeDiscoveryReport {
+            volumes: vec![previous.clone()],
+        });
+
+        let transition = state.apply_parts_transition(
+            VolumeEventKind::DescriptionChanged,
+            NativeVolumeStatus::Available,
+            Some(root.clone()),
+            Some(current),
+            None,
+        );
+
+        assert!(!transition.applied);
+        assert_eq!(
+            transition.invalidation.reason,
+            "volume-event-state-unchanged"
+        );
+        assert!(!transition.invalidation.invalidate_sidebar);
+        assert!(!transition.invalidation.invalidate_operation_policy);
+        assert!(!transition.invalidation.invalidate_index_admission);
+        assert!(!transition.invalidation.rescan_index);
+        assert_eq!(state.report().volumes, vec![previous]);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_event_state_suppresses_disappearance_for_unknown_volume() {
+        let root = unique_temp_dir("gfm-volume-event-state-stale-disappeared");
+        let mut state = VolumeEventState::new(VolumeDiscoveryReport {
+            volumes: Vec::new(),
+        });
+
+        let transition = state.apply_parts_transition(
+            VolumeEventKind::Disappeared,
+            NativeVolumeStatus::Missing,
+            Some(root.clone()),
+            None,
+            None,
+        );
+
+        assert!(!transition.applied);
+        assert_eq!(transition.previous, None);
+        assert_eq!(transition.current, None);
+        assert_eq!(
+            transition.invalidation.reason,
+            "volume-event-state-unchanged"
+        );
+        assert!(!transition.invalidation.invalidate_sidebar);
+        assert!(!transition.invalidation.invalidate_operation_policy);
+        assert!(!transition.invalidation.invalidate_index_admission);
+        assert!(!transition.invalidation.rescan_index);
+        assert!(state.report().volumes.is_empty());
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -6828,6 +6990,7 @@ mod tests {
             None,
         );
 
+        assert!(transition.applied);
         assert_eq!(transition.previous.as_ref(), Some(&previous));
         assert_eq!(transition.current.as_ref(), Some(&current));
         assert_eq!(transition.invalidation.reason, "volume-label-changed");
@@ -7484,7 +7647,7 @@ mod tests {
     }
 
     #[test]
-    fn unchanged_description_transition_keeps_status_reason_sidebar_scoped() {
+    fn unchanged_description_transition_suppresses_downstream_fanout() {
         let root = unique_temp_dir("gfm-volume-event-state-unchanged-native-reason");
         fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
         let mut descriptor = VolumeDescriptor::for_path(&root).unwrap();
@@ -7501,11 +7664,12 @@ mod tests {
             Some("diskarbitration-volume-unavailable".to_string()),
         );
 
+        assert!(!transition.applied);
         assert_eq!(
             transition.invalidation.reason,
-            "volume-event-description-changed"
+            "volume-event-state-unchanged"
         );
-        assert!(transition.invalidation.invalidate_sidebar);
+        assert!(!transition.invalidation.invalidate_sidebar);
         assert!(!transition.invalidation.invalidate_operation_policy);
         assert!(!transition.invalidation.invalidate_index_admission);
         assert!(!transition.invalidation.rescan_index);

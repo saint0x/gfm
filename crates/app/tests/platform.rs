@@ -7358,8 +7358,7 @@ fn stateful_volume_event_index_invalidation_preserves_missing_disappearance_from
 }
 
 #[test]
-fn stateful_volume_event_index_invalidation_keeps_unchanged_description_sidebar_scoped_from_binary()
-{
+fn stateful_volume_event_index_invalidation_suppresses_unchanged_description_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-volume-event-state-index-label-{}",
         std::process::id()
@@ -7388,7 +7387,7 @@ fn stateful_volume_event_index_invalidation_keeps_unchanged_description_sidebar_
     assert!(stdout.contains("\tcurrent-volume="));
     assert!(stdout.contains("\tindex-admission=false\trescan-index=false\t"));
     assert!(stdout.contains("\tcancel-index-jobs=false\tclear-fsevents-cursor=false\t"));
-    assert!(stdout.ends_with("reason=volume-event-description-sidebar-only\n"));
+    assert!(stdout.ends_with("reason=volume-event-state-unchanged\n"));
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -7608,6 +7607,52 @@ fn reports_volume_event_state_batch_from_binary() {
 }
 
 #[test]
+fn volume_event_state_batch_suppresses_duplicate_events_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-volume-event-state-batch-duplicate-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-event-state-batch")
+        .arg(&root)
+        .arg("--")
+        .arg("appeared")
+        .arg(&root)
+        .arg("description-changed")
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(
+        stdout.starts_with("volume-event-state-batch\tinput=2\tapplied=0\tresulting-volumes=1\t")
+    );
+    assert!(stdout.contains(
+        "\tsidebar=false\toperation-policy=false\tindex-admission=false\trescan-index=false\t"
+    ));
+    assert!(stdout.contains("\tcancel-index-jobs=false\tclear-fsevents-cursor=false"));
+    assert_eq!(
+        stdout
+            .matches("reason=volume-event-state-unchanged")
+            .count(),
+        2
+    );
+    assert!(!stdout.contains("\treason=volume-event-appeared\n"));
+    assert!(!stdout.contains("\treason=volume-event-description-changed\n"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_volume_event_runtime_cancellation_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-volume-event-runtime-invalidation-{}",
@@ -7765,10 +7810,12 @@ fn reports_volume_event_runtime_fanout_from_binary() {
     );
     let kept_stdout = String::from_utf8(kept.stdout).unwrap();
     assert!(kept_stdout.starts_with("volume-event-runtime-fanout\tkind=appeared\t"));
-    assert!(kept_stdout.contains("\tsidebar=true\t"));
-    assert!(kept_stdout.contains("\toperation-policy=true\t"));
-    assert!(kept_stdout.contains("\tindex-admission=true\t"));
+    assert!(kept_stdout.contains("\tsidebar=false\t"));
+    assert!(kept_stdout.contains("\toperation-policy=false\t"));
+    assert!(kept_stdout.contains("\tindex-admission=false\t"));
+    assert!(kept_stdout.contains("\trescan-index=false\t"));
     assert!(kept_stdout.contains("\tcancel-index-jobs=false\t"));
+    assert!(kept_stdout.contains("\tclear-fsevents-cursor=false\t"));
     assert!(kept_stdout.contains("sidebar-volume-invalidation\trow=volume-"));
     assert!(kept_stdout.contains("\tremove-row=false\t"));
     assert!(kept_stdout.contains("volume-event-operation-policy-invalidation\tkind=appeared\t"));
@@ -7793,7 +7840,11 @@ fn reports_volume_event_runtime_fanout_from_binary() {
     assert!(kept_stdout.contains("\tcurrent-case-sensitive=false\t"));
     assert!(kept_stdout.contains("\tcurrent-case-preserving=true\t"));
     assert!(kept_stdout.contains("\tcurrent-slow=false\t"));
-    assert!(kept_stdout.contains("\tinvalidate-policy=true\treason=volume-event-appeared\n"));
+    assert!(kept_stdout.contains("\tindex-admission=false\trescan-index=false\t"));
+    assert!(kept_stdout.contains("\tinvalidate-row=false\t"));
+    assert!(
+        kept_stdout.contains("\tinvalidate-policy=false\treason=volume-event-state-unchanged\n")
+    );
     assert!(kept_stdout.ends_with(
         "volume-job-cancellation\tvolume=-\tclass=background\tcancelled=0\treason=index-jobs-still-valid\n"
     ));

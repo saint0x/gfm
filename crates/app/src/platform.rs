@@ -1753,14 +1753,18 @@ fn volume_event_state_index_invalidation_from_args(
     );
     let previous = transition.previous.as_ref().map(index_volume_descriptor);
     let current = transition.current.as_ref().map(index_volume_descriptor);
-    Ok(VolumeEventIndexInvalidationReport::from_event(
+    let mut report = VolumeEventIndexInvalidationReport::from_event(
         index_volume_event_kind(kind),
         transition.invalidation.path,
         previous.as_ref(),
         current.as_ref(),
         transition.invalidation.invalidate_index_admission,
         transition.invalidation.rescan_index,
-    ))
+    );
+    if !transition.applied {
+        report.reason = transition.invalidation.reason;
+    }
+    Ok(report)
 }
 
 fn volume_event_state_batch_from_args(
@@ -1835,7 +1839,7 @@ fn volume_event_runtime_fanout_from_args(
     );
     let previous_index = transition.previous.as_ref().map(index_volume_descriptor);
     let current_index = transition.current.as_ref().map(index_volume_descriptor);
-    let index = VolumeEventIndexInvalidationReport::from_event(
+    let mut index = VolumeEventIndexInvalidationReport::from_event(
         index_volume_event_kind(kind),
         transition.invalidation.path.clone(),
         previous_index.as_ref(),
@@ -1843,6 +1847,9 @@ fn volume_event_runtime_fanout_from_args(
         transition.invalidation.invalidate_index_admission,
         transition.invalidation.rescan_index,
     );
+    if !transition.applied {
+        index.reason = transition.invalidation.reason.clone();
+    }
     let previous_sidebar = transition.previous.as_ref().map(sidebar_volume_spec);
     let current_sidebar = transition.current.as_ref().map(sidebar_volume_spec);
     let sidebar = SidebarVolumeInvalidation::from_event(
