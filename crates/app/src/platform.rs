@@ -4782,6 +4782,7 @@ mod tests {
             entries: vec![FileProviderStateSnapshotEntry {
                 path: item.clone(),
                 state: CloudStorageState::Downloaded,
+                signature: None,
             }],
         }
         .write(&state_path)
@@ -4890,6 +4891,7 @@ mod tests {
             entries: vec![FileProviderStateSnapshotEntry {
                 path: tracked.clone(),
                 state: CloudStorageState::Downloaded,
+                signature: None,
             }],
         };
         previous.write(&state_path).unwrap();
@@ -4951,6 +4953,7 @@ mod tests {
             entries: vec![FileProviderStateSnapshotEntry {
                 path: tracked,
                 state: CloudStorageState::Evicted,
+                signature: None,
             }],
         };
         let empty = FileProviderStateSnapshot {
@@ -5092,6 +5095,7 @@ mod tests {
             entries: vec![FileProviderStateSnapshotEntry {
                 path: tracked.clone(),
                 state: CloudStorageState::Evicted,
+                signature: None,
             }],
         };
         previous.write(&state_path).unwrap();
@@ -5146,6 +5150,7 @@ mod tests {
             entries: vec![FileProviderStateSnapshotEntry {
                 path: tracked.clone(),
                 state: CloudStorageState::Downloaded,
+                signature: None,
             }],
         };
         previous.write(&state_path).unwrap();
@@ -5253,6 +5258,7 @@ mod tests {
             entries: vec![FileProviderStateSnapshotEntry {
                 path: tracked.clone(),
                 state: CloudStorageState::Evicted,
+                signature: None,
             }],
         };
         std::fs::remove_dir_all(tracked.parent().unwrap()).unwrap();

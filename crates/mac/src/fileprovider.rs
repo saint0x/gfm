@@ -768,6 +768,7 @@ pub struct FileProviderStateSnapshot {
 pub struct FileProviderStateSnapshotEntry {
     pub path: PathBuf,
     pub state: CloudStorageState,
+    pub signature: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -881,12 +882,13 @@ impl FileProviderInvalidationReport {
         previous: CloudStorageState,
         current: FileProviderStateReport,
     ) -> FileProviderInvalidationReport {
-        Self::from_current_with_event(path, previous, current, false)
+        Self::from_current_with_event(path, previous, None, current, false)
     }
 
     fn from_current_with_event(
         path: PathBuf,
         previous: CloudStorageState,
+        previous_signature: Option<&str>,
         current: FileProviderStateReport,
         observed_event: bool,
     ) -> FileProviderInvalidationReport {
@@ -894,9 +896,14 @@ impl FileProviderInvalidationReport {
         let provider_visible = current.domain != FileProviderDomain::Local
             || previous != CloudStorageState::LocalOnly
             || !current.badges.is_empty();
+        let current_signature = fileprovider_snapshot_signature(&current);
+        let signature_changed = previous_signature
+            .filter(|signature| !signature.is_empty() && *signature != "-")
+            .is_some_and(|signature| signature != current_signature);
         let observed_metadata_changed = observed_event && provider_visible && !state_changed;
         let invalidate_sidebar = provider_visible
             && (state_changed
+                || signature_changed
                 || observed_metadata_changed
                 || matches!(
                     current.storage_state,
@@ -914,6 +921,8 @@ impl FileProviderInvalidationReport {
             "not-provider-visible"
         } else if state_changed {
             "fileprovider-state-changed"
+        } else if signature_changed {
+            "fileprovider-state-signature-changed"
         } else if observed_metadata_changed {
             "fileprovider-observed-metadata-changed"
         } else {
@@ -924,12 +933,14 @@ impl FileProviderInvalidationReport {
             path,
             previous,
             state_changed,
-            invalidate_icon: provider_visible && (state_changed || observed_metadata_changed),
+            invalidate_icon: provider_visible
+                && (state_changed || signature_changed || observed_metadata_changed),
             invalidate_preview_memory: provider_visible
-                && (state_changed || observed_metadata_changed),
+                && (state_changed || signature_changed || observed_metadata_changed),
             invalidate_preview_disk: provider_visible && state_changed,
             invalidate_sidebar,
-            reindex_metadata: provider_visible && (state_changed || observed_metadata_changed),
+            reindex_metadata: provider_visible
+                && (state_changed || signature_changed || observed_metadata_changed),
             current,
             reason,
         }
@@ -966,6 +977,7 @@ impl FileProviderStateSnapshot {
                 entries.push(FileProviderStateSnapshotEntry {
                     path,
                     state: report.storage_state,
+                    signature: Some(fileprovider_snapshot_signature(&report)),
                 });
             }
         }
@@ -992,8 +1004,9 @@ impl FileProviderStateSnapshot {
             .transpose()
             .map_err(|err| GfmError::io(path, err))?;
         check_control()?;
-        match header.as_deref() {
-            Some("gfm-fileprovider-state-v1") => {}
+        let snapshot_version = match header.as_deref() {
+            Some("gfm-fileprovider-state-v1") => 1,
+            Some("gfm-fileprovider-state-v2") => 2,
             Some(other) => {
                 return Err(GfmError::Format(format!(
                     "unsupported FileProvider state header `{other}` in {}",
@@ -1006,7 +1019,7 @@ impl FileProviderStateSnapshot {
                     path.display()
                 )))
             }
-        }
+        };
         let mut entries = Vec::new();
         let mut seen_paths = BTreeSet::new();
         for (line_index, line) in lines.enumerate() {
@@ -1016,11 +1029,18 @@ impl FileProviderStateSnapshot {
                 continue;
             }
             let fields = line.split('\t').collect::<Vec<_>>();
-            if fields.len() != 2 {
+            let expected_fields = if snapshot_version == 1 { 2 } else { 3 };
+            if fields.len() != expected_fields {
                 return Err(GfmError::Format(format!(
-                    "{}:{} expected 2 tab-separated fields: state, path",
+                    "{}:{} expected {} tab-separated fields: {}",
                     path.display(),
-                    line_index + 2
+                    line_index + 2,
+                    expected_fields,
+                    if snapshot_version == 1 {
+                        "state, path"
+                    } else {
+                        "state, signature, path"
+                    }
                 )));
             }
             let state = CloudStorageState::parse(fields[0]).map_err(|err| {
@@ -1031,7 +1051,17 @@ impl FileProviderStateSnapshot {
                     fields[0]
                 ))
             })?;
-            let entry_path = PathBuf::from(unescape_field(fields[1]));
+            let signature = if snapshot_version == 1 || fields[1] == "-" {
+                None
+            } else {
+                Some(unescape_field(fields[1]))
+            };
+            let path_field = if snapshot_version == 1 {
+                fields[1]
+            } else {
+                fields[2]
+            };
+            let entry_path = PathBuf::from(unescape_field(path_field));
             if !seen_paths.insert(entry_path.clone()) {
                 return Err(GfmError::Format(format!(
                     "{}:{} duplicate FileProvider state path `{}`",
@@ -1042,6 +1072,7 @@ impl FileProviderStateSnapshot {
             }
             entries.push(FileProviderStateSnapshotEntry {
                 state,
+                signature,
                 path: entry_path,
             });
         }
@@ -1061,11 +1092,16 @@ impl FileProviderStateSnapshot {
         validate_unique_fileprovider_snapshot_paths(path, &self.entries)?;
         let mut entries = self.entries.clone();
         entries.sort_by(|left, right| left.path.cmp(&right.path));
-        let mut output = String::from("gfm-fileprovider-state-v1\n");
+        let mut output = String::from("gfm-fileprovider-state-v2\n");
         for entry in &entries {
             output.push_str(&format!(
-                "{}\t{}\n",
+                "{}\t{}\t{}\n",
                 entry.state.as_str(),
+                entry
+                    .signature
+                    .as_deref()
+                    .map(escape_field)
+                    .unwrap_or_else(|| "-".to_string()),
                 escape_field(&entry.path.to_string_lossy())
             ));
         }
@@ -1076,6 +1112,13 @@ impl FileProviderStateSnapshot {
         self.entries
             .iter()
             .map(|entry| (entry.path.as_path(), entry.state))
+            .collect()
+    }
+
+    fn entry_index(&self) -> BTreeMap<&Path, &FileProviderStateSnapshotEntry> {
+        self.entries
+            .iter()
+            .map(|entry| (entry.path.as_path(), entry))
             .collect()
     }
 
@@ -1129,8 +1172,8 @@ impl FileProviderStateInvalidationReport {
     ) -> Result<(Self, FileProviderStateSnapshot)> {
         check()?;
         let initialized = previous.is_none();
-        let previous_states = previous
-            .map(FileProviderStateSnapshot::state_index)
+        let previous_entries = previous
+            .map(FileProviderStateSnapshot::entry_index)
             .unwrap_or_default();
         let mut changes = Vec::new();
         let mut current_entries = Vec::new();
@@ -1141,7 +1184,8 @@ impl FileProviderStateInvalidationReport {
                 continue;
             }
             check()?;
-            let previous_state = previous_states.get(path.as_path()).copied();
+            let previous_entry = previous_entries.get(path.as_path()).copied();
+            let previous_state = previous_entry.map(|entry| entry.state);
             let path_exists = path
                 .try_exists()
                 .map_err(|err| GfmError::io(&path, format!("path existence unavailable: {err}")))?;
@@ -1163,6 +1207,7 @@ impl FileProviderStateInvalidationReport {
             let change = FileProviderInvalidationReport::from_current_with_event(
                 path.clone(),
                 previous_state,
+                previous_entry.and_then(|entry| entry.signature.as_deref()),
                 current,
                 observed_event,
             );
@@ -1172,10 +1217,12 @@ impl FileProviderStateInvalidationReport {
                 current_entries.push(FileProviderStateSnapshotEntry {
                     path,
                     state: change.current.storage_state,
+                    signature: Some(fileprovider_snapshot_signature(&change.current)),
                 });
             }
             if (initialized
                 || change.state_changed
+                || change.reason == "fileprovider-state-signature-changed"
                 || change.reason == "fileprovider-observed-metadata-changed")
                 && fileprovider_invalidation_change_is_visible(&change)
             {
@@ -1224,6 +1271,37 @@ fn should_persist_fileprovider_snapshot_entry(report: &FileProviderStateReport) 
     report.domain != FileProviderDomain::Local
         || report.storage_state != CloudStorageState::LocalOnly
         || !report.badges.is_empty()
+}
+
+fn fileprovider_snapshot_signature(report: &FileProviderStateReport) -> String {
+    format!(
+        "domain={};state={};materialization={};materialization-source={};materialization-confidence={};offline={};conflict={};badges={};progress-direction={};progress-milli={};progress-requested={};progress-complete={};progress-indeterminate={};download={};evict={};reveal-conflict={};provider={}",
+        report.domain.as_str(),
+        report.storage_state.as_str(),
+        report.materialization.as_str(),
+        report.materialization_source.as_str(),
+        report.materialization_confidence.as_str(),
+        report.offline,
+        report.conflict,
+        cloud_badges_tsv(&report.badges),
+        report.progress.direction.as_str(),
+        report
+            .progress
+            .percent_milli
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        report.progress.requested,
+        report.progress.complete,
+        report.progress.indeterminate,
+        report.commands.download.as_str(),
+        report.commands.evict.as_str(),
+        report.commands.reveal_conflict.as_str(),
+        report
+            .provider_identifier
+            .as_deref()
+            .map(escape_field)
+            .unwrap_or_else(|| "-".to_string()),
+    )
 }
 
 fn fileprovider_invalidation_change_is_visible(change: &FileProviderInvalidationReport) -> bool {
@@ -3876,6 +3954,7 @@ mod tests {
             entries: vec![FileProviderStateSnapshotEntry {
                 path: root.join("Remote\tName\nArchive\\2026.icloud"),
                 state: CloudStorageState::Evicted,
+                signature: None,
             }],
         };
 
@@ -3990,13 +4069,13 @@ mod tests {
         let snapshot =
             FileProviderStateSnapshot::from_paths([local.clone(), evicted.clone()]).unwrap();
 
-        assert_eq!(
-            snapshot.entries,
-            vec![FileProviderStateSnapshotEntry {
-                path: evicted,
-                state: CloudStorageState::Evicted,
-            }]
-        );
+        assert_eq!(snapshot.entries.len(), 1);
+        assert_eq!(snapshot.entries[0].path, evicted);
+        assert_eq!(snapshot.entries[0].state, CloudStorageState::Evicted);
+        let signature = snapshot.entries[0].signature.as_deref().unwrap();
+        assert!(signature.contains("domain=icloud-drive"));
+        assert!(signature.contains("materialization=remote-placeholder"));
+        assert!(signature.contains("badges=cloud"));
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -4015,13 +4094,10 @@ mod tests {
         ])
         .unwrap();
 
-        assert_eq!(
-            snapshot.entries,
-            vec![FileProviderStateSnapshotEntry {
-                path: evicted,
-                state: CloudStorageState::Evicted,
-            }]
-        );
+        assert_eq!(snapshot.entries.len(), 1);
+        assert_eq!(snapshot.entries[0].path, evicted);
+        assert_eq!(snapshot.entries[0].state, CloudStorageState::Evicted);
+        assert!(snapshot.entries[0].signature.is_some());
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -4036,10 +4112,12 @@ mod tests {
                 FileProviderStateSnapshotEntry {
                     path: tracked.clone(),
                     state: CloudStorageState::Evicted,
+                    signature: None,
                 },
                 FileProviderStateSnapshotEntry {
                     path: tracked.clone(),
                     state: CloudStorageState::Downloaded,
+                    signature: None,
                 },
             ],
         };
@@ -4109,6 +4187,7 @@ mod tests {
             entries: vec![FileProviderStateSnapshotEntry {
                 path: local.clone(),
                 state: CloudStorageState::Downloaded,
+                signature: None,
             }],
         };
 
@@ -4142,6 +4221,7 @@ mod tests {
             entries: vec![FileProviderStateSnapshotEntry {
                 path: root.join("Remote.icloud-placeholder"),
                 state: CloudStorageState::Evicted,
+                signature: None,
             }],
         };
 
@@ -4161,6 +4241,7 @@ mod tests {
             entries: vec![FileProviderStateSnapshotEntry {
                 path: evicted.clone(),
                 state: CloudStorageState::Downloaded,
+                signature: None,
             }],
         };
 
@@ -4184,6 +4265,48 @@ mod tests {
     }
 
     #[test]
+    fn fileprovider_state_invalidation_detects_same_state_signature_changes() {
+        let root = unique_temp_dir();
+        let evicted = root.join("Remote.icloud-placeholder");
+        fs::write(&evicted, "placeholder").unwrap();
+        mark_evicted_fixture(&evicted);
+        let previous = FileProviderStateSnapshot {
+            entries: vec![FileProviderStateSnapshotEntry {
+                path: evicted.clone(),
+                state: CloudStorageState::Evicted,
+                signature: Some("domain=icloud-drive;state=evicted;badges=stale".to_string()),
+            }],
+        };
+
+        let (report, snapshot) =
+            FileProviderStateInvalidationReport::evaluate(Some(&previous), [evicted.clone()])
+                .unwrap();
+
+        assert!(!report.initialized);
+        assert_eq!(report.changes.len(), 1);
+        let change = &report.changes[0];
+        assert_eq!(change.previous, CloudStorageState::Evicted);
+        assert_eq!(change.current.storage_state, CloudStorageState::Evicted);
+        assert!(!change.state_changed);
+        assert!(change.invalidate_icon);
+        assert!(change.invalidate_preview_memory);
+        assert!(!change.invalidate_preview_disk);
+        assert!(change.invalidate_sidebar);
+        assert!(change.reindex_metadata);
+        assert_eq!(change.reason, "fileprovider-state-signature-changed");
+        assert_eq!(snapshot.entries.len(), 1);
+        assert_eq!(snapshot.entries[0].path, evicted);
+        assert_eq!(snapshot.entries[0].state, CloudStorageState::Evicted);
+        assert!(snapshot.entries[0]
+            .signature
+            .as_deref()
+            .unwrap()
+            .contains("badges=cloud"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn fileprovider_state_invalidation_deduplicates_current_paths_before_reads() {
         let root = unique_temp_dir();
         let evicted = root.join("Remote.icloud-placeholder");
@@ -4193,6 +4316,7 @@ mod tests {
             entries: vec![FileProviderStateSnapshotEntry {
                 path: evicted.clone(),
                 state: CloudStorageState::Downloaded,
+                signature: None,
             }],
         };
 
@@ -4234,6 +4358,7 @@ mod tests {
             entries: vec![FileProviderStateSnapshotEntry {
                 path: evicted.clone(),
                 state: CloudStorageState::Downloaded,
+                signature: None,
             }],
         };
         let events = vec![FileEvent::new(&evicted, FileEventKind::Metadata)];
@@ -4308,6 +4433,7 @@ mod tests {
             entries: vec![FileProviderStateSnapshotEntry {
                 path: evicted.clone(),
                 state: CloudStorageState::Downloaded,
+                signature: None,
             }],
         };
         let events = vec![
@@ -4342,6 +4468,7 @@ mod tests {
             entries: vec![FileProviderStateSnapshotEntry {
                 path: old.clone(),
                 state: CloudStorageState::Downloaded,
+                signature: None,
             }],
         };
         let events = vec![
@@ -4387,6 +4514,7 @@ mod tests {
             entries: vec![FileProviderStateSnapshotEntry {
                 path: tracked.clone(),
                 state: CloudStorageState::Evicted,
+                signature: None,
             }],
         };
         let events = vec![FileEvent::new(
@@ -4418,6 +4546,7 @@ mod tests {
             entries: vec![FileProviderStateSnapshotEntry {
                 path: tracked.clone(),
                 state: CloudStorageState::Evicted,
+                signature: None,
             }],
         };
         let events = vec![FileEvent::new(&tracked, FileEventKind::Metadata)];
@@ -4442,7 +4571,14 @@ mod tests {
             .as_tsv()
             .contains("\tprevious=evicted\tcurrent=evicted\tchanged=false\t"));
         assert!(observed.as_tsv().contains("\tcurrent-badges=cloud\t"));
-        assert_eq!(snapshot, previous);
+        assert_eq!(snapshot.entries.len(), 1);
+        assert_eq!(snapshot.entries[0].path, tracked);
+        assert_eq!(snapshot.entries[0].state, CloudStorageState::Evicted);
+        assert!(snapshot.entries[0]
+            .signature
+            .as_deref()
+            .unwrap()
+            .contains("badges=cloud"));
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -4458,6 +4594,7 @@ mod tests {
             entries: vec![FileProviderStateSnapshotEntry {
                 path: tracked.clone(),
                 state: CloudStorageState::Evicted,
+                signature: None,
             }],
         };
         let events = vec![FileEvent::new(&local, FileEventKind::Modify)];
@@ -4572,6 +4709,7 @@ mod tests {
             entries: vec![FileProviderStateSnapshotEntry {
                 path: tracked.clone(),
                 state: CloudStorageState::Downloaded,
+                signature: None,
             }],
         };
         fs::remove_file(&tracked).unwrap();
@@ -4627,10 +4765,12 @@ mod tests {
                 FileProviderStateSnapshotEntry {
                     path: removed_child.clone(),
                     state: CloudStorageState::Downloaded,
+                    signature: None,
                 },
                 FileProviderStateSnapshotEntry {
                     path: untouched.clone(),
                     state: CloudStorageState::Evicted,
+                    signature: None,
                 },
             ],
         };
@@ -4670,6 +4810,7 @@ mod tests {
             entries: vec![FileProviderStateSnapshotEntry {
                 path: old_child.clone(),
                 state: CloudStorageState::Downloaded,
+                signature: None,
             }],
         };
         fs::rename(&old_dir, &new_dir).unwrap();
@@ -4724,10 +4865,12 @@ mod tests {
                 FileProviderStateSnapshotEntry {
                     path: changed.clone(),
                     state: CloudStorageState::Downloaded,
+                    signature: None,
                 },
                 FileProviderStateSnapshotEntry {
                     path: untouched.clone(),
                     state: CloudStorageState::Evicted,
+                    signature: None,
                 },
             ],
         };
@@ -4764,14 +4907,17 @@ mod tests {
                 FileProviderStateSnapshotEntry {
                     path: exact.clone(),
                     state: CloudStorageState::Downloaded,
+                    signature: None,
                 },
                 FileProviderStateSnapshotEntry {
                     path: child,
                     state: CloudStorageState::Evicted,
+                    signature: None,
                 },
                 FileProviderStateSnapshotEntry {
                     path: unrelated.clone(),
                     state: CloudStorageState::Evicted,
+                    signature: None,
                 },
             ],
         };
@@ -4779,6 +4925,7 @@ mod tests {
             entries: vec![FileProviderStateSnapshotEntry {
                 path: replacement.clone(),
                 state: CloudStorageState::Downloaded,
+                signature: None,
             }],
         };
 
@@ -4791,10 +4938,12 @@ mod tests {
                 FileProviderStateSnapshotEntry {
                     path: replacement,
                     state: CloudStorageState::Downloaded,
+                    signature: None,
                 },
                 FileProviderStateSnapshotEntry {
                     path: unrelated,
                     state: CloudStorageState::Evicted,
+                    signature: None,
                 },
             ]
         );
@@ -4808,6 +4957,7 @@ mod tests {
             entries: vec![FileProviderStateSnapshotEntry {
                 path: root.join("Unrelated.icloud-placeholder"),
                 state: CloudStorageState::Evicted,
+                signature: None,
             }],
         };
         let event_snapshot = FileProviderStateSnapshot {
@@ -4815,10 +4965,12 @@ mod tests {
                 FileProviderStateSnapshotEntry {
                     path: observed.clone(),
                     state: CloudStorageState::Downloaded,
+                    signature: None,
                 },
                 FileProviderStateSnapshotEntry {
                     path: observed.clone(),
                     state: CloudStorageState::Evicted,
+                    signature: None,
                 },
             ],
         };
@@ -4851,10 +5003,12 @@ mod tests {
                 FileProviderStateSnapshotEntry {
                     path: removed.clone(),
                     state: CloudStorageState::Downloaded,
+                    signature: None,
                 },
                 FileProviderStateSnapshotEntry {
                     path: untouched.clone(),
                     state: CloudStorageState::Evicted,
+                    signature: None,
                 },
             ],
         };
@@ -5966,17 +6120,19 @@ mod tests {
                 FileProviderStateSnapshotEntry {
                     path: first.clone(),
                     state: CloudStorageState::Evicted,
+                    signature: None,
                 },
                 FileProviderStateSnapshotEntry {
                     path: second.clone(),
                     state: CloudStorageState::Downloaded,
+                    signature: None,
                 },
             ],
         };
 
         snapshot.write(&snapshot_path).unwrap();
         let text = fs::read_to_string(&snapshot_path).unwrap();
-        assert!(text.starts_with("gfm-fileprovider-state-v1\n"));
+        assert!(text.starts_with("gfm-fileprovider-state-v2\n"));
         assert!(
             text.find("A.icloud-downloaded").unwrap() < text.find("B.icloud-placeholder").unwrap()
         );
@@ -5999,12 +6155,14 @@ mod tests {
             entries: vec![FileProviderStateSnapshotEntry {
                 path: root.join("Remote.icloud-placeholder"),
                 state: CloudStorageState::Evicted,
+                signature: None,
             }],
         };
         let current = FileProviderStateSnapshot {
             entries: vec![FileProviderStateSnapshotEntry {
                 path: root.join("Remote.icloud-downloaded"),
                 state: CloudStorageState::Downloaded,
+                signature: None,
             }],
         };
         previous.write(&snapshot_path).unwrap();
@@ -6052,10 +6210,12 @@ mod tests {
                 FileProviderStateSnapshotEntry {
                     path: unchanged.clone(),
                     state: CloudStorageState::Evicted,
+                    signature: None,
                 },
                 FileProviderStateSnapshotEntry {
                     path: changed.clone(),
                     state: CloudStorageState::Downloaded,
+                    signature: None,
                 },
             ],
         };
@@ -6093,10 +6253,12 @@ mod tests {
                 FileProviderStateSnapshotEntry {
                     path: unchanged.clone(),
                     state: CloudStorageState::Evicted,
+                    signature: None,
                 },
                 FileProviderStateSnapshotEntry {
                     path: local.clone(),
                     state: CloudStorageState::Downloaded,
+                    signature: None,
                 },
             ],
         };
@@ -6127,6 +6289,7 @@ mod tests {
             entries: vec![FileProviderStateSnapshotEntry {
                 path: PathBuf::from("Remote.icloud"),
                 state: CloudStorageState::Evicted,
+                signature: None,
             }],
         };
 

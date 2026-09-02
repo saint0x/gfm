@@ -1702,6 +1702,23 @@ fn provider_metadata_invalidation_schedules_update_for_observed_same_state_event
 }
 
 #[test]
+fn provider_metadata_invalidation_schedules_update_for_signature_change() {
+    let report = crate::ProviderMetadataInvalidationReport::from_provider_transition(
+        "/tmp/Remote.icloud-placeholder",
+        "evicted",
+        "evicted",
+        true,
+        false,
+        "fileprovider-state-signature-changed",
+    );
+
+    assert!(report.reindex_metadata);
+    assert!(report.schedule_metadata_update);
+    assert!(report.invalidate_query_cache);
+    assert_eq!(report.reason, "fileprovider-state-signature-changed");
+}
+
+#[test]
 fn event_backpressure_coalesces_duplicate_background_bursts() {
     let path = PathBuf::from("/tmp/hot.md");
     let mut queue = EventBackpressureQueue::new(8, 3);

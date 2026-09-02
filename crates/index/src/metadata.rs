@@ -52,13 +52,16 @@ impl ProviderMetadataInvalidationReport {
         let previous_state = previous_state.into();
         let current_state = current_state.into();
         let provider_reason = provider_reason.into();
-        let observed_metadata_changed = provider_reason == "fileprovider-observed-metadata-changed";
+        let provider_metadata_changed = matches!(
+            provider_reason.as_str(),
+            "fileprovider-observed-metadata-changed" | "fileprovider-state-signature-changed"
+        );
         let schedule_metadata_update =
-            provider_reindex_metadata && (state_changed || observed_metadata_changed);
+            provider_reindex_metadata && (state_changed || provider_metadata_changed);
         let invalidate_query_cache = schedule_metadata_update;
         let reason = if !provider_reindex_metadata {
             "provider-did-not-reindex-metadata".to_string()
-        } else if observed_metadata_changed {
+        } else if provider_metadata_changed {
             provider_reason
         } else if !state_changed {
             "provider-state-unchanged".to_string()

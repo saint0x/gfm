@@ -10862,9 +10862,14 @@ fn ui_fileprovider_observed_invalidation_persists_snapshot_on_visible_worker_fro
 
     let stored = fs::read_to_string(&state).unwrap();
     assert!(
-        stored.starts_with("gfm-fileprovider-state-v1\n"),
+        stored.starts_with("gfm-fileprovider-state-v2\n"),
         "{stored}"
     );
+    assert!(
+        stored.contains("domain=icloud-drive;state=evicted;"),
+        "{stored}"
+    );
+    assert!(stored.contains("badges=cloud"), "{stored}");
     assert!(stored.contains(&item.display().to_string()), "{stored}");
 
     fs::remove_dir_all(root).unwrap();
@@ -10948,9 +10953,14 @@ fn fileprovider_invalidation_scan_persists_snapshot_on_visible_worker_from_binar
 
     let stored = fs::read_to_string(&state).unwrap();
     assert!(
-        stored.starts_with("gfm-fileprovider-state-v1\n"),
+        stored.starts_with("gfm-fileprovider-state-v2\n"),
         "{stored}"
     );
+    assert!(
+        stored.contains("domain=icloud-drive;state=evicted;"),
+        "{stored}"
+    );
+    assert!(stored.contains("badges=cloud"), "{stored}");
     assert!(stored.contains(&item.display().to_string()), "{stored}");
 
     fs::remove_dir_all(root).unwrap();
@@ -10993,9 +11003,14 @@ fn fileprovider_invalidation_event_persists_snapshot_on_visible_worker_from_bina
 
     let stored = fs::read_to_string(&state).unwrap();
     assert!(
-        stored.starts_with("gfm-fileprovider-state-v1\n"),
+        stored.starts_with("gfm-fileprovider-state-v2\n"),
         "{stored}"
     );
+    assert!(
+        stored.contains("domain=icloud-drive;state=evicted;"),
+        "{stored}"
+    );
+    assert!(stored.contains("badges=cloud"), "{stored}");
     assert!(stored.contains(&item.display().to_string()), "{stored}");
 
     fs::remove_dir_all(root).unwrap();
@@ -11050,9 +11065,14 @@ fn fileprovider_observed_metadata_invalidation_persists_snapshot_on_visible_work
 
     let stored = fs::read_to_string(&state).unwrap();
     assert!(
-        stored.starts_with("gfm-fileprovider-state-v1\n"),
+        stored.starts_with("gfm-fileprovider-state-v2\n"),
         "{stored}"
     );
+    assert!(
+        stored.contains("domain=icloud-drive;state=evicted;"),
+        "{stored}"
+    );
+    assert!(stored.contains("badges=cloud"), "{stored}");
     assert!(stored.contains(&item.display().to_string()), "{stored}");
 
     fs::remove_dir_all(root).unwrap();

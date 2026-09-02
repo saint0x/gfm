@@ -1,6 +1,17 @@
 use gfm_preview::{PreviewCache, PreviewCacheConfig, PreviewEntry, PreviewKind, PreviewRequestKey};
 use gfm_types::{FileId, VolumeId};
+use std::path::Path;
 use std::process::Command;
+
+fn assert_fileprovider_state_entry(state_text: &str, state: &str, path: &Path) {
+    assert!(
+        state_text.lines().any(|line| {
+            line.starts_with(&format!("{state}\t"))
+                && line.ends_with(&format!("\t{}", path.display()))
+        }),
+        "{state_text}"
+    );
+}
 
 #[test]
 fn reports_host_support_from_binary() {
@@ -3374,7 +3385,7 @@ fn reports_preview_cache_fileprovider_observed_invalidation_from_binary() {
     assert!(stdout.contains("\tkind=thumbnail\treason=content-or-icloud\t"));
     assert!(stdout.contains("\tremoved-memory=false\tremoved-disk=true\n"));
     let state_text = std::fs::read_to_string(&state).unwrap();
-    assert!(state_text.contains(&format!("evicted\t{}\n", evicted.display())));
+    assert_fileprovider_state_entry(&state_text, "evicted", &evicted);
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -4166,7 +4177,7 @@ fn reports_sidebar_fileprovider_observer_probe_from_binary() {
     assert!(stdout.contains("\tprogress=0\tinvalidate-row=true\t"));
     assert!(stdout.ends_with("reason=sidebar-cloud-state-changed\n"));
     let state_text = std::fs::read_to_string(&state).unwrap();
-    assert!(state_text.contains(&format!("evicted\t{}\n", item.display())));
+    assert_fileprovider_state_entry(&state_text, "evicted", &item);
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -4276,6 +4287,53 @@ fn persists_fileprovider_invalidation_scan_from_binary() {
 }
 
 #[test]
+fn fileprovider_invalidation_scan_detects_v2_signature_changes_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-fileprovider-invalidation-scan-signature-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let state = root.join("fileprovider-state.tsv");
+    let evicted = root.join("Remote.icloud-placeholder");
+    std::fs::write(&evicted, "placeholder").unwrap();
+    mark_evicted_fixture(&evicted);
+    std::fs::write(
+        &state,
+        format!(
+            "gfm-fileprovider-state-v2\nevicted\tstale-signature\t{}\n",
+            evicted.display()
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-invalidation-scan")
+        .arg(&state)
+        .arg(&evicted)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("fileprovider-state-invalidation\tinitialized=false\tchanged=1\t"));
+    assert!(stdout.contains("\tprevious=evicted\tcurrent=evicted\tchanged=false\t"));
+    assert!(stdout.contains("\tcurrent-materialization=remote-placeholder\t"));
+    assert!(stdout.contains("\tcurrent-badges=cloud\t"));
+    assert!(stdout.ends_with("reason=fileprovider-state-signature-changed\n"));
+    let state_text = std::fs::read_to_string(&state).unwrap();
+    assert!(state_text.starts_with("gfm-fileprovider-state-v2\n"));
+    assert!(state_text.contains("badges=cloud"));
+    assert!(!state_text.contains("stale-signature"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn fileprovider_invalidation_scan_preserves_unscanned_snapshot_entries_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-fileprovider-invalidation-scan-preserve-{}",
@@ -4319,8 +4377,10 @@ fn fileprovider_invalidation_scan_preserves_unscanned_snapshot_entries_from_bina
         changed.display()
     )));
     let state_text = std::fs::read_to_string(&state).unwrap();
-    assert!(state_text.contains(&format!("evicted\t{}\n", unchanged.display())));
-    assert!(state_text.contains(&format!("evicted\t{}\n", changed.display())));
+    assert!(state_text.starts_with("gfm-fileprovider-state-v2\n"));
+    assert!(state_text.contains(&unchanged.display().to_string()));
+    assert!(state_text.contains(&changed.display().to_string()));
+    assert!(state_text.contains("badges=cloud"));
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -4559,7 +4619,7 @@ fn fileprovider_invalidation_scan_removes_tracked_entry_without_provider_evidenc
         .ends_with("sidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\n"));
     assert_eq!(
         std::fs::read_to_string(&state).unwrap(),
-        "gfm-fileprovider-state-v1\n"
+        "gfm-fileprovider-state-v2\n"
     );
 
     let _ = std::fs::remove_dir_all(root);
@@ -4657,8 +4717,9 @@ fn reports_fileprovider_invalidation_scan_from_binary() {
         .starts_with("fileprovider-state-invalidation\tinitialized=true\tchanged=1\t"));
     assert!(initial_stdout.contains("\tcurrent=evicted\tchanged=true\t"));
     let state_text = std::fs::read_to_string(&state).unwrap();
-    assert!(state_text.starts_with("gfm-fileprovider-state-v1\n"));
+    assert!(state_text.starts_with("gfm-fileprovider-state-v2\n"));
     assert!(state_text.contains("evicted\t"));
+    assert!(state_text.contains("badges=cloud"));
 
     let unchanged = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("fileprovider-invalidation-scan")
@@ -4952,7 +5013,9 @@ fn fileprovider_invalidation_event_persists_renamed_tracked_provider_state_from_
     )));
     let state_text = std::fs::read_to_string(&state).unwrap();
     assert!(!state_text.contains(&old_child.display().to_string()));
-    assert!(state_text.contains(&format!("evicted\t{}\n", new_child.display())));
+    assert!(state_text.starts_with("gfm-fileprovider-state-v2\n"));
+    assert!(state_text.contains(&new_child.display().to_string()));
+    assert!(state_text.contains("badges=cloud"));
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -5047,7 +5110,8 @@ fn fileprovider_invalidation_event_removes_deleted_tracked_item_from_binary() {
     assert!(stdout.contains("\tsidebar=true\treindex-metadata=true\t"));
     let state_text = std::fs::read_to_string(&state).unwrap();
     assert!(!state_text.contains(&item.display().to_string()));
-    assert!(state_text.contains(&format!("evicted\t{}\n", untouched.display())));
+    assert!(state_text.starts_with("gfm-fileprovider-state-v2\n"));
+    assert!(state_text.contains(&untouched.display().to_string()));
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -5103,7 +5167,8 @@ fn fileprovider_invalidation_event_removes_deleted_tracked_subtree_from_binary()
     assert!(stdout.contains("\tsidebar=true\treindex-metadata=true\t"));
     let state_text = std::fs::read_to_string(&state).unwrap();
     assert!(!state_text.contains(&child.display().to_string()));
-    assert!(state_text.contains(&format!("evicted\t{}\n", untouched.display())));
+    assert!(state_text.starts_with("gfm-fileprovider-state-v2\n"));
+    assert!(state_text.contains(&untouched.display().to_string()));
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -5265,7 +5330,7 @@ fn reports_fileprovider_observer_probe_from_binary() {
 }
 
 #[test]
-fn fileprovider_observer_probe_skips_snapshot_publish_for_unchanged_state_from_binary() {
+fn fileprovider_observer_probe_publishes_same_state_metadata_refresh_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-fileprovider-observer-noop-publish-{}",
         std::process::id()
@@ -5295,9 +5360,12 @@ fn fileprovider_observer_probe_skips_snapshot_publish_for_unchanged_state_from_b
     assert!(stdout.starts_with("fileprovider-observed-invalidation\t"));
     assert!(stdout.contains("\tpaths=1\n"));
     assert!(stdout.contains(
-        "fileprovider-state-invalidation\tinitialized=false\tchanged=0\ticon=false\tpreview-memory=false\tpreview-disk=false\tsidebar=false\treindex-metadata=false"
+        "fileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=false\tsidebar=true\treindex-metadata=true"
     ));
-    assert_eq!(std::fs::read_to_string(&state).unwrap(), state_text);
+    let refreshed_state_text = std::fs::read_to_string(&state).unwrap();
+    assert!(refreshed_state_text.starts_with("gfm-fileprovider-state-v2\n"));
+    assert_fileprovider_state_entry(&refreshed_state_text, "evicted", &item);
+    assert!(refreshed_state_text.contains("badges=cloud"));
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -5352,7 +5420,7 @@ fn reports_native_icon_fileprovider_observer_probe_from_binary() {
     assert!(stdout.contains("\tprevious-badges=cloud-available-offline\tcurrent-badges=cloud\t"));
     assert!(stdout.ends_with("invalidate-cache=true\treason=native-icon-badges-changed\n"));
     let state_text = std::fs::read_to_string(&state).unwrap();
-    assert!(state_text.contains(&format!("evicted\t{}\n", item.display())));
+    assert_fileprovider_state_entry(&state_text, "evicted", &item);
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -5473,7 +5541,7 @@ fn reports_preview_cache_fileprovider_observer_probe_from_binary() {
     assert!(stdout.contains("\tinvalidate-memory=true\tinvalidate-disk=true\t"));
     assert!(stdout.contains("\tremoved-memory=false\tremoved-disk=true\n"));
     let state_text = std::fs::read_to_string(&state).unwrap();
-    assert!(state_text.contains(&format!("evicted\t{}\n", item.display())));
+    assert_fileprovider_state_entry(&state_text, "evicted", &item);
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -5539,10 +5607,7 @@ fn fileprovider_sidebar_observed_rename_updates_snapshot_from_binary() {
         !state_text.contains(&old.display().to_string()),
         "{state_text}"
     );
-    assert!(
-        state_text.contains(&format!("evicted\t{}\n", new.display())),
-        "{state_text}"
-    );
+    assert_fileprovider_state_entry(&state_text, "evicted", &new);
 
     let _ = std::fs::remove_dir_all(root);
 }

@@ -2427,6 +2427,7 @@ mod tests {
             entries: vec![FileProviderStateSnapshotEntry {
                 path: tracked.clone(),
                 state: CloudStorageState::Evicted,
+                signature: None,
             }],
         };
         std::fs::remove_dir_all(tracked.parent().unwrap()).unwrap();
