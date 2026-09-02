@@ -51,11 +51,20 @@ pub(crate) fn worker_admission_volume_gate_report_checked(
 ) -> Result<WorkerAdmissionVolumeGateReport> {
     check_control()?;
     let worker = worker.into();
-    let _ = refresh_permission_state(PermissionRefreshAudience::Workers, &worker)?;
-    check_control()?;
     let volume_path = absolute_volume_probe_path(path);
     let volume_report =
         VolumeDiscoveryReport::for_containing_path_checked(&volume_path, &mut check_control)?;
+    check_control()?;
+    let admission =
+        worker_admission_with_volume_report(path, intent, worker.clone(), &volume_report);
+    if worker_admission_blocked_by_volume(&admission) {
+        return Ok(WorkerAdmissionVolumeGateReport {
+            admission,
+            volume_path,
+            volume_report,
+        });
+    }
+    let _ = refresh_permission_state(PermissionRefreshAudience::Workers, &worker)?;
     check_control()?;
     let admission = worker_admission_with_volume_report(path, intent, worker, &volume_report);
     Ok(WorkerAdmissionVolumeGateReport {
@@ -114,11 +123,19 @@ pub(crate) fn worker_admissions_volume_gate_report_checked(
 ) -> Result<WorkerAdmissionsVolumeGateReport> {
     check_control()?;
     let subject = worker_admission_fanout_subject(requests);
-    let _ = refresh_permission_state(PermissionRefreshAudience::Workers, &subject)?;
-    check_control()?;
     let volume_path = absolute_volume_probe_path(path);
     let volume_report =
         VolumeDiscoveryReport::for_containing_path_checked(&volume_path, &mut check_control)?;
+    check_control()?;
+    let admissions = worker_admissions_with_volume_report(path, requests, &volume_report);
+    if admissions.iter().all(worker_admission_blocked_by_volume) {
+        return Ok(WorkerAdmissionsVolumeGateReport {
+            admissions,
+            volume_path,
+            volume_report,
+        });
+    }
+    let _ = refresh_permission_state(PermissionRefreshAudience::Workers, &subject)?;
     check_control()?;
     let admissions = worker_admissions_with_volume_report(path, requests, &volume_report);
     Ok(WorkerAdmissionsVolumeGateReport {

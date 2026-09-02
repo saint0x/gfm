@@ -1068,16 +1068,7 @@ fn reports_security_worker_admission_fanout_from_binary() {
         "{stdout}"
     );
     assert!(
-        stderr.contains("permission-refresh\taudience=workers\tsubject=worker-admission-fanout;index worker:index;preview worker:preview;thumbnail worker:preview;extraction worker:read;operation worker:operate\tinitialized=false\tchanged=1\t"),
-        "{stderr}"
-    );
-    assert!(
-        stderr.contains("\tfirst-change-scope=")
-            && !stderr.contains("\tfirst-change-scope=-")
-            && stderr.contains("\tfirst-change-kind=")
-            && stderr.contains("\tfirst-change-current=")
-            && stderr.contains("\tfirst-change-path=")
-            && stderr.contains("\tfirst-change-reason="),
+        !stderr.contains("permission-refresh\taudience=workers\t"),
         "{stderr}"
     );
     assert!(!stdout.contains("\tprobe=missing\t"), "{stdout}");
