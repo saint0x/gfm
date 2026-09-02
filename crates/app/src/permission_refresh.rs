@@ -277,6 +277,7 @@ fn escape_field(value: &str) -> String {
         .replace('\\', "\\\\")
         .replace('\t', "\\t")
         .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 fn permission_refresh_change_lines(
@@ -380,17 +381,17 @@ mod tests {
             &[PermissionScopeChange {
                 scope: PermissionScope::Documents,
                 kind: PermissionScopeChangeKind::Revoked,
-                path: PathBuf::from("/Users/me/Documents/reports\t2026"),
+                path: PathBuf::from("/Users/me/Documents/reports\t2026\rQ3"),
                 previous: Some(PermissionState::Granted),
                 current: PermissionState::Denied,
-                reason: "macOS denied\nread access".to_string(),
+                reason: "macOS denied\nread access\rretry".to_string(),
             }],
         );
 
         assert_eq!(lines.len(), 1);
         assert_eq!(
             lines[0],
-            "permission-refresh-change\taudience=workers\tsubject=index\\trecords\tscope=documents\tkind=revoked\tprevious=granted\tcurrent=denied\tpath=/Users/me/Documents/reports\\t2026\treason=macOS denied\\nread access"
+            "permission-refresh-change\taudience=workers\tsubject=index\\trecords\tscope=documents\tkind=revoked\tprevious=granted\tcurrent=denied\tpath=/Users/me/Documents/reports\\t2026\\rQ3\treason=macOS denied\\nread access\\rretry"
         );
     }
 
@@ -399,9 +400,9 @@ mod tests {
         let current = PermissionStateSnapshot {
             readiness: vec![PermissionReadiness {
                 scope: PermissionScope::Documents,
-                path: PathBuf::from("/Users/me/Documents/reports\t2026"),
+                path: PathBuf::from("/Users/me/Documents/reports\t2026\rQ3"),
                 state: PermissionState::Denied,
-                reason: "macOS denied\nread access".to_string(),
+                reason: "macOS denied\nread access\rretry".to_string(),
             }],
         };
         let report = PermissionStateInvalidationReport::evaluate(None, &current);
@@ -412,7 +413,7 @@ mod tests {
                 "preview\tdecode",
                 &report,
             ),
-            "permission-refresh\taudience=workers\tsubject=preview\\tdecode\tinitialized=true\tchanged=1\trefresh-ui=true\trefresh-workers=true\trefresh-operations=true\tfirst-change-scope=documents\tfirst-change-kind=initialized\tfirst-change-previous=-\tfirst-change-current=denied\tfirst-change-path=/Users/me/Documents/reports\\t2026\tfirst-change-reason=macOS denied\\nread access"
+            "permission-refresh\taudience=workers\tsubject=preview\\tdecode\tinitialized=true\tchanged=1\trefresh-ui=true\trefresh-workers=true\trefresh-operations=true\tfirst-change-scope=documents\tfirst-change-kind=initialized\tfirst-change-previous=-\tfirst-change-current=denied\tfirst-change-path=/Users/me/Documents/reports\\t2026\\rQ3\tfirst-change-reason=macOS denied\\nread access\\rretry"
         );
     }
 
@@ -459,14 +460,18 @@ mod tests {
     #[test]
     fn refresh_state_refuses_nested_read_only_volume_before_parent_creation() {
         let root = unique_temp_dir("gfm-permission-refresh-nested-read-only");
-        fs::write(
-            root.join(".gfm-volume-kind"),
-            "external-removable-read-only\n",
-        )
-        .unwrap();
         let state = root.join("runtime").join("permission-state.tsv");
+        let mut volume = VolumeDescriptor::for_path(&root).unwrap();
+        volume.kind = VolumeKind::External;
+        volume.read_only = true;
+        volume.writable = false;
+        let report = VolumeDiscoveryReport {
+            volumes: vec![volume],
+        };
 
-        let err = refresh_permission_state_at_path(&state).unwrap_err();
+        let err =
+            refresh_permission_state_at_path_with_report_checked(&state, &root, &report, || Ok(()))
+                .unwrap_err();
 
         assert!(matches!(err, GfmError::Permission { .. }));
         assert!(err

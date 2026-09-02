@@ -1007,6 +1007,7 @@ fn escape_content_tsv_field(value: &str) -> String {
         .replace('\\', "\\\\")
         .replace('\t', "\\t")
         .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 fn run_extraction_report(
@@ -2221,6 +2222,37 @@ mod tests {
 
         assert_eq!(result.err(), Some(GfmError::Cancelled));
         assert!(!store.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn content_volume_access_tsv_escapes_control_characters() {
+        let root = unique_temp_dir("gfm-content-volume-access-escape");
+        let path = root
+            .join("Reports\tQ3\nDraft\r")
+            .join("content\tinput\none\r.md");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "content\n").unwrap();
+        let report = VolumeDiscoveryReport::for_containing_path_checked(&path, || Ok(())).unwrap();
+
+        let tsv = content_volume_access_tsv(
+            "content\tprefix",
+            "worker\nname",
+            &path,
+            AccessIntent::Read,
+            &report,
+        );
+
+        assert!(
+            tsv.starts_with("content\\tprefix\tworker=worker\\nname\t"),
+            "{tsv}"
+        );
+        assert!(
+            tsv.contains("Reports\\tQ3\\nDraft\\r/content\\tinput\\none\\r.md"),
+            "{tsv}"
+        );
+        assert_eq!(tsv.split('\t').count(), 12, "{tsv}");
+
         fs::remove_dir_all(root).unwrap();
     }
 
