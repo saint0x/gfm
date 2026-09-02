@@ -62,6 +62,13 @@ impl PixelMaskRect {
             && self.x.saturating_add(self.width) <= size.width
             && self.y.saturating_add(self.height) <= size.height
     }
+
+    pub fn overlaps(self, other: Self) -> bool {
+        self.x < other.x.saturating_add(other.width)
+            && other.x < self.x.saturating_add(self.width)
+            && self.y < other.y.saturating_add(other.height)
+            && other.y < self.y.saturating_add(self.height)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -343,7 +350,7 @@ pub fn diff_rgba(
             actual.len()
         )));
     }
-    for mask in &options.masks {
+    for (index, mask) in options.masks.iter().enumerate() {
         if !mask.rect.is_valid_for(options.size) {
             return Err(GfmError::Format(format!(
                 "mask {},{},{},{} is outside {}x{} image",
@@ -359,6 +366,22 @@ pub fn diff_rgba(
             return Err(GfmError::Format(
                 "pixel mask reason cannot be empty".to_string(),
             ));
+        }
+        if let Some(previous) = options.masks[..index]
+            .iter()
+            .find(|previous| previous.rect.overlaps(mask.rect))
+        {
+            return Err(GfmError::Format(format!(
+                "pixel masks {},{},{},{} and {},{},{},{} overlap",
+                previous.rect.x,
+                previous.rect.y,
+                previous.rect.width,
+                previous.rect.height,
+                mask.rect.x,
+                mask.rect.y,
+                mask.rect.width,
+                mask.rect.height
+            )));
         }
     }
 
@@ -616,7 +639,7 @@ pub fn parse_masks(content: &str, size: PixelSize) -> Result<Vec<PixelMaskRect>>
 }
 
 pub fn parse_governed_masks(content: &str, size: PixelSize) -> Result<Vec<PixelMaskRegion>> {
-    let mut masks = Vec::new();
+    let mut masks: Vec<PixelMaskRegion> = Vec::new();
     let mut seen_rects = BTreeSet::new();
     for (line_index, line) in content.lines().enumerate() {
         let line = line.trim();
@@ -659,6 +682,16 @@ pub fn parse_governed_masks(content: &str, size: PixelSize) -> Result<Vec<PixelM
                 rect.y,
                 rect.width,
                 rect.height
+            )));
+        }
+        if let Some(previous) = masks.iter().find(|mask| mask.rect.overlaps(rect)) {
+            return Err(GfmError::Format(format!(
+                "governed mask line {} overlaps rectangle {},{},{},{}",
+                line_index + 1,
+                previous.rect.x,
+                previous.rect.y,
+                previous.rect.width,
+                previous.rect.height
             )));
         }
         masks.push(PixelMaskRegion::new(rect, reason));
@@ -862,6 +895,38 @@ mod tests {
 
         assert!(err.to_string().contains("line 2"));
         assert!(err.to_string().contains("duplicates rectangle 1,0,1,1"));
+    }
+
+    #[test]
+    fn governed_masks_reject_overlapping_rectangles() {
+        let err = parse_governed_masks(
+            "0\t0\t2\t2\tOS-owned selection flash\n1\t1\t2\t2\tOS-owned hover flash\n",
+            PixelSize::new(4, 4),
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("line 2"));
+        assert!(err.to_string().contains("overlaps rectangle 0,0,2,2"));
+    }
+
+    #[test]
+    fn pixel_diff_rejects_overlapping_programmatic_masks() {
+        let expected = vec![
+            0, 0, 0, 255, 10, 10, 10, 255, 20, 20, 20, 255, 30, 30, 30, 255,
+        ];
+        let actual = vec![
+            0, 0, 0, 255, 9, 10, 10, 255, 19, 20, 20, 255, 30, 30, 30, 255,
+        ];
+        let options = PixelDiffOptions::strict(PixelSize::new(2, 2)).with_governed_masks(vec![
+            PixelMaskRegion::new(PixelMaskRect::new(0, 0, 2, 1), "OS-owned toolbar flash"),
+            PixelMaskRegion::new(PixelMaskRect::new(1, 0, 1, 2), "OS-owned hover flash"),
+        ]);
+
+        let err = diff_rgba(&expected, &actual, &options).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("pixel masks 0,0,2,1 and 1,0,1,2 overlap"));
     }
 
     #[test]
