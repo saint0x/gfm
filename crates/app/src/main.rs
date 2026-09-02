@@ -5,7 +5,8 @@ use gfm_index::{
     ThermalState, UserActivity,
 };
 use gfm_jobs::{
-    JobBatteryState, JobIoPressure, JobThermalState, JobUserActivity, Priority, SchedulingPressure,
+    JobBatteryState, JobIoPressure, JobPayloadKind, JobThermalState, JobUserActivity, Priority,
+    SchedulingPressure,
 };
 use gfm_mac::{
     current_host_profile, current_permission_onboarding, AccessIntent, MountState, SupportMatrix,
@@ -726,6 +727,7 @@ pub(crate) fn parent_or_cwd(path: &Path) -> &Path {
 
 pub(crate) fn run_preview_contract_cancellable_with_payload_path<T>(
     volume: Option<VolumeId>,
+    payload_kind: JobPayloadKind,
     label: &'static str,
     payload_path: impl Into<PathBuf>,
     build: impl Fn(gfm_jobs::Cancellation) -> Result<T> + Send + Sync + 'static,
@@ -733,9 +735,10 @@ pub(crate) fn run_preview_contract_cancellable_with_payload_path<T>(
 where
     T: Send + 'static,
 {
-    runtime::run_retriable_volume_task_cancellable_with_payload_path(
+    runtime::run_retriable_volume_task_cancellable_with_kind_and_payload_path(
         volume,
         Priority::Visible,
+        payload_kind,
         label,
         payload_path,
         build,
@@ -744,6 +747,7 @@ where
 
 pub(crate) fn run_preview_contract_adaptive_with_volume_and_payload_path<T>(
     priority: Priority,
+    payload_kind: JobPayloadKind,
     label: &'static str,
     pressure: SchedulingPressure,
     volume: impl FnOnce() -> Result<Option<VolumeId>>,
@@ -753,8 +757,9 @@ pub(crate) fn run_preview_contract_adaptive_with_volume_and_payload_path<T>(
 where
     T: Send + 'static,
 {
-    runtime::run_scheduled_volume_task_cancellable_with_volume_and_payload_path(
+    runtime::run_scheduled_volume_task_cancellable_with_kind_volume_and_payload_path(
         priority,
+        payload_kind,
         label,
         pressure,
         volume,

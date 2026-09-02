@@ -46,9 +46,31 @@ pub(crate) fn run_volume_task_cancellable_with_payload_path<T>(
 where
     T: Send + 'static,
 {
+    run_volume_task_cancellable_with_kind_and_payload_path(
+        volume,
+        priority,
+        payload_kind_for_label(label),
+        label,
+        payload_path,
+        work,
+    )
+}
+
+pub(crate) fn run_volume_task_cancellable_with_kind_and_payload_path<T>(
+    volume: Option<VolumeId>,
+    priority: Priority,
+    payload_kind: JobPayloadKind,
+    label: &'static str,
+    payload_path: impl Into<PathBuf>,
+    work: impl FnOnce(Cancellation) -> Result<T> + Send + 'static,
+) -> Result<T>
+where
+    T: Send + 'static,
+{
     run_volume_task_cancellable_with_runtime_payload_path(
         volume,
         priority,
+        payload_kind,
         label,
         payload_path,
         move |cancellation, _runtime| work(cancellation),
@@ -65,9 +87,31 @@ pub(crate) fn run_retriable_volume_task_cancellable_with_payload_path<T>(
 where
     T: Send + 'static,
 {
+    run_retriable_volume_task_cancellable_with_kind_and_payload_path(
+        volume,
+        priority,
+        payload_kind_for_label(label),
+        label,
+        payload_path,
+        work,
+    )
+}
+
+pub(crate) fn run_retriable_volume_task_cancellable_with_kind_and_payload_path<T>(
+    volume: Option<VolumeId>,
+    priority: Priority,
+    payload_kind: JobPayloadKind,
+    label: &'static str,
+    payload_path: impl Into<PathBuf>,
+    work: impl Fn(Cancellation) -> Result<T> + Send + Sync + 'static,
+) -> Result<T>
+where
+    T: Send + 'static,
+{
     run_retriable_volume_task_cancellable_with_runtime_payload_path(
         volume,
         priority,
+        payload_kind,
         label,
         payload_path,
         move |cancellation, _runtime| work(cancellation),
@@ -83,11 +127,13 @@ pub(crate) fn run_volume_task_cancellable_with_runtime<T>(
 where
     T: Send + 'static,
 {
+    let payload_kind = payload_kind_for_label(label);
     run_volume_task_cancellable_with_runtime_payload_path(
         volume,
         priority,
+        payload_kind,
         label,
-        runtime_payload_path(payload_kind_for_label(label), label),
+        runtime_payload_path(payload_kind, label),
         work,
     )
 }
@@ -95,6 +141,7 @@ where
 fn run_retriable_volume_task_cancellable_with_runtime_payload_path<T>(
     volume: Option<VolumeId>,
     priority: Priority,
+    payload_kind: JobPayloadKind,
     label: &'static str,
     payload_path: impl Into<PathBuf>,
     work: impl Fn(Cancellation, RuntimeJobHandle) -> Result<T> + Send + Sync + 'static,
@@ -102,7 +149,6 @@ fn run_retriable_volume_task_cancellable_with_runtime_payload_path<T>(
 where
     T: Send + 'static,
 {
-    let payload_kind = payload_kind_for_label(label);
     let (result_tx, result_rx) = mpsc::sync_channel(1);
     let mut scheduler = Scheduler::new();
     let job = if let Some(volume) = volume {
@@ -160,6 +206,7 @@ where
 fn run_volume_task_cancellable_with_runtime_payload_path<T>(
     volume: Option<VolumeId>,
     priority: Priority,
+    payload_kind: JobPayloadKind,
     label: &'static str,
     payload_path: impl Into<PathBuf>,
     work: impl FnOnce(Cancellation, RuntimeJobHandle) -> Result<T> + Send + 'static,
@@ -167,7 +214,6 @@ fn run_volume_task_cancellable_with_runtime_payload_path<T>(
 where
     T: Send + 'static,
 {
-    let payload_kind = payload_kind_for_label(label);
     let (result_tx, result_rx) = mpsc::sync_channel(1);
     let mut scheduler = Scheduler::new();
     let job = if let Some(volume) = volume {
@@ -318,8 +364,30 @@ pub(crate) fn run_scheduled_volume_task_cancellable_with_volume_and_payload_path
 where
     T: Send + 'static,
 {
+    run_scheduled_volume_task_cancellable_with_kind_volume_and_payload_path(
+        priority,
+        payload_kind_for_label(label),
+        label,
+        pressure,
+        volume,
+        payload_path,
+        work,
+    )
+}
+
+pub(crate) fn run_scheduled_volume_task_cancellable_with_kind_volume_and_payload_path<T>(
+    priority: Priority,
+    payload_kind: JobPayloadKind,
+    label: &'static str,
+    pressure: SchedulingPressure,
+    volume: impl FnOnce() -> Result<Option<VolumeId>>,
+    payload_path: impl Into<PathBuf>,
+    work: impl Fn(Cancellation) -> Result<T> + Send + Sync + 'static,
+) -> Result<ScheduledTaskOutcome<T>>
+where
+    T: Send + 'static,
+{
     let payload_path = payload_path.into();
-    let payload_kind = payload_kind_for_label(label);
     let scheduling = pressure.decide(priority, 1, 1);
     let mut scheduler = Scheduler::new();
     let mut job = scheduler.schedule_payload(priority, payload_kind, label);

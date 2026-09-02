@@ -3547,6 +3547,7 @@ fn run_icon_preview(path: PathBuf) -> Result<IconPreviewContract> {
     let payload_path = access_report.path.clone();
     run_preview_contract_cancellable_with_payload_path(
         volume,
+        JobPayloadKind::Preview,
         WORKER,
         payload_path,
         move |cancellation| build_icon_preview_contract(&access_report, WORKER, &cancellation),
@@ -3573,6 +3574,7 @@ fn run_icon_preview_retry_probe(
     let payload_path = access_report.path.clone();
     run_preview_contract_cancellable_with_payload_path(
         volume,
+        JobPayloadKind::Preview,
         WORKER,
         payload_path,
         move |cancellation| {
@@ -3593,6 +3595,7 @@ fn run_quicklook_session(path: PathBuf) -> Result<QuickLookSessionContract> {
     let payload_path = access_report.path.clone();
     run_preview_contract_cancellable_with_payload_path(
         volume,
+        JobPayloadKind::Preview,
         WORKER,
         payload_path,
         move |cancellation| {
@@ -3623,6 +3626,7 @@ fn run_quicklook_session_retry_probe(
     let payload_path = access_report.path.clone();
     run_preview_contract_cancellable_with_payload_path(
         volume,
+        JobPayloadKind::Preview,
         WORKER,
         payload_path,
         move |cancellation| {
@@ -3643,6 +3647,7 @@ fn run_thumbnail_generation(path: PathBuf) -> Result<ThumbnailGenerationContract
     let payload_path = access_report.path.clone();
     run_preview_contract_cancellable_with_payload_path(
         volume,
+        JobPayloadKind::Thumbnail,
         WORKER,
         payload_path,
         move |cancellation| {
@@ -3673,6 +3678,7 @@ fn run_thumbnail_generation_retry_probe(
     let payload_path = access_report.path.clone();
     run_preview_contract_cancellable_with_payload_path(
         volume,
+        JobPayloadKind::Thumbnail,
         WORKER,
         payload_path,
         move |cancellation| {
@@ -3845,6 +3851,7 @@ fn run_adaptive_quicklook_session(
     let payload_path = access_report.path.clone();
     run_preview_contract_adaptive_with_volume_and_payload_path(
         Priority::Visible,
+        JobPayloadKind::Preview,
         "quicklook preview",
         pressure,
         move || {
@@ -3906,6 +3913,7 @@ fn run_adaptive_thumbnail_generation(
     let payload_path = access_report.path.clone();
     run_preview_contract_adaptive_with_volume_and_payload_path(
         Priority::Background,
+        JobPayloadKind::Thumbnail,
         "thumbnail generation",
         pressure,
         move || {
