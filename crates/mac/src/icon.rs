@@ -424,7 +424,7 @@ fn volume_badges(volume: &crate::VolumeDescriptor) -> Vec<NativeIconBadge> {
     if volume.mount_state != crate::MountState::Mounted || volume.reachable == Some(false) {
         badges.push(NativeIconBadge::VolumeOffline);
     }
-    if volume.platform_state_unavailable() {
+    if volume.platform_api_not_available() {
         badges.push(NativeIconBadge::VolumeUnavailable);
     }
     badges
@@ -701,6 +701,9 @@ mod tests {
         volume.network = true;
         volume.local = Some(false);
         volume.reachable = Some(true);
+        volume.native_status = Some(crate::NativeVolumeStatus::Available);
+        volume.resource_status = Some(crate::NativeVolumeStatus::Available);
+        volume.mount_table_status = Some(crate::NativeVolumeStatus::Available);
         let mut record = record("network", FileKind::Directory);
         record.path = root.clone();
 
@@ -709,6 +712,36 @@ mod tests {
         assert_eq!(descriptor.role, NativeIconRole::Folder);
         assert_eq!(descriptor.badges, vec![NativeIconBadge::VolumeNetwork]);
         assert_eq!(descriptor.cache_key, "folder:public.folder:volume-network");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_roots_carry_unavailable_api_badge_in_cache_key() {
+        let root = temp_path("gfm-native-volume-icon", "api-unavailable");
+        fs::create_dir_all(&root).unwrap();
+        let mut volume = crate::VolumeDescriptor::for_path(&root).unwrap();
+        volume.kind = crate::VolumeKind::External;
+        volume.reachable = Some(true);
+        volume.native_status = Some(crate::NativeVolumeStatus::Available);
+        volume.resource_status = Some(crate::NativeVolumeStatus::Unavailable);
+        volume.mount_table_status = Some(crate::NativeVolumeStatus::Available);
+        let mut record = record("api-unavailable", FileKind::Directory);
+        record.path = root.clone();
+
+        let descriptor = NativeIconDescriptor::for_record_on_volume(&record, Some(&volume));
+
+        assert_eq!(descriptor.role, NativeIconRole::Folder);
+        assert_eq!(
+            descriptor.badges,
+            vec![
+                NativeIconBadge::VolumeExternal,
+                NativeIconBadge::VolumeUnavailable
+            ]
+        );
+        assert_eq!(
+            descriptor.cache_key,
+            "folder:public.folder:volume-external+volume-unavailable"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

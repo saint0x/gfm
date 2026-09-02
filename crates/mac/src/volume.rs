@@ -221,6 +221,16 @@ impl VolumeDescriptor {
             && self.mount_table_status == Some(NativeVolumeStatus::Unavailable)
     }
 
+    pub fn platform_api_not_available(&self) -> bool {
+        self.platform_state_unavailable()
+            || self
+                .resource_status
+                .is_some_and(|status| status != NativeVolumeStatus::Available)
+            || self
+                .mount_table_status
+                .is_some_and(|status| status != NativeVolumeStatus::Available)
+    }
+
     pub fn reports_slow_volume_io(&self) -> bool {
         if self.network || self.reachable == Some(false) {
             return false;
@@ -4749,6 +4759,33 @@ mod tests {
         assert!(descriptor.platform_state_unavailable());
 
         descriptor.mount_table_status = Some(NativeVolumeStatus::Available);
+        assert!(!descriptor.platform_state_unavailable());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn descriptor_reports_platform_api_not_available_for_resource_or_mount_failures() {
+        let root = unique_temp_dir("gfm-volume-platform-api-not-available");
+        let mut descriptor = VolumeDescriptor::for_path(&root).unwrap();
+
+        descriptor.native_status = Some(NativeVolumeStatus::Available);
+        descriptor.resource_status = Some(NativeVolumeStatus::Available);
+        descriptor.mount_table_status = Some(NativeVolumeStatus::Available);
+        assert!(!descriptor.platform_api_not_available());
+
+        descriptor.native_status = Some(NativeVolumeStatus::Unavailable);
+        assert!(!descriptor.platform_api_not_available());
+        assert!(!descriptor.platform_state_unavailable());
+
+        descriptor.native_status = Some(NativeVolumeStatus::Available);
+        descriptor.resource_status = Some(NativeVolumeStatus::Missing);
+        assert!(descriptor.platform_api_not_available());
+        assert!(!descriptor.platform_state_unavailable());
+
+        descriptor.resource_status = Some(NativeVolumeStatus::Available);
+        descriptor.mount_table_status = Some(NativeVolumeStatus::Unavailable);
+        assert!(descriptor.platform_api_not_available());
         assert!(!descriptor.platform_state_unavailable());
 
         fs::remove_dir_all(root).unwrap();

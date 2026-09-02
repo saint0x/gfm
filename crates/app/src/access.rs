@@ -349,7 +349,7 @@ fn volume_access_block_in_report(
             probe: AccessProbeState::Unknown,
         });
     }
-    if volume.platform_state_unavailable() {
+    if volume.platform_api_not_available() {
         return Some(VolumeAccessBlock {
             reason: format!(
             "{worker} volume access blocked: unavailable volume {}; label={}; root={}; stable-id={}; mount={}; {}",
@@ -1020,6 +1020,47 @@ mod tests {
         assert!(admission.as_tsv().contains("\tprobe=unavailable\t"));
         assert!(!admission.as_tsv().contains("\tprobe=unknown\t"));
         assert!(worker_admission_blocked_by_volume(&admission));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn worker_admission_gate_refuses_partially_unavailable_volume_api_state() {
+        let root = unique_temp_dir("gfm-access-admission-partial-api");
+        let path = root.join("Missing.pdf");
+        let mut volume = VolumeDescriptor::for_path(&root).unwrap();
+        volume.kind = VolumeKind::External;
+        volume.reachable = Some(true);
+        volume.native_status = Some(gfm_mac::NativeVolumeStatus::Available);
+        volume.resource_status = Some(gfm_mac::NativeVolumeStatus::Missing);
+        volume.resource_reason = Some("URL resource values missing during refresh".to_string());
+        volume.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Available);
+        let report = VolumeDiscoveryReport {
+            volumes: vec![volume],
+        };
+
+        let admission = worker_admission_with_volume_report(
+            &path,
+            AccessIntent::Preview,
+            "preview worker",
+            &report,
+        );
+
+        assert_eq!(admission.worker_action, SecurityWorkerAction::Deny);
+        assert!(!admission.can_touch_filesystem);
+        assert_eq!(
+            admission.access.probe,
+            gfm_mac::AccessProbeState::Unavailable
+        );
+        assert!(admission.reason.contains("unavailable volume external"));
+        assert!(admission.reason.contains("native-status=available"));
+        assert!(admission.reason.contains("resource-status=missing"));
+        assert!(admission
+            .reason
+            .contains("resource-reason=URL resource values missing during refresh"));
+        assert!(admission.reason.contains("mount-status=available"));
+        assert!(worker_admission_blocked_by_volume(&admission));
+        assert!(!path.exists());
 
         fs::remove_dir_all(root).unwrap();
     }

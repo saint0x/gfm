@@ -151,7 +151,7 @@ fn preflight_permission_state_volume_with_report(
             ),
         });
     }
-    if volume.platform_state_unavailable() {
+    if volume.platform_api_not_available() {
         return Err(GfmError::Permission {
             path: path.to_path_buf(),
             message: format!(
@@ -546,6 +546,42 @@ mod tests {
         assert!(err
             .to_string()
             .contains("mount-reason=mount table unavailable during refresh"));
+        assert!(!state.exists());
+        assert!(!state.parent().unwrap().exists());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn refresh_state_refuses_partially_unavailable_volume_api_state_before_write() {
+        let root = unique_temp_dir("gfm-permission-refresh-partial-api");
+        let state = root.join("runtime").join("permission-state.tsv");
+        let mut volume = VolumeDescriptor::for_path(&root).unwrap();
+        volume.kind = VolumeKind::External;
+        volume.mount_state = MountState::Mounted;
+        volume.reachable = Some(true);
+        volume.native_status = Some(gfm_mac::NativeVolumeStatus::Available);
+        volume.resource_status = Some(gfm_mac::NativeVolumeStatus::Missing);
+        volume.resource_reason =
+            Some("URL resource values missing during permission refresh".to_string());
+        volume.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Available);
+        let report = VolumeDiscoveryReport {
+            volumes: vec![volume],
+        };
+
+        let err =
+            preflight_permission_state_volume_with_report(&state, &root, &report).unwrap_err();
+
+        assert!(matches!(err, GfmError::Permission { .. }));
+        assert!(err
+            .to_string()
+            .contains("permission state volume access blocked: unavailable volume external"));
+        assert!(err.to_string().contains("native-status=available"));
+        assert!(err.to_string().contains("resource-status=missing"));
+        assert!(err
+            .to_string()
+            .contains("resource-reason=URL resource values missing during permission refresh"));
+        assert!(err.to_string().contains("mount-status=available"));
         assert!(!state.exists());
         assert!(!state.parent().unwrap().exists());
 

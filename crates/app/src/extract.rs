@@ -75,7 +75,7 @@ fn extraction_volume_class_from_report(
 }
 
 fn extraction_volume_class_for_descriptor(volume: &VolumeDescriptor) -> ExtractionVolumeClass {
-    if volume.platform_state_unavailable() {
+    if volume.platform_api_not_available() {
         return conservative_unknown_extraction_volume_class();
     }
     if volume.network || volume.local == Some(false) || volume.kind == VolumeKind::Network {

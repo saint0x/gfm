@@ -2204,7 +2204,7 @@ fn preview_scheduling_policy_from_volume_report(
     let Some(volume) = report.volume_for_path(&volume_path) else {
         return preview_conservative_volume_policy(policy);
     };
-    if volume.platform_state_unavailable()
+    if volume.platform_api_not_available()
         || volume_descriptor_is_remote_for_preview(volume)
         || volume_reports_slow_for_preview(volume)
     {
@@ -2936,7 +2936,7 @@ fn current_index_volume_descriptor_from_report_checked(
         .filter(|descriptor| {
             descriptor.mount_state != MountState::Mounted
                 || descriptor.reachable == Some(false)
-                || descriptor.platform_state_unavailable()
+                || descriptor.platform_api_not_available()
         })
     {
         return Ok(Some(index_volume_descriptor(descriptor)));
@@ -4840,7 +4840,7 @@ impl PlatformAccessReport {
                 volume.stable_identity,
                 volume.mount_state.as_str()
             ))
-        } else if volume.platform_state_unavailable() {
+        } else if volume.platform_api_not_available() {
             Some(format!(
                 "{worker} volume access blocked: unavailable volume {}; label={}; root={}; stable-id={}; mount={}; {}",
                 volume.kind.as_str(),
@@ -5213,6 +5213,46 @@ mod tests {
         assert!(policy.cancel_offscreen);
         assert!(facts.slow);
         assert!(!facts.remote);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn preview_scheduling_uses_conservative_policy_for_partially_unavailable_volume_api() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-preview-partial-volume-api-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("Image.png");
+        std::fs::write(&path, "image fixture").unwrap();
+        let mut volume = VolumeDescriptor::for_path(&root).unwrap();
+        volume.kind = gfm_mac::VolumeKind::External;
+        volume.reachable = Some(true);
+        volume.native_status = Some(gfm_mac::NativeVolumeStatus::Available);
+        volume.resource_status = Some(gfm_mac::NativeVolumeStatus::Missing);
+        volume.resource_reason = Some("URL resource values missing during preview".to_string());
+        volume.mount_table_status = Some(gfm_mac::NativeVolumeStatus::Available);
+        let report = VolumeDiscoveryReport {
+            volumes: vec![volume],
+        };
+        let base = PreviewSchedulingPolicy {
+            max_visible: 16,
+            max_prefetch: 8,
+            cancel_offscreen: false,
+        };
+
+        let policy = preview_scheduling_policy_from_volume_report(
+            &path,
+            base,
+            SchedulingPressure::default(),
+            &report,
+        );
+
+        assert_eq!(policy.max_visible, 8);
+        assert_eq!(policy.max_prefetch, 0);
+        assert!(policy.cancel_offscreen);
 
         std::fs::remove_dir_all(root).unwrap();
     }
