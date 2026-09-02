@@ -2462,6 +2462,14 @@ fn coalesce_native_volume_events_for_state(
             retained.push(event);
             continue;
         };
+        if event.kind == gfm_mac_sys::NativeVolumeEventKind::Disappeared {
+            if let Some(index) = key_index.remove(&key) {
+                retained[index] = event;
+            } else {
+                retained.push(event);
+            }
+            continue;
+        }
         if let Some(index) = key_index.get(&key).copied() {
             retained[index] = event;
         } else {
@@ -6680,6 +6688,37 @@ mod tests {
     }
 
     #[test]
+    fn coalescing_preserves_disappeared_then_appeared_lifecycle_boundary() {
+        let root = PathBuf::from("/Volumes/Remounted");
+        let disappeared = gfm_mac_sys::NativeVolumeEvent {
+            kind: gfm_mac_sys::NativeVolumeEventKind::Disappeared,
+            description: native_description(|description| {
+                description.volume_uuid = Some("REMOUNTED-VOLUME".to_string());
+                description.volume_path = Some(root.clone());
+            }),
+        };
+        let appeared = gfm_mac_sys::NativeVolumeEvent {
+            kind: gfm_mac_sys::NativeVolumeEventKind::Appeared,
+            description: native_description(|description| {
+                description.volume_uuid = Some("REMOUNTED-VOLUME".to_string());
+                description.volume_path = Some(root.clone());
+            }),
+        };
+
+        let coalesced = coalesce_native_volume_events_for_state(vec![disappeared, appeared]);
+
+        assert_eq!(coalesced.len(), 2);
+        assert_eq!(
+            coalesced[0].kind,
+            gfm_mac_sys::NativeVolumeEventKind::Disappeared
+        );
+        assert_eq!(
+            coalesced[1].kind,
+            gfm_mac_sys::NativeVolumeEventKind::Appeared
+        );
+    }
+
+    #[test]
     fn volume_event_stream_state_drain_reports_raw_and_resolved_counts() {
         let root = unique_temp_dir("gfm-volume-event-state-drain-counts");
         fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
@@ -6720,6 +6759,57 @@ mod tests {
         assert_eq!(state.report().volumes.len(), 1);
         assert!(tsv.contains("\tinput=2\t"));
         assert!(tsv.contains("\tresolved=1"));
+        drop(stream);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_event_stream_state_drain_applies_remount_lifecycle_boundary() {
+        let root = unique_temp_dir("gfm-volume-event-state-drain-remount");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let previous = VolumeDescriptor::for_path(&root).unwrap();
+        let disappeared = gfm_mac_sys::NativeVolumeEvent {
+            kind: gfm_mac_sys::NativeVolumeEventKind::Disappeared,
+            description: native_description(|description| {
+                description.volume_uuid = Some("REMOUNTED-STATE-VOLUME".to_string());
+                description.volume_path = Some(root.clone());
+            }),
+        };
+        let appeared = gfm_mac_sys::NativeVolumeEvent {
+            kind: gfm_mac_sys::NativeVolumeEventKind::Appeared,
+            description: native_description(|description| {
+                description.volume_uuid = Some("REMOUNTED-STATE-VOLUME".to_string());
+                description.volume_path = Some(root.clone());
+            }),
+        };
+        let mut state = VolumeEventState::new(VolumeDiscoveryReport {
+            volumes: vec![previous],
+        });
+        let stream = volume_event_stream_with_pending([disappeared, appeared]);
+
+        let report = stream
+            .drain_into_state_checked(&mut state, 2, || Ok(()))
+            .unwrap();
+
+        assert_eq!(report.batch.input_events, 2);
+        assert_eq!(report.batch.resolved_events, 2);
+        assert_eq!(report.batch.applied_events, 2);
+        assert_eq!(report.batch.resulting_volumes, 1);
+        assert!(report.batch.invalidate_sidebar);
+        assert!(report.batch.invalidate_operation_policy);
+        assert!(report.batch.invalidate_index_admission);
+        assert!(report.batch.rescan_index);
+        assert!(report.batch.cancel_index_jobs);
+        assert!(report.batch.clear_fsevents_cursor);
+        assert_eq!(
+            report.batch.transitions[0].invalidation.reason,
+            "volume-event-disappeared"
+        );
+        assert_eq!(
+            report.batch.transitions[1].invalidation.reason,
+            "volume-event-appeared"
+        );
+        assert_eq!(state.report().volumes.len(), 1);
         drop(stream);
         fs::remove_dir_all(root).unwrap();
     }
