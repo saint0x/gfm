@@ -289,6 +289,7 @@ fn permission_access_contract_refuses_unreachable_volume_from_binary() {
     std::fs::write(&path, "%PDF-1.7\n").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_ENABLE_VOLUME_FIXTURE_MARKERS", "1")
         .args([
             "ui-permission-access-contract",
             path.to_str().unwrap(),
@@ -353,7 +354,7 @@ fn permission_access_contract_refuses_unreachable_volume_from_binary() {
 }
 
 #[test]
-fn permission_access_contract_honors_read_only_volume_marker_from_binary() {
+fn permission_access_contract_prefers_native_write_truth_over_read_only_marker_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-ui-permission-access-native-volume-{}",
         std::process::id()
@@ -369,6 +370,7 @@ fn permission_access_contract_honors_read_only_volume_marker_from_binary() {
     std::fs::write(&path, b"existing export target").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_ENABLE_VOLUME_FIXTURE_MARKERS", "1")
         .args([
             "ui-permission-access-contract",
             path.to_str().unwrap(),
@@ -385,7 +387,10 @@ fn permission_access_contract_honors_read_only_volume_marker_from_binary() {
     let stdout = String::from_utf8(output.stdout).unwrap();
 
     assert!(stdout.starts_with("dialog\tsurface=permission\tpresentation=window-sheet"));
-    assert!(stdout.contains("\ttitle=Volume Unavailable\t"), "{stdout}");
+    assert!(
+        stdout.contains("\ttitle=GFM needs permission to continue\t"),
+        "{stdout}"
+    );
     assert!(
         !stdout.contains("button\tchoose-location\tChoose...\t"),
         "{stdout}"
@@ -393,21 +398,18 @@ fn permission_access_contract_honors_read_only_volume_marker_from_binary() {
     assert!(stdout.contains("\npermission-access\t"), "{stdout}");
     assert!(stdout.contains("\tintent=write\tscope=none\t"), "{stdout}");
     assert!(
-        stdout.contains("\tprobe=unknown\tmode=denied\t"),
+        stdout.contains("\tprobe=granted\tmode=plain-filesystem\t"),
         "{stdout}"
     );
-    assert!(stdout.contains("\taccess-action=deny\t"), "{stdout}");
-    assert!(stdout.contains("\tworker-action=deny\t"), "{stdout}");
+    assert!(stdout.contains("\taccess-action=allow\t"), "{stdout}");
+    assert!(stdout.contains("\tworker-action=start\t"), "{stdout}");
     assert!(
-        stdout.contains("\trefresh-on-permission-change=true\tprompt-kind=blocked\t"),
+        stdout.contains("\trefresh-on-permission-change=false\tprompt-kind=general\t"),
         "{stdout}"
     );
+    assert!(stdout.contains("\tprompt-action=none\t"), "{stdout}");
     assert!(
-        stdout.contains("\tprompt-action=blocked-volume\t"),
-        "{stdout}"
-    );
-    assert!(
-        stdout.contains("\tpromptable=false\tprompt-source=volume\t"),
+        stdout.contains("\tpromptable=false\tprompt-source=none\t"),
         "{stdout}"
     );
     assert!(
@@ -415,7 +417,7 @@ fn permission_access_contract_honors_read_only_volume_marker_from_binary() {
         "{stdout}"
     );
     assert!(
-        stdout.contains("export worker volume access blocked: read-only volume external"),
+        stdout.contains("export worker may start with filesystem access"),
         "{stdout}"
     );
 

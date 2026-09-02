@@ -419,9 +419,8 @@ fn retained_security_accesses_from_store_checked(
     check_control()?;
     let Some(access) = lookup.access else {
         eprintln!(
-            "security-scope-access\t{}\tstatus=missing\tread-only={}\taccess-started=false\treason=current-access-without-retained-bookmark",
-            report.path.display(),
-            read_only_intent(report.intent)
+            "{}",
+            missing_security_scope_access_line(&report.path, read_only_intent(report.intent))
         );
         return Err(GfmError::Permission {
             path: report.path.clone(),
@@ -431,14 +430,7 @@ fn retained_security_accesses_from_store_checked(
             ),
         });
     };
-    eprintln!(
-        "security-scope-access\t{}\tstatus={}\tread-only={}\taccess-started={}\tstale={}\treason=bookmark-resolved",
-        report.path.display(),
-        access.report.status.as_str(),
-        access.report.read_only,
-        access.report.access_started,
-        access.report.stale
-    );
+    eprintln!("{}", resolved_security_scope_access_line(&access));
     if access.report.stale || !access.report.access_started {
         return Err(GfmError::Permission {
             path: report.path.clone(),
@@ -459,6 +451,35 @@ const fn read_only_intent(intent: AccessIntent) -> bool {
         intent,
         AccessIntent::Read | AccessIntent::Index | AccessIntent::Preview
     )
+}
+
+fn missing_security_scope_access_line(path: &Path, read_only: bool) -> String {
+    format!(
+        "security-scope-access\t{}\tstatus=missing\tread-only={read_only}\taccess-started=false\treason=current-access-without-retained-bookmark",
+        escape_path_field(path)
+    )
+}
+
+fn resolved_security_scope_access_line(access: &SecurityScopedBookmarkAccess) -> String {
+    format!(
+        "security-scope-access\t{}\tstatus={}\tread-only={}\taccess-started={}\tstale={}\treason=bookmark-resolved",
+        escape_path_field(&access.report.path),
+        access.report.status.as_str(),
+        access.report.read_only,
+        access.report.access_started,
+        access.report.stale
+    )
+}
+
+fn escape_path_field(path: &Path) -> String {
+    escape_field(&path.to_string_lossy())
+}
+
+fn escape_field(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
 }
 
 #[cfg(test)]
@@ -532,6 +553,48 @@ mod tests {
         assert!(err
             .to_string()
             .contains("retained security-scoped bookmark required before touching filesystem"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn missing_security_scope_access_line_escapes_control_characters_in_path() {
+        let line = missing_security_scope_access_line(
+            Path::new("/Users/me/Documents/Reports\tQ3\nDraft.md"),
+            true,
+        );
+
+        assert_eq!(line.lines().count(), 1, "{line}");
+        assert!(line.starts_with(
+            "security-scope-access\t/Users/me/Documents/Reports\\tQ3\\nDraft.md\tstatus=missing\t"
+        ));
+        assert_eq!(line.split('\t').count(), 6, "{line}");
+    }
+
+    #[test]
+    fn resolved_security_scope_access_line_escapes_control_characters_in_path() {
+        let root = unique_temp_dir("gfm-access-resolved-bookmark-line");
+        let path = root.join("Documents\tQ3").join("Draft\nPlan.md");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, "plan").unwrap();
+        let store = SecurityScopedBookmarkStore::new(root.join("bookmarks.tsv"));
+        store
+            .upsert(gfm_mac::SecurityScopedBookmark::create(&path, true).unwrap())
+            .unwrap();
+        let access = store
+            .start_access_for_path(&path, true, true)
+            .unwrap()
+            .access
+            .expect("matching bookmark access");
+
+        let line = resolved_security_scope_access_line(&access);
+
+        assert_eq!(line.lines().count(), 1, "{line}");
+        assert!(
+            line.contains("Documents\\tQ3/Draft\\nPlan.md\tstatus=resolved\t"),
+            "{line}"
+        );
+        assert_eq!(line.split('\t').count(), 7, "{line}");
 
         fs::remove_dir_all(root).unwrap();
     }
