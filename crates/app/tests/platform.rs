@@ -4042,7 +4042,9 @@ fn reports_sidebar_fileprovider_invalidation_from_binary() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.starts_with("sidebar-cloud-invalidation\ticloud-drive\tpath="));
     assert!(stdout.contains("\tprevious=available-offline\tcurrent=cloud-only\t"));
-    assert!(stdout.contains("\tprogress=0\tinvalidate-row=true\t"));
+    assert!(stdout.contains(
+        "\tprogress=0\tprogress-source=state\tprogress-reason=remote-placeholder\tinvalidate-row=true\t"
+    ));
     assert!(stdout.ends_with("reason=sidebar-cloud-state-changed\n"));
 
     let _ = std::fs::remove_dir_all(root);
@@ -4091,7 +4093,9 @@ fn reports_sidebar_fileprovider_observed_invalidation_from_binary() {
     assert!(stdout.contains("\tprevious=downloaded\tcurrent=evicted\tchanged=true\t"));
     assert!(stdout.contains("\nsidebar-cloud-invalidation\ticloud-drive\tpath="));
     assert!(stdout.contains("\tprevious=available-offline\tcurrent=cloud-only\t"));
-    assert!(stdout.contains("\tprogress=0\tinvalidate-row=true\t"));
+    assert!(stdout.contains(
+        "\tprogress=0\tprogress-source=state\tprogress-reason=remote-placeholder\tinvalidate-row=true\t"
+    ));
     assert!(stdout.ends_with("reason=sidebar-cloud-state-changed\n"));
     let state_text = std::fs::read_to_string(&state).unwrap();
     assert!(state_text.contains("\nevicted\t"));
@@ -4227,7 +4231,9 @@ fn reports_sidebar_fileprovider_observer_probe_from_binary() {
     assert!(stdout.contains("\tprevious=downloaded\tcurrent=evicted\tchanged=true\t"));
     assert!(stdout.contains("\nsidebar-cloud-invalidation\ticloud-drive\tpath="));
     assert!(stdout.contains("\tprevious=available-offline\tcurrent=cloud-only\t"));
-    assert!(stdout.contains("\tprogress=0\tinvalidate-row=true\t"));
+    assert!(stdout.contains(
+        "\tprogress=0\tprogress-source=state\tprogress-reason=remote-placeholder\tinvalidate-row=true\t"
+    ));
     assert!(stdout.ends_with("reason=sidebar-cloud-state-changed\n"));
     let state_text = std::fs::read_to_string(&state).unwrap();
     assert_fileprovider_state_entry(&state_text, "evicted", &item);
@@ -4279,7 +4285,7 @@ fn sidebar_fileprovider_observed_invalidation_removes_deleted_tracked_subtree_fr
         child.display()
     )));
     assert!(stdout.contains(&format!(
-        "sidebar-cloud-invalidation\ticloud-drive\tpath={}\tprevious=available-offline\tcurrent=unavailable\tprogress=-\tinvalidate-row=true\t",
+        "sidebar-cloud-invalidation\ticloud-drive\tpath={}\tprevious=available-offline\tcurrent=unavailable\tprogress=-\tprogress-source=state\tprogress-reason=fileprovider-item-removed\tinvalidate-row=true\t",
         child.display()
     )));
     assert!(stdout.ends_with("reason=sidebar-cloud-state-changed\n"));
@@ -5651,11 +5657,11 @@ fn fileprovider_sidebar_observed_rename_updates_snapshot_from_binary() {
         new.display()
     )));
     assert!(stdout.contains(&format!(
-        "sidebar-cloud-invalidation\ticloud-drive\tpath={}\tprevious=available-offline\tcurrent=unavailable\tprogress=-\tinvalidate-row=true\t",
+        "sidebar-cloud-invalidation\ticloud-drive\tpath={}\tprevious=available-offline\tcurrent=unavailable\tprogress=-\tprogress-source=state\tprogress-reason=fileprovider-item-removed\tinvalidate-row=true\t",
         old.display()
     )));
     assert!(stdout.contains(&format!(
-        "sidebar-cloud-invalidation\ticloud-drive\tpath={}\tprevious=none\tcurrent=cloud-only\tprogress=0\tinvalidate-row=true\t",
+        "sidebar-cloud-invalidation\ticloud-drive\tpath={}\tprevious=none\tcurrent=cloud-only\tprogress=0\tprogress-source=state\tprogress-reason=remote-placeholder\tinvalidate-row=true\t",
         new.display()
     )));
 

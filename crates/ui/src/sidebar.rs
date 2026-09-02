@@ -94,6 +94,8 @@ pub struct SidebarItemSpec {
     pub path_state: SidebarPathState,
     pub cloud_state: SidebarCloudState,
     pub cloud_progress_milli: Option<u32>,
+    pub cloud_progress_source: Option<String>,
+    pub cloud_progress_reason: Option<String>,
     pub volume_kind: Option<SidebarVolumeKind>,
     pub volume_mount_state: Option<SidebarVolumeMountState>,
     pub volume_read_only: Option<bool>,
@@ -112,6 +114,8 @@ pub struct SidebarCloudInvalidation {
     pub previous: SidebarCloudState,
     pub current: SidebarCloudState,
     pub progress_milli: Option<u32>,
+    pub progress_source: Option<String>,
+    pub progress_reason: Option<String>,
     pub invalidate_row: bool,
     pub reason: String,
 }
@@ -144,14 +148,22 @@ impl SidebarCloudInvalidation {
             previous,
             current,
             progress_milli,
+            progress_source: None,
+            progress_reason: None,
             invalidate_row,
             reason,
         }
     }
 
+    pub fn with_progress_context(mut self, source: Option<String>, reason: Option<String>) -> Self {
+        self.progress_source = normalized_optional_string(source);
+        self.progress_reason = normalized_optional_string(reason);
+        self
+    }
+
     pub fn as_tsv(&self) -> String {
         format!(
-            "sidebar-cloud-invalidation\t{}\tpath={}\tprevious={}\tcurrent={}\tprogress={}\tinvalidate-row={}\treason={}",
+            "sidebar-cloud-invalidation\t{}\tpath={}\tprevious={}\tcurrent={}\tprogress={}\tprogress-source={}\tprogress-reason={}\tinvalidate-row={}\treason={}",
             self.row_id,
             self.path.display(),
             self.previous.as_str(),
@@ -159,6 +171,8 @@ impl SidebarCloudInvalidation {
             self.progress_milli
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string()),
+            format_optional_string(self.progress_source.as_deref()),
+            format_optional_string(self.progress_reason.as_deref()),
             self.invalidate_row,
             self.reason
         )
@@ -631,6 +645,8 @@ struct SidebarEnvironment {
     paths: SidebarPathSnapshot,
     icloud_state: SidebarCloudState,
     icloud_progress_milli: Option<u32>,
+    icloud_progress_source: Option<String>,
+    icloud_progress_reason: Option<String>,
     volumes: Vec<SidebarVolumeSpec>,
 }
 
@@ -640,6 +656,8 @@ impl SidebarEnvironment {
             paths: SidebarPathSnapshot::discover(),
             icloud_state: SidebarCloudState::None,
             icloud_progress_milli: None,
+            icloud_progress_source: None,
+            icloud_progress_reason: None,
             volumes: Vec::new(),
         }
     }
@@ -745,6 +763,8 @@ impl SidebarContract {
                 paths,
                 icloud_state: SidebarCloudState::None,
                 icloud_progress_milli: None,
+                icloud_progress_source: None,
+                icloud_progress_reason: None,
                 volumes,
             },
         )
@@ -763,6 +783,30 @@ impl SidebarContract {
                 paths,
                 icloud_state: cloud_state,
                 icloud_progress_milli: progress_milli,
+                icloud_progress_source: None,
+                icloud_progress_reason: None,
+                volumes,
+            },
+        )
+    }
+
+    pub fn from_path_snapshot_with_icloud_progress(
+        current_path: impl AsRef<Path>,
+        paths: SidebarPathSnapshot,
+        cloud_state: SidebarCloudState,
+        progress_milli: Option<u32>,
+        progress_source: Option<String>,
+        progress_reason: Option<String>,
+        volumes: Vec<SidebarVolumeSpec>,
+    ) -> Self {
+        Self::from_environment(
+            current_path,
+            SidebarEnvironment {
+                paths,
+                icloud_state: cloud_state,
+                icloud_progress_milli: progress_milli,
+                icloud_progress_source: normalized_optional_string(progress_source),
+                icloud_progress_reason: normalized_optional_string(progress_reason),
                 volumes,
             },
         )
@@ -792,6 +836,8 @@ impl SidebarContract {
             environment.paths.icloud_drive_state,
             environment.icloud_state,
             environment.icloud_progress_milli,
+            environment.icloud_progress_source,
+            environment.icloud_progress_reason,
             current_path,
         ));
         rows.extend(location_rows(&environment.volumes, current_path));
@@ -817,7 +863,7 @@ impl SidebarContract {
         ));
         lines.extend(self.rows.iter().map(|row| {
             format!(
-                "row\t{}\t{}\t{}\t{}\t{}\t{}\tdepth={}\tenabled={}\tselected={}\tejectable={}\tvirtual={}\tpath-state={}\tcloud={}\tcloud-progress={}\tvolume-kind={}\tvolume-mount={}\tvolume-read-only={}\tvolume-network={}\tvolume-reachable={}\tvolume-ejectable={}\tvolume-removable={}\tvolume-case-sensitive={}\tvolume-case-preserving={}",
+                "row\t{}\t{}\t{}\t{}\t{}\t{}\tdepth={}\tenabled={}\tselected={}\tejectable={}\tvirtual={}\tpath-state={}\tcloud={}\tcloud-progress={}\tcloud-progress-source={}\tcloud-progress-reason={}\tvolume-kind={}\tvolume-mount={}\tvolume-read-only={}\tvolume-network={}\tvolume-reachable={}\tvolume-ejectable={}\tvolume-removable={}\tvolume-case-sensitive={}\tvolume-case-preserving={}",
                 row.section,
                 row.id,
                 row.label,
@@ -837,6 +883,8 @@ impl SidebarContract {
                 row.cloud_progress_milli
                     .map(|value| value.to_string())
                     .unwrap_or_else(|| "-".to_string()),
+                format_optional_string(row.cloud_progress_source.as_deref()),
+                format_optional_string(row.cloud_progress_reason.as_deref()),
                 row.volume_kind
                     .map(SidebarVolumeKind::as_str)
                     .unwrap_or("-"),
@@ -1089,6 +1137,8 @@ fn icloud_row(
     path_state: SidebarPathState,
     cloud_state: SidebarCloudState,
     progress_milli: Option<u32>,
+    progress_source: Option<String>,
+    progress_reason: Option<String>,
     current_path: &Path,
 ) -> SidebarItemSpec {
     let path = icloud_drive.map(Path::to_path_buf);
@@ -1105,7 +1155,12 @@ fn icloud_row(
         "icloud",
     )
     .optional_path(path)
-    .cloud(cloud_state, progress_milli)
+    .cloud(
+        cloud_state,
+        progress_milli,
+        progress_source,
+        progress_reason,
+    )
     .state(RowState::path(path_state, selected)))
 }
 
@@ -1219,6 +1274,8 @@ struct RowDescriptor {
     state: RowState,
     cloud_state: SidebarCloudState,
     cloud_progress_milli: Option<u32>,
+    cloud_progress_source: Option<String>,
+    cloud_progress_reason: Option<String>,
     volume_kind: Option<SidebarVolumeKind>,
     volume_mount_state: Option<SidebarVolumeMountState>,
     volume_read_only: Option<bool>,
@@ -1250,6 +1307,8 @@ impl RowDescriptor {
             state: RowState::path(SidebarPathState::Available, false),
             cloud_state: SidebarCloudState::None,
             cloud_progress_milli: None,
+            cloud_progress_source: None,
+            cloud_progress_reason: None,
             volume_kind: None,
             volume_mount_state: None,
             volume_read_only: None,
@@ -1277,9 +1336,17 @@ impl RowDescriptor {
         self
     }
 
-    fn cloud(mut self, state: SidebarCloudState, progress_milli: Option<u32>) -> Self {
+    fn cloud(
+        mut self,
+        state: SidebarCloudState,
+        progress_milli: Option<u32>,
+        progress_source: Option<String>,
+        progress_reason: Option<String>,
+    ) -> Self {
         self.cloud_state = state;
         self.cloud_progress_milli = progress_milli;
+        self.cloud_progress_source = normalized_optional_string(progress_source);
+        self.cloud_progress_reason = normalized_optional_string(progress_reason);
         self
     }
 
@@ -1314,6 +1381,8 @@ fn row(descriptor: RowDescriptor) -> SidebarItemSpec {
         path_state: descriptor.state.path_state,
         cloud_state: descriptor.cloud_state,
         cloud_progress_milli: descriptor.cloud_progress_milli,
+        cloud_progress_source: descriptor.cloud_progress_source,
+        cloud_progress_reason: descriptor.cloud_progress_reason,
         volume_kind: descriptor.volume_kind,
         volume_mount_state: descriptor.volume_mount_state,
         volume_read_only: descriptor.volume_read_only,
@@ -1421,6 +1490,8 @@ mod tests {
                 ),
                 icloud_state: SidebarCloudState::None,
                 icloud_progress_milli: None,
+                icloud_progress_source: None,
+                icloud_progress_reason: None,
                 volumes: vec![SidebarVolumeSpec::from_native_seed(
                     "work",
                     "Work",
@@ -1448,6 +1519,8 @@ mod tests {
                 paths: test_paths("/Users/tester"),
                 icloud_state: SidebarCloudState::None,
                 icloud_progress_milli: None,
+                icloud_progress_source: None,
+                icloud_progress_reason: None,
                 volumes: Vec::new(),
             },
         );
@@ -1460,7 +1533,7 @@ mod tests {
             "row\tFavorites\thome\ttester\thome-folder\tfavorite\t/Users/tester\tdepth=0"
         ));
         assert!(output.contains(
-            "row\tiCloud\ticloud-drive\tiCloud Drive\ticloud-drive\tcloud\t-\tdepth=0\tenabled=false\tselected=false\tejectable=false\tvirtual=false\tpath-state=missing\tcloud=none\tcloud-progress=-\tvolume-kind=-\tvolume-mount=-\tvolume-read-only=-\tvolume-network=-\tvolume-reachable=-\tvolume-ejectable=-\tvolume-removable=-\tvolume-case-sensitive=-\tvolume-case-preserving=-"
+            "row\tiCloud\ticloud-drive\tiCloud Drive\ticloud-drive\tcloud\t-\tdepth=0\tenabled=false\tselected=false\tejectable=false\tvirtual=false\tpath-state=missing\tcloud=none\tcloud-progress=-\tcloud-progress-source=-\tcloud-progress-reason=-\tvolume-kind=-\tvolume-mount=-\tvolume-read-only=-\tvolume-network=-\tvolume-reachable=-\tvolume-ejectable=-\tvolume-removable=-\tvolume-case-sensitive=-\tvolume-case-preserving=-"
         ));
         assert!(output.contains(
             "row\tTags\ttag-all\tAll Tags...\tfinder-tag\ttag\t-\tdepth=0\tenabled=true"
@@ -1531,6 +1604,8 @@ mod tests {
                 paths: test_paths(home.clone()).with_home_state(SidebarPathState::Unavailable),
                 icloud_state: SidebarCloudState::None,
                 icloud_progress_milli: None,
+                icloud_progress_source: None,
+                icloud_progress_reason: None,
                 volumes: Vec::new(),
             },
         );
@@ -1580,6 +1655,8 @@ mod tests {
                 paths: test_paths("/Users/tester"),
                 icloud_state: SidebarCloudState::None,
                 icloud_progress_milli: None,
+                icloud_progress_source: None,
+                icloud_progress_reason: None,
                 volumes: vec![SidebarVolumeSpec::from_native_seed(
                     "network-volume",
                     "Team",
@@ -1627,6 +1704,8 @@ mod tests {
                 paths: test_paths("/Users/tester"),
                 icloud_state: SidebarCloudState::None,
                 icloud_progress_milli: None,
+                icloud_progress_source: None,
+                icloud_progress_reason: None,
                 volumes: vec![SidebarVolumeSpec::from_native_seed(
                     "diskarbitration:uuid:External",
                     "External",
@@ -2019,7 +2098,7 @@ mod tests {
         assert_eq!(row.cloud_progress_milli, Some(12_500));
         assert!(contract
             .as_tsv()
-            .contains("\tcloud=downloading\tcloud-progress=12500\tvolume-kind=-"));
+            .contains("\tcloud=downloading\tcloud-progress=12500\tcloud-progress-source=-\tcloud-progress-reason=-\tvolume-kind=-"));
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -2040,7 +2119,60 @@ mod tests {
         assert_eq!(invalidation.reason, "sidebar-cloud-state-changed");
         assert_eq!(
             invalidation.as_tsv(),
-            "sidebar-cloud-invalidation\ticloud-drive\tpath=/Users/tester/Library/Mobile Documents/com~apple~CloudDocs/Report.md\tprevious=cloud-only\tcurrent=available-offline\tprogress=-\tinvalidate-row=true\treason=sidebar-cloud-state-changed"
+            "sidebar-cloud-invalidation\ticloud-drive\tpath=/Users/tester/Library/Mobile Documents/com~apple~CloudDocs/Report.md\tprevious=cloud-only\tcurrent=available-offline\tprogress=-\tprogress-source=-\tprogress-reason=-\tinvalidate-row=true\treason=sidebar-cloud-state-changed"
+        );
+    }
+
+    #[test]
+    fn icloud_progress_context_survives_sidebar_contract() {
+        let path = PathBuf::from("/Users/tester/Library/Mobile Documents/com~apple~CloudDocs");
+        let contract = SidebarContract::from_path_snapshot_with_icloud_progress(
+            &path,
+            SidebarPathSnapshot::default()
+                .with_icloud_drive(path.clone(), SidebarPathState::Available),
+            SidebarCloudState::Downloading,
+            Some(42_000),
+            Some("native-url-resource".to_string()),
+            Some("provider-progress-unavailable".to_string()),
+            Vec::new(),
+        );
+
+        let row = contract
+            .rows
+            .iter()
+            .find(|row| row.id == "icloud-drive")
+            .unwrap();
+        assert_eq!(
+            row.cloud_progress_source.as_deref(),
+            Some("native-url-resource")
+        );
+        assert_eq!(
+            row.cloud_progress_reason.as_deref(),
+            Some("provider-progress-unavailable")
+        );
+        assert!(contract.as_tsv().contains(
+            "\tcloud=downloading\tcloud-progress=42000\tcloud-progress-source=native-url-resource\tcloud-progress-reason=provider-progress-unavailable\t"
+        ));
+    }
+
+    #[test]
+    fn fileprovider_invalidation_preserves_progress_context() {
+        let invalidation = SidebarCloudInvalidation::new(
+            "/Users/tester/Library/Mobile Documents/com~apple~CloudDocs/Report.md",
+            SidebarCloudState::AvailableOffline,
+            SidebarCloudState::Downloading,
+            Some(64_000),
+            true,
+            "fileprovider-progress-changed",
+        )
+        .with_progress_context(
+            Some("native-url-resource".to_string()),
+            Some("provider-progress-unavailable".to_string()),
+        );
+
+        assert_eq!(
+            invalidation.as_tsv(),
+            "sidebar-cloud-invalidation\ticloud-drive\tpath=/Users/tester/Library/Mobile Documents/com~apple~CloudDocs/Report.md\tprevious=available-offline\tcurrent=downloading\tprogress=64000\tprogress-source=native-url-resource\tprogress-reason=provider-progress-unavailable\tinvalidate-row=true\treason=sidebar-cloud-state-changed"
         );
     }
 

@@ -1821,7 +1821,9 @@ fn reports_fileprovider_state_in_ui_sidebar_contract_from_binary() {
 
     assert!(stdout.contains("row\tiCloud\ticloud-drive\tiCloud Drive\ticloud-drive\tcloud"));
     assert!(stdout.contains("\tselected=true\t"));
-    assert!(stdout.contains("\tcloud=downloading\tcloud-progress=-"));
+    assert!(stdout.contains(
+        "\tcloud=downloading\tcloud-progress=-\tcloud-progress-source=state\tcloud-progress-reason=provider-progress-unavailable"
+    ));
 
     let _ = std::fs::remove_dir_all(root);
 }

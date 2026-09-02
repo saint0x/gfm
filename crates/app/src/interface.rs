@@ -290,12 +290,14 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let report = read_ui_fileprovider_sidebar_state(provider_path.clone())?;
             println!(
                 "{}",
-                SidebarContract::from_path_snapshot_with_icloud_state(
+                SidebarContract::from_path_snapshot_with_icloud_progress(
                     current_path,
                     SidebarPathSnapshot::discover()
                         .with_icloud_drive(provider_path, SidebarPathState::Available),
                     sidebar_cloud_state(report.storage_state),
                     report.progress.percent_milli,
+                    Some(report.progress.source.to_string()),
+                    report.progress.reason,
                     Vec::new(),
                 )
                 .as_tsv()
@@ -320,6 +322,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     report.current.progress.percent_milli,
                     report.invalidate_sidebar,
                     report.reason,
+                )
+                .with_progress_context(
+                    Some(report.current.progress.source.to_string()),
+                    report.current.progress.reason,
                 )
                 .as_tsv()
             );
@@ -1006,6 +1012,10 @@ fn observed_sidebar_invalidation_tsv(observed: &FileProviderObservedInvalidation
             report.current.progress.percent_milli,
             report.invalidate_sidebar,
             report.reason,
+        )
+        .with_progress_context(
+            Some(report.current.progress.source.to_string()),
+            report.current.progress.reason.clone(),
         )
         .as_tsv()
     }));

@@ -10834,6 +10834,8 @@ fn ui_fileprovider_sidebar_state_reads_on_visible_worker_from_binary() {
     assert!(stdout.contains("sidebar\t"), "{stdout}");
     assert!(stdout.contains("icloud"), "{stdout}");
     assert!(stdout.contains("cloud"), "{stdout}");
+    assert!(stdout.contains("\tcloud-progress-source="), "{stdout}");
+    assert!(stdout.contains("\tcloud-progress-reason="), "{stdout}");
 
     fs::remove_dir_all(root).unwrap();
 }
@@ -10869,6 +10871,8 @@ fn ui_fileprovider_sidebar_invalidation_reads_on_visible_worker_from_binary() {
         "{stdout}"
     );
     assert!(stdout.contains("\tcurrent=cloud-only\t"), "{stdout}");
+    assert!(stdout.contains("\tprogress-source="), "{stdout}");
+    assert!(stdout.contains("\tprogress-reason="), "{stdout}");
 
     fs::remove_dir_all(root).unwrap();
 }
