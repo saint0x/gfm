@@ -5940,7 +5940,9 @@ fn reports_volume_index_policy_from_binary() {
     assert!(stdout.contains("\tid="));
     assert!(!stdout.contains("\tid=-\tpath="));
     assert!(stdout.contains("\tincluded=0\n"), "{stdout}");
-    assert!(stdout.contains("\tmount=mounted\treachable=true\taction=api-unavailable\t"));
+    assert!(stdout.contains("\tmount=mounted\treachable=true\tstable-id="));
+    assert!(!stdout.contains("\tstable-id=-\taction=api-unavailable\t"));
+    assert!(stdout.contains("\taction=api-unavailable\t"));
     assert!(stdout.contains("\tthrottle=suspended\tmax-jobs=0\t"));
     assert!(stdout.contains("\tnative-status=unavailable\t"), "{stdout}");
     assert!(
@@ -6187,6 +6189,8 @@ fn volume_known_facts_lost_invalidates_index_from_binary() {
     assert!(stdout.contains("\tcurrent-mountable=-\t"));
     assert!(stdout.contains("\tprevious-case-sensitive=false\t"));
     assert!(stdout.contains("\tcurrent-case-sensitive=-\t"));
+    assert!(stdout.contains("\tprevious-stable-id=diskarbitration:uuid:KNOWN-FACTS\t"));
+    assert!(stdout.contains("\tcurrent-stable-id=-\t"));
     assert!(stdout.contains("\toperation-policy=true\tindex-admission=true\t"));
     assert!(stdout.contains("\tcancel-index-jobs=true\tclear-fsevents-cursor=true\t"));
     assert!(stdout.contains("\treason=volume-read-only-changed\n"));
@@ -6194,6 +6198,8 @@ fn volume_known_facts_lost_invalidates_index_from_binary() {
         "volume-event-index-invalidation\tkind=description-changed\tpath=/Volumes/Known Facts Lost\t"
     ));
     assert!(stdout.contains("\tidentity-changed=true\tfilesystem-changed=true\t"));
+    assert!(stdout.contains("\tprevious-stable-id=diskarbitration:uuid:KNOWN-FACTS\t"));
+    assert!(stdout.contains("\tcurrent-stable-id=-\t"));
     assert!(stdout.ends_with("reason=volume-event-identity-changed\n"));
 }
 
@@ -6294,6 +6300,10 @@ fn reports_volume_topology_index_invalidation_from_binary() {
     );
     assert!(stdout.contains("\tkind=disappeared\t"));
     assert!(stdout.contains("\tkind=appeared\t"));
+    assert!(stdout.contains("\tprevious-stable-id="));
+    assert!(stdout.contains("\tcurrent-stable-id="));
+    assert!(stdout.contains("\tprevious-stable-id=-\t"));
+    assert!(stdout.contains("\tcurrent-stable-id=-\t"));
     assert!(stdout.contains("\treason=volume-event-disconnected\n"));
     assert!(stdout.contains("\treason=volume-event-connected\n"));
     assert!(stdout.contains("\tcancel-index-jobs=true\t"));
@@ -6927,6 +6937,9 @@ fn reports_volume_event_index_invalidation_from_binary() {
     assert!(connected_stdout.contains("\tprevious-volume=-\t"));
     assert!(connected_stdout.contains("\tcurrent-volume="));
     assert!(connected_stdout.contains("\tcurrent-class=external\tcurrent-mount=mounted\t"));
+    assert!(connected_stdout.contains("\tprevious-stable-id=-\t"));
+    assert!(connected_stdout.contains("\tcurrent-stable-id="));
+    assert!(!connected_stdout.contains("\tcurrent-stable-id=-\t"));
     assert!(connected_stdout.contains("\tindex-admission=true\trescan-index=true\t"));
     assert!(connected_stdout.contains("\tcancel-index-jobs=false\t"));
     assert!(connected_stdout.ends_with("reason=volume-event-connected\n"));
@@ -6946,6 +6959,8 @@ fn reports_volume_event_index_invalidation_from_binary() {
         .starts_with("volume-event-index-invalidation\tkind=unavailable\tpath=-\t"));
     assert!(unavailable_stdout.contains("\tprevious-volume=-\t"));
     assert!(unavailable_stdout.contains("\tcurrent-volume=-\t"));
+    assert!(unavailable_stdout.contains("\tprevious-stable-id=-\t"));
+    assert!(unavailable_stdout.contains("\tcurrent-stable-id=-\t"));
     assert!(unavailable_stdout.contains("\tcancel-index-jobs=true\t"));
     assert!(unavailable_stdout.contains("\tclear-fsevents-cursor=true\t"));
 

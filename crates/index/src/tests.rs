@@ -1981,17 +1981,22 @@ fn volume_index_policy_defers_unknown_volumes_by_default() {
         IndexVolumeClass::Unknown,
         IndexMountState::Mounted,
     )
-    .with_volume_id(VolumeId(9));
+    .with_volume_id(VolumeId(9))
+    .with_stable_identity("diskarbitration:uuid:UNKNOWN");
 
     let decision = policy.decide(&unknown);
 
     assert_eq!(decision.action, VolumeIndexAction::DeferredOptIn);
     assert_eq!(decision.throttle.class, VolumeThrottleClass::Suspended);
     assert_eq!(decision.reason, "requires-opt-in");
+    assert_eq!(
+        decision.stable_identity.as_deref(),
+        Some("diskarbitration:uuid:UNKNOWN")
+    );
     assert!(!decision.should_index());
     assert!(decision
         .as_tsv()
-        .contains("\tclass=unknown\tmount=mounted\treachable=true\taction=deferred-opt-in\t"));
+        .contains("\tclass=unknown\tmount=mounted\treachable=true\tstable-id=diskarbitration:uuid:UNKNOWN\taction=deferred-opt-in\t"));
 }
 
 #[test]
@@ -2055,6 +2060,7 @@ fn volume_index_plan_builds_precise_search_scope_from_included_volume_ids() {
         SearchVolumeScope::only([VolumeId(1), VolumeId(2)])
     );
     assert!(plan.as_tsv().contains("\tid=2\tpath=/Volumes/Work\t"));
+    assert!(plan.as_tsv().contains("\tstable-id=-\taction=include\t"));
 }
 
 #[test]
@@ -2140,9 +2146,9 @@ fn volume_index_policy_uses_slow_throttle_for_slow_external_media() {
         decision.throttle.content_bytes_per_second,
         Some(32 * 1024 * 1024)
     );
-    assert!(decision
-        .as_tsv()
-        .contains("\tclass=slow\tmount=mounted\treachable=true\taction=include\tthrottle=slow\t"));
+    assert!(decision.as_tsv().contains(
+        "\tclass=slow\tmount=mounted\treachable=true\tstable-id=-\taction=include\tthrottle=slow\t"
+    ));
 }
 
 #[test]
@@ -2202,7 +2208,7 @@ fn volume_index_policy_suspends_unreachable_remote_volumes_before_policy_admissi
     assert!(plan.included_roots().is_empty());
     assert!(plan
         .as_tsv()
-        .contains("\tmount=mounted\treachable=false\taction=unreachable\t"));
+        .contains("\tmount=mounted\treachable=false\tstable-id=-\taction=unreachable\t"));
 }
 
 #[test]

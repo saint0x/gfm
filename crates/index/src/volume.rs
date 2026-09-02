@@ -527,6 +527,7 @@ pub struct VolumeIndexDecision {
     pub class: IndexVolumeClass,
     pub mount_state: IndexMountState,
     pub reachable: Option<bool>,
+    pub stable_identity: Option<String>,
     pub native_status: Option<String>,
     pub native_reason: Option<String>,
     pub resource_status: Option<String>,
@@ -552,6 +553,7 @@ impl VolumeIndexDecision {
             class: volume.class,
             mount_state: volume.mount_state,
             reachable: volume.reachable,
+            stable_identity: volume.stable_identity.clone(),
             native_status: volume.native_status.clone(),
             native_reason: volume.native_reason.clone(),
             resource_status: volume.resource_status.clone(),
@@ -570,7 +572,7 @@ impl VolumeIndexDecision {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume-index\t{}\tid={}\tpath={}\tclass={}\tmount={}\treachable={}\taction={}\t{}\tnative-status={}\tnative-reason={}\tresource-status={}\tresource-reason={}\tmount-status={}\tmount-reason={}\treason={}",
+            "volume-index\t{}\tid={}\tpath={}\tclass={}\tmount={}\treachable={}\tstable-id={}\taction={}\t{}\tnative-status={}\tnative-reason={}\tresource-status={}\tresource-reason={}\tmount-status={}\tmount-reason={}\treason={}",
             escape_field(&self.label),
             self.id
                 .map(|id| id.0.to_string())
@@ -581,6 +583,7 @@ impl VolumeIndexDecision {
             self.reachable
                 .map(|value| value.to_string())
                 .unwrap_or_else(|| "-".to_string()),
+            format_optional_string(self.stable_identity.as_deref()),
             self.action.as_str(),
             self.throttle.as_tsv_fields(),
             format_optional_string(self.native_status.as_deref()),
