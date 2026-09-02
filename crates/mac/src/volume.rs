@@ -1507,6 +1507,9 @@ fn native_event_descriptor_checked(
     if kind == VolumeEventKind::Unavailable {
         return Ok(None);
     }
+    if kind == VolumeEventKind::Disappeared {
+        return Ok(None);
+    }
     let Some(path) = path else {
         return Ok(None);
     };
@@ -8104,6 +8107,37 @@ mod tests {
         assert!(invalidation.invalidate_sidebar);
         assert!(invalidation.invalidate_operation_policy);
         assert!(invalidation.invalidate_index_admission);
+    }
+
+    #[test]
+    fn native_disappeared_event_for_existing_path_does_not_refresh_current_descriptor() {
+        let root = unique_temp_dir("gfm-native-volume-event-existing-disappeared");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let event = gfm_mac_sys::NativeVolumeEvent {
+            kind: gfm_mac_sys::NativeVolumeEventKind::Disappeared,
+            description: native_description(|description| {
+                description.status = NativeVolumeStatus::Available;
+                description.volume_path = Some(root.clone());
+                description.reason = Some("DiskArbitration volume disappeared".to_string());
+            }),
+        };
+
+        let report = VolumeEventReport::from_native_checked(event, || Ok(())).unwrap();
+        let invalidation = VolumeEventInvalidationReport::from_event(&report);
+
+        assert_eq!(report.kind, VolumeEventKind::Disappeared);
+        assert_eq!(report.path.as_deref(), Some(root.as_path()));
+        assert!(report.descriptor.is_none());
+        assert_eq!(invalidation.previous_kind, None);
+        assert_eq!(invalidation.current_kind, None);
+        assert_eq!(
+            invalidation.current_mount_state,
+            Some(MountState::Unmounted)
+        );
+        assert!(invalidation.invalidate_sidebar);
+        assert!(invalidation.invalidate_operation_policy);
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

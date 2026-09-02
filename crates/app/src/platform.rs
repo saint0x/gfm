@@ -37,9 +37,9 @@ use gfm_mac::{
     SecurityScopedBookmarkStatus, SecurityScopedBookmarkStore, SecurityWorkerAction,
     SecurityWorkerAdmissionReport, SpotlightMetadataReader, SpotlightReconciliationReport,
     VolumeDescriptor, VolumeDiscoveryReport, VolumeEventInvalidationReport, VolumeEventKind,
-    VolumeEventReport, VolumeEventState, VolumeEventStateBatchReport, VolumeEventStream,
-    VolumeMountIdentityReport, VolumeOperation, VolumeOperationReport, VolumeTopologyChangeKind,
-    VolumeTopologyDiff, WatchRoot,
+    VolumeEventReport, VolumeEventState, VolumeEventStateBatchReport, VolumeEventStateTransition,
+    VolumeEventStream, VolumeMountIdentityReport, VolumeOperation, VolumeOperationReport,
+    VolumeTopologyChangeKind, VolumeTopologyDiff, WatchRoot,
 };
 use gfm_preview::{
     decide_invalidation, decide_preview_security, preview_invalidation_for_fileprovider,
@@ -714,6 +714,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "volume-event-state-batch" => {
             println!("{}", volume_event_state_batch_from_args(args)?.as_tsv());
+        }
+        "volume-event-state-runtime-fanout" => {
+            for line in volume_event_state_runtime_fanout_from_args(args)? {
+                println!("{line}");
+            }
         }
         "volume-case-sensitivity-invalidation" => {
             let previous_case_sensitive = parse_platform_bool(
@@ -1858,11 +1863,14 @@ fn volume_event_state_batch_from_args(
         let path = required_string(args.next(), "volume event state batch requires event path")?;
         let path = (path != "-").then(|| PathBuf::from(path));
         let resolution = resolve_volume_event_path(kind, path)?;
+        let descriptor = (kind != VolumeEventKind::Disappeared)
+            .then_some(resolution.descriptor)
+            .flatten();
         events.push(VolumeEventReport {
             kind,
             native_status: resolution.native_status,
             path: resolution.path,
-            descriptor: resolution.descriptor,
+            descriptor,
             reason: resolution.native_reason,
         });
     }
@@ -1874,6 +1882,14 @@ fn volume_event_state_batch_from_args(
 
     let mut state = VolumeEventState::new(volume_discovery_report(previous_paths, false)?);
     state.apply_events_checked(events, || Ok(()))
+}
+
+fn volume_event_state_runtime_fanout_from_args(
+    args: &mut impl Iterator<Item = String>,
+) -> Result<Vec<String>> {
+    Ok(volume_event_state_runtime_fanout(
+        &volume_event_state_batch_from_args(args)?,
+    ))
 }
 
 fn volume_event_runtime_fanout_from_args(
@@ -1907,10 +1923,16 @@ fn volume_event_runtime_fanout_from_args(
         current,
         resolution.native_reason,
     );
+    Ok(volume_event_runtime_fanout_for_transition(&transition))
+}
+
+fn volume_event_runtime_fanout_for_transition(
+    transition: &VolumeEventStateTransition,
+) -> Vec<String> {
     let previous_index = transition.previous.as_ref().map(index_volume_descriptor);
     let current_index = transition.current.as_ref().map(index_volume_descriptor);
     let mut index = VolumeEventIndexInvalidationReport::from_event(
-        index_volume_event_kind(kind),
+        index_volume_event_kind(transition.invalidation.kind),
         transition.invalidation.path.clone(),
         previous_index.as_ref(),
         current_index.as_ref(),
@@ -1923,7 +1945,7 @@ fn volume_event_runtime_fanout_from_args(
     let previous_sidebar = transition.previous.as_ref().map(sidebar_volume_spec);
     let current_sidebar = transition.current.as_ref().map(sidebar_volume_spec);
     let sidebar = SidebarVolumeInvalidation::from_event(
-        sidebar_volume_event_kind(kind),
+        sidebar_volume_event_kind(transition.invalidation.kind),
         transition.invalidation.path.clone(),
         previous_sidebar.as_ref(),
         current_sidebar.as_ref(),
@@ -1961,7 +1983,27 @@ fn volume_event_runtime_fanout_from_args(
             }
         ));
     }
-    Ok(lines)
+    lines
+}
+
+fn volume_event_state_runtime_fanout(batch: &VolumeEventStateBatchReport) -> Vec<String> {
+    let mut lines = vec![format!(
+        "volume-event-state-runtime-fanout\tinput={}\tresolved={}\tapplied={}\tresulting-volumes={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}",
+        batch.input_events,
+        batch.resolved_events,
+        batch.applied_events,
+        batch.resulting_volumes,
+        batch.invalidate_sidebar,
+        batch.invalidate_operation_policy,
+        batch.invalidate_index_admission,
+        batch.rescan_index,
+        batch.cancel_index_jobs,
+        batch.clear_fsevents_cursor
+    )];
+    for transition in &batch.transitions {
+        lines.extend(volume_event_runtime_fanout_for_transition(transition));
+    }
+    lines
 }
 
 fn volume_event_runtime_fanout_summary(

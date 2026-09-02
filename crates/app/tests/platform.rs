@@ -207,8 +207,8 @@ fn ui_permission_access_contract_reports_blocked_volume_orchestration_from_binar
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
-
     let stderr = String::from_utf8(output.stderr).unwrap();
+
     assert!(
         stdout.starts_with("dialog\tsurface=permission\tpresentation=window-sheet\t"),
         "{stdout}"
@@ -221,7 +221,6 @@ fn ui_permission_access_contract_reports_blocked_volume_orchestration_from_binar
     assert!(stdout.contains("\trefresh-on-permission-change=true\t"));
     assert!(stdout.contains("unreachable volume network"));
     assert!(stdout.contains("security-worker-admission\tworker=preview worker\t"));
-
     assert!(stdout.contains("ui-permission-volume-access\tworker=preview worker\t"));
     assert!(stdout.contains(&format!("\tpath={}\tintent=preview\t", path.display())));
     assert!(stdout.contains(&format!("\tvolume-root={}\t", root.display())));
@@ -231,6 +230,7 @@ fn ui_permission_access_contract_reports_blocked_volume_orchestration_from_binar
         !stderr.contains("ui-permission-volume-access\t"),
         "{stderr}"
     );
+
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -8075,6 +8075,103 @@ fn reports_volume_event_state_batch_from_binary() {
     assert!(stdout.contains("\nvolume-event-invalidation\tkind=appeared\t"));
     assert!(stdout.contains("\nvolume-event-invalidation\tkind=disappeared\t"));
     assert!(stdout.contains("\tcurrent-mount=unmounted\t"));
+
+    let _ = std::fs::remove_dir_all(previous);
+    let _ = std::fs::remove_dir_all(appeared);
+}
+
+#[test]
+fn reports_volume_event_state_runtime_fanout_from_binary() {
+    let previous = std::env::temp_dir().join(format!(
+        "gfm-volume-event-state-runtime-previous-{}",
+        std::process::id()
+    ));
+    let appeared = std::env::temp_dir().join(format!(
+        "gfm-volume-event-state-runtime-appeared-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&previous);
+    let _ = std::fs::remove_dir_all(&appeared);
+    std::fs::create_dir_all(&previous).unwrap();
+    std::fs::create_dir_all(&appeared).unwrap();
+    std::fs::write(previous.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+    std::fs::write(appeared.join(".gfm-volume-kind"), "network-smb\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-event-state-runtime-fanout")
+        .arg(&previous)
+        .arg("--")
+        .arg("appeared")
+        .arg(&appeared)
+        .arg("description-changed")
+        .arg(&previous)
+        .arg("disappeared")
+        .arg(&previous)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines = stdout.lines().collect::<Vec<_>>();
+
+    assert!(stdout.starts_with(
+        "volume-event-state-runtime-fanout\tinput=3\tresolved=3\tapplied=2\tresulting-volumes=1\t"
+    ));
+    assert!(stdout.contains(
+        "\tsidebar=true\toperation-policy=true\tindex-admission=true\trescan-index=true\t"
+    ));
+    assert!(stdout.contains("\tcancel-index-jobs=true\tclear-fsevents-cursor=true\n"));
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.starts_with("volume-event-runtime-fanout\t"))
+            .count(),
+        3
+    );
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.starts_with("volume-event-index-invalidation\t"))
+            .count(),
+        3
+    );
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.starts_with("sidebar-volume-invalidation\t"))
+            .count(),
+        3
+    );
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.starts_with("volume-event-operation-policy-invalidation\t"))
+            .count(),
+        3
+    );
+    assert!(stdout.contains("volume-event-runtime-fanout\tkind=appeared\t"));
+    assert!(stdout.contains("\treason=volume-event-connected\n"));
+    assert!(stdout.contains("volume-event-runtime-fanout\tkind=description-changed\t"));
+    assert!(stdout.contains("\treason=volume-event-state-unchanged\n"));
+    assert!(stdout.contains("volume-event-runtime-fanout\tkind=disappeared\t"));
+    assert!(stdout.contains("\treason=volume-event-disappeared\n"));
+    assert!(stdout.contains("\tkind=appeared\tpath="));
+    assert!(stdout.contains("\tcurrent-class=network\tcurrent-mount=mounted\t"));
+    assert!(stdout.contains("\tcurrent-network=true\t"));
+    assert!(stdout.contains("\tkind=disappeared\tpath="));
+    assert!(stdout.contains("\tprevious-class=external\tprevious-mount=mounted\t"));
+    assert!(stdout.contains("\tcurrent-class=-\tcurrent-mount=-\t"));
+    assert!(stdout.contains("\nvolume-job-cancellation\tvolume="));
+    assert!(stdout.contains("\tclass=background\tcancelled=1\n"));
+    assert!(stdout.contains("cancelled-job\t1\tbackground\tbackground\tindex invalidated volume"));
+    assert!(stdout.contains(
+        "volume-job-cancellation\tvolume=-\tclass=background\tcancelled=0\treason=index-jobs-still-valid\n"
+    ));
+    assert!(!stdout.contains("render visible volume previews"));
+    assert!(!stdout.contains("index unrelated volume"));
 
     let _ = std::fs::remove_dir_all(previous);
     let _ = std::fs::remove_dir_all(appeared);
