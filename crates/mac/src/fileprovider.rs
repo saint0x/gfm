@@ -1204,16 +1204,18 @@ impl FileProviderStateInvalidationReport {
             check()?;
             let previous_entry = previous_entries.get(path.as_path()).copied();
             let previous_state = previous_entry.map(|entry| entry.state);
-            let path_exists = path
-                .try_exists()
-                .map_err(|err| GfmError::io(&path, format!("path existence unavailable: {err}")))?;
+            let path_exists = fileprovider_state_refresh_path_exists(&path)?;
             check()?;
             let current = if path_exists
                 || (previous_state.is_none() && is_evicted_placeholder_path(&path))
             {
-                Some(FileProviderStateReport::read_path_checked(
-                    &path, &mut check,
-                )?)
+                Some(
+                    FileProviderStateReport::from_path_with_known_existence_checked(
+                        path.clone(),
+                        path_exists,
+                        &mut check,
+                    )?,
+                )
             } else if previous_state.is_some() {
                 Some(FileProviderStateReport::removed(path.clone()))
             } else {
@@ -2357,6 +2359,17 @@ fn ensure_fileprovider_read_path(path: &Path) -> Result<bool> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
             Err(GfmError::io(path, "path does not exist"))
         }
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("path metadata unavailable: {err}"),
+        )),
+    }
+}
+
+fn fileprovider_state_refresh_path_exists(path: &Path) -> Result<bool> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(err) => Err(GfmError::io(
             path,
             format!("path metadata unavailable: {err}"),
@@ -4615,7 +4628,7 @@ mod tests {
 
         let err = FileProviderStateInvalidationReport::evaluate(None, [path]).unwrap_err();
 
-        assert!(err.to_string().contains("path existence unavailable"));
+        assert!(err.to_string().contains("path metadata unavailable"));
     }
 
     #[test]
@@ -4628,6 +4641,28 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(err, GfmError::Cancelled);
+    }
+
+    #[test]
+    fn checked_state_invalidation_can_cancel_after_path_metadata_probe() {
+        let root = unique_temp_dir();
+        let path = root.join("Downloaded.icloud.md");
+        fs::write(&path, "local").unwrap();
+        let mut checks = 0usize;
+
+        let err = FileProviderStateInvalidationReport::evaluate_checked(None, [path], || {
+            checks += 1;
+            if checks > 3 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert_eq!(checks, 4);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
