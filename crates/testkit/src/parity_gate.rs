@@ -822,7 +822,7 @@ fn render_review_markdown(report: &ParityGateReport) -> String {
     let manifest = report
         .manifest_path
         .as_ref()
-        .map(|path| path.display().to_string())
+        .map(|path| escape_markdown_inline_code_path(path))
         .unwrap_or_else(|| "<in-memory>".to_string());
     let mut text = String::new();
     text.push_str("# GFM Finder Parity Review\n\n");
@@ -845,7 +845,7 @@ fn render_review_markdown(report: &ParityGateReport) -> String {
                 text.push_str(&format!(
                     "| {} | {} | {} | {} | {} | {}x{} | {} | {} | {} | {} | {} | {} |\n",
                     entry.input.surface.as_str(),
-                    provenance.macos_build,
+                    escape_markdown_table_cell(&provenance.macos_build),
                     provenance.appearance.as_str(),
                     provenance.scale.as_str(),
                     provenance.color_profile.as_str(),
@@ -853,10 +853,10 @@ fn render_review_markdown(report: &ParityGateReport) -> String {
                     provenance.window_size.height,
                     provenance.focus.as_str(),
                     provenance.view_mode.as_str(),
-                    provenance.fixture_root.display(),
-                    provenance.reviewer,
-                    provenance.signer,
-                    provenance.approved_mask_set
+                    escape_markdown_table_cell(&provenance.fixture_root.display().to_string()),
+                    escape_markdown_table_cell(&provenance.reviewer),
+                    escape_markdown_table_cell(&provenance.signer),
+                    escape_markdown_table_cell(&provenance.approved_mask_set)
                 ));
             }
         }
@@ -1146,6 +1146,20 @@ fn escape_tsv_field(value: &str) -> String {
 
 fn escape_tsv_path(path: &Path) -> String {
     escape_tsv_field(&path.display().to_string())
+}
+
+fn escape_markdown_table_cell(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('|', "\\|")
+        .replace(['\t', '\n', '\r'], " ")
+}
+
+fn escape_markdown_inline_code_path(path: &Path) -> String {
+    path.display()
+        .to_string()
+        .replace('`', "\\`")
+        .replace(['\t', '\n', '\r'], " ")
 }
 
 fn resolve_manifest_path(base: &Path, value: &str) -> PathBuf {
@@ -1603,16 +1617,16 @@ mod tests {
                     fixture_manifest: "fixtures\nmanifest.tsv".to_string(),
                     captured_at: "2026-08-27T00:00:00Z".to_string(),
                     capture_command: "screencapture\t-x".to_string(),
-                    reviewer: "reviewer\nname".to_string(),
-                    signer: "signer\rname".to_string(),
-                    approved_mask_set: "macos-25A354-default".to_string(),
+                    reviewer: "reviewer|name\nline".to_string(),
+                    signer: "signer|name\rline".to_string(),
+                    approved_mask_set: "macos-25A354-default|reviewed".to_string(),
                     appearance: ParityAppearance::Dark,
                     scale: DisplayScale::Two,
                     color_profile: ColorProfile::DisplayP3,
                     window_size: PixelSize::new(1040, 720),
                     focus: ParityFocusState::Active,
                     view_mode: ParityViewMode::List,
-                    fixture_root: root.join("fixtures\troot"),
+                    fixture_root: root.join("fixtures|root\tline"),
                 }),
                 diff: empty_report(PixelSize::new(1, 1)),
                 evaluation: PixelThresholdEvaluation {
@@ -1624,6 +1638,7 @@ mod tests {
         };
 
         let bundle = write_parity_review_bundle(report, &output).unwrap();
+        let review_markdown = fs::read_to_string(&bundle.review_path).unwrap();
         let entries = fs::read_to_string(&bundle.entries_path).unwrap();
         let bundle_manifest = fs::read_to_string(&bundle.bundle_manifest_path).unwrap();
 
@@ -1632,11 +1647,35 @@ mod tests {
         assert!(entries.contains("studio display"), "{entries}");
         assert!(entries.contains("fixtures manifest.tsv"), "{entries}");
         assert!(entries.contains("screencapture -x"), "{entries}");
-        assert!(entries.contains("reviewer name"), "{entries}");
-        assert!(entries.contains("signer name"), "{entries}");
-        assert!(entries.contains("fixtures root"), "{entries}");
+        assert!(entries.contains("reviewer|name line"), "{entries}");
+        assert!(entries.contains("signer|name line"), "{entries}");
+        assert!(entries.contains("fixtures|root line"), "{entries}");
         assert!(!entries.contains("finder\tcapture.rgba"), "{entries}");
         assert!(!entries.contains("gfm\ncapture.rgba"), "{entries}");
+        assert!(
+            review_markdown.contains("fixtures\\|root line"),
+            "{review_markdown}"
+        );
+        assert!(
+            review_markdown.contains("reviewer\\|name line"),
+            "{review_markdown}"
+        );
+        assert!(
+            review_markdown.contains("signer\\|name line"),
+            "{review_markdown}"
+        );
+        assert!(
+            review_markdown.contains("macos-25A354-default\\|reviewed"),
+            "{review_markdown}"
+        );
+        assert!(
+            review_markdown.contains("gate manifest.tsv"),
+            "{review_markdown}"
+        );
+        assert!(
+            !review_markdown.contains("gate\rmanifest.tsv"),
+            "{review_markdown}"
+        );
         assert!(
             bundle_manifest.contains("review bundle/review.md"),
             "{bundle_manifest}"
