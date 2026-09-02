@@ -2196,7 +2196,7 @@ fn volume_event_operation_policy_invalidation_tsv(
     current: Option<&VolumeDescriptor>,
 ) -> String {
     format!(
-        "volume-event-operation-policy-invalidation\tkind={}\tpath={}\tprevious-class={}\tprevious-stable-id={}\tprevious-mount={}\tprevious-read-only={}\tprevious-network={}\tprevious-reachable={}\tprevious-removable={}\tprevious-case-sensitive={}\tprevious-case-preserving={}\tprevious-slow={}\tcurrent-class={}\tcurrent-stable-id={}\tcurrent-mount={}\tcurrent-read-only={}\tcurrent-network={}\tcurrent-reachable={}\tcurrent-removable={}\tcurrent-case-sensitive={}\tcurrent-case-preserving={}\tcurrent-slow={}\tinvalidate-policy={}\treason={}",
+        "volume-event-operation-policy-invalidation\tkind={}\tpath={}\tprevious-class={}\tprevious-stable-id={}\tprevious-mount={}\tprevious-writable={}\tprevious-read-only={}\tprevious-network={}\tprevious-reachable={}\tprevious-removable={}\tprevious-case-sensitive={}\tprevious-case-preserving={}\tprevious-slow={}\tcurrent-class={}\tcurrent-stable-id={}\tcurrent-mount={}\tcurrent-writable={}\tcurrent-read-only={}\tcurrent-network={}\tcurrent-reachable={}\tcurrent-removable={}\tcurrent-case-sensitive={}\tcurrent-case-preserving={}\tcurrent-slow={}\tinvalidate-policy={}\treason={}",
         platform.kind.as_str(),
         platform
             .path
@@ -2211,6 +2211,10 @@ fn volume_event_operation_policy_invalidation_tsv(
         previous
             .map(|volume| volume.mount_state.as_str())
             .unwrap_or("-"),
+        previous
+            .map(|volume| volume.writable)
+            .map(|writable| writable.to_string())
+            .unwrap_or_else(|| "-".to_string()),
         previous
             .map(|volume| volume.read_only)
             .map(|read_only| read_only.to_string())
@@ -2238,6 +2242,10 @@ fn volume_event_operation_policy_invalidation_tsv(
         current
             .map(|volume| volume.mount_state.as_str())
             .unwrap_or("-"),
+        current
+            .map(|volume| volume.writable)
+            .map(|writable| writable.to_string())
+            .unwrap_or_else(|| "-".to_string()),
         current
             .map(|volume| volume.read_only)
             .map(|read_only| read_only.to_string())
