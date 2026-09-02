@@ -3396,12 +3396,6 @@ fn volume_access_state(
     mount_table: Option<&NativeVolumeMountTableEntry>,
     filesystem_writable: bool,
 ) -> VolumeAccessState {
-    if let Some(read_only) = marker_read_only(marker) {
-        return VolumeAccessState {
-            writable: !read_only,
-            read_only,
-        };
-    }
     if let Some(read_only) = mount_table
         .filter(|mount_table| mount_table.status == NativeVolumeStatus::Available)
         .and_then(|mount_table| mount_table.is_read_only)
@@ -3427,6 +3421,12 @@ fn volume_access_state(
         return VolumeAccessState {
             writable,
             read_only: !writable,
+        };
+    }
+    if let Some(read_only) = marker_read_only(marker) {
+        return VolumeAccessState {
+            writable: !read_only,
+            read_only,
         };
     }
     VolumeAccessState {
@@ -4955,7 +4955,7 @@ mod tests {
     }
 
     #[test]
-    fn volume_access_prefers_fixture_read_only_marker_over_host_mount_table() {
+    fn volume_access_prefers_native_truth_over_fixture_read_only_marker() {
         let mount_table = mount_table_entry(|entry| {
             entry.is_read_only = Some(false);
         });
@@ -4977,8 +4977,8 @@ mod tests {
         assert_eq!(
             access,
             VolumeAccessState {
-                writable: false,
-                read_only: true
+                writable: true,
+                read_only: false
             }
         );
     }

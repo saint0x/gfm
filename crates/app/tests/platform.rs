@@ -1240,7 +1240,7 @@ fn security_worker_admission_refuses_unreachable_volume_from_binary() {
 }
 
 #[test]
-fn security_worker_admission_refuses_write_on_read_only_volume_from_binary() {
+fn security_worker_admission_prefers_native_write_truth_over_read_only_marker_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-security-worker-read-only-volume-{}",
         std::process::id()
@@ -1268,13 +1268,13 @@ fn security_worker_admission_refuses_write_on_read_only_volume_from_binary() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.starts_with("security-worker-admission\t"));
-    assert!(stdout.contains("\tintent=write\tscope=none\tprobe=unknown\t"));
-    assert!(stdout.contains("\tmode=denied\t"));
-    assert!(stdout.contains("\taccess-action=deny\tworker-action=deny\t"));
-    assert!(stdout.contains("\tcan-touch-filesystem=false\t"));
-    assert!(stdout.contains("\trefresh-on-permission-change=true\t"));
-    assert!(stdout.contains("export worker volume access blocked"));
-    assert!(stdout.contains("read-only volume external"));
+    assert!(stdout.contains("\tintent=write\tscope=none\tprobe=granted\t"));
+    assert!(stdout.contains("\tmode=plain-filesystem\t"));
+    assert!(stdout.contains("\taccess-action=allow\tworker-action=start\t"));
+    assert!(stdout.contains("\tcan-touch-filesystem=true\t"));
+    assert!(stdout.contains("\trefresh-on-permission-change=false\t"));
+    assert!(stdout.contains("export worker may start with filesystem access"));
+    assert!(!stdout.contains("read-only volume external"));
 
     let _ = std::fs::remove_dir_all(root);
 }
