@@ -4355,19 +4355,33 @@ fn fileprovider_snapshot_access_reports(
     paths: &[PathBuf],
     worker: &str,
 ) -> Result<PlatformAccessReports> {
+    fileprovider_snapshot_access_reports_checked(state_path, paths, worker, || Ok(()))
+}
+
+fn fileprovider_snapshot_access_reports_checked(
+    state_path: &Path,
+    paths: &[PathBuf],
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<PlatformAccessReports> {
+    check_control()?;
     let state_probe = write_probe_existing_ancestor(state_path, worker)?;
+    check_control()?;
     let mut reports = vec![PlatformAccessReport::new_checked(
         state_probe,
         AccessIntent::Write,
-        || Ok(()),
+        &mut check_control,
     )?];
+    check_control()?;
     for path in unique_fileprovider_paths(paths.iter().map(PathBuf::as_path)) {
+        check_control()?;
         reports.push(PlatformAccessReport::new_checked(
             path.to_path_buf(),
             AccessIntent::Read,
-            || Ok(()),
+            &mut check_control,
         )?);
     }
+    check_control()?;
     Ok(PlatformAccessReports::new(reports))
 }
 
@@ -4376,20 +4390,34 @@ fn fileprovider_observed_event_access_reports(
     event: &FileEvent,
     worker: &str,
 ) -> Result<PlatformAccessReports> {
+    fileprovider_observed_event_access_reports_checked(state_path, event, worker, || Ok(()))
+}
+
+fn fileprovider_observed_event_access_reports_checked(
+    state_path: &Path,
+    event: &FileEvent,
+    worker: &str,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<PlatformAccessReports> {
+    check_control()?;
     let state_probe = write_probe_existing_ancestor(state_path, worker)?;
+    check_control()?;
     let mut reports = vec![PlatformAccessReport::new_checked(
         state_probe,
         AccessIntent::Write,
-        || Ok(()),
+        &mut check_control,
     )?];
+    check_control()?;
     let paths = fileprovider_raw_event_paths(event);
     for path in unique_fileprovider_paths(paths.iter().map(PathBuf::as_path)) {
+        check_control()?;
         reports.push(PlatformAccessReport::new_checked(
             path.to_path_buf(),
             AccessIntent::Read,
-            || Ok(()),
+            &mut check_control,
         )?);
     }
+    check_control()?;
     Ok(PlatformAccessReports::new(reports))
 }
 
@@ -4975,7 +5003,7 @@ fn retain_fileprovider_snapshot_access_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<ScopedAccessGuard>> {
     check_control()?;
-    fileprovider_snapshot_access_reports(state_path, paths, worker)?
+    fileprovider_snapshot_access_reports_checked(state_path, paths, worker, &mut check_control)?
         .access_checked(worker, check_control)
 }
 
@@ -6905,6 +6933,45 @@ mod tests {
     }
 
     #[test]
+    fn fileprovider_snapshot_access_reports_checked_can_cancel_before_second_path_report() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-platform-snapshot-access-mid-cancel-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let state_path = root.join("state.tsv");
+        let first = root.join("first.icloud");
+        let second = root.join("second.icloud");
+        std::fs::write(&first, "first").unwrap();
+        std::fs::write(&second, "second").unwrap();
+        let mut checks = 0usize;
+
+        let err = match fileprovider_snapshot_access_reports_checked(
+            &state_path,
+            &[first, second],
+            "fileprovider snapshot",
+            || {
+                checks += 1;
+                if checks > 8 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        ) {
+            Ok(_) => panic!("snapshot access report construction ignored mid-flight cancellation"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert!(
+            checks <= 9,
+            "late cancellation was not checked promptly; checks={checks}"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn fileprovider_event_access_checked_honors_pre_cancelled_control() {
         let event = FileEvent::new(
             std::env::temp_dir().join("gfm-platform-event-access-pre-cancelled"),
@@ -6921,6 +6988,45 @@ mod tests {
             Err(err) => err,
         };
         assert_eq!(err, GfmError::Cancelled);
+    }
+
+    #[test]
+    fn fileprovider_observed_event_access_reports_checked_can_cancel_before_event_path_report() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-platform-observed-event-access-mid-cancel-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let state_path = root.join("state.tsv");
+        let from = root.join("from.icloud");
+        let to = root.join("to.icloud");
+        std::fs::write(&from, "from").unwrap();
+        let event = FileEvent::new(to.clone(), FileEventKind::Rename { from, to });
+        let mut checks = 0usize;
+
+        let err = match fileprovider_observed_event_access_reports_checked(
+            &state_path,
+            &event,
+            "fileprovider observed event",
+            || {
+                checks += 1;
+                if checks > 6 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        ) {
+            Ok(_) => panic!("observed event report construction ignored mid-flight cancellation"),
+            Err(err) => err,
+        };
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert!(
+            checks <= 7,
+            "late cancellation was not checked promptly; checks={checks}"
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
