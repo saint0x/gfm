@@ -1474,6 +1474,15 @@ fn reports_native_icon_descriptor_from_binary() {
     );
     let app_stderr = String::from_utf8_lossy(&app.stderr);
     assert_worker_admitted(&app_stderr, "native icon", &root.join("GFM.app"));
+    assert!(
+        app_stderr.contains(&format!(
+            "preview-volume-access\tworker=native icon\tpath={}\tintent=preview",
+            root.join("GFM.app").display()
+        )) && app_stderr.contains("\tstable-id=")
+            && !app_stderr.contains("\tstable-id=-\t")
+            && app_stderr.contains("\treason=cached-volume-report"),
+        "{app_stderr}"
+    );
     let app_stdout = String::from_utf8(app.stdout).unwrap();
     assert_eq!(
         app_stdout.trim(),
@@ -1492,6 +1501,15 @@ fn reports_native_icon_descriptor_from_binary() {
     );
     let document_stderr = String::from_utf8_lossy(&document.stderr);
     assert_worker_admitted(&document_stderr, "native icon", &root.join("Report.PDF"));
+    assert!(
+        document_stderr.contains(&format!(
+            "preview-volume-access\tworker=native icon\tpath={}\tintent=preview",
+            root.join("Report.PDF").display()
+        )) && document_stderr.contains("\tstable-id=")
+            && !document_stderr.contains("\tstable-id=-\t")
+            && document_stderr.contains("\treason=cached-volume-report"),
+        "{document_stderr}"
+    );
     let document_stdout = String::from_utf8(document.stdout).unwrap();
     assert_eq!(
         document_stdout.trim(),
@@ -1513,6 +1531,15 @@ fn reports_native_icon_descriptor_from_binary() {
         &bridge_stderr,
         "native icon bridge",
         &root.join("Report.PDF"),
+    );
+    assert!(
+        bridge_stderr.contains(&format!(
+            "preview-volume-access\tworker=native icon bridge\tpath={}\tintent=preview",
+            root.join("Report.PDF").display()
+        )) && bridge_stderr.contains("\tstable-id=")
+            && !bridge_stderr.contains("\tstable-id=-\t")
+            && bridge_stderr.contains("\treason=cached-volume-report"),
+        "{bridge_stderr}"
     );
     let bridge_stdout = String::from_utf8(bridge.stdout).unwrap();
     assert!(bridge_stdout.starts_with(
@@ -1885,6 +1912,15 @@ fn reports_icon_preview_contract_from_binary() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_worker_admitted(&stderr, "icon preview", &root.join("GFM.app"));
+    assert!(
+        stderr.contains(&format!(
+            "preview-volume-access\tworker=icon preview\tpath={}\tintent=preview",
+            root.join("GFM.app").display()
+        )) && stderr.contains("\tstable-id=")
+            && !stderr.contains("\tstable-id=-\t")
+            && stderr.contains("\treason=cached-volume-report"),
+        "{stderr}"
+    );
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert_eq!(
         stdout.trim(),
@@ -1924,6 +1960,25 @@ fn icon_preview_retries_transient_preview_failure_from_binary() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.starts_with("icon-preview\t"), "{stdout}");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains(&format!(
+            "preview-volume-access\tworker=icon preview\tpath={}\tintent=preview",
+            app.display()
+        )) && stderr.contains("\tstable-id=")
+            && !stderr.contains("\tstable-id=-\t")
+            && stderr.contains("\treason=cached-volume-report"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!(
+            "preview-retry-volume-access\tworker=icon preview\tpath={}\tintent=write",
+            retry_probe.parent().unwrap().display()
+        )) && stderr.contains("\tstable-id=")
+            && !stderr.contains("\tstable-id=-\t")
+            && stderr.contains("\treason=cached-volume-report"),
+        "{stderr}"
+    );
     assert_eq!(std::fs::read_to_string(&retry_probe).unwrap(), "2");
     let journal_text = std::fs::read_to_string(&journal).unwrap();
     assert!(

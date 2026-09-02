@@ -2877,6 +2877,7 @@ fn run_native_icon(path: PathBuf) -> Result<NativeIconDescriptor> {
     const WORKER: &str = "native icon";
     let access_report = PreviewAccessReport::new_checked(path, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
+    eprintln!("{}", access_report.volume_access_tsv(WORKER));
     let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
@@ -2893,6 +2894,7 @@ fn run_native_icon_bridge(path: PathBuf) -> Result<NativeIconBridgeContract> {
     const WORKER: &str = "native icon bridge";
     let access_report = PreviewAccessReport::new_checked(path, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
+    eprintln!("{}", access_report.volume_access_tsv(WORKER));
     let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
@@ -2912,6 +2914,7 @@ fn run_icon_preview(path: PathBuf) -> Result<IconPreviewContract> {
     const WORKER: &str = "icon preview";
     let access_report = PreviewAccessReport::new_checked(path, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
+    eprintln!("{}", access_report.volume_access_tsv(WORKER));
     let volume = access_report.volume();
     let payload_path = access_report.path.clone();
     run_preview_contract_cancellable_with_payload_path(
@@ -2929,8 +2932,15 @@ fn run_icon_preview_retry_probe(
     const WORKER: &str = "icon preview";
     let access_report = PreviewAccessReport::new_checked(path, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
+    eprintln!("{}", access_report.volume_access_tsv(WORKER));
     let retry_probe = PreviewRetryProbe::new_checked(attempt_state, WORKER, || Ok(()))?;
     retry_probe.preflight_volume()?;
+    eprintln!(
+        "{}",
+        retry_probe
+            .access_report
+            .volume_access_tsv("preview-retry-volume-access", WORKER)
+    );
     let volume = access_report.volume();
     let payload_path = access_report.path.clone();
     run_preview_contract_cancellable_with_payload_path(
