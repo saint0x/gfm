@@ -3001,13 +3001,13 @@ fn operation_volume_for_path_checked(
     path: &Path,
     mut check: impl FnMut() -> Result<()>,
 ) -> Result<VolumeDescriptor> {
-    let report = VolumeDiscoveryReport::for_containing_path_checked(path, &mut check)?;
+    let report = VolumeDiscoveryReport::for_containing_path_policy_checked(path, &mut check)?;
     check()?;
     if let Some(volume) = report.volume_for_path(path).cloned() {
         return Ok(volume);
     }
     check()?;
-    VolumeDescriptor::for_path_checked(path, check)
+    VolumeDescriptor::for_path_policy_checked(path, check)
 }
 
 fn operation_targets_volume_root(path: &Path, volume_path: &Path) -> bool {
@@ -5635,6 +5635,10 @@ mod tests {
         assert!(report.as_tsv().contains("\tvolume-ejectable=true\t"));
         assert!(report.as_tsv().contains("\tvolume-removable=true\t"));
         assert!(report.as_tsv().contains("\tvolume-mountable="));
+        assert_eq!(
+            report.volume.as_ref().map(|volume| &volume.capacity),
+            Some(&VolumeCapacity::deferred())
+        );
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -5655,6 +5659,10 @@ mod tests {
         assert!(report.as_tsv().contains("\tcommand-state=enabled\t"));
         assert!(report.as_tsv().contains("\tvolume-kind=external\t"));
         assert!(report.as_tsv().contains("\tmount=mounted\t"));
+        assert_eq!(
+            report.volume.as_ref().map(|volume| &volume.capacity),
+            Some(&VolumeCapacity::deferred())
+        );
 
         fs::remove_dir_all(root).unwrap();
     }
