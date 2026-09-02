@@ -7358,6 +7358,32 @@ fn reports_bsd_identity_volume_event_index_invalidation_from_binary() {
 }
 
 #[test]
+fn reports_apfs_metadata_volume_event_index_invalidation_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-apfs-metadata-index-invalidation")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with(
+        "volume-event-index-invalidation\tkind=description-changed\tpath=/Volumes/APFS Metadata Test\t"
+    ));
+    assert!(stdout.contains("\tprevious-volume=79\tprevious-class=external\t"));
+    assert!(stdout.contains("\tcurrent-volume=79\tcurrent-class=external\t"));
+    assert!(stdout.contains("\tidentity-changed=false\tfilesystem-changed=true\t"));
+    assert!(stdout.contains("\tapfs-metadata-changed=true\t"));
+    assert!(stdout.contains("\tfilesystem-identity-changed=true\t"));
+    assert!(stdout.contains("\tindex-admission=true\trescan-index=true\t"));
+    assert!(stdout.contains("\tcancel-index-jobs=true\tclear-fsevents-cursor=true\t"));
+    assert!(stdout.ends_with("reason=volume-event-apfs-metadata-changed\n"));
+}
+
+#[test]
 fn reports_volume_event_state_batch_from_binary() {
     let previous = std::env::temp_dir().join(format!(
         "gfm-volume-event-state-batch-previous-{}",

@@ -647,6 +647,7 @@ pub struct VolumeInvalidationReport {
     pub current_mount_status: Option<String>,
     pub current_mount_reason: Option<String>,
     pub api_status_changed: bool,
+    pub apfs_metadata_changed: bool,
     pub filesystem_identity_changed: bool,
     pub invalidate_sidebar: bool,
     pub invalidate_operation_policy: bool,
@@ -706,6 +707,7 @@ pub struct VolumeEventIndexInvalidationReport {
     pub case_preserving_changed: bool,
     pub api_status_changed: bool,
     pub stable_identity_changed: bool,
+    pub apfs_metadata_changed: bool,
     pub filesystem_identity_changed: bool,
     pub filesystem_signature_changed: bool,
     pub invalidate_index_admission: bool,
@@ -768,6 +770,7 @@ impl VolumeInvalidationReport {
                     &previous_mount_status,
                     &current_mount_status,
                 );
+        let apfs_metadata_changed = apfs_metadata_changed(previous.as_ref(), current.as_ref());
         let filesystem_identity_changed =
             filesystem_identity_changed(previous.as_ref(), current.as_ref());
 
@@ -956,6 +959,15 @@ impl VolumeInvalidationReport {
                 true,
                 "volume-api-status-changed",
             ),
+            (Some(previous), Some(_)) if apfs_metadata_changed => (
+                true,
+                true,
+                true,
+                true,
+                previous.mount_state == IndexMountState::Mounted,
+                true,
+                "volume-apfs-metadata-changed",
+            ),
             (Some(previous), Some(_)) if filesystem_identity_changed => (
                 true,
                 true,
@@ -1030,6 +1042,7 @@ impl VolumeInvalidationReport {
             current_mount_status,
             current_mount_reason,
             api_status_changed,
+            apfs_metadata_changed,
             filesystem_identity_changed,
             invalidate_sidebar,
             invalidate_operation_policy,
@@ -1043,7 +1056,7 @@ impl VolumeInvalidationReport {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume-invalidation\tpath={}\tprevious-class={}\tprevious-mount={}\tprevious-reachable={}\tprevious-read-only={}\tcurrent-class={}\tcurrent-mount={}\tcurrent-reachable={}\tcurrent-read-only={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\tprevious-writable={}\tprevious-ejectable={}\tprevious-removable={}\tprevious-mountable={}\tprevious-case-sensitive={}\tprevious-case-preserving={}\tcurrent-writable={}\tcurrent-ejectable={}\tcurrent-removable={}\tcurrent-mountable={}\tcurrent-case-sensitive={}\tcurrent-case-preserving={}\tprevious-native-status={}\tprevious-native-reason={}\tprevious-resource-status={}\tprevious-resource-reason={}\tprevious-mount-status={}\tprevious-mount-reason={}\tcurrent-native-status={}\tcurrent-native-reason={}\tcurrent-resource-status={}\tcurrent-resource-reason={}\tcurrent-mount-status={}\tcurrent-mount-reason={}\tapi-status-changed={}\tfilesystem-identity-changed={}\tprevious-stable-id={}\tcurrent-stable-id={}\treason={}",
+            "volume-invalidation\tpath={}\tprevious-class={}\tprevious-mount={}\tprevious-reachable={}\tprevious-read-only={}\tcurrent-class={}\tcurrent-mount={}\tcurrent-reachable={}\tcurrent-read-only={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\tprevious-writable={}\tprevious-ejectable={}\tprevious-removable={}\tprevious-mountable={}\tprevious-case-sensitive={}\tprevious-case-preserving={}\tcurrent-writable={}\tcurrent-ejectable={}\tcurrent-removable={}\tcurrent-mountable={}\tcurrent-case-sensitive={}\tcurrent-case-preserving={}\tprevious-native-status={}\tprevious-native-reason={}\tprevious-resource-status={}\tprevious-resource-reason={}\tprevious-mount-status={}\tprevious-mount-reason={}\tcurrent-native-status={}\tcurrent-native-reason={}\tcurrent-resource-status={}\tcurrent-resource-reason={}\tcurrent-mount-status={}\tcurrent-mount-reason={}\tapi-status-changed={}\tapfs-metadata-changed={}\tfilesystem-identity-changed={}\tprevious-stable-id={}\tcurrent-stable-id={}\treason={}",
             self.path.display(),
             self.previous_class
                 .map(IndexVolumeClass::as_str)
@@ -1098,6 +1111,7 @@ impl VolumeInvalidationReport {
             format_optional_string(self.current_mount_status.as_deref()),
             format_optional_string(self.current_mount_reason.as_deref()),
             self.api_status_changed,
+            self.apfs_metadata_changed,
             self.filesystem_identity_changed,
             format_optional_string(self.previous_stable_identity.as_deref()),
             format_optional_string(self.current_stable_identity.as_deref()),
@@ -1119,6 +1133,7 @@ impl VolumeEventIndexInvalidationReport {
             &previous.and_then(|volume| volume.stable_identity.clone()),
             &current.and_then(|volume| volume.stable_identity.clone()),
         );
+        let apfs_metadata_changed = apfs_metadata_changed(previous.as_ref(), current.as_ref());
         let filesystem_signature_changed = known_optional_value_lost_or_changed(
             &previous.and_then(|volume| volume.filesystem_signature.clone()),
             &current.and_then(|volume| volume.filesystem_signature.clone()),
@@ -1172,6 +1187,7 @@ impl VolumeEventIndexInvalidationReport {
             || current.is_some()
             || source_invalidates_index_admission;
         let descriptor_changed = stable_identity_changed
+            || apfs_metadata_changed
             || filesystem_identity_changed
             || filesystem_signature_changed
             || read_only_changed
@@ -1223,6 +1239,9 @@ impl VolumeEventIndexInvalidationReport {
             }
             IndexVolumeEventKind::DescriptionChanged if api_status_changed => {
                 "volume-event-api-status-changed"
+            }
+            IndexVolumeEventKind::DescriptionChanged if apfs_metadata_changed => {
+                "volume-event-apfs-metadata-changed"
             }
             IndexVolumeEventKind::DescriptionChanged if filesystem_identity_changed => {
                 "volume-event-filesystem-identity-changed"
@@ -1294,6 +1313,7 @@ impl VolumeEventIndexInvalidationReport {
             case_preserving_changed,
             api_status_changed,
             stable_identity_changed,
+            apfs_metadata_changed,
             filesystem_identity_changed,
             filesystem_signature_changed,
             invalidate_index_admission,
@@ -1306,7 +1326,7 @@ impl VolumeEventIndexInvalidationReport {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume-event-index-invalidation\tkind={}\tpath={}\tprevious-volume={}\tprevious-class={}\tprevious-mount={}\tprevious-reachable={}\tprevious-read-only={}\tcurrent-volume={}\tcurrent-class={}\tcurrent-mount={}\tcurrent-reachable={}\tcurrent-read-only={}\tread-only-changed={}\tidentity-changed={}\tfilesystem-changed={}\tfilesystem-identity-changed={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\tprevious-writable={}\tprevious-ejectable={}\tprevious-removable={}\tprevious-mountable={}\tprevious-case-sensitive={}\tprevious-case-preserving={}\tcurrent-writable={}\tcurrent-ejectable={}\tcurrent-removable={}\tcurrent-mountable={}\tcurrent-case-sensitive={}\tcurrent-case-preserving={}\twritable-changed={}\tejectable-changed={}\tremovable-changed={}\tmountable-changed={}\tcase-sensitive-changed={}\tcase-preserving-changed={}\tprevious-native-status={}\tprevious-native-reason={}\tprevious-resource-status={}\tprevious-resource-reason={}\tprevious-mount-status={}\tprevious-mount-reason={}\tcurrent-native-status={}\tcurrent-native-reason={}\tcurrent-resource-status={}\tcurrent-resource-reason={}\tcurrent-mount-status={}\tcurrent-mount-reason={}\tapi-status-changed={}\tprevious-stable-id={}\tcurrent-stable-id={}\treason={}",
+            "volume-event-index-invalidation\tkind={}\tpath={}\tprevious-volume={}\tprevious-class={}\tprevious-mount={}\tprevious-reachable={}\tprevious-read-only={}\tcurrent-volume={}\tcurrent-class={}\tcurrent-mount={}\tcurrent-reachable={}\tcurrent-read-only={}\tread-only-changed={}\tidentity-changed={}\tfilesystem-changed={}\tapfs-metadata-changed={}\tfilesystem-identity-changed={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\tprevious-writable={}\tprevious-ejectable={}\tprevious-removable={}\tprevious-mountable={}\tprevious-case-sensitive={}\tprevious-case-preserving={}\tcurrent-writable={}\tcurrent-ejectable={}\tcurrent-removable={}\tcurrent-mountable={}\tcurrent-case-sensitive={}\tcurrent-case-preserving={}\twritable-changed={}\tejectable-changed={}\tremovable-changed={}\tmountable-changed={}\tcase-sensitive-changed={}\tcase-preserving-changed={}\tprevious-native-status={}\tprevious-native-reason={}\tprevious-resource-status={}\tprevious-resource-reason={}\tprevious-mount-status={}\tprevious-mount-reason={}\tcurrent-native-status={}\tcurrent-native-reason={}\tcurrent-resource-status={}\tcurrent-resource-reason={}\tcurrent-mount-status={}\tcurrent-mount-reason={}\tapi-status-changed={}\tprevious-stable-id={}\tcurrent-stable-id={}\treason={}",
             self.kind.as_str(),
             self.path
                 .as_ref()
@@ -1343,6 +1363,7 @@ impl VolumeEventIndexInvalidationReport {
             self.read_only_changed,
             self.stable_identity_changed,
             self.filesystem_signature_changed,
+            self.apfs_metadata_changed,
             self.filesystem_identity_changed,
             self.invalidate_index_admission,
             self.rescan_index,
@@ -1414,6 +1435,21 @@ fn filesystem_identity_changed(
     ) || known_optional_value_lost_or_changed(
         &previous.and_then(|volume| volume.resource_uuid.clone()),
         &current.and_then(|volume| volume.resource_uuid.clone()),
+    )
+}
+
+fn apfs_metadata_changed(
+    previous: Option<&&IndexVolumeDescriptor>,
+    current: Option<&&IndexVolumeDescriptor>,
+) -> bool {
+    let previous = previous.copied();
+    let current = current.copied();
+    known_optional_value_lost_or_changed(
+        &previous.and_then(|volume| volume.apfs_container_uuid.clone()),
+        &current.and_then(|volume| volume.apfs_container_uuid.clone()),
+    ) || known_optional_value_lost_or_changed(
+        &previous.and_then(|volume| volume.apfs_role.clone()),
+        &current.and_then(|volume| volume.apfs_role.clone()),
     )
 }
 

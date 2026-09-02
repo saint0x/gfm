@@ -751,6 +751,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "volume-bsd-identity-invalidation" => {
             println!("{}", volume_bsd_identity_invalidation().as_tsv());
         }
+        "volume-apfs-metadata-index-invalidation" => {
+            println!("{}", volume_apfs_metadata_index_invalidation().as_tsv());
+        }
         "volume-event-runtime-invalidation" => {
             let report = volume_event_index_invalidation_from_args(args)?;
             println!("{}", report.as_tsv());
@@ -2453,6 +2456,48 @@ fn volume_bsd_identity_invalidation() -> VolumeEventIndexInvalidationReport {
     VolumeEventIndexInvalidationReport::from_event(
         IndexVolumeEventKind::DescriptionChanged,
         Some(PathBuf::from("/Volumes/BSD Identity Test")),
+        Some(&previous),
+        Some(&current),
+        false,
+        false,
+    )
+}
+
+fn volume_apfs_metadata_index_invalidation() -> VolumeEventIndexInvalidationReport {
+    let previous = IndexVolumeDescriptor::new(
+        "APFS Metadata Test",
+        "/Volumes/APFS Metadata Test",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(VolumeId(79))
+    .with_stable_identity("diskarbitration:uuid:APFS-METADATA-TEST")
+    .with_filesystem("apfs")
+    .with_volume_uuid("APFS-VOLUME-UUID")
+    .with_apfs_container_uuid("APFS-CONTAINER-OLD")
+    .with_apfs_role("data")
+    .with_filesystem_signature(
+        "fs=apfs|volume-uuid=APFS-VOLUME-UUID|apfs-container-uuid=APFS-CONTAINER-OLD|apfs-role=data",
+    );
+    let current = IndexVolumeDescriptor::new(
+        "APFS Metadata Test",
+        "/Volumes/APFS Metadata Test",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(VolumeId(79))
+    .with_stable_identity("diskarbitration:uuid:APFS-METADATA-TEST")
+    .with_filesystem("apfs")
+    .with_volume_uuid("APFS-VOLUME-UUID")
+    .with_apfs_container_uuid("APFS-CONTAINER-NEW")
+    .with_apfs_role("system")
+    .with_filesystem_signature(
+        "fs=apfs|volume-uuid=APFS-VOLUME-UUID|apfs-container-uuid=APFS-CONTAINER-NEW|apfs-role=system",
+    );
+
+    VolumeEventIndexInvalidationReport::from_event(
+        IndexVolumeEventKind::DescriptionChanged,
+        Some(PathBuf::from("/Volumes/APFS Metadata Test")),
         Some(&previous),
         Some(&current),
         false,

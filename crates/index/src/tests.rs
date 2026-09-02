@@ -3003,6 +3003,53 @@ fn volume_event_index_invalidation_cancels_jobs_when_filesystem_signature_change
 }
 
 #[test]
+fn volume_event_index_invalidation_reports_apfs_metadata_changes() {
+    let previous = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_stable_identity("diskarbitration:uuid:WORK")
+    .with_apfs_container_uuid("APFS-CONTAINER-OLD")
+    .with_apfs_role("data")
+    .with_filesystem_signature("fs=apfs|apfs-container-uuid=APFS-CONTAINER-OLD|apfs-role=data");
+    let current = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_stable_identity("diskarbitration:uuid:WORK")
+    .with_apfs_container_uuid("APFS-CONTAINER-NEW")
+    .with_apfs_role("system")
+    .with_filesystem_signature("fs=apfs|apfs-container-uuid=APFS-CONTAINER-NEW|apfs-role=system");
+
+    let report = VolumeEventIndexInvalidationReport::from_event(
+        IndexVolumeEventKind::DescriptionChanged,
+        Some(PathBuf::from("/Volumes/Work")),
+        Some(&previous),
+        Some(&current),
+        false,
+        false,
+    );
+
+    assert!(!report.stable_identity_changed);
+    assert!(report.filesystem_signature_changed);
+    assert!(report.apfs_metadata_changed);
+    assert!(report.filesystem_identity_changed);
+    assert!(report.invalidate_index_admission);
+    assert!(report.rescan_index);
+    assert!(report.cancel_index_jobs);
+    assert!(report.clear_fsevents_cursor);
+    assert_eq!(report.reason, "volume-event-apfs-metadata-changed");
+    assert!(report.as_tsv().contains("\tapfs-metadata-changed=true\t"));
+    assert!(report
+        .as_tsv()
+        .contains("\tfilesystem-identity-changed=true\t"));
+}
+
+#[test]
 fn volume_invalidation_cancels_index_jobs_when_known_volume_facts_are_lost() {
     let previous = IndexVolumeDescriptor::new(
         "Work Drive",
@@ -3107,6 +3154,44 @@ fn volume_invalidation_rescans_when_filesystem_signature_changes() {
     assert!(report.cancel_index_jobs);
     assert!(report.clear_fsevents_cursor);
     assert_eq!(report.reason, "volume-filesystem-changed");
+}
+
+#[test]
+fn volume_invalidation_rescans_when_apfs_metadata_changes() {
+    let previous = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_stable_identity("diskarbitration:uuid:WORK")
+    .with_apfs_container_uuid("APFS-CONTAINER-OLD")
+    .with_apfs_role("data");
+    let current = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_stable_identity("diskarbitration:uuid:WORK")
+    .with_apfs_container_uuid("APFS-CONTAINER-NEW")
+    .with_apfs_role("system");
+
+    let report = VolumeInvalidationReport::evaluate(Some(&previous), Some(&current));
+
+    assert!(report.invalidate_sidebar);
+    assert!(report.invalidate_operation_policy);
+    assert!(report.invalidate_index_admission);
+    assert!(report.rescan_index);
+    assert!(report.cancel_index_jobs);
+    assert!(report.clear_fsevents_cursor);
+    assert!(report.apfs_metadata_changed);
+    assert!(report.filesystem_identity_changed);
+    assert_eq!(report.reason, "volume-apfs-metadata-changed");
+    assert!(report.as_tsv().contains("\tapfs-metadata-changed=true\t"));
+    assert!(report
+        .as_tsv()
+        .contains("\tfilesystem-identity-changed=true\t"));
 }
 
 #[test]
