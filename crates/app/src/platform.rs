@@ -2828,6 +2828,42 @@ fn previous_index_volume_descriptor_from_args(
     if let Some(filesystem_signature) = optional_platform_string(args.next()) {
         previous = previous.with_filesystem_signature(filesystem_signature);
     }
+    if let Some(filesystem) = optional_platform_string(args.next()) {
+        previous = previous.with_filesystem(filesystem);
+    }
+    if let Some(volume_uuid) = optional_platform_string(args.next()) {
+        previous = previous.with_volume_uuid(volume_uuid);
+    }
+    if let Some(apfs_container_uuid) = optional_platform_string(args.next()) {
+        previous = previous.with_apfs_container_uuid(apfs_container_uuid);
+    }
+    if let Some(apfs_role) = optional_platform_string(args.next()) {
+        previous = previous.with_apfs_role(apfs_role);
+    }
+    if let Some(media_uuid) = optional_platform_string(args.next()) {
+        previous = previous.with_media_uuid(media_uuid);
+    }
+    if let Some(resource_uuid) = optional_platform_string(args.next()) {
+        previous = previous.with_resource_uuid(resource_uuid);
+    }
+    if let Some(native_status) = optional_platform_string(args.next()) {
+        previous = previous.with_native_status(native_status);
+    }
+    if let Some(native_reason) = optional_platform_string(args.next()) {
+        previous = previous.with_native_reason(native_reason);
+    }
+    if let Some(resource_status) = optional_platform_string(args.next()) {
+        previous = previous.with_resource_status(resource_status);
+    }
+    if let Some(resource_reason) = optional_platform_string(args.next()) {
+        previous = previous.with_resource_reason(resource_reason);
+    }
+    if let Some(mount_status) = optional_platform_string(args.next()) {
+        previous = previous.with_mount_status(mount_status);
+    }
+    if let Some(mount_reason) = optional_platform_string(args.next()) {
+        previous = previous.with_mount_reason(mount_reason);
+    }
     Ok(previous)
 }
 
@@ -5038,6 +5074,144 @@ mod tests {
         assert_eq!(descriptor.path, root);
         assert!(!path.exists());
         std::fs::remove_dir_all(descriptor.path).unwrap();
+    }
+
+    #[test]
+    fn previous_index_volume_descriptor_args_carry_apfs_and_api_context() {
+        let previous = previous_index_volume_descriptor_from_args(
+            IndexVolumeDescriptor::new(
+                "Work",
+                "/Volumes/Work",
+                IndexVolumeClass::External,
+                IndexMountState::Mounted,
+            ),
+            &mut [
+                "false",
+                "true",
+                "true",
+                "false",
+                "true",
+                "diskarbitration:uuid:WORK",
+                "fs=apfs|volume-uuid=OLD|apfs-container-uuid=OLD-CONTAINER|apfs-role=data",
+                "apfs",
+                "OLD",
+                "OLD-CONTAINER",
+                "data",
+                "OLD-MEDIA",
+                "OLD-RESOURCE",
+                "unavailable",
+                "DiskArbitration unavailable\tbefore refresh",
+                "available",
+                "-",
+                "unavailable",
+                "mount table unavailable",
+            ]
+            .into_iter()
+            .map(str::to_string),
+        )
+        .unwrap();
+
+        assert_eq!(previous.read_only, Some(false));
+        assert_eq!(previous.writable, Some(true));
+        assert_eq!(previous.ejectable, Some(true));
+        assert_eq!(previous.mountable, Some(false));
+        assert_eq!(previous.case_sensitive, Some(true));
+        assert_eq!(
+            previous.stable_identity.as_deref(),
+            Some("diskarbitration:uuid:WORK")
+        );
+        assert_eq!(previous.filesystem.as_deref(), Some("apfs"));
+        assert_eq!(previous.volume_uuid.as_deref(), Some("OLD"));
+        assert_eq!(
+            previous.apfs_container_uuid.as_deref(),
+            Some("OLD-CONTAINER")
+        );
+        assert_eq!(previous.apfs_role.as_deref(), Some("data"));
+        assert_eq!(previous.media_uuid.as_deref(), Some("OLD-MEDIA"));
+        assert_eq!(previous.resource_uuid.as_deref(), Some("OLD-RESOURCE"));
+        assert_eq!(previous.native_status.as_deref(), Some("unavailable"));
+        assert_eq!(
+            previous.native_reason.as_deref(),
+            Some("DiskArbitration unavailable\tbefore refresh")
+        );
+        assert_eq!(previous.resource_status.as_deref(), Some("available"));
+        assert_eq!(previous.resource_reason, None);
+        assert_eq!(previous.mount_status.as_deref(), Some("unavailable"));
+        assert_eq!(
+            previous.mount_reason.as_deref(),
+            Some("mount table unavailable")
+        );
+    }
+
+    #[test]
+    fn volume_invalidation_uses_previous_arg_api_context_for_index_admission() {
+        let previous = previous_index_volume_descriptor_from_args(
+            IndexVolumeDescriptor::new(
+                "Work",
+                "/Volumes/Work",
+                IndexVolumeClass::External,
+                IndexMountState::Mounted,
+            ),
+            &mut [
+                "-",
+                "-",
+                "-",
+                "-",
+                "-",
+                "diskarbitration:uuid:WORK",
+                "fs=apfs|volume-uuid=WORK-VOLUME|apfs-container-uuid=OLD-CONTAINER|apfs-role=data",
+                "apfs",
+                "WORK-VOLUME",
+                "OLD-CONTAINER",
+                "data",
+                "-",
+                "-",
+                "unavailable",
+                "DiskArbitration unavailable before refresh",
+                "unavailable",
+                "URL resource values unavailable before refresh",
+                "unavailable",
+                "mount table unavailable before refresh",
+            ]
+            .into_iter()
+            .map(str::to_string),
+        )
+        .unwrap();
+        let current = IndexVolumeDescriptor::new(
+            "Work",
+            "/Volumes/Work",
+            IndexVolumeClass::External,
+            IndexMountState::Mounted,
+        )
+        .with_stable_identity("diskarbitration:uuid:WORK")
+        .with_filesystem("apfs")
+        .with_volume_uuid("WORK-VOLUME")
+        .with_apfs_container_uuid("NEW-CONTAINER")
+        .with_apfs_role("system")
+        .with_native_status("available")
+        .with_resource_status("available")
+        .with_mount_status("available")
+        .with_filesystem_signature(
+            "fs=apfs|volume-uuid=WORK-VOLUME|apfs-container-uuid=NEW-CONTAINER|apfs-role=system",
+        );
+
+        let report = VolumeInvalidationReport::evaluate(Some(&previous), Some(&current));
+        let tsv = report.as_tsv();
+
+        assert!(report.api_status_changed);
+        assert!(report.apfs_metadata_changed);
+        assert!(report.filesystem_identity_changed);
+        assert!(report.invalidate_index_admission);
+        assert!(report.rescan_index);
+        assert!(report.cancel_index_jobs);
+        assert!(report.clear_fsevents_cursor);
+        assert_eq!(report.reason, "volume-api-status-changed");
+        assert!(tsv.contains("\tprevious-native-status=unavailable\t"));
+        assert!(tsv.contains("\tcurrent-native-status=available\t"));
+        assert!(
+            tsv.contains("\tprevious-native-reason=DiskArbitration unavailable before refresh\t")
+        );
+        assert!(tsv.contains("\tapi-status-changed=true\t"));
     }
 
     #[test]

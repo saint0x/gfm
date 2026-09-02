@@ -6318,6 +6318,69 @@ fn volume_invalidation_accepts_previous_capability_snapshot_from_binary() {
 }
 
 #[test]
+fn volume_invalidation_accepts_previous_api_snapshot_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-volume-invalidation-api-snapshot-{}",
+        std::process::id()
+    ));
+    let external = root.join("Work Drive");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&external).unwrap();
+    std::fs::write(external.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-invalidation")
+        .arg("external")
+        .arg("mounted")
+        .arg(&external)
+        .args([
+            "-",
+            "-",
+            "-",
+            "-",
+            "-",
+            "diskarbitration:uuid:WORK",
+            "fs=apfs|volume-uuid=WORK-VOLUME|apfs-container-uuid=OLD-CONTAINER|apfs-role=data",
+            "apfs",
+            "WORK-VOLUME",
+            "OLD-CONTAINER",
+            "data",
+            "OLD-MEDIA",
+            "OLD-RESOURCE",
+            "unavailable",
+            "DiskArbitration unavailable\tbefore refresh",
+            "unavailable",
+            "URL resource values unavailable before refresh",
+            "unavailable",
+            "mount table unavailable before refresh",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with("volume-invalidation\tpath="), "{stdout}");
+    assert!(stdout.contains("\tprevious-stable-id=diskarbitration:uuid:WORK\t"));
+    assert!(stdout.contains("\tprevious-native-status=unavailable\t"));
+    assert!(stdout.contains(
+        "\tprevious-native-reason=DiskArbitration unavailable\\tbefore refresh\t"
+    ));
+    assert!(stdout.contains("\tprevious-resource-status=unavailable\t"));
+    assert!(stdout
+        .contains("\tprevious-resource-reason=URL resource values unavailable before refresh\t"));
+    assert!(stdout.contains("\tprevious-mount-status=unavailable\t"));
+    assert!(stdout.contains("\tprevious-mount-reason=mount table unavailable before refresh\t"));
+    assert!(stdout.contains("\tapi-status-changed=true\t"), "{stdout}");
+    assert!(stdout.contains("\tindex-admission=true\trescan-index=true\t"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn volume_invalidation_surfaces_unavailable_current_path_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-volume-invalidation-unavailable-{}",
