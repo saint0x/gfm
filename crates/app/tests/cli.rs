@@ -8494,7 +8494,7 @@ fn operation_volume_copy_policy_refuses_unreachable_destination_from_binary() {
 }
 
 #[test]
-fn operation_volume_copy_policy_refuses_read_only_destination_from_binary() {
+fn operation_volume_copy_policy_prefers_native_write_truth_over_read_only_marker_from_binary() {
     let root = unique_temp_dir("gfm-cli-operation-copy-policy-read-only");
     let source_root = root.join("Source");
     let read_only = root.join("Camera Card");
@@ -8518,17 +8518,31 @@ fn operation_volume_copy_policy_refuses_read_only_destination_from_binary() {
         .output()
         .unwrap();
 
-    assert!(!output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        !stdout.contains("operation-volume-copy-policy\t"),
+        stdout.starts_with("operation-volume-copy-policy\t"),
         "{stdout}"
     );
     assert!(
-        stderr.contains(
-            "operation volume copy policy destination volume access blocked: read-only volume external"
-        ),
+        stdout.contains("\tdestination-class=external\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\tdestination-label=Camera Card\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tdestination-stable-id="), "{stdout}");
+    assert!(!stdout.contains("\tdestination-stable-id=-\t"), "{stdout}");
+    assert!(stdout.contains("\tbuffer-bytes=131072\t"), "{stdout}");
+    assert!(
+        !stderr.contains("read-only volume external")
+            && !stderr.contains("destination volume access blocked"),
         "{stderr}"
     );
     assert!(!destination.exists());
@@ -8537,7 +8551,7 @@ fn operation_volume_copy_policy_refuses_read_only_destination_from_binary() {
 }
 
 #[test]
-fn operation_refuses_read_only_destination_volume_before_copying_from_binary() {
+fn operation_prefers_native_write_truth_over_read_only_destination_marker_from_binary() {
     let root = unique_temp_dir("gfm-cli-ops-readonly-destination-root");
     let journal = root.join("ops.journal");
     let source_root = root.join("Source");
@@ -8563,20 +8577,21 @@ fn operation_refuses_read_only_destination_volume_before_copying_from_binary() {
         .output()
         .unwrap();
 
-    assert!(!output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!stdout.contains("\tcompleted"), "{stdout}");
+    assert!(stdout.contains("\tcompleted"), "{stdout}");
+    assert!(!stderr.contains("read-only volume external"), "{stderr}");
     assert!(
-        stderr.contains("destination-parent is not accessible for mutation"),
+        !stderr.contains("destination-parent is not accessible for mutation"),
         "{stderr}"
     );
     assert!(
-        stderr.contains("read-only volume external") && stderr.contains("role=destination-parent"),
-        "{stderr}"
-    );
-    assert!(
-        stderr.contains("refresh-on-permission-change=true"),
+        !stderr.contains("refresh-on-permission-change=true"),
         "{stderr}"
     );
     assert_operation_volume_access(
@@ -8591,24 +8606,29 @@ fn operation_refuses_read_only_destination_volume_before_copying_from_binary() {
         "external",
         "mounted",
     );
+    assert!(stderr.contains("\trole=destination-parent\t"), "{stderr}");
+    assert!(stderr.contains("\tread-only=false\t"), "{stderr}");
     assert_eq!(
         fs::read_to_string(&source).unwrap(),
         "do not copy onto read-only storage"
     );
-    assert!(!destination.exists());
+    assert_eq!(
+        fs::read_to_string(&destination).unwrap(),
+        "do not copy onto read-only storage"
+    );
     let journal_text = fs::read_to_string(&journal).unwrap();
     assert!(journal_text.contains("\tstarted\t"), "{journal_text}");
-    assert!(journal_text.contains("\tfailed\t"), "{journal_text}");
+    assert!(journal_text.contains("\tcompleted\t"), "{journal_text}");
     assert!(journal_text.contains("\tcopy\t"), "{journal_text}");
+    assert!(!journal_text.contains("\tfailed\t"), "{journal_text}");
     assert!(
-        journal_text.contains("read-only volume external"),
+        !journal_text.contains("read-only volume external"),
         "{journal_text}"
     );
     assert!(
-        journal_text.contains("refresh-on-permission-change=true"),
+        !journal_text.contains("refresh-on-permission-change=true"),
         "{journal_text}"
     );
-    assert!(!journal_text.contains("\tcompleted\t"), "{journal_text}");
 
     fs::remove_dir_all(root).unwrap();
 }
@@ -11462,7 +11482,7 @@ fn preview_cache_fileprovider_observed_invalidation_runs_on_visible_worker_from_
 
     let stored = fs::read_to_string(&state).unwrap();
     assert!(
-        stored.starts_with("gfm-fileprovider-state-v1\n"),
+        stored.starts_with("gfm-fileprovider-state-v2\n"),
         "{stored}"
     );
     assert!(stored.contains(&item.display().to_string()), "{stored}");

@@ -499,7 +499,7 @@ fn permission_invalidation_refuses_unreachable_state_before_persisting_from_bina
 }
 
 #[test]
-fn permission_invalidation_refuses_read_only_state_before_persisting_from_binary() {
+fn permission_invalidation_prefers_native_write_truth_over_read_only_marker_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-permission-invalidation-read-only-{}",
         std::process::id()
@@ -519,15 +519,26 @@ fn permission_invalidation_refuses_read_only_state_before_persisting_from_binary
         .output()
         .unwrap();
 
-    assert!(!output.status.success());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!stdout.contains("permission-invalidation\t"), "{stdout}");
     assert!(
-        stderr.contains("permission state volume access blocked: read-only volume external"),
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stdout.starts_with("permission-invalidation\tinitialized=true\t"),
+        "{stdout}"
+    );
+    assert!(
+        !stderr.contains("permission state volume access blocked")
+            && !stderr.contains("read-only volume external"),
         "{stderr}"
     );
-    assert!(!state.exists());
+    assert!(state.is_file());
+    assert!(std::fs::read_to_string(&state)
+        .unwrap()
+        .starts_with("gfm-permission-state-v1\n"));
 
     let _ = std::fs::remove_dir_all(root);
 }
