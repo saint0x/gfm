@@ -588,9 +588,9 @@ fn run_parity_baseline(
             })?;
             Ok(format!(
                 "{}\t{}\t{}",
-                report.config_path.display(),
-                report.baseline_root.display(),
-                report.macos_build
+                escape_diagnostics_tsv_path(&report.config_path),
+                escape_diagnostics_tsv_path(&report.baseline_root),
+                escape_diagnostics_tsv_field(&report.macos_build)
             ))
         },
     )
@@ -710,6 +710,10 @@ fn escape_diagnostics_tsv_field(value: &str) -> String {
         .replace('\t', "\\t")
         .replace('\n', "\\n")
         .replace('\r', "\\r")
+}
+
+fn escape_diagnostics_tsv_path(path: &Path) -> String {
+    escape_diagnostics_tsv_field(&path.to_string_lossy())
 }
 
 #[cfg(test)]

@@ -838,6 +838,36 @@ fn diagnostics_exports_trace_and_selects_parity_baseline_from_binary() {
 }
 
 #[test]
+fn diagnostics_parity_baseline_escapes_control_character_paths_from_binary() {
+    let root = unique_temp_dir("gfm-cli-diagnostics-parity-escaped");
+    let config = root.join("config\tfile.toml");
+    let baseline = root.join("baselines\troot");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "diagnostics-parity-baseline",
+            config.to_str().unwrap(),
+            baseline.to_str().unwrap(),
+            "25A354",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.contains("config\\tfile.toml"), "{stdout}");
+    assert!(stdout.contains("baselines\\troot"), "{stdout}");
+    assert!(!stdout.contains("config\tfile.toml"), "{stdout}");
+    assert!(!stdout.contains("baselines\troot"), "{stdout}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn diagnostics_parity_baseline_refuses_unreachable_paths_before_config_write_from_binary() {
     let root = unique_temp_dir("gfm-cli-diagnostics-parity-preflight-root");
     let offline = unique_temp_dir("gfm-cli-diagnostics-parity-preflight-offline");
