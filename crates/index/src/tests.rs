@@ -1681,6 +1681,27 @@ fn provider_metadata_invalidation_skips_noop_provider_state() {
 }
 
 #[test]
+fn provider_metadata_invalidation_schedules_update_for_observed_same_state_event() {
+    let report = crate::ProviderMetadataInvalidationReport::from_provider_transition(
+        "/tmp/Remote.icloud-placeholder",
+        "evicted",
+        "evicted",
+        true,
+        false,
+        "fileprovider-observed-metadata-changed",
+    );
+
+    assert!(report.reindex_metadata);
+    assert!(report.schedule_metadata_update);
+    assert!(report.invalidate_query_cache);
+    assert_eq!(report.reason, "fileprovider-observed-metadata-changed");
+    assert_eq!(
+        report.as_tsv(),
+        "provider-metadata-invalidation\t/tmp/Remote.icloud-placeholder\tprevious=evicted\tcurrent=evicted\treindex-metadata=true\tschedule-metadata-update=true\tinvalidate-query-cache=true\treason=fileprovider-observed-metadata-changed"
+    );
+}
+
+#[test]
 fn event_backpressure_coalesces_duplicate_background_bursts() {
     let path = PathBuf::from("/tmp/hot.md");
     let mut queue = EventBackpressureQueue::new(8, 3);

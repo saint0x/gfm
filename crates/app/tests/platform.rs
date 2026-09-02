@@ -4803,6 +4803,56 @@ fn reports_observed_fileprovider_metadata_invalidation_from_binary() {
 }
 
 #[test]
+fn observed_fileprovider_metadata_invalidation_schedules_same_state_provider_events_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-fileprovider-observed-metadata-same-state-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let state = root.join("fileprovider-state.tsv");
+    let item = root.join("Remote.icloud-placeholder");
+    std::fs::write(&item, "placeholder").unwrap();
+    mark_evicted_fixture(&item);
+    std::fs::write(
+        &state,
+        format!("gfm-fileprovider-state-v1\nevicted\t{}\n", item.display()),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("fileprovider-observed-metadata-invalidation")
+        .arg(&state)
+        .arg("metadata")
+        .arg(&item)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with(
+        "fileprovider-observed-invalidation\tevents=1\tevent-kinds=metadata\tpaths=1\n"
+    ));
+    assert!(stdout.contains(
+        "fileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=false\tsidebar=true\treindex-metadata=true\n"
+    ));
+    assert!(stdout.contains("\tprevious=evicted\tcurrent=evicted\tchanged=false\t"));
+    assert!(stdout.contains("\tcurrent-materialization=remote-placeholder\t"));
+    assert!(stdout.contains("\tcurrent-badges=cloud\t"));
+    assert!(stdout.contains("provider-metadata-invalidation\t"));
+    assert!(stdout.contains("\tprevious=evicted\tcurrent=evicted\t"));
+    assert!(stdout.contains(
+        "\treindex-metadata=true\tschedule-metadata-update=true\tinvalidate-query-cache=true\t"
+    ));
+    assert!(stdout.ends_with("reason=fileprovider-observed-metadata-changed\n"));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn observed_fileprovider_rename_deduplicates_repeated_event_path_admission_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-fileprovider-observed-rename-dedup-{}",

@@ -881,12 +881,23 @@ impl FileProviderInvalidationReport {
         previous: CloudStorageState,
         current: FileProviderStateReport,
     ) -> FileProviderInvalidationReport {
+        Self::from_current_with_event(path, previous, current, false)
+    }
+
+    fn from_current_with_event(
+        path: PathBuf,
+        previous: CloudStorageState,
+        current: FileProviderStateReport,
+        observed_event: bool,
+    ) -> FileProviderInvalidationReport {
         let state_changed = previous != current.storage_state;
         let provider_visible = current.domain != FileProviderDomain::Local
             || previous != CloudStorageState::LocalOnly
             || !current.badges.is_empty();
+        let observed_metadata_changed = observed_event && provider_visible && !state_changed;
         let invalidate_sidebar = provider_visible
             && (state_changed
+                || observed_metadata_changed
                 || matches!(
                     current.storage_state,
                     CloudStorageState::Downloaded
@@ -903,6 +914,8 @@ impl FileProviderInvalidationReport {
             "not-provider-visible"
         } else if state_changed {
             "fileprovider-state-changed"
+        } else if observed_metadata_changed {
+            "fileprovider-observed-metadata-changed"
         } else {
             "fileprovider-state-unchanged"
         };
@@ -911,11 +924,12 @@ impl FileProviderInvalidationReport {
             path,
             previous,
             state_changed,
-            invalidate_icon: provider_visible && state_changed,
-            invalidate_preview_memory: provider_visible && state_changed,
+            invalidate_icon: provider_visible && (state_changed || observed_metadata_changed),
+            invalidate_preview_memory: provider_visible
+                && (state_changed || observed_metadata_changed),
             invalidate_preview_disk: provider_visible && state_changed,
             invalidate_sidebar,
-            reindex_metadata: provider_visible && state_changed,
+            reindex_metadata: provider_visible && (state_changed || observed_metadata_changed),
             current,
             reason,
         }
@@ -1104,6 +1118,15 @@ impl FileProviderStateInvalidationReport {
         current_paths: impl IntoIterator<Item = PathBuf>,
         mut check: impl FnMut() -> Result<()>,
     ) -> Result<(Self, FileProviderStateSnapshot)> {
+        Self::evaluate_checked_with_event_mode(previous, current_paths, false, &mut check)
+    }
+
+    fn evaluate_checked_with_event_mode(
+        previous: Option<&FileProviderStateSnapshot>,
+        current_paths: impl IntoIterator<Item = PathBuf>,
+        observed_event: bool,
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<(Self, FileProviderStateSnapshot)> {
         check()?;
         let initialized = previous.is_none();
         let previous_states = previous
@@ -1137,8 +1160,12 @@ impl FileProviderStateInvalidationReport {
             check()?;
             let current = current.ok_or_else(|| GfmError::io(&path, "path does not exist"))?;
             let previous_state = previous_state.unwrap_or(CloudStorageState::LocalOnly);
-            let change =
-                FileProviderInvalidationReport::from_current(path.clone(), previous_state, current);
+            let change = FileProviderInvalidationReport::from_current_with_event(
+                path.clone(),
+                previous_state,
+                current,
+                observed_event,
+            );
             if change.current.storage_state != CloudStorageState::Removed
                 && should_persist_fileprovider_snapshot_entry(&change.current)
             {
@@ -1147,7 +1174,9 @@ impl FileProviderStateInvalidationReport {
                     state: change.current.storage_state,
                 });
             }
-            if (initialized || change.state_changed)
+            if (initialized
+                || change.state_changed
+                || change.reason == "fileprovider-observed-metadata-changed")
                 && fileprovider_invalidation_change_is_visible(&change)
             {
                 changes.push(change);
@@ -1260,11 +1289,13 @@ impl FileProviderObservedInvalidation {
                 snapshot,
             )
         } else {
-            let (report, event_snapshot) = FileProviderStateInvalidationReport::evaluate_checked(
-                previous,
-                paths.clone(),
-                &mut check,
-            )?;
+            let (report, event_snapshot) =
+                FileProviderStateInvalidationReport::evaluate_checked_with_event_mode(
+                    previous,
+                    paths.clone(),
+                    true,
+                    &mut check,
+                )?;
             let snapshot = merge_observed_snapshot(previous, &paths, event_snapshot)?;
             (report, snapshot)
         };
@@ -4372,6 +4403,45 @@ mod tests {
         assert!(!observed.report.invalidate_icon);
         assert!(!observed.report.invalidate_preview_memory);
         assert!(!observed.report.invalidate_preview_disk);
+        assert_eq!(snapshot, previous);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn observed_fileprovider_invalidation_publishes_same_state_provider_metadata_events() {
+        let root = unique_temp_dir();
+        let tracked = root.join("Remote.icloud-placeholder");
+        fs::write(&tracked, "placeholder").unwrap();
+        mark_evicted_fixture(&tracked);
+        let previous = FileProviderStateSnapshot {
+            entries: vec![FileProviderStateSnapshotEntry {
+                path: tracked.clone(),
+                state: CloudStorageState::Evicted,
+            }],
+        };
+        let events = vec![FileEvent::new(&tracked, FileEventKind::Metadata)];
+
+        let (observed, snapshot) =
+            FileProviderObservedInvalidation::evaluate(Some(&previous), events).unwrap();
+
+        assert_eq!(observed.events, 1);
+        assert_eq!(observed.paths, vec![tracked.clone()]);
+        assert_eq!(observed.report.changes.len(), 1);
+        let change = &observed.report.changes[0];
+        assert_eq!(change.previous, CloudStorageState::Evicted);
+        assert_eq!(change.current.storage_state, CloudStorageState::Evicted);
+        assert!(!change.state_changed);
+        assert!(change.invalidate_icon);
+        assert!(change.invalidate_preview_memory);
+        assert!(!change.invalidate_preview_disk);
+        assert!(change.invalidate_sidebar);
+        assert!(change.reindex_metadata);
+        assert_eq!(change.reason, "fileprovider-observed-metadata-changed");
+        assert!(observed
+            .as_tsv()
+            .contains("\tprevious=evicted\tcurrent=evicted\tchanged=false\t"));
+        assert!(observed.as_tsv().contains("\tcurrent-badges=cloud\t"));
         assert_eq!(snapshot, previous);
 
         fs::remove_dir_all(root).unwrap();
