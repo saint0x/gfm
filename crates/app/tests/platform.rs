@@ -208,6 +208,7 @@ fn ui_permission_access_contract_reports_blocked_volume_orchestration_from_binar
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
 
+    let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(
         stdout.starts_with("dialog\tsurface=permission\tpresentation=window-sheet\t"),
         "{stdout}"
@@ -221,6 +222,15 @@ fn ui_permission_access_contract_reports_blocked_volume_orchestration_from_binar
     assert!(stdout.contains("unreachable volume network"));
     assert!(stdout.contains("security-worker-admission\tworker=preview worker\t"));
 
+    assert!(stdout.contains("ui-permission-volume-access\tworker=preview worker\t"));
+    assert!(stdout.contains(&format!("\tpath={}\tintent=preview\t", path.display())));
+    assert!(stdout.contains(&format!("\tvolume-root={}\t", root.display())));
+    assert!(stdout.contains("\tclass=network\tmount=mounted\treachable=false\t"));
+    assert!(stdout.contains("\treason=cached-volume-report\n"));
+    assert!(
+        !stderr.contains("ui-permission-volume-access\t"),
+        "{stderr}"
+    );
     let _ = std::fs::remove_dir_all(root);
 }
 

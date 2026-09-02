@@ -617,12 +617,16 @@ fn reports_permission_ui_refresh_in_access_contract_from_binary() {
     assert!(stdout.contains("\npermission-access\tpath="), "{stdout}");
     assert!(stdout.contains("\nsecurity-worker-admission\tworker=ui list view\t"));
     assert!(
-        stderr.contains(&format!(
+        stdout.contains(&format!(
             "ui-permission-volume-access\tworker=ui list view\tpath={}\tintent=read",
             root.display()
-        )) && stderr.contains("\tstable-id=")
-            && !stderr.contains("\tstable-id=-\t")
-            && stderr.contains("\treason=cached-volume-report"),
+        )) && stdout.contains("\tstable-id=")
+            && !stdout.contains("\tstable-id=-\t")
+            && stdout.contains("\treason=cached-volume-report"),
+        "{stdout}"
+    );
+    assert!(
+        !stderr.contains("ui-permission-volume-access\t"),
         "{stderr}"
     );
 

@@ -143,21 +143,19 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 worker,
                 || Ok(()),
             )?;
-            eprintln!(
-                "{}",
-                interface_volume_access_tsv(
-                    "ui-permission-volume-access",
-                    &gate.admission.worker,
-                    &path,
-                    intent,
-                    &gate.volume_path,
-                    &gate.volume_report,
-                )
+            let volume_access = interface_volume_access_tsv(
+                "ui-permission-volume-access",
+                &gate.admission.worker,
+                &path,
+                intent,
+                &gate.volume_path,
+                &gate.volume_report,
             );
             print_permission_access_contract(
                 &gate.admission,
                 refresh.as_ref().map(permission_refresh_contract),
             )?;
+            println!("{volume_access}");
         }
         "ui-permission-refresh-compare-contract" => {
             let previous_path = required_path(
