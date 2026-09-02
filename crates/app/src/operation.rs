@@ -1556,6 +1556,12 @@ fn operation_volume_copy_policy_from_report(
                 policy = policy
                     .with_root(root.clone(), operation_volume_class_for_descriptor(volume))
                     .with_root_volume_identity(root.clone(), volume.stable_identity.clone());
+                if let Some(case_sensitive) = volume.case_sensitive {
+                    policy = policy.with_root_case_sensitive(root.clone(), case_sensitive);
+                }
+                if let Some(case_preserving) = volume.case_preserving {
+                    policy = policy.with_root_case_preserving(root.clone(), case_preserving);
+                }
                 if let Some(supported) = volume.resource_supports_file_cloning {
                     policy = policy.with_root_file_cloning_support(root.clone(), supported);
                 }
@@ -1976,6 +1982,48 @@ mod tests {
         let policy = operation_volume_copy_policy_from_report(&operation, &report);
 
         assert!(!policy.file_cloning_supported_for_paths(&source, &destination));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operation_volume_policy_uses_descriptor_case_semantics_to_disable_clone_fallback() {
+        let root = unique_temp_dir("gfm-app-op-volume-policy-case-semantics");
+        let source_root = root.join("CaseSensitive");
+        let destination_root = root.join("CaseInsensitive");
+        fs::create_dir_all(&source_root).unwrap();
+        fs::create_dir_all(&destination_root).unwrap();
+        let source = source_root.join("source.bin");
+        let destination = destination_root.join("destination.bin");
+        let mut source_volume = VolumeDescriptor::for_path(&source_root).unwrap();
+        source_volume.path = source_root.clone();
+        source_volume.kind = VolumeKind::Internal;
+        source_volume.stable_identity.clear();
+        source_volume.case_sensitive = Some(true);
+        source_volume.case_preserving = Some(true);
+        let mut destination_volume = VolumeDescriptor::for_path(&destination_root).unwrap();
+        destination_volume.path = destination_root.clone();
+        destination_volume.kind = VolumeKind::Internal;
+        destination_volume.stable_identity.clear();
+        destination_volume.case_sensitive = Some(false);
+        destination_volume.case_preserving = Some(true);
+        let report = VolumeDiscoveryReport {
+            volumes: vec![source_volume, destination_volume],
+        };
+        let operation = Operation::Copy {
+            from: source.clone(),
+            to: destination.clone(),
+        };
+
+        let policy = operation_volume_copy_policy_from_report(&operation, &report);
+
+        assert_eq!(policy.class_for_path(&source), OperationVolumeClass::Local);
+        assert_eq!(
+            policy.class_for_path(&destination),
+            OperationVolumeClass::Local
+        );
+        assert!(!policy.file_cloning_supported_for_paths(&source, &destination));
+        assert!(policy.paths_are_known_distinct_volumes(&source, &destination));
 
         fs::remove_dir_all(root).unwrap();
     }

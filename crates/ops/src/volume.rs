@@ -40,6 +40,8 @@ pub struct OperationVolumeCopyPolicy {
     default_class: OperationVolumeClass,
     root_classes: BTreeMap<PathBuf, OperationVolumeClass>,
     root_volume_identities: BTreeMap<PathBuf, String>,
+    root_case_sensitive: BTreeMap<PathBuf, bool>,
+    root_case_preserving: BTreeMap<PathBuf, bool>,
     root_file_cloning_support: BTreeMap<PathBuf, bool>,
     root_hard_link_support: BTreeMap<PathBuf, bool>,
     root_sparse_file_support: BTreeMap<PathBuf, bool>,
@@ -51,6 +53,8 @@ impl Default for OperationVolumeCopyPolicy {
             default_class: OperationVolumeClass::Local,
             root_classes: BTreeMap::new(),
             root_volume_identities: BTreeMap::new(),
+            root_case_sensitive: BTreeMap::new(),
+            root_case_preserving: BTreeMap::new(),
             root_file_cloning_support: BTreeMap::new(),
             root_hard_link_support: BTreeMap::new(),
             root_sparse_file_support: BTreeMap::new(),
@@ -64,6 +68,8 @@ impl OperationVolumeCopyPolicy {
             default_class,
             root_classes: BTreeMap::new(),
             root_volume_identities: BTreeMap::new(),
+            root_case_sensitive: BTreeMap::new(),
+            root_case_preserving: BTreeMap::new(),
             root_file_cloning_support: BTreeMap::new(),
             root_hard_link_support: BTreeMap::new(),
             root_sparse_file_support: BTreeMap::new(),
@@ -82,6 +88,16 @@ impl OperationVolumeCopyPolicy {
     ) -> Self {
         self.root_volume_identities
             .insert(root.into(), identity.into());
+        self
+    }
+
+    pub fn with_root_case_sensitive(mut self, root: impl Into<PathBuf>, value: bool) -> Self {
+        self.root_case_sensitive.insert(root.into(), value);
+        self
+    }
+
+    pub fn with_root_case_preserving(mut self, root: impl Into<PathBuf>, value: bool) -> Self {
+        self.root_case_preserving.insert(root.into(), value);
         self
     }
 
@@ -153,6 +169,7 @@ impl OperationVolumeCopyPolicy {
             (None, None) => {
                 self.class_for_path(from) == OperationVolumeClass::Local
                     && self.class_for_path(to) == OperationVolumeClass::Local
+                    && !self.paths_have_known_case_semantics_mismatch(from, to)
             }
         }
     }
@@ -168,8 +185,31 @@ impl OperationVolumeCopyPolicy {
             self.volume_identity_for_path(to),
         ) {
             (Some(source), Some(destination)) => source != destination,
+            _ => self.paths_have_known_case_semantics_mismatch(from, to),
+        }
+    }
+
+    fn paths_have_known_case_semantics_mismatch(&self, from: &Path, to: &Path) -> bool {
+        Self::bool_property_mismatch(&self.root_case_sensitive, from, to)
+            || Self::bool_property_mismatch(&self.root_case_preserving, from, to)
+    }
+
+    fn bool_property_mismatch(values: &BTreeMap<PathBuf, bool>, from: &Path, to: &Path) -> bool {
+        match (
+            Self::bool_property_for_path(values, from),
+            Self::bool_property_for_path(values, to),
+        ) {
+            (Some(source), Some(destination)) => source != destination,
             _ => false,
         }
+    }
+
+    fn bool_property_for_path(values: &BTreeMap<PathBuf, bool>, path: &Path) -> Option<bool> {
+        values
+            .iter()
+            .filter(|(root, _)| path.starts_with(root))
+            .max_by_key(|(root, _)| root.components().count())
+            .map(|(_, value)| *value)
     }
 
     pub fn hard_links_supported_for_path(&self, path: &Path) -> bool {
@@ -344,6 +384,46 @@ mod tests {
         assert!(!policy.paths_are_known_distinct_volumes(
             Path::new("/Unknown/source.bin"),
             Path::new("/Volumes/Destination/file.bin")
+        ));
+    }
+
+    #[test]
+    fn known_case_semantics_mismatch_marks_unidentified_local_roots_distinct() {
+        let policy = OperationVolumeCopyPolicy::default()
+            .with_root_case_sensitive("/Volumes/CaseSensitive", true)
+            .with_root_case_sensitive("/Volumes/CaseInsensitive", false)
+            .with_root_case_preserving("/Volumes/CaseSensitive", true)
+            .with_root_case_preserving("/Volumes/CaseInsensitive", true);
+
+        assert!(!policy.file_cloning_supported_for_paths(
+            Path::new("/Volumes/CaseSensitive/file.bin"),
+            Path::new("/Volumes/CaseInsensitive/file.bin")
+        ));
+        assert!(policy.paths_are_known_distinct_volumes(
+            Path::new("/Volumes/CaseSensitive/file.bin"),
+            Path::new("/Volumes/CaseInsensitive/file.bin")
+        ));
+        assert!(policy.file_cloning_supported_for_paths(
+            Path::new("/Volumes/CaseSensitive/file.bin"),
+            Path::new("/Volumes/CaseSensitive/copy.bin")
+        ));
+    }
+
+    #[test]
+    fn known_identity_overrides_conflicting_case_semantics_for_aliases() {
+        let policy = OperationVolumeCopyPolicy::default()
+            .with_root_volume_identity("/var", "diskarbitration:uuid:SAME")
+            .with_root_volume_identity("/private/var", "diskarbitration:uuid:SAME")
+            .with_root_case_sensitive("/var", true)
+            .with_root_case_sensitive("/private/var", false);
+
+        assert!(policy.file_cloning_supported_for_paths(
+            Path::new("/var/tmp/source.bin"),
+            Path::new("/private/var/tmp/copy.bin")
+        ));
+        assert!(!policy.paths_are_known_distinct_volumes(
+            Path::new("/var/tmp/source.bin"),
+            Path::new("/private/var/tmp/copy.bin")
         ));
     }
 
