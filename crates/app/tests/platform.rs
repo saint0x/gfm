@@ -14,6 +14,14 @@ fn assert_fileprovider_state_entry(state_text: &str, state: &str, path: &Path) {
     );
 }
 
+fn escape_tsv_field(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+}
+
 #[test]
 fn reports_host_support_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -7848,6 +7856,51 @@ fn reports_volume_event_runtime_fanout_from_binary() {
     assert!(kept_stdout.ends_with(
         "volume-job-cancellation\tvolume=-\tclass=background\tcancelled=0\treason=index-jobs-still-valid\n"
     ));
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn volume_event_runtime_fanout_escapes_control_character_paths_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-volume-event-runtime-escape-{}\tVisible\nDraft\rFinal\\Slash",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+    let escaped_path = escape_tsv_field(&root.to_string_lossy());
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-event-runtime-fanout")
+        .arg(&root)
+        .arg("--")
+        .arg("appeared")
+        .arg(&root)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let lines = stdout.lines().collect::<Vec<_>>();
+
+    assert_eq!(lines.len(), 5, "{stdout}");
+    assert!(!stdout.contains('\r'), "{stdout}");
+    assert!(stdout.starts_with("volume-event-runtime-fanout\tkind=appeared\t"));
+    assert!(
+        stdout.contains(&format!("\tpath={escaped_path}\t")),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\treason=volume-event-state-unchanged\n"));
+    for line in lines {
+        assert!(
+            line.contains(&escaped_path) || line.starts_with("volume-job-cancellation\t"),
+            "{stdout}"
+        );
+    }
 
     let _ = std::fs::remove_dir_all(root);
 }

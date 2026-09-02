@@ -1905,7 +1905,7 @@ fn volume_event_runtime_fanout_summary(
         platform
             .path
             .as_ref()
-            .map(|path| path.display().to_string())
+            .map(|path| escape_field(&path.to_string_lossy()))
             .unwrap_or_else(|| "-".to_string()),
         platform.invalidate_sidebar,
         platform.invalidate_operation_policy,
@@ -1915,7 +1915,7 @@ fn volume_event_runtime_fanout_summary(
         index.clear_fsevents_cursor,
         sidebar.invalidate_row,
         sidebar.invalidate_section,
-        platform.reason
+        escape_field(&platform.reason)
     )
 }
 
@@ -2209,7 +2209,7 @@ fn volume_event_operation_policy_invalidation_tsv(
         platform
             .path
             .as_ref()
-            .map(|path| path.display().to_string())
+            .map(|path| escape_field(&path.to_string_lossy()))
             .unwrap_or_else(|| "-".to_string()),
         previous.map(|volume| volume.kind.as_str()).unwrap_or("-"),
         previous
@@ -2274,7 +2274,7 @@ fn volume_event_operation_policy_invalidation_tsv(
             .map(|slow| slow.to_string())
             .unwrap_or_else(|| "-".to_string()),
         platform.invalidate_operation_policy,
-        platform.reason
+        escape_field(&platform.reason)
     )
 }
 
