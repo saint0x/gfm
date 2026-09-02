@@ -2617,6 +2617,7 @@ fn reports_quicklook_session_from_binary() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_worker_admitted(&stderr, "quicklook preview", &path);
+    assert!(stderr.contains("scheduler-pressure\t"), "{stderr}");
 
     assert!(stdout.starts_with("quicklook-session\tquick-look\t"));
     assert!(stdout.contains("\tallow-native\tcloud=native-eligible\tnative-preview-controller\t"));
@@ -2884,6 +2885,7 @@ fn reports_thumbnail_generation_from_binary() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_worker_admitted(&stderr, "thumbnail generation", &path);
+    assert!(stderr.contains("scheduler-pressure\t"), "{stderr}");
 
     assert!(stdout.starts_with("thumbnail-generation\t"));
     assert!(stdout.contains(
