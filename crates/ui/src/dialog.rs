@@ -716,7 +716,11 @@ impl OperationConflictContract {
             escape_tsv(&self.target),
             escape_tsv(&self.target_kind),
             escape_tsv(&self.selected_policy),
-            self.available_policies.join(","),
+            self.available_policies
+                .iter()
+                .map(|policy| escape_tsv(policy))
+                .collect::<Vec<_>>()
+                .join(","),
             self.blocks_operation,
             escape_tsv(&self.initial_focus),
             escape_tsv(&self.default_action),
@@ -1028,17 +1032,17 @@ impl DialogContract {
             "dialog\tsurface={}\tpresentation={}\ttitle={}\tmessage={}\ticon={}\tblocks-parent={}\tescape-cancels={}",
             self.surface.as_str(),
             self.presentation.as_str(),
-            self.title,
-            self.message,
-            self.icon,
+            escape_tsv(self.title),
+            escape_tsv(self.message),
+            escape_tsv(self.icon),
             self.blocks_parent_window,
             self.escape_cancels
         ));
         lines.extend(self.fields.iter().map(|field| {
             format!(
                 "field\t{}\t{}\t{}\trequired={}\tenabled={}",
-                field.id,
-                field.label,
+                escape_tsv(field.id),
+                escape_tsv(field.label),
                 field.kind.as_str(),
                 field.required,
                 field.enabled
@@ -1047,8 +1051,8 @@ impl DialogContract {
         lines.extend(self.buttons.iter().map(|button| {
             format!(
                 "button\t{}\t{}\t{}\tenabled={}",
-                button.id,
-                button.title,
+                escape_tsv(button.id),
+                escape_tsv(button.title),
                 button.role.as_str(),
                 button.enabled
             )
@@ -1396,12 +1400,10 @@ fn affected_paths_tsv(paths: &[String]) -> String {
 
 fn escape_tsv(value: &str) -> String {
     value
-        .chars()
-        .map(|ch| match ch {
-            '\t' | '\n' | '\r' => ' ',
-            other => other,
-        })
-        .collect()
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 #[cfg(test)]
@@ -1479,6 +1481,42 @@ mod tests {
         assert!(contract
             .as_tsv()
             .contains("\tconflict=false\taffected=0\taffected-paths=-\treveal=false\toperations-blocked=false\t"));
+    }
+
+    #[test]
+    fn provider_conflict_tsv_escapes_control_characters_in_text_fields() {
+        let contract = ProviderConflictContract::from_input(ProviderConflictInput::new(
+            "/tmp/Conflict\tOne\nTwo\r.md",
+            true,
+            vec![
+                "/tmp/Conflict\tOne\nTwo\r.md".to_string(),
+                "/tmp/Other\\Affected.md".to_string(),
+            ],
+            true,
+            true,
+            "provider\tconflict\nrequires\rreview\\now",
+        ));
+        let tsv = contract.as_tsv();
+        let row = tsv
+            .lines()
+            .find(|line| line.starts_with("provider-conflict\t"))
+            .unwrap();
+
+        assert!(
+            row.contains("path=/tmp/Conflict\\tOne\\nTwo\\r.md\t"),
+            "{tsv}"
+        );
+        assert!(
+            row.contains(
+                "affected-paths=/tmp/Conflict\\tOne\\nTwo\\r.md,/tmp/Other\\\\Affected.md\t"
+            ),
+            "{tsv}"
+        );
+        assert!(
+            row.contains("reason=provider\\tconflict\\nrequires\\rreview\\\\now"),
+            "{tsv}"
+        );
+        assert_eq!(row.split('\t').count(), 8, "{tsv}");
     }
 
     #[test]
@@ -1671,6 +1709,51 @@ mod tests {
     }
 
     #[test]
+    fn operation_conflict_tsv_escapes_control_characters_in_text_fields() {
+        let contract = OperationConflictContract::from_input(
+            OperationConflictInput::new(
+                "copy\tfiles",
+                OperationConflictPaths::new("/tmp/source\tA\nB\r.txt", "/tmp/target\tA\nB\r.txt"),
+                "file\tkind",
+                "keep\tboth",
+                vec!["keep\tboth".to_string(), "skip\\item".to_string()],
+                true,
+                "destination\tconflict\nrequires\rresolution\\now",
+            )
+            .with_store_path("/tmp/conflicts\tbatch.tsv"),
+        );
+        let tsv = contract.as_tsv();
+        let ui = tsv
+            .lines()
+            .find(|line| line.starts_with("operation-conflict-ui\t"))
+            .unwrap();
+        let row = tsv
+            .lines()
+            .find(|line| line.starts_with("operation-conflict-row\t"))
+            .unwrap();
+        let action = tsv
+            .lines()
+            .find(|line| line.starts_with("operation-conflict-action\t"))
+            .unwrap();
+
+        assert!(ui.contains("operation=copy\\tfiles\t"), "{tsv}");
+        assert!(ui.contains("available=keep\\tboth,skip\\\\item\t"), "{tsv}");
+        assert!(
+            ui.contains("reason=destination\\tconflict\\nrequires\\rresolution\\\\now"),
+            "{tsv}"
+        );
+        assert!(row.contains("source=/tmp/source\\tA\\nB\\r.txt\t"), "{tsv}");
+        assert!(row.contains("target=/tmp/target\\tA\\nB\\r.txt\t"), "{tsv}");
+        assert!(
+            action.contains("store=/tmp/conflicts\\tbatch.tsv\t"),
+            "{tsv}"
+        );
+        assert_eq!(ui.split('\t').count(), 12, "{tsv}");
+        assert_eq!(row.split('\t').count(), 8, "{tsv}");
+        assert_eq!(action.split('\t').count(), 6, "{tsv}");
+    }
+
+    #[test]
     fn progress_sheet_is_not_escape_cancelled() {
         let contract = DialogContract::finder_default(DialogSurface::Progress);
 
@@ -1786,6 +1869,45 @@ mod tests {
     }
 
     #[test]
+    fn operation_progress_tsv_escapes_control_characters_in_text_fields() {
+        let contract = OperationProgressContract::from_input(
+            OperationProgressInput::new(
+                "copy\tfiles",
+                OperationProgressState::Paused,
+                1,
+                4,
+                "detail\twith\nlines\rand\\slash",
+            )
+            .with_job_id(9)
+            .with_payload(
+                OperationProgressPayloadKind::Repair,
+                "repair\tpath\nsidecar.gfmjob",
+                "repair\tsummary\nwith\rslash\\tail",
+            ),
+        );
+        let tsv = contract.as_tsv();
+        let row = tsv
+            .lines()
+            .find(|line| line.starts_with("operation-progress\t"))
+            .unwrap();
+
+        assert!(row.contains("label=copy\\tfiles\t"), "{tsv}");
+        assert!(
+            row.contains("detail=detail\\twith\\nlines\\rand\\\\slash\t"),
+            "{tsv}"
+        );
+        assert!(
+            row.contains("payload-path=repair\\tpath\\nsidecar.gfmjob\t"),
+            "{tsv}"
+        );
+        assert!(
+            row.contains("payload-summary=repair\\tsummary\\nwith\\rslash\\\\tail"),
+            "{tsv}"
+        );
+        assert_eq!(row.split('\t').count(), 12, "{tsv}");
+    }
+
+    #[test]
     fn operation_progress_contract_classifies_metadata_degradation() {
         let contract = OperationProgressContract::from_input(OperationProgressInput::new(
             "copy",
@@ -1829,6 +1951,56 @@ mod tests {
         assert!(tsv.starts_with("dialog\tsurface=permission\tpresentation=window-sheet"));
         assert!(tsv.contains("button\topen-settings\tOpen Settings\tdefault\tenabled=true"));
         assert!(tsv.contains("button\tnot-now\tNot Now\tcancel\tenabled=true"));
+    }
+
+    #[test]
+    fn dialog_tsv_escapes_control_characters_in_text_fields() {
+        let contract = DialogContract {
+            surface: DialogSurface::Alert,
+            presentation: DialogPresentation::WindowSheet,
+            title: "Title\tOne\nTwo\r",
+            message: "Message\tOne\nTwo\r\\tail",
+            icon: "icon\tname",
+            buttons: vec![button(
+                "confirm\tid",
+                "Confirm\tNow\nPlease\r",
+                DialogButtonRole::Default,
+                true,
+            )],
+            fields: vec![field(
+                "name\tfield",
+                "Name\tLabel\nFull\r",
+                DialogFieldKind::Text,
+                true,
+                true,
+            )],
+            blocks_parent_window: true,
+            escape_cancels: false,
+        };
+        let tsv = contract.as_tsv();
+        let mut lines = tsv.lines();
+        let header = lines.next().unwrap();
+        let field = lines.next().unwrap();
+        let button = lines.next().unwrap();
+
+        assert_eq!(tsv.lines().count(), 3, "{tsv}");
+        assert!(header.contains("title=Title\\tOne\\nTwo\\r\t"), "{tsv}");
+        assert!(
+            header.contains("message=Message\\tOne\\nTwo\\r\\\\tail\t"),
+            "{tsv}"
+        );
+        assert!(header.contains("icon=icon\\tname\t"), "{tsv}");
+        assert!(
+            field.contains("field\tname\\tfield\tName\\tLabel\\nFull\\r\t"),
+            "{tsv}"
+        );
+        assert!(
+            button.contains("button\tconfirm\\tid\tConfirm\\tNow\\nPlease\\r\t"),
+            "{tsv}"
+        );
+        assert_eq!(header.split('\t').count(), 8, "{tsv}");
+        assert_eq!(field.split('\t').count(), 6, "{tsv}");
+        assert_eq!(button.split('\t').count(), 5, "{tsv}");
     }
 
     #[test]

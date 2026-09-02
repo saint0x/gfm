@@ -390,12 +390,10 @@ impl PermissionRefreshChangeContract {
 
 fn escape_contract_field(value: &str) -> String {
     value
-        .chars()
-        .map(|ch| match ch {
-            '\t' | '\n' | '\r' => ' ',
-            other => other,
-        })
-        .collect()
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 impl AppLaunchSpec {
@@ -693,15 +691,15 @@ impl WindowLifecycleContract {
     pub fn as_tsv(&self) -> String {
         let mut lines = vec![format!(
             "window\t{}\t{}\t{}x{}\tmin={}x{}\ttransparent-titlebar={}\tactivate={}\ttabs={}\tsidebar-home={}\tsidebar-icloud={}\tpermission-dialog={}",
-            self.title,
-            self.initial_path.display(),
+            escape_contract_field(&self.title),
+            escape_contract_field(&self.initial_path.display().to_string()),
             self.width,
             self.height,
             self.min_width,
             self.min_height,
             self.transparent_titlebar,
             self.activate_on_launch,
-            self.tabbing_identifier,
+            escape_contract_field(&self.tabbing_identifier),
             self.sidebar_paths.home_state.as_str(),
             self.sidebar_paths.icloud_drive_state.as_str(),
             self.permission_dialog
@@ -960,6 +958,21 @@ mod tests {
     }
 
     #[test]
+    fn lifecycle_window_tsv_escapes_control_characters_in_text_fields() {
+        let mut spec = AppLaunchSpec::new("/tmp/Window\tPath\nRoot\r");
+        spec.title = "GFM\tWindow\nTitle\r".to_string();
+        spec.tabbing_identifier = "gfm\tmain\nwindow\r".to_string();
+        let contract = WindowLifecycleContract::from_spec(&spec).unwrap();
+        let tsv = contract.as_tsv();
+        let window = tsv.lines().next().unwrap();
+
+        assert!(window.contains("GFM\\tWindow\\nTitle\\r\t"), "{tsv}");
+        assert!(window.contains("\t/tmp/Window\\tPath\\nRoot\\r\t"), "{tsv}");
+        assert!(window.contains("\ttabs=gfm\\tmain\\nwindow\\r\t"), "{tsv}");
+        assert_eq!(window.split('\t').count(), 11, "{tsv}");
+    }
+
+    #[test]
     fn lifecycle_contract_tracks_permission_sheet() {
         let spec = AppLaunchSpec::new("/tmp/gfm")
             .with_permission_prompt(PermissionPromptKind::BookmarkAcquisition);
@@ -1072,6 +1085,120 @@ mod tests {
         assert!(contract
             .as_tsv()
             .contains("\tprompt-kind=bookmark-acquisition\tprompt-action=choose-location\tpromptable=true\tprompt-source=security-scoped-bookmark\t"));
+    }
+
+    #[test]
+    fn lifecycle_permission_tsv_escapes_control_characters_in_text_fields() {
+        let onboarding = PermissionOnboardingContract::new(
+            "open\tsettings",
+            PermissionPromptKind::FullDiskAccess,
+            "first\nrun",
+            true,
+            false,
+        )
+        .with_scopes(vec![PermissionOnboardingScopeContract::new(
+            "desktop\tfolder",
+            "denied\nnow",
+            "/Users/me/Desktop\tProjects\nDraft\r",
+            "full disk\taccess\nrequired\\soon",
+        )]);
+        let access = PermissionAccessContract {
+            path: "/Users/me/Documents\tDraft\nPlan\r.md".to_string(),
+            intent: "read\tpreview".to_string(),
+            scope: "documents\nfolder".to_string(),
+            probe: "granted\tnative".to_string(),
+            mode: "security-scoped\tbookmark".to_string(),
+            access_action: "allow\nread".to_string(),
+            worker_action: "start\rworker".to_string(),
+            can_touch_filesystem: true,
+            bookmark_required: true,
+            bookmark_access: true,
+            refresh_on_permission_change: true,
+            prompt_kind: PermissionPromptKind::BookmarkAcquisition,
+            prompt_action: "choose-location".to_string(),
+            promptable: true,
+            prompt_source: "security-scoped\nbookmark".to_string(),
+            reason: "retained\tbookmark\nrequired\\now".to_string(),
+        };
+        let refresh =
+            PermissionRefreshContract::new(false, 1, true, true, true).with_changes(vec![
+                PermissionRefreshChangeContract {
+                    scope: "desktop\tfolder".to_string(),
+                    kind: "granted\nread".to_string(),
+                    previous: "denied\rbefore".to_string(),
+                    current: "granted\\now".to_string(),
+                    path: "/Users/me/Desktop\tProjects\nDraft\r".to_string(),
+                    reason: "macOS\tgranted\nread\\access".to_string(),
+                },
+            ]);
+        let spec = AppLaunchSpec::new("/tmp/gfm")
+            .with_permission_onboarding(onboarding)
+            .with_permission_access(access)
+            .with_permission_refresh(refresh);
+        let contract = WindowLifecycleContract::from_spec(&spec).unwrap();
+        let tsv = contract.as_tsv();
+        let onboarding = tsv
+            .lines()
+            .find(|line| line.starts_with("permission-onboarding\t"))
+            .unwrap();
+        let scope = tsv
+            .lines()
+            .find(|line| line.starts_with("permission-scope\t"))
+            .unwrap();
+        let access = tsv
+            .lines()
+            .find(|line| line.starts_with("permission-access\t"))
+            .unwrap();
+        let refresh = tsv
+            .lines()
+            .find(|line| line.starts_with("permission-refresh\t"))
+            .unwrap();
+        let change = tsv
+            .lines()
+            .find(|line| line.starts_with("permission-refresh-change\t"))
+            .unwrap();
+
+        assert!(onboarding.contains("action=open\\tsettings\t"), "{tsv}");
+        assert!(onboarding.contains("prompt-mode=first\\nrun\t"), "{tsv}");
+        assert!(
+            scope.contains("permission-scope\tdesktop\\tfolder\t"),
+            "{tsv}"
+        );
+        assert!(
+            scope.contains("path=/Users/me/Desktop\\tProjects\\nDraft\\r\t"),
+            "{tsv}"
+        );
+        assert!(
+            scope.contains("reason=full disk\\taccess\\nrequired\\\\soon"),
+            "{tsv}"
+        );
+        assert!(
+            access.contains("path=/Users/me/Documents\\tDraft\\nPlan\\r.md\t"),
+            "{tsv}"
+        );
+        assert!(
+            access.contains("prompt-source=security-scoped\\nbookmark\t"),
+            "{tsv}"
+        );
+        assert!(
+            access.contains("reason=retained\\tbookmark\\nrequired\\\\now"),
+            "{tsv}"
+        );
+        assert!(
+            refresh.contains("first-change-path=/Users/me/Desktop\\tProjects\\nDraft\\r\t"),
+            "{tsv}"
+        );
+        assert!(
+            refresh.contains("first-change-reason=macOS\\tgranted\\nread\\\\access"),
+            "{tsv}"
+        );
+        assert!(change.contains("scope=desktop\\tfolder\t"), "{tsv}");
+        assert!(change.contains("current=granted\\\\now\t"), "{tsv}");
+        assert_eq!(onboarding.split('\t').count(), 6, "{tsv}");
+        assert_eq!(scope.split('\t').count(), 5, "{tsv}");
+        assert_eq!(access.split('\t').count(), 17, "{tsv}");
+        assert_eq!(refresh.split('\t').count(), 13, "{tsv}");
+        assert_eq!(change.split('\t').count(), 7, "{tsv}");
     }
 
     #[test]

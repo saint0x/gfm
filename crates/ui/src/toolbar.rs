@@ -183,7 +183,7 @@ impl ToolbarContract {
                 "control\t{}\t{}\t{}\t{}\t{}\t{}px\tenabled={}\tselected={}",
                 control.group,
                 control.id,
-                control.label,
+                escape_field(&control.label),
                 control.role,
                 control.kind.as_str(),
                 control.width_px,
@@ -313,6 +313,14 @@ fn toolbar_title(path: &Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
+fn escape_field(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+}
+
 fn control(
     group: &'static str,
     id: &'static str,
@@ -376,5 +384,22 @@ mod tests {
         assert!(contract.as_tsv().contains(
             "control\tsearch\tsearch-field\tSearch\tmachine-search\tsearch-field\t232px\tenabled=true\tselected=false"
         ));
+    }
+
+    #[test]
+    fn toolbar_tsv_escapes_control_characters_in_path_title() {
+        let contract = ToolbarContract::finder_default("/tmp/Reports\tQ3\nDraft\rToolbar");
+        let tsv = contract.as_tsv();
+        let title = tsv
+            .lines()
+            .find(|line| line.starts_with("control\tlocation\tpath-title\t"))
+            .unwrap();
+
+        assert_eq!(tsv.lines().count(), 13, "{tsv}");
+        assert!(
+            title.contains("\tReports\\tQ3\\nDraft\\rToolbar\tcurrent-folder-title\t"),
+            "{tsv}"
+        );
+        assert_eq!(title.split('\t').count(), 9, "{tsv}");
     }
 }
