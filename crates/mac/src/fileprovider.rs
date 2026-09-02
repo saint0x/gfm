@@ -1794,7 +1794,7 @@ impl FileProviderOperationReport {
         check_control()?;
         let path = path.as_ref().to_path_buf();
         check_control()?;
-        let path_exists = match path.try_exists() {
+        let path_exists = match fileprovider_operation_path_exists(&path) {
             Ok(exists) => exists,
             Err(err) => {
                 check_control()?;
@@ -1804,16 +1804,16 @@ impl FileProviderOperationReport {
                     path,
                     operation,
                     before,
-                    format!("fileprovider-path-existence-unavailable: {err}"),
+                    format!("fileprovider-path-metadata-unavailable: {err}"),
                 ));
             }
         };
         check_control()?;
-        let before = if path_exists {
-            FileProviderStateReport::read_path_checked(&path, &mut check_control)?
-        } else {
-            FileProviderStateReport::from_path_checked(path.clone(), &mut check_control)?
-        };
+        let before = FileProviderStateReport::from_path_with_known_existence_checked(
+            path.clone(),
+            path_exists,
+            &mut check_control,
+        )?;
         check_control()?;
         let command = match operation {
             FileProviderOperation::Download => before.commands.download,
@@ -2374,6 +2374,14 @@ fn fileprovider_state_refresh_path_exists(path: &Path) -> Result<bool> {
             path,
             format!("path metadata unavailable: {err}"),
         )),
+    }
+}
+
+fn fileprovider_operation_path_exists(path: &Path) -> std::io::Result<bool> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err),
     }
 }
 
@@ -6586,6 +6594,32 @@ mod tests {
     }
 
     #[test]
+    fn checked_operation_can_cancel_after_path_metadata_probe() {
+        let root = unique_temp_dir();
+        let path = root.join("Downloaded.icloud.md");
+        fs::write(&path, "local").unwrap();
+        let mut checks = 0usize;
+
+        let err = FileProviderOperationReport::execute_checked(
+            &path,
+            FileProviderOperation::Download,
+            || {
+                checks += 1;
+                if checks > 2 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert_eq!(checks, 3);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn operations_report_unavailable_path_probe_before_native_call() {
         let root = unique_temp_dir();
         let unavailable = root.join(format!(
@@ -6610,7 +6644,7 @@ mod tests {
             report
                 .reason
                 .as_deref()
-                .is_some_and(|reason| reason.contains("fileprovider-path-existence-unavailable")),
+                .is_some_and(|reason| reason.contains("fileprovider-path-metadata-unavailable")),
             "{report:?}"
         );
         assert!(report.as_tsv().contains("\tdisposition=unavailable\t"));
