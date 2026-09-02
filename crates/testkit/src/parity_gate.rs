@@ -318,6 +318,9 @@ fn validate_capture_provenance_artifacts(input: &ParityGateInput) -> Result<()> 
     if !fixture_manifest_metadata.is_file() {
         return Err(missing_fixture_manifest());
     }
+    let fixture_manifest_content =
+        fs::read_to_string(fixture_manifest).map_err(|err| GfmError::io(fixture_manifest, err))?;
+    validate_fixture_manifest_contains_capture(input, fixture_manifest, &fixture_manifest_content)?;
     let missing_fixture_root = || {
         GfmError::Format(format!(
             "parity gate entry for {} requires captured fixture root directory: {}",
@@ -336,6 +339,50 @@ fn validate_capture_provenance_artifacts(input: &ParityGateInput) -> Result<()> 
         return Err(missing_fixture_root());
     }
     Ok(())
+}
+
+fn validate_fixture_manifest_contains_capture(
+    input: &ParityGateInput,
+    fixture_manifest: &Path,
+    content: &str,
+) -> Result<()> {
+    let Some(provenance) = &input.provenance else {
+        return Ok(());
+    };
+    let base = fixture_manifest.parent().unwrap_or_else(|| Path::new(""));
+    for line in content.lines() {
+        let line = line.trim_end();
+        if line.is_empty() || line.starts_with('#') || line.starts_with("scenario\t") {
+            continue;
+        }
+        let fields = line.split('\t').collect::<Vec<_>>();
+        if fields.len() < 3 {
+            continue;
+        }
+        let root = resolve_manifest_path(base, fields[1]);
+        if paths_refer_to_same_capture_root(&root, &provenance.fixture_root)
+            && fields[2] == provenance.view_mode.as_str()
+        {
+            return Ok(());
+        }
+    }
+    Err(GfmError::Format(format!(
+        "parity gate entry for {} requires captured fixture manifest {} to reference fixture root {} with view mode {}",
+        input.surface.as_str(),
+        fixture_manifest.display(),
+        provenance.fixture_root.display(),
+        provenance.view_mode.as_str()
+    )))
+}
+
+fn paths_refer_to_same_capture_root(left: &Path, right: &Path) -> bool {
+    if left == right {
+        return true;
+    }
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => false,
+    }
 }
 
 fn validate_distinct_capture_artifacts(input: &ParityGateInput) -> Result<()> {
@@ -1400,7 +1447,14 @@ mod tests {
         fs::write(root.join("expected.rgba"), [1, 2, 3, 255]).unwrap();
         fs::write(root.join("actual.rgba"), [1, 2, 3, 255]).unwrap();
         fs::create_dir_all(root.join("fixtures")).unwrap();
-        fs::write(root.join("fixtures/manifest.tsv"), "surface\tfixture\n").unwrap();
+        fs::write(
+            root.join("fixtures/manifest.tsv"),
+            format!(
+                "scenario\troot\tfinder-view\tfiles\tdirectories\nicon\t{}\ticon\t1\t0\n",
+                root.join("fixtures/icon").display()
+            ),
+        )
+        .unwrap();
         fs::write(
             root.join("gate.tsv"),
             "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=light\tscale=2x\tcolor-profile=srgb\nentry\ticon\texpected.rgba\tactual.rgba\t1\t1\t\t1040\t720\tactive\ticon\tfixtures/icon\n",
@@ -1412,6 +1466,36 @@ mod tests {
         assert!(err
             .to_string()
             .contains("requires captured fixture root directory"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn parity_gate_rejects_fixture_root_missing_from_fixture_manifest() {
+        let root = unique_temp_dir("gfm-parity-gate-mismatched-fixture-manifest-root");
+        fs::write(root.join("expected.rgba"), [1, 2, 3, 255]).unwrap();
+        fs::write(root.join("actual.rgba"), [1, 2, 3, 255]).unwrap();
+        fs::create_dir_all(root.join("fixtures/icon")).unwrap();
+        fs::write(
+            root.join("fixtures/manifest.tsv"),
+            format!(
+                "scenario\troot\tfinder-view\tfiles\tdirectories\nlist\t{}\tlist\t1\t0\n",
+                root.join("fixtures/list").display()
+            ),
+        )
+        .unwrap();
+        fs::write(
+            root.join("gate.tsv"),
+            "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=light\tscale=2x\tcolor-profile=srgb\nentry\ticon\texpected.rgba\tactual.rgba\t1\t1\t\t1040\t720\tactive\ticon\tfixtures/icon\n",
+        )
+        .unwrap();
+
+        let err = run_parity_gate_manifest(root.join("gate.tsv")).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("requires captured fixture manifest"));
+        assert!(err.to_string().contains("to reference fixture root"));
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -1798,8 +1882,18 @@ mod tests {
 
     fn write_capture_provenance_artifacts(root: &Path, fixture_root: &str) {
         fs::create_dir_all(root.join("fixtures")).unwrap();
-        fs::write(root.join("fixtures/manifest.tsv"), "surface\tfixture\n").unwrap();
         fs::create_dir_all(root.join(fixture_root)).unwrap();
+        fs::write(
+            root.join("fixtures/manifest.tsv"),
+            format!(
+                "scenario\troot\tfinder-view\tfiles\tdirectories\nfixture-icon\t{}\ticon\t1\t0\nfixture-list\t{}\tlist\t1\t0\nfixture-column\t{}\tcolumn\t1\t0\nfixture-gallery\t{}\tgallery\t1\t0\n",
+                root.join(fixture_root).display(),
+                root.join(fixture_root).display(),
+                root.join(fixture_root).display(),
+                root.join(fixture_root).display()
+            ),
+        )
+        .unwrap();
     }
 
     fn unique_temp_dir(prefix: &str) -> PathBuf {

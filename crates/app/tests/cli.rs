@@ -21303,8 +21303,18 @@ fn worker_admission_count(stderr: &str, worker: &str, path: &std::path::Path) ->
 
 fn write_capture_provenance_artifacts(root: &Path, fixture_root: &str) {
     fs::create_dir_all(root.join("fixtures")).unwrap();
-    fs::write(root.join("fixtures/manifest.tsv"), "surface\tfixture\n").unwrap();
     fs::create_dir_all(root.join(fixture_root)).unwrap();
+    fs::write(
+        root.join("fixtures/manifest.tsv"),
+        format!(
+            "scenario\troot\tfinder-view\tfiles\tdirectories\nfixture-icon\t{}\ticon\t1\t0\nfixture-list\t{}\tlist\t1\t0\nfixture-column\t{}\tcolumn\t1\t0\nfixture-gallery\t{}\tgallery\t1\t0\n",
+            root.join(fixture_root).display(),
+            root.join(fixture_root).display(),
+            root.join(fixture_root).display(),
+            root.join(fixture_root).display()
+        ),
+    )
+    .unwrap();
 }
 
 #[cfg(unix)]
