@@ -8357,6 +8357,50 @@ fn operation_access_refuses_unavailable_volume_api_state_from_binary() {
 }
 
 #[test]
+fn operation_access_unavailable_volume_api_escapes_control_character_root_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-operation-access-api-unavailable-{}\tTeam\nShare\rFinal\\Root",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let source_root = root.join("Source");
+    let volume = root.join("Team\tShare\nVolume\rFinal");
+    std::fs::create_dir_all(&source_root).unwrap();
+    std::fs::create_dir_all(&volume).unwrap();
+    let source = source_root.join("source.txt");
+    let destination = volume.join("copy.txt");
+    std::fs::write(&source, "content").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("operation-access-unavailable-volume-api")
+        .arg(&source)
+        .arg(&destination)
+        .arg(&volume)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert_eq!(stdout.lines().count(), 1, "{stdout}");
+    assert!(!stdout.contains('\r'), "{stdout}");
+    assert!(stdout.starts_with("operation-access\tcopy\taction=deny\t"));
+    assert!(stdout.contains("volume-root="));
+    assert!(stdout.contains("\\tTeam\\nShare\\rFinal\\\\Root"));
+    assert!(stdout.contains("Team\\tShare\\nVolume\\rFinal"));
+    assert!(stdout.contains("reason="));
+    assert!(stdout.contains("destination-parent is not accessible for mutation"));
+    assert!(stdout.contains("refresh-on-permission-change=true"));
+    assert!(!destination.exists());
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_volume_mount_bsd_refusal_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("volume-mount-bsd")

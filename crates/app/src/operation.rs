@@ -150,11 +150,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             match gate.check(&operation) {
                 Ok(()) => println!(
                     "operation-access\tcopy\taction=allow\tvolume-root={}\treason=-",
-                    root.display()
+                    escape_operation_field(&root.display().to_string())
                 ),
                 Err(err) => println!(
                     "operation-access\tcopy\taction=deny\tvolume-root={}\treason={err}",
-                    root.display()
+                    escape_operation_field(&root.display().to_string()),
+                    err = escape_operation_field(&err.to_string())
                 ),
             }
         }
