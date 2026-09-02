@@ -22,6 +22,7 @@ use std::ffi::{CStr, CString};
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::ptr;
+use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -699,17 +700,18 @@ pub fn submit_volume_operation(
 
     let run_loop = unsafe { CFRunLoopGetCurrent() };
     let (tx, rx) = mpsc::channel();
-    let context = Box::into_raw(Box::new(NativeVolumeOperationContext {
+    let context = Rc::new(NativeVolumeOperationContext {
         operation,
         run_loop,
         sender: tx,
-    }));
+    });
+    let callback_context = Rc::into_raw(Rc::clone(&context)) as *mut c_void;
     unsafe {
         DASessionScheduleWithRunLoop(session, run_loop, kCFRunLoopDefaultMode);
     }
     match operation {
         NativeVolumeOperation::Eject => unsafe {
-            DADiskEject(disk, 0, Some(volume_operation_callback), context.cast());
+            DADiskEject(disk, 0, Some(volume_operation_callback), callback_context);
         },
         NativeVolumeOperation::Mount => unsafe {
             DADiskMount(
@@ -717,11 +719,11 @@ pub fn submit_volume_operation(
                 ptr::null(),
                 0,
                 Some(volume_operation_callback),
-                context.cast(),
+                callback_context,
             );
         },
         NativeVolumeOperation::Unmount => unsafe {
-            DADiskUnmount(disk, 0, Some(volume_operation_callback), context.cast());
+            DADiskUnmount(disk, 0, Some(volume_operation_callback), callback_context);
         },
     }
 
@@ -733,7 +735,7 @@ pub fn submit_volume_operation(
         );
         DASessionUnscheduleFromRunLoop(session, run_loop, kCFRunLoopDefaultMode);
     }
-    let result = finish_volume_operation_context(rx, context, operation);
+    let result = finish_volume_operation_context(rx, operation);
 
     unsafe {
         CFRelease(disk as CFTypeRef);
@@ -797,11 +799,12 @@ pub fn submit_volume_mount_by_bsd_name(bsd_name: &str) -> NativeVolumeOperationR
 
     let run_loop = unsafe { CFRunLoopGetCurrent() };
     let (tx, rx) = mpsc::channel();
-    let context = Box::into_raw(Box::new(NativeVolumeOperationContext {
+    let context = Rc::new(NativeVolumeOperationContext {
         operation,
         run_loop,
         sender: tx,
-    }));
+    });
+    let callback_context = Rc::into_raw(Rc::clone(&context)) as *mut c_void;
     unsafe {
         DASessionScheduleWithRunLoop(session, run_loop, kCFRunLoopDefaultMode);
         DADiskMount(
@@ -809,7 +812,7 @@ pub fn submit_volume_mount_by_bsd_name(bsd_name: &str) -> NativeVolumeOperationR
             ptr::null(),
             0,
             Some(volume_operation_callback),
-            context.cast(),
+            callback_context,
         );
         CFRunLoopRunInMode(
             kCFRunLoopDefaultMode,
@@ -818,7 +821,7 @@ pub fn submit_volume_mount_by_bsd_name(bsd_name: &str) -> NativeVolumeOperationR
         );
         DASessionUnscheduleFromRunLoop(session, run_loop, kCFRunLoopDefaultMode);
     }
-    let result = finish_volume_operation_context(rx, context, operation);
+    let result = finish_volume_operation_context(rx, operation);
 
     unsafe {
         CFRelease(disk as CFTypeRef);
@@ -860,23 +863,15 @@ fn valid_bsd_disk_name(name: &str) -> bool {
 
 fn finish_volume_operation_context(
     rx: Receiver<NativeVolumeOperationResult>,
-    context: *mut NativeVolumeOperationContext,
     operation: NativeVolumeOperation,
 ) -> NativeVolumeOperationResult {
-    let result = rx
-        .try_recv()
+    rx.try_recv()
         .unwrap_or_else(|_| NativeVolumeOperationResult {
             operation,
             status: NativeVolumeOperationStatus::Submitted,
             dissenter_status: None,
             reason: Some(volume_operation_submitted_reason()),
-        });
-    if !context.is_null() {
-        unsafe {
-            drop(Box::from_raw(context));
-        }
-    }
-    result
+        })
 }
 
 unsafe extern "C" fn volume_operation_callback(
@@ -887,7 +882,7 @@ unsafe extern "C" fn volume_operation_callback(
     if context.is_null() {
         return;
     }
-    let context = &*(context as *const NativeVolumeOperationContext);
+    let context = Rc::from_raw(context as *const NativeVolumeOperationContext);
     let (status, dissenter_status, reason) = if dissenter.is_null() {
         (
             NativeVolumeOperationStatus::Succeeded,
@@ -1910,38 +1905,44 @@ mod tests {
     }
 
     #[test]
-    fn volume_operation_timeout_finishes_owned_context_as_submitted() {
+    fn volume_operation_timeout_retains_callback_context_as_submitted() {
         let (tx, rx) = mpsc::channel();
-        let context = Box::into_raw(Box::new(NativeVolumeOperationContext {
+        let context = Rc::new(NativeVolumeOperationContext {
             operation: NativeVolumeOperation::Eject,
             run_loop: unsafe { CFRunLoopGetCurrent() },
             sender: tx,
-        }));
+        });
+        let callback_context = Rc::into_raw(Rc::clone(&context));
 
-        let result = finish_volume_operation_context(rx, context, NativeVolumeOperation::Eject);
+        let result = finish_volume_operation_context(rx, NativeVolumeOperation::Eject);
 
         assert_eq!(result.operation, NativeVolumeOperation::Eject);
         assert_eq!(result.status, NativeVolumeOperationStatus::Submitted);
         assert_eq!(result.reason, Some(volume_operation_submitted_reason()));
+        assert_eq!(Rc::strong_count(&context), 2);
+        unsafe {
+            drop(Rc::from_raw(callback_context));
+        }
+        assert_eq!(Rc::strong_count(&context), 1);
     }
 
     #[test]
-    fn volume_operation_callback_result_wins_before_context_finish() {
+    fn volume_operation_callback_result_wins_and_releases_callback_context() {
         let (tx, rx) = mpsc::channel();
-        let context = Box::into_raw(Box::new(NativeVolumeOperationContext {
+        let context = Rc::new(NativeVolumeOperationContext {
             operation: NativeVolumeOperation::Unmount,
             run_loop: unsafe { CFRunLoopGetCurrent() },
-            sender: tx.clone(),
-        }));
-        tx.send(NativeVolumeOperationResult {
-            operation: NativeVolumeOperation::Unmount,
-            status: NativeVolumeOperationStatus::Succeeded,
-            dissenter_status: None,
-            reason: Some("diskarbitration-operation-succeeded".to_string()),
-        })
-        .unwrap();
+            sender: tx,
+        });
+        let callback_context = Rc::into_raw(Rc::clone(&context)) as *mut c_void;
+        assert_eq!(Rc::strong_count(&context), 2);
 
-        let result = finish_volume_operation_context(rx, context, NativeVolumeOperation::Unmount);
+        unsafe {
+            volume_operation_callback(ptr::null(), ptr::null(), callback_context);
+        }
+
+        assert_eq!(Rc::strong_count(&context), 1);
+        let result = finish_volume_operation_context(rx, NativeVolumeOperation::Unmount);
 
         assert_eq!(result.operation, NativeVolumeOperation::Unmount);
         assert_eq!(result.status, NativeVolumeOperationStatus::Succeeded);
