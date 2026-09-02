@@ -8,7 +8,7 @@ use gfm_mac::{
     SecurityWorkerAdmissionReport, VolumeDescriptor, VolumeDiscoveryReport,
 };
 use gfm_types::{GfmError, Result};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub(crate) struct ScopedAccessGuard {
     _accesses: Vec<SecurityScopedBookmarkAccess>,
@@ -20,12 +20,28 @@ pub(crate) struct WorkerAdmissionRequest {
     pub(crate) intent: AccessIntent,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WorkerAdmissionVolumeGateReport {
+    pub(crate) admission: SecurityWorkerAdmissionReport,
+    pub(crate) volume_path: PathBuf,
+    pub(crate) volume_report: VolumeDiscoveryReport,
+}
+
 pub(crate) fn worker_admission_with_volume_gate_checked(
     path: &Path,
     intent: AccessIntent,
     worker: impl Into<String>,
-    mut check_control: impl FnMut() -> Result<()>,
+    check_control: impl FnMut() -> Result<()>,
 ) -> Result<SecurityWorkerAdmissionReport> {
+    Ok(worker_admission_volume_gate_report_checked(path, intent, worker, check_control)?.admission)
+}
+
+pub(crate) fn worker_admission_volume_gate_report_checked(
+    path: &Path,
+    intent: AccessIntent,
+    worker: impl Into<String>,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<WorkerAdmissionVolumeGateReport> {
     check_control()?;
     let worker = worker.into();
     let _ = refresh_permission_state(PermissionRefreshAudience::Workers, &worker)?;
@@ -34,12 +50,12 @@ pub(crate) fn worker_admission_with_volume_gate_checked(
     let volume_report =
         VolumeDiscoveryReport::for_containing_path_checked(&volume_path, &mut check_control)?;
     check_control()?;
-    Ok(worker_admission_with_volume_report(
-        path,
-        intent,
-        worker,
-        &volume_report,
-    ))
+    let admission = worker_admission_with_volume_report(path, intent, worker, &volume_report);
+    Ok(WorkerAdmissionVolumeGateReport {
+        admission,
+        volume_path,
+        volume_report,
+    })
 }
 
 pub(crate) fn worker_admission_with_volume_report(
@@ -643,6 +659,34 @@ mod tests {
         assert!(admission.as_tsv().contains("\tprobe=unknown\t"));
         assert!(!admission.as_tsv().contains("\tprobe=missing\t"));
         assert!(worker_admission_blocked_by_volume(&admission));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn worker_admission_volume_gate_report_returns_cached_volume_context() {
+        let root = unique_temp_dir("gfm-access-admission-volume-report");
+        let path = root.join("Preview.pdf");
+        fs::write(&path, "%PDF-1.7\n").unwrap();
+
+        let report = worker_admission_volume_gate_report_checked(
+            &path,
+            AccessIntent::Preview,
+            "preview worker",
+            || Ok(()),
+        )
+        .unwrap();
+
+        assert_eq!(report.admission.worker, "preview worker");
+        assert_eq!(report.admission.worker_action, SecurityWorkerAction::Start);
+        assert!(report.admission.can_touch_filesystem);
+        assert_eq!(report.volume_path, path);
+        let volume = report
+            .volume_report
+            .volume_for_path(&report.volume_path)
+            .expect("cached containing volume");
+        assert!(!volume.stable_identity.is_empty());
+        assert_eq!(volume.mount_state, gfm_mac::MountState::Mounted);
 
         fs::remove_dir_all(root).unwrap();
     }

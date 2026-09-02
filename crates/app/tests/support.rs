@@ -595,6 +595,7 @@ fn reports_permission_ui_refresh_in_access_contract_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8(output.stderr).unwrap();
 
     assert!(stdout.starts_with("dialog\tsurface=permission\tpresentation=window-sheet"));
     assert!(
@@ -613,6 +614,15 @@ fn reports_permission_ui_refresh_in_access_contract_from_binary() {
     assert!(stdout.contains("\trefresh-ui=true\t"), "{stdout}");
     assert!(stdout.contains("\npermission-access\tpath="), "{stdout}");
     assert!(stdout.contains("\nsecurity-worker-admission\tworker=ui list view\t"));
+    assert!(
+        stderr.contains(&format!(
+            "ui-permission-volume-access\tworker=ui list view\tpath={}\tintent=read",
+            root.display()
+        )) && stderr.contains("\tstable-id=")
+            && !stderr.contains("\tstable-id=-\t")
+            && stderr.contains("\treason=cached-volume-report"),
+        "{stderr}"
+    );
 
     let _ = std::fs::remove_dir_all(root);
 }

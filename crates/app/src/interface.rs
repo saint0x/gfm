@@ -137,14 +137,25 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 crate::permission_refresh::PermissionRefreshAudience::Ui,
                 "permission-access",
             )?;
-            let admission = crate::access::worker_admission_with_volume_gate_checked(
+            let gate = crate::access::worker_admission_volume_gate_report_checked(
                 &path,
                 intent,
                 worker,
                 || Ok(()),
             )?;
+            eprintln!(
+                "{}",
+                interface_volume_access_tsv(
+                    "ui-permission-volume-access",
+                    &gate.admission.worker,
+                    &path,
+                    intent,
+                    &gate.volume_path,
+                    &gate.volume_report,
+                )
+            );
             print_permission_access_contract(
-                &admission,
+                &gate.admission,
                 refresh.as_ref().map(permission_refresh_contract),
             )?;
         }
@@ -1215,29 +1226,47 @@ impl InterfaceAccessReport {
     }
 
     fn as_tsv(&self, prefix: &str, worker: &str) -> String {
-        if let Some(volume) = self.volume_report.volume_for_path(&self.path) {
-            format!(
-                "{}\tworker={}\tpath={}\tintent={}\tvolume-id={}\tstable-id={}\tclass={}\tmount={}\treachable={}\tread-only={}\treason=cached-volume-report",
-                escape_tsv_field(prefix),
-                escape_tsv_field(worker),
-                escape_tsv_field(&self.path.to_string_lossy()),
-                self.intent.as_str(),
-                volume.id.0,
-                escape_tsv_field(&volume.stable_identity),
-                volume.kind.as_str(),
-                volume.mount_state.as_str(),
-                format_optional_bool(volume.reachable),
-                volume.read_only,
-            )
-        } else {
-            format!(
-                "{}\tworker={}\tpath={}\tintent={}\tvolume-id=-\tstable-id=-\tclass=-\tmount=-\treachable=-\tread-only=-\treason=no-containing-volume",
-                escape_tsv_field(prefix),
-                escape_tsv_field(worker),
-                escape_tsv_field(&self.path.to_string_lossy()),
-                self.intent.as_str(),
-            )
-        }
+        interface_volume_access_tsv(
+            prefix,
+            worker,
+            &self.path,
+            self.intent,
+            &self.path,
+            &self.volume_report,
+        )
+    }
+}
+
+fn interface_volume_access_tsv(
+    prefix: &str,
+    worker: &str,
+    path: &Path,
+    intent: AccessIntent,
+    volume_path: &Path,
+    volume_report: &VolumeDiscoveryReport,
+) -> String {
+    if let Some(volume) = volume_report.volume_for_path(volume_path) {
+        format!(
+            "{}\tworker={}\tpath={}\tintent={}\tvolume-id={}\tstable-id={}\tclass={}\tmount={}\treachable={}\tread-only={}\treason=cached-volume-report",
+            escape_tsv_field(prefix),
+            escape_tsv_field(worker),
+            escape_tsv_field(&path.to_string_lossy()),
+            intent.as_str(),
+            volume.id.0,
+            escape_tsv_field(&volume.stable_identity),
+            volume.kind.as_str(),
+            volume.mount_state.as_str(),
+            format_optional_bool(volume.reachable),
+            volume.read_only,
+        )
+    } else {
+        format!(
+            "{}\tworker={}\tpath={}\tintent={}\tvolume-id=-\tstable-id=-\tclass=-\tmount=-\treachable=-\tread-only=-\treason=no-containing-volume",
+            escape_tsv_field(prefix),
+            escape_tsv_field(worker),
+            escape_tsv_field(&path.to_string_lossy()),
+            intent.as_str(),
+        )
     }
 }
 
