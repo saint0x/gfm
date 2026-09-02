@@ -1430,6 +1430,9 @@ fn quicklook_session_retries_transient_preview_failure_from_binary() {
         )) && stderr.contains("\tstable-id=")
             && !stderr.contains("\tstable-id=-\t")
             && stderr.contains("\twritable=")
+            && stderr.contains("\tvolume-native-status=")
+            && stderr.contains("\tvolume-resource-status=")
+            && stderr.contains("\tvolume-mount-status=")
             && stderr.contains("\treason=cached-volume-report"),
         "{stderr}"
     );

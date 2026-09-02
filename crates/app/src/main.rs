@@ -284,7 +284,7 @@ pub(crate) fn index_volume_descriptor(volume: &VolumeDescriptor) -> IndexVolumeD
     let mut descriptor = IndexVolumeDescriptor::new(
         volume.label.clone(),
         volume.path.clone(),
-        index_volume_class(volume.kind),
+        index_volume_class(volume),
         index_mount_state(volume.mount_state),
     )
     .with_volume_id(volume.id)
@@ -452,15 +452,47 @@ fn push_signature_u64(tokens: &mut Vec<String>, key: &str, value: Option<u64>) {
     }
 }
 
-fn index_volume_class(kind: VolumeKind) -> IndexVolumeClass {
-    match kind {
+fn index_volume_class(volume: &VolumeDescriptor) -> IndexVolumeClass {
+    match volume.kind {
         VolumeKind::System => IndexVolumeClass::System,
         VolumeKind::Internal => IndexVolumeClass::Internal,
+        VolumeKind::External | VolumeKind::Removable if index_volume_reports_slow(volume) => {
+            IndexVolumeClass::Slow
+        }
         VolumeKind::External | VolumeKind::Removable => IndexVolumeClass::External,
         VolumeKind::DiskImage => IndexVolumeClass::Slow,
         VolumeKind::Network => IndexVolumeClass::Network,
         VolumeKind::Unknown => IndexVolumeClass::Unknown,
     }
+}
+
+fn index_volume_reports_slow(volume: &VolumeDescriptor) -> bool {
+    if volume.network || volume.reachable == Some(false) {
+        return false;
+    }
+    if volume.kind == VolumeKind::DiskImage {
+        return true;
+    }
+    if !matches!(volume.kind, VolumeKind::External | VolumeKind::Removable) {
+        return false;
+    }
+    let protocol = volume.device_protocol.as_deref().unwrap_or_default();
+    let media_kind = volume.media_kind.as_deref().unwrap_or_default();
+    let media_type = volume.media_type.as_deref().unwrap_or_default();
+    volume.resource_automounted == Some(true)
+        || volume.removable
+            && (protocol.eq_ignore_ascii_case("usb")
+                || protocol.eq_ignore_ascii_case("firewire")
+                || contains_ascii_case_insensitive(media_kind, "removable")
+                || contains_ascii_case_insensitive(media_type, "removable"))
+}
+
+fn contains_ascii_case_insensitive(haystack: &str, needle: &str) -> bool {
+    !needle.is_empty()
+        && haystack
+            .as_bytes()
+            .windows(needle.len())
+            .any(|window| window.eq_ignore_ascii_case(needle.as_bytes()))
 }
 
 fn index_mount_state(state: MountState) -> IndexMountState {
@@ -1371,6 +1403,68 @@ mod tests {
         let descriptor = index_volume_descriptor(&volume);
 
         assert_eq!(descriptor.class, IndexVolumeClass::Slow);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn index_volume_descriptor_maps_usb_removable_external_media_to_slow_class() {
+        let root = unique_temp_dir("gfm-app-volume-usb-removable-index-class");
+        let mut volume = VolumeDescriptor::for_path(&root).unwrap();
+        volume.kind = VolumeKind::External;
+        volume.removable = true;
+        volume.device_protocol = Some("USB".to_string());
+
+        let descriptor = index_volume_descriptor(&volume);
+
+        assert_eq!(descriptor.class, IndexVolumeClass::Slow);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn index_volume_descriptor_maps_resource_automounted_external_media_to_slow_class() {
+        let root = unique_temp_dir("gfm-app-volume-automounted-index-class");
+        let mut volume = VolumeDescriptor::for_path(&root).unwrap();
+        volume.kind = VolumeKind::External;
+        volume.resource_automounted = Some(true);
+
+        let descriptor = index_volume_descriptor(&volume);
+
+        assert_eq!(descriptor.class, IndexVolumeClass::Slow);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn index_volume_descriptor_keeps_normal_external_media_external() {
+        let root = unique_temp_dir("gfm-app-volume-normal-external-index-class");
+        let mut volume = VolumeDescriptor::for_path(&root).unwrap();
+        volume.kind = VolumeKind::External;
+        volume.removable = false;
+        volume.resource_automounted = Some(false);
+        volume.device_protocol = Some("PCI-Express".to_string());
+
+        let descriptor = index_volume_descriptor(&volume);
+
+        assert_eq!(descriptor.class, IndexVolumeClass::External);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn index_volume_descriptor_keeps_unreachable_network_external_out_of_slow_class() {
+        let root = unique_temp_dir("gfm-app-volume-unreachable-index-class");
+        let mut volume = VolumeDescriptor::for_path(&root).unwrap();
+        volume.kind = VolumeKind::External;
+        volume.network = true;
+        volume.reachable = Some(false);
+        volume.removable = true;
+        volume.device_protocol = Some("USB".to_string());
+
+        let descriptor = index_volume_descriptor(&volume);
+
+        assert_eq!(descriptor.class, IndexVolumeClass::External);
 
         std::fs::remove_dir_all(root).unwrap();
     }
