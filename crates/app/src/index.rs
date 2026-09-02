@@ -69,11 +69,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     "{}\t{}\t{}",
                     marker(record.kind),
                     record.len,
-                    record.path.display()
+                    escape_index_tsv_field(&record.path.to_string_lossy())
                 );
             }
             for issue in page.inaccessible {
-                eprintln!("inaccessible\t{}\t{}", issue.path.display(), issue.reason);
+                eprintln!(
+                    "inaccessible\t{}\t{}",
+                    escape_index_tsv_field(&issue.path.to_string_lossy()),
+                    escape_index_tsv_field(&issue.reason)
+                );
             }
         }
         "index" | "index-retry-probe" => {
@@ -595,7 +599,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let _root_access = enforce_index_access(&root)?;
             let stream = FileEventStream::watch(&[WatchRoot::tree(root)])?;
             let event = stream.recv()?;
-            println!("{}\t{}", event_marker(&event.kind), event.path.display());
+            println!(
+                "{}\t{}",
+                event_marker(&event.kind),
+                escape_index_tsv_field(&event.path.to_string_lossy())
+            );
         }
         _ => return Ok(false),
     }

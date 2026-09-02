@@ -163,6 +163,48 @@ fn search_volume_access_escapes_control_characters_from_binary() {
 }
 
 #[test]
+fn search_index_rows_escape_control_character_paths_from_binary() {
+    let root = unique_temp_dir("gfm-cli-search-row-escape-root");
+    let index = unique_temp_path("gfm-cli-search-row-escape", "gfmidx");
+    let file = root.join("Needle\tVisible\nDraft\rFinal.txt");
+    fs::write(&file, "needle visible").unwrap();
+
+    let index_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["index", root.to_str().unwrap(), index.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        index_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&index_output.stderr)
+    );
+
+    for command in ["search-index", "search-index-mmap"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+            .args([command, index.to_str().unwrap(), "needle"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert_eq!(stdout.lines().count(), 1, "{command}: {stdout}");
+        assert!(!stdout.contains('\r'), "{command}: {stdout}");
+        let line = stdout.lines().next().unwrap();
+        assert_eq!(line.split('\t').count(), 4, "{command}: {stdout}");
+        assert!(
+            line.contains(&escape_test_tsv_field(&file.to_string_lossy())),
+            "{command}: {stdout}"
+        );
+    }
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(index).unwrap();
+}
+
+#[test]
 fn index_retries_transient_failure_from_binary() {
     let root = unique_temp_dir("gfm-cli-index-retry-root");
     let index = unique_temp_path("gfm-cli-index-retry", "gfmidx");
@@ -750,6 +792,8 @@ fn list_volume_access_escapes_control_characters_from_binary() {
     let root = scratch.join("List\tRoot\nVolume\rAccess");
     fs::create_dir_all(root.join("Folder")).unwrap();
     fs::write(root.join("Visible.txt"), "listed").unwrap();
+    let control_file = root.join("Visible\tFile\nDraft\rFinal.txt");
+    fs::write(&control_file, "listed control").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("list")
@@ -766,6 +810,14 @@ fn list_volume_access_escapes_control_characters_from_binary() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stdout.contains("Visible.txt"), "{stdout}");
     assert!(stdout.contains("Folder"), "{stdout}");
+    assert!(!stdout.contains('\r'), "{stdout}");
+    assert!(
+        stdout.contains(&escape_test_tsv_field(&control_file.to_string_lossy())),
+        "{stdout}"
+    );
+    for line in stdout.lines() {
+        assert_eq!(line.split('\t').count(), 3, "{stdout}");
+    }
     let escaped_root = escape_test_tsv_field(&root.to_string_lossy());
     assert!(
         stderr.contains(&format!(
@@ -3735,6 +3787,44 @@ fn reports_rename_correlation_from_binary() {
 }
 
 #[test]
+fn rename_correlation_escapes_control_character_paths_from_binary() {
+    let root = unique_temp_dir("gfm-cli-rename-control-root");
+    let from = root.join("Rename\tOld\nDraft\r.md");
+    let to = root.join("Rename\tNew\nDraft\r.md");
+    fs::write(&from, "rename identity").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "rename-correlation",
+            from.to_str().unwrap(),
+            to.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(stdout.lines().count(), 1, "{stdout}");
+    assert!(!stdout.contains('\r'), "{stdout}");
+    assert!(
+        stdout.contains(&format!(
+            "from={}\t",
+            escape_test_tsv_field(&from.to_string_lossy())
+        )) && stdout.contains(&format!(
+            "to={}\t",
+            escape_test_tsv_field(&to.to_string_lossy())
+        )),
+        "{stdout}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn rename_correlation_refuses_unreachable_destination_before_indexing_from_binary() {
     let root = unique_temp_dir("gfm-cli-rename-preflight-root");
     let offline = unique_temp_dir("gfm-cli-rename-preflight-offline");
@@ -3809,6 +3899,40 @@ fn reports_metadata_update_from_binary() {
     assert!(stdout.starts_with("metadata-update\t"), "{stdout}");
     assert!(stdout.contains("\texisted=true\t"), "{stdout}");
     assert!(stdout.contains("size"), "{stdout}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn metadata_update_escapes_control_character_path_from_binary() {
+    let root = unique_temp_dir("gfm-cli-metadata-control-root");
+    let path = root.join("Metadata\tDraft\nFinal\r.md");
+    fs::write(&path, "metadata").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "metadata-update",
+            path.to_str().unwrap(),
+            " appended content",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(stdout.lines().count(), 1, "{stdout}");
+    assert!(!stdout.contains('\r'), "{stdout}");
+    assert!(
+        stdout.contains(&format!(
+            "metadata-update\t{}\t",
+            escape_test_tsv_field(&path.to_string_lossy())
+        )),
+        "{stdout}"
+    );
 
     fs::remove_dir_all(root).unwrap();
 }
@@ -4155,6 +4279,81 @@ fn schedules_fsevents_repair_from_binary() {
         "{explicit_stdout}"
     );
     assert!(explicit_stdout.contains("Projects"), "{explicit_stdout}");
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(index).unwrap();
+    fs::remove_file(state).unwrap();
+    fs::remove_file(cursor).unwrap();
+}
+
+#[test]
+fn fsevents_repair_schedule_escapes_control_character_paths_from_binary() {
+    let root = unique_temp_dir("gfm-cli-repair-control-root");
+    let index = unique_temp_path("gfm-cli-repair-control-records", "gfmidx");
+    let state = unique_temp_path("gfm-cli-repair-control-state", "gfmstate");
+    let cursor = unique_temp_path("gfm-cli-repair-control-cursor", "gfmcursor");
+    let dropped = root.join("Projects\tDrop\nAgain\r");
+    fs::create_dir_all(&dropped).unwrap();
+    fs::write(dropped.join("Repair.md"), "alpha").unwrap();
+
+    let index_state = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "index-state",
+            root.to_str().unwrap(),
+            index.to_str().unwrap(),
+            state.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        index_state.status.success(),
+        "{}",
+        String::from_utf8_lossy(&index_state.stderr)
+    );
+
+    let checkpoint = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "fsevents-cursor-checkpoint",
+            state.to_str().unwrap(),
+            cursor.to_str().unwrap(),
+            "200",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        checkpoint.status.success(),
+        "{}",
+        String::from_utf8_lossy(&checkpoint.stderr)
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "fsevents-repair-schedule",
+            state.to_str().unwrap(),
+            cursor.to_str().unwrap(),
+            "201",
+            "kernel\tdropped\nagain\r",
+            dropped.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(stdout.lines().count(), 2, "{stdout}");
+    assert!(!stdout.contains('\r'), "{stdout}");
+    assert!(
+        stdout.contains(&escape_test_tsv_field(&dropped.to_string_lossy())),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("reason=explicit-drop:kernel\\tdropped\\nagain\\r"),
+        "{stdout}"
+    );
 
     fs::remove_dir_all(root).unwrap();
     fs::remove_file(index).unwrap();

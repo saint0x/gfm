@@ -133,13 +133,21 @@ impl SidecarQueryCacheInvalidationReport {
     pub fn as_tsv(&self) -> String {
         format!(
             "sidecar-query-cache-invalidation\t{}\tinvalidated={}\tresult-entries-before={}\tresult-entries-after={}\treason={}",
-            self.path.display(),
+            escape_tsv_field(&self.path.to_string_lossy()),
             self.invalidated,
             self.result_entries_before,
             self.result_entries_after,
-            self.reason
+            escape_tsv_field(&self.reason)
         )
     }
+}
+
+fn escape_tsv_field(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 #[derive(Debug)]
@@ -1943,6 +1951,30 @@ mod tests {
         assert_eq!(after.result_cache_hits, 0);
         assert_eq!(after.result_cache_misses, 1);
         assert_eq!(after.content_cache_hits, 1);
+    }
+
+    #[test]
+    fn sidecar_query_cache_invalidation_tsv_escapes_control_characters() {
+        let report = SidecarQueryCacheInvalidationReport {
+            path: std::path::PathBuf::from("/tmp/Sidecar\\Rows/Query\tDraft\nFinal\r.md"),
+            invalidated: true,
+            result_entries_before: 3,
+            result_entries_after: 0,
+            reason: "provider\tchanged\nagain\r".to_string(),
+        };
+        let tsv = report.as_tsv();
+
+        assert_eq!(tsv.lines().count(), 1, "{tsv}");
+        assert!(!tsv.contains('\r'), "{tsv}");
+        assert!(
+            tsv.contains("Sidecar\\\\Rows/Query\\tDraft\\nFinal\\r.md\t"),
+            "{tsv}"
+        );
+        assert!(
+            tsv.contains("reason=provider\\tchanged\\nagain\\r"),
+            "{tsv}"
+        );
+        assert_eq!(tsv.split('\t').count(), 6, "{tsv}");
     }
 
     #[test]

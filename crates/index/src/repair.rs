@@ -66,9 +66,9 @@ impl SubtreeRepairJob {
     pub fn as_tsv(&self) -> String {
         format!(
             "repair\tpath={}\tpriority={}\treason={}",
-            self.path.display(),
+            escape_tsv_field(&self.path.to_string_lossy()),
             self.priority.as_str(),
-            self.reason.as_str()
+            escape_tsv_field(&self.reason.as_str())
         )
     }
 }
@@ -163,7 +163,7 @@ impl RepairSchedule {
             self.highest_observed_event_id
                 .map(|event_id| event_id.to_string())
                 .unwrap_or_else(|| "-".to_string()),
-            self.resume.reason
+            escape_tsv_field(&self.resume.reason)
         )];
         for job in &self.jobs {
             lines.push(job.as_tsv());
@@ -208,6 +208,14 @@ fn normalize_repair_path(root: &Path, path: &Path) -> PathBuf {
     } else {
         root.join(path)
     }
+}
+
+fn escape_tsv_field(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 #[cfg(test)]
@@ -275,5 +283,50 @@ mod tests {
             .iter()
             .any(|job| matches!(job.reason, RepairReason::EventIdGap { .. })));
         assert_eq!(schedule.jobs[0].path, PathBuf::from("/Volumes/Data"));
+    }
+
+    #[test]
+    fn repair_schedule_tsv_escapes_control_characters() {
+        let mut volume = volume();
+        volume.root = PathBuf::from("/Volumes/Data\tRoot\nDraft\r");
+        let rescan_schedule = RepairSchedule::evaluate(
+            &volume,
+            FseventsResumePlan {
+                action: FseventsResumeAction::Rescan,
+                from_event_id: Some(10),
+                reason: "stale\tcursor\nagain\r".to_string(),
+            },
+            &[],
+            &[],
+            None,
+        );
+        let drop_schedule = RepairSchedule::evaluate(
+            &volume,
+            FseventsResumePlan {
+                action: FseventsResumeAction::Continue,
+                from_event_id: Some(10),
+                reason: "steady\tcursor\nagain\r".to_string(),
+            },
+            &[],
+            &[PathBuf::from("Dropped\tRoot\nAgain\r")],
+            Some("drop\treason\nagain\r"),
+        );
+        let tsv = format!("{}\n{}", rescan_schedule.as_tsv(), drop_schedule.as_tsv());
+
+        assert_eq!(tsv.lines().count(), 4, "{tsv}");
+        assert!(!tsv.contains('\r'), "{tsv}");
+        assert!(tsv.contains("reason=stale\\tcursor\\nagain\\r"), "{tsv}");
+        assert!(
+            tsv.contains("path=/Volumes/Data\\tRoot\\nDraft\\r\t"),
+            "{tsv}"
+        );
+        assert!(
+            tsv.contains("Data\\tRoot\\nDraft\\r/Dropped\\tRoot\\nAgain\\r"),
+            "{tsv}"
+        );
+        assert!(
+            tsv.contains("reason=explicit-drop:drop\\treason\\nagain\\r"),
+            "{tsv}"
+        );
     }
 }

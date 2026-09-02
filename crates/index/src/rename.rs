@@ -15,8 +15,8 @@ impl RenameCorrelationReport {
     pub fn as_tsv(&self) -> String {
         format!(
             "rename-correlation\tfrom={}\tto={}\tremoved={}\tinserted={}\tpreserved={}",
-            self.from.display(),
-            self.to.display(),
+            escape_tsv_field(&self.from.to_string_lossy()),
+            escape_tsv_field(&self.to.to_string_lossy()),
             self.removed,
             self.inserted,
             self.preserved
@@ -174,4 +174,40 @@ fn root_parent(records: &[FileRecord], from: &Path) -> Option<gfm_types::FileId>
         .iter()
         .find(|record| record.path == from)
         .and_then(|record| record.parent)
+}
+
+fn escape_tsv_field(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rename_correlation_tsv_escapes_control_character_paths() {
+        let report = RenameCorrelationReport {
+            from: PathBuf::from("/tmp/Rename\\Rows/From\tDraft\nFinal\r"),
+            to: PathBuf::from("/tmp/Rename\\Rows/To\tDraft\nFinal\r"),
+            removed: 1,
+            inserted: 1,
+            preserved: 1,
+        };
+        let tsv = report.as_tsv();
+
+        assert_eq!(tsv.lines().count(), 1, "{tsv}");
+        assert!(!tsv.contains('\r'), "{tsv}");
+        assert!(
+            tsv.contains("from=/tmp/Rename\\\\Rows/From\\tDraft\\nFinal\\r\t"),
+            "{tsv}"
+        );
+        assert!(
+            tsv.contains("to=/tmp/Rename\\\\Rows/To\\tDraft\\nFinal\\r\t"),
+            "{tsv}"
+        );
+    }
 }

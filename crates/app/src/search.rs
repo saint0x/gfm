@@ -3783,7 +3783,7 @@ fn print_hit(hit: &SearchHit) {
         hit.score,
         marker(hit.record.kind),
         hit.record.len,
-        hit.record.path.display()
+        escape_tsv_field(&hit.record.path.to_string_lossy())
     );
     if let Some(snippet) = &hit.snippet {
         print!("\t{}", escape_output_field(&highlight_snippet(snippet)));
