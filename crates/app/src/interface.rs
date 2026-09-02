@@ -1283,6 +1283,7 @@ fn escape_tsv_field(value: &str) -> String {
         .replace('\\', "\\\\")
         .replace('\t', "\\t")
         .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 #[derive(Clone)]
@@ -2245,6 +2246,41 @@ mod tests {
         let access = allowed_permission_access();
 
         assert!(!permission_access_requires_surface(&access));
+    }
+
+    #[test]
+    fn interface_volume_access_tsv_escapes_control_characters() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-interface-volume-access-escape-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("UI\tSearch\nRoot\r.gfmidx");
+        std::fs::write(&path, b"records").unwrap();
+        let mut volume = gfm_mac::VolumeDescriptor::for_path(&root).unwrap();
+        volume.stable_identity = "interface\tstable\nid\r".to_string();
+        let report = VolumeDiscoveryReport {
+            volumes: vec![volume],
+        };
+
+        let tsv = interface_volume_access_tsv(
+            "ui-search\tvolume\naccess\r",
+            "ui\tsearch\nworker\r",
+            &path,
+            AccessIntent::Read,
+            &path,
+            &report,
+        );
+
+        assert_eq!(tsv.lines().count(), 1, "{tsv}");
+        assert!(tsv
+            .starts_with("ui-search\\tvolume\\naccess\\r\tworker=ui\\tsearch\\nworker\\r\tpath="));
+        assert!(tsv.contains("UI\\tSearch\\nRoot\\r.gfmidx\tintent=read\t"));
+        assert!(tsv.contains("stable-id=interface\\tstable\\nid\\r\t"));
+        assert_eq!(tsv.split('\t').count(), 12, "{tsv}");
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

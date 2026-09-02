@@ -584,7 +584,7 @@ impl VolumeIndexDecision {
             self.id
                 .map(|id| id.0.to_string())
                 .unwrap_or_else(|| "-".to_string()),
-            self.path.display(),
+            escape_field(&self.path.to_string_lossy()),
             self.class.as_str(),
             self.mount_state.as_str(),
             self.reachable
@@ -1057,7 +1057,7 @@ impl VolumeInvalidationReport {
     pub fn as_tsv(&self) -> String {
         format!(
             "volume-invalidation\tpath={}\tprevious-class={}\tprevious-mount={}\tprevious-reachable={}\tprevious-read-only={}\tcurrent-class={}\tcurrent-mount={}\tcurrent-reachable={}\tcurrent-read-only={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\tprevious-writable={}\tprevious-ejectable={}\tprevious-removable={}\tprevious-mountable={}\tprevious-case-sensitive={}\tprevious-case-preserving={}\tcurrent-writable={}\tcurrent-ejectable={}\tcurrent-removable={}\tcurrent-mountable={}\tcurrent-case-sensitive={}\tcurrent-case-preserving={}\tprevious-native-status={}\tprevious-native-reason={}\tprevious-resource-status={}\tprevious-resource-reason={}\tprevious-mount-status={}\tprevious-mount-reason={}\tcurrent-native-status={}\tcurrent-native-reason={}\tcurrent-resource-status={}\tcurrent-resource-reason={}\tcurrent-mount-status={}\tcurrent-mount-reason={}\tapi-status-changed={}\tapfs-metadata-changed={}\tfilesystem-identity-changed={}\tprevious-stable-id={}\tcurrent-stable-id={}\treason={}",
-            self.path.display(),
+            escape_field(&self.path.to_string_lossy()),
             self.previous_class
                 .map(IndexVolumeClass::as_str)
                 .unwrap_or("-"),
@@ -1567,6 +1567,7 @@ fn escape_field(value: &str) -> String {
         .replace('\\', "\\\\")
         .replace('\t', "\\t")
         .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 #[cfg(test)]
@@ -1641,16 +1642,67 @@ mod tests {
     }
 
     #[test]
+    fn volume_index_decision_tsv_escapes_control_characters() {
+        let volume = external_volume("/Volumes/Index\tRoot\nVolume\rAccess")
+            .with_stable_identity("diskarbitration:uuid:Index\tVolume\nStable\rId")
+            .with_native_reason("native\treason\nwith\rcontrols")
+            .with_resource_reason("resource\treason\nwith\rcontrols")
+            .with_mount_reason("mount\treason\nwith\rcontrols");
+
+        let tsv =
+            VolumeIndexPolicy::new(VolumeIndexingPolicy::Enabled, VolumeIndexingPolicy::Enabled)
+                .decide(&volume)
+                .as_tsv();
+
+        assert_eq!(tsv.lines().count(), 1, "{tsv}");
+        assert!(
+            tsv.contains("Index\\tRoot\\nVolume\\rAccess\tclass=external\t"),
+            "{tsv}"
+        );
+        assert!(tsv.contains("\tstable-id=diskarbitration:uuid:Index\\tVolume\\nStable\\rId\t"));
+        assert!(tsv.contains("\tnative-reason=native\\treason\\nwith\\rcontrols\t"));
+        assert!(tsv.contains("\tresource-reason=resource\\treason\\nwith\\rcontrols\t"));
+        assert!(tsv.contains("\tmount-reason=mount\\treason\\nwith\\rcontrols\t"));
+    }
+
+    #[test]
+    fn volume_invalidation_tsv_escapes_control_characters() {
+        let previous = external_volume("/Volumes/Index\tRoot\nVolume\rAccess")
+            .with_stable_identity("diskarbitration:uuid:Previous\tVolume\nStable\rId")
+            .with_native_reason("previous\tnative\nreason\rnow");
+        let current = external_volume("/Volumes/Index\tRoot\nVolume\rAccess")
+            .with_stable_identity("diskarbitration:uuid:Current\tVolume\nStable\rId")
+            .with_native_reason("current\tnative\nreason\rnow");
+
+        let tsv = VolumeInvalidationReport::evaluate(Some(&previous), Some(&current)).as_tsv();
+
+        assert_eq!(tsv.lines().count(), 1, "{tsv}");
+        assert!(
+            tsv.contains("path=/Volumes/Index\\tRoot\\nVolume\\rAccess\t"),
+            "{tsv}"
+        );
+        assert!(tsv.contains("\tprevious-native-reason=previous\\tnative\\nreason\\rnow\t"));
+        assert!(tsv.contains("\tcurrent-native-reason=current\\tnative\\nreason\\rnow\t"));
+        assert!(tsv.contains(
+            "\tprevious-stable-id=diskarbitration:uuid:Previous\\tVolume\\nStable\\rId\t"
+        ));
+        assert!(tsv
+            .contains("\tcurrent-stable-id=diskarbitration:uuid:Current\\tVolume\\nStable\\rId\t"));
+    }
+
+    #[test]
     fn volume_event_index_invalidation_uses_structured_filesystem_identity() {
         let previous = external_volume("/Volumes/Data")
             .with_filesystem("apfs")
-            .with_apfs_container_uuid("OLD-CONTAINER")
+            .with_volume_uuid("OLD-VOLUME")
+            .with_apfs_container_uuid("CONTAINER")
             .with_media_uuid("MEDIA")
             .with_resource_uuid("RESOURCE")
             .with_filesystem_signature("legacy-signature");
         let current = external_volume("/Volumes/Data")
             .with_filesystem("apfs")
-            .with_apfs_container_uuid("NEW-CONTAINER")
+            .with_volume_uuid("NEW-VOLUME")
+            .with_apfs_container_uuid("CONTAINER")
             .with_media_uuid("MEDIA")
             .with_resource_uuid("RESOURCE")
             .with_filesystem_signature("legacy-signature");

@@ -192,7 +192,7 @@ impl FinderMetadataReport {
     pub fn as_tsv(&self) -> String {
         let mut lines = vec![format!(
             "finder-metadata\t{}\tdisplay={}\tlocalized={}\tkind={}\ttype={}\tlink={}\thidden={}\text-hidden={}\tlabel={}\ttags={}\tcomment={}",
-            self.record.path.display(),
+            escape_field(&self.record.path.to_string_lossy()),
             escape_field(&self.display_name),
             self.localized_name.as_deref().map(escape_field).unwrap_or_else(|| "-".to_string()),
             escape_field(&self.kind_string),
@@ -489,6 +489,7 @@ fn escape_field(value: &str) -> String {
         .replace('\\', "\\\\")
         .replace('\t', "\\t")
         .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 #[cfg(test)]
@@ -556,6 +557,32 @@ mod tests {
         assert!(secondary.comments.contains(&"Report".to_string()));
         assert!(secondary.comments.contains(&"Md Document".to_string()));
         assert!(secondary.comments.contains(&"handoff notes".to_string()));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn finder_metadata_tsv_escapes_control_characters_in_text_fields() {
+        let root = unique_temp_dir();
+        let path = root.join("Report\tQ3\nDraft\rFinal.md");
+        fs::write(&path, "report").unwrap();
+        set_tags(&path, &["Important\tNow\n6"]);
+        set_comment(&path, "handoff\tnotes\nwith\rcontrols");
+
+        let report = FinderMetadataReport::read_path(&path).unwrap();
+        let tsv = report.as_tsv();
+
+        assert_eq!(tsv.lines().count(), 2, "{tsv}");
+        assert!(tsv.starts_with("finder-metadata\t"), "{tsv}");
+        assert!(
+            tsv.contains("Report\\tQ3\\nDraft\\rFinal.md\tdisplay="),
+            "{tsv}"
+        );
+        assert!(
+            tsv.contains("comment=handoff\\tnotes\\nwith\\rcontrols"),
+            "{tsv}"
+        );
+        assert!(tsv.contains("tag\tImportant\\tNow\tred"), "{tsv}");
 
         fs::remove_dir_all(root).unwrap();
     }

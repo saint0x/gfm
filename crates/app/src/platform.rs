@@ -2072,6 +2072,7 @@ fn escape_platform_tsv_field(value: &str) -> String {
         .replace('\\', "\\\\")
         .replace('\t', "\\t")
         .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 fn preview_volume_id_from_report(path: &Path, report: &VolumeDiscoveryReport) -> Option<VolumeId> {
@@ -4374,6 +4375,7 @@ fn escape_field(value: &str) -> String {
         .replace('\\', "\\\\")
         .replace('\t', "\\t")
         .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 fn index_volume_event_kind(kind: VolumeEventKind) -> IndexVolumeEventKind {
@@ -4820,20 +4822,20 @@ mod tests {
             can_read: false,
             can_write: false,
             least_privilege: true,
-            reason: "access denied".to_string(),
+            reason: "access denied\rnow".to_string(),
         };
         let admission = SecurityWorkerAdmissionReport {
-            worker: "preview\tworker".to_string(),
+            worker: "preview\tworker\rfast".to_string(),
             access,
             worker_action: SecurityWorkerAction::MetadataOnly,
             can_touch_filesystem: false,
             needs_bookmark_access: false,
             refresh_on_permission_change: true,
-            reason: "preview worker must avoid\nfile IO".to_string(),
+            reason: "preview worker must avoid\nfile IO\rnow".to_string(),
         };
         let mut volume = VolumeDescriptor::for_path(&root).unwrap();
-        volume.label = "blocked\tvolume".to_string();
-        volume.stable_identity = "diskarbitration:uuid:BLOCKED\nVOLUME".to_string();
+        volume.label = "blocked\tvolume\rlabel".to_string();
+        volume.stable_identity = "diskarbitration:uuid:BLOCKED\nVOLUME\rID".to_string();
         volume.kind = gfm_mac::VolumeKind::Network;
         let report = crate::access::WorkerAdmissionsVolumeGateReport {
             admissions: vec![admission],
@@ -4849,11 +4851,11 @@ mod tests {
         assert!(summary.contains("\tall-blocked=true\t"), "{summary}");
         assert!(summary.contains("\trefresh-required=true\t"), "{summary}");
         assert!(
-            summary.contains("\tfirst-blocked-worker=preview\\tworker\t"),
+            summary.contains("\tfirst-blocked-worker=preview\\tworker\\rfast\t"),
             "{summary}"
         );
         assert!(
-            summary.contains("\tfirst-blocked-reason=preview worker must avoid\\nfile IO\t"),
+            summary.contains("\tfirst-blocked-reason=preview worker must avoid\\nfile IO\\rnow\t"),
             "{summary}"
         );
         assert!(
@@ -4861,20 +4863,56 @@ mod tests {
             "{summary}"
         );
         assert!(
-            summary.contains("\tfirst-blocked-volume-label=blocked\\tvolume\t"),
+            summary.contains("\tfirst-blocked-volume-label=blocked\\tvolume\\rlabel\t"),
             "{summary}"
         );
         assert!(
             summary.contains(
-                "\tfirst-blocked-volume-stable-id=diskarbitration:uuid:BLOCKED\\nVOLUME\t"
+                "\tfirst-blocked-volume-stable-id=diskarbitration:uuid:BLOCKED\\nVOLUME\\rID\t"
             ),
             "{summary}"
         );
         assert!(
-            summary.contains("\tfirst-refresh-worker=preview\\tworker\t"),
+            summary.contains("\tfirst-refresh-worker=preview\\tworker\\rfast\t"),
             "{summary}"
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn platform_volume_access_tsv_escapes_control_characters() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-platform-volume-access-escape-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("Platform\tPath\nRoot\r.dat");
+        std::fs::write(&path, b"payload").unwrap();
+        let mut volume = VolumeDescriptor::for_path(&root).unwrap();
+        volume.stable_identity = "platform\tstable\nid\r".to_string();
+        let report = VolumeDiscoveryReport {
+            volumes: vec![volume],
+        };
+
+        let tsv = platform_volume_access_tsv(
+            "platform\tvolume\naccess\r",
+            "preview\tworker\nname\r",
+            &path,
+            AccessIntent::Preview,
+            &path,
+            &report,
+        );
+
+        assert_eq!(tsv.lines().count(), 1, "{tsv}");
+        assert!(tsv.starts_with(
+            "platform\\tvolume\\naccess\\r\tworker=preview\\tworker\\nname\\r\tpath="
+        ));
+        assert!(tsv.contains("Platform\\tPath\\nRoot\\r.dat\tintent=preview\t"));
+        assert!(tsv.contains("stable-id=platform\\tstable\\nid\\r\t"));
+        assert_eq!(tsv.split('\t').count(), 12, "{tsv}");
+
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
