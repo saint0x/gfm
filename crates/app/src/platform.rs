@@ -3266,7 +3266,7 @@ fn current_index_volume_descriptor_from_report_checked(
         return Ok(Some(index_volume_descriptor(descriptor)));
     }
     check_control()?;
-    match path.try_exists() {
+    match volume_invalidation_current_path_exists(path) {
         Ok(true) => {
             let descriptor = descriptor.map(Ok).unwrap_or_else(|| {
                 VolumeDescriptor::for_path_policy_checked(path, &mut check_control)
@@ -3280,8 +3280,16 @@ fn current_index_volume_descriptor_from_report_checked(
         }
         Err(err) => Err(GfmError::io(
             path,
-            format!("volume invalidation current path existence unavailable: {err}"),
+            format!("volume invalidation current path metadata unavailable: {err}"),
         )),
+    }
+}
+
+fn volume_invalidation_current_path_exists(path: &Path) -> std::io::Result<bool> {
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err),
     }
 }
 
@@ -6320,6 +6328,34 @@ mod tests {
             })
             .count();
         assert_eq!(leftovers, 0);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn current_index_volume_descriptor_can_cancel_after_missing_path_metadata_probe() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-current-index-volume-descriptor-post-metadata-cancel-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("Missing.md");
+        let report = VolumeDiscoveryReport { volumes: vec![] };
+        let mut checks = 0usize;
+
+        let err = current_index_volume_descriptor_from_report_checked(&path, &report, || {
+            checks += 1;
+            if checks > 2 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert_eq!(checks, 3);
+        assert!(!path.exists());
         std::fs::remove_dir_all(root).unwrap();
     }
 

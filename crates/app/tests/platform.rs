@@ -6628,7 +6628,7 @@ fn volume_invalidation_surfaces_unavailable_current_path_from_binary() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stdout.contains("volume-invalidation\t"), "{stdout}");
     assert!(
-        stderr.contains("volume invalidation current path existence unavailable")
+        stderr.contains("volume invalidation current path metadata unavailable")
             || stderr.contains("File name too long"),
         "{stderr}"
     );
@@ -6671,7 +6671,7 @@ fn volume_invalidation_reports_unreachable_current_volume_before_existence_probe
     assert!(stdout.contains("\toperation-policy=true\tindex-admission=true\t"));
     assert!(stdout.contains("\tcancel-index-jobs=true\tclear-fsevents-cursor=true\t"));
     assert!(stdout.contains("\treason=volume-path-changed\n"));
-    assert!(!stdout.contains("volume invalidation current path existence unavailable"));
+    assert!(!stdout.contains("volume invalidation current path metadata unavailable"));
     assert!(!current.exists());
 
     let _ = std::fs::remove_dir_all(root);
@@ -6709,7 +6709,7 @@ fn volume_invalidation_matches_unprobeable_tmp_alias_current_volume_from_binary(
     assert!(stdout.contains("\tcurrent-class=network\tcurrent-mount=mounted\t"));
     assert!(stdout.contains("\tcurrent-reachable=false\t"));
     assert!(stdout.contains("\toperation-policy=true\tindex-admission=true\t"));
-    assert!(!stdout.contains("volume invalidation current path existence unavailable"));
+    assert!(!stdout.contains("volume invalidation current path metadata unavailable"));
     assert!(!stderr.contains("File name too long"));
     assert!(!current.exists());
 

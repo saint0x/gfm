@@ -1546,13 +1546,23 @@ fn native_event_descriptor_checked(
         return Ok(None);
     };
     check()?;
-    match path.try_exists() {
+    let path_exists = volume_event_path_exists(path);
+    check()?;
+    match path_exists {
         Ok(true) => match VolumeDescriptor::for_path_policy_checked(path, &mut check) {
             Ok(descriptor) => Ok(Some(descriptor)),
             Err(GfmError::Cancelled) => Err(GfmError::Cancelled),
             Err(_) => Ok(None),
         },
         Ok(false) | Err(_) => Ok(None),
+    }
+}
+
+fn volume_event_path_exists(path: &Path) -> std::io::Result<bool> {
+    match fs::metadata(path) {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err),
     }
 }
 
@@ -8463,6 +8473,34 @@ mod tests {
             VolumeEventReport::from_native_checked(event, || Err(GfmError::Cancelled)).unwrap_err();
 
         assert_eq!(err, GfmError::Cancelled);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn checked_native_volume_event_can_cancel_after_path_metadata_probe() {
+        let root = unique_temp_dir("gfm-native-volume-event-post-metadata-cancelled");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let description = native_description(|description| {
+            description.volume_path = Some(root.clone());
+        });
+        let event = gfm_mac_sys::NativeVolumeEvent {
+            kind: gfm_mac_sys::NativeVolumeEventKind::Appeared,
+            description,
+        };
+        let mut checks = 0usize;
+
+        let err = VolumeEventReport::from_native_checked(event, || {
+            checks += 1;
+            if checks > 3 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert_eq!(checks, 4);
         fs::remove_dir_all(root).unwrap();
     }
 
