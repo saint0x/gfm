@@ -1718,21 +1718,13 @@ fn should_read_observed_fileprovider_path_checked(
     if !fileprovider_observed_path_exists_checked(path, &mut check)? {
         return Ok(false);
     }
-    is_observable_fileprovider_path_checked(previous, path, check)
+    is_observable_fileprovider_existing_path_checked(path, check)
 }
 
-fn is_observable_fileprovider_path_checked(
-    previous: &FileProviderSnapshotLookup<'_>,
+fn is_observable_fileprovider_existing_path_checked(
     path: &Path,
     mut check: impl FnMut() -> Result<()>,
 ) -> Result<bool> {
-    check()?;
-    if previous.contains_path(path) {
-        return Ok(true);
-    }
-    if !fileprovider_observed_path_exists_checked(path, &mut check)? {
-        return Ok(false);
-    }
     check()?;
     let hints = CloudHints::read_checked(path, &mut check)?;
     check()?;
@@ -1747,8 +1739,14 @@ fn fileprovider_observed_path_exists_checked(
     mut check: impl FnMut() -> Result<()>,
 ) -> Result<bool> {
     check()?;
-    path.try_exists()
-        .map_err(|err| GfmError::io(path, format!("observed path existence unavailable: {err}")))
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("observed path metadata unavailable: {err}"),
+        )),
+    }
 }
 
 fn observable_fileprovider_path_from_hints(path: &Path, hints: &CloudHints) -> bool {
@@ -5337,7 +5335,7 @@ mod tests {
 
         assert!(err
             .to_string()
-            .contains("observed path existence unavailable"));
+            .contains("observed path metadata unavailable"));
         fs::remove_dir_all(root).unwrap();
     }
 
