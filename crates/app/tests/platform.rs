@@ -2779,7 +2779,7 @@ fn reports_fileprovider_state_from_binary() {
     let value_current_stderr = String::from_utf8_lossy(&value_current_output.stderr);
     assert_worker_admitted(&value_current_stderr, "fileprovider state", &value_current);
     assert!(value_current_stdout.contains("\tstate=downloaded\tmaterialization=materialized\t"));
-    assert!(value_current_stdout.contains("\tmaterialization-source=xattr-fallback\t"));
+    assert_downloaded_materialization_source(&value_current_stdout);
     assert!(value_current_stdout.contains("\tbadges=available-offline\t"));
     assert!(value_current_stdout.contains("\treason=not-native-provider-backed"));
 
@@ -2829,7 +2829,7 @@ fn reports_fileprovider_state_from_binary() {
         value_conflict_false_stdout.contains("\tstate=downloaded\tmaterialization=materialized\t")
     );
     assert!(value_conflict_false_stdout.contains("\tconflict=false\t"));
-    assert!(value_conflict_false_stdout.contains("\tmaterialization-source=xattr-fallback\t"));
+    assert_downloaded_materialization_source(&value_conflict_false_stdout);
 
     let value_false_prefix_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("fileprovider-state")
@@ -2851,7 +2851,7 @@ fn reports_fileprovider_state_from_binary() {
     assert!(
         value_false_prefix_stdout.contains("\tstate=downloaded\tmaterialization=materialized\t")
     );
-    assert!(value_false_prefix_stdout.contains("\tmaterialization-source=xattr-fallback\t"));
+    assert_downloaded_materialization_source(&value_false_prefix_stdout);
 
     let local_with_provider_xattr_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("fileprovider-state")
@@ -8431,6 +8431,17 @@ fn mark_evicted_fixture(path: impl AsRef<std::path::Path>) {
 
 fn assert_worker_admitted(stderr: &str, worker: &str, path: &std::path::Path) {
     assert!(worker_admission_count(stderr, worker, path) > 0, "{stderr}");
+}
+
+fn assert_downloaded_materialization_source(stdout: &str) {
+    assert!(
+        stdout.contains("\tmaterialization-source=xattr-fallback\t")
+            || (stdout.contains("\tmaterialization-source=native-url-resource\t")
+                && stdout.contains(
+                    "\tmaterialization-reason=native-url-resource-allocated-materialized\t"
+                )),
+        "{stdout}"
+    );
 }
 
 fn worker_admission_count(stderr: &str, worker: &str, path: &std::path::Path) -> usize {
