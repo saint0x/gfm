@@ -3427,6 +3427,10 @@ fn reports_preview_cache_fileprovider_observed_invalidation_from_binary() {
     assert!(stdout.starts_with(
         "fileprovider-observed-invalidation\tevents=1\tevent-kinds=metadata\tpaths=1\n"
     ));
+    assert!(stdout.contains(&format!(
+        "fileprovider-observed-paths\tcount=1\tpaths={}\n",
+        evicted.display()
+    )));
     assert!(stdout.contains(
         "fileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\t"
     ));
@@ -4902,6 +4906,10 @@ fn reports_observed_fileprovider_metadata_invalidation_from_binary() {
     assert!(stdout.starts_with(
         "fileprovider-observed-invalidation\tevents=1\tevent-kinds=metadata\tpaths=1\n"
     ));
+    assert!(stdout.contains(&format!(
+        "fileprovider-observed-paths\tcount=1\tpaths={}\n",
+        item.display()
+    )));
     assert!(stdout.contains("provider-metadata-invalidation\t"));
     assert!(stdout.contains("\tprevious=downloaded\tcurrent=evicted\t"));
     assert!(stdout.contains(

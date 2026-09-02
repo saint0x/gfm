@@ -4001,7 +4001,7 @@
         "tmp/gfm-fozzy-fileprovider-event.icloud-placeholder"
       ],
       "exit_code": 0,
-      "stdout": "fileprovider-observed-invalidation\tevents=1\tevent-kinds=metadata\tpaths=1\nfileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-event.icloud-placeholder\tprevious=downloaded\tcurrent=evicted\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\n",
+      "stdout": "fileprovider-observed-invalidation\tevents=1\tevent-kinds=metadata\tpaths=1\nfileprovider-observed-paths\tcount=1\tpaths=tmp/gfm-fozzy-fileprovider-event.icloud-placeholder\nfileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-event.icloud-placeholder\tprevious=downloaded\tcurrent=evicted\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\n",
       "stderr": "",
       "times": 1
     },
@@ -4030,7 +4030,7 @@
         "tmp/gfm-fozzy-fileprovider-event.icloud-placeholder"
       ],
       "exit_code": 0,
-      "stdout": "fileprovider-observed-invalidation\tevents=1\tevent-kinds=metadata\tpaths=1\nfileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-event.icloud-placeholder\tprevious=downloaded\tcurrent=evicted\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\nprovider-metadata-invalidation\ttmp/gfm-fozzy-fileprovider-event.icloud-placeholder\tprevious=downloaded\tcurrent=evicted\treindex-metadata=true\tschedule-metadata-update=true\tinvalidate-query-cache=true\treason=provider-metadata-state-changed\n",
+      "stdout": "fileprovider-observed-invalidation\tevents=1\tevent-kinds=metadata\tpaths=1\nfileprovider-observed-paths\tcount=1\tpaths=tmp/gfm-fozzy-fileprovider-event.icloud-placeholder\nfileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-event.icloud-placeholder\tprevious=downloaded\tcurrent=evicted\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\nprovider-metadata-invalidation\ttmp/gfm-fozzy-fileprovider-event.icloud-placeholder\tprevious=downloaded\tcurrent=evicted\treindex-metadata=true\tschedule-metadata-update=true\tinvalidate-query-cache=true\treason=provider-metadata-state-changed\n",
       "stderr": "",
       "times": 1
     },
@@ -4044,7 +4044,7 @@
         "tmp/gfm-fozzy-fileprovider-event.icloud-placeholder"
       ],
       "exit_code": 0,
-      "stdout": "fileprovider-observed-invalidation\tevents=1\tevent-kinds=metadata\tpaths=1\nfileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-event.icloud-placeholder\tprevious=downloaded\tcurrent=evicted\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\nsidebar-cloud-invalidation\ticloud-drive\tpath=tmp/gfm-fozzy-fileprovider-event.icloud-placeholder\tprevious=available-offline\tcurrent=cloud-only\tprogress=0\tinvalidate-row=true\treason=sidebar-cloud-state-changed\n",
+      "stdout": "fileprovider-observed-invalidation\tevents=1\tevent-kinds=metadata\tpaths=1\nfileprovider-observed-paths\tcount=1\tpaths=tmp/gfm-fozzy-fileprovider-event.icloud-placeholder\nfileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-event.icloud-placeholder\tprevious=downloaded\tcurrent=evicted\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\nsidebar-cloud-invalidation\ticloud-drive\tpath=tmp/gfm-fozzy-fileprovider-event.icloud-placeholder\tprevious=available-offline\tcurrent=cloud-only\tprogress=0\tinvalidate-row=true\treason=sidebar-cloud-state-changed\n",
       "stderr": "",
       "times": 1
     },
@@ -4060,7 +4060,7 @@
         "tmp/gfm-fozzy-fileprovider-event.icloud-placeholder"
       ],
       "exit_code": 0,
-      "stdout": "fileprovider-observed-invalidation\tevents=1\tevent-kinds=metadata\tpaths=1\nfileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-event.icloud-placeholder\tprevious=downloaded\tcurrent=evicted\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\npreview-cache-invalidation\ttmp/gfm-fozzy-fileprovider-event.icloud-placeholder\tkind=thumbnail\treason=content-or-icloud\tinvalidate-memory=true\tinvalidate-disk=true\tremoved-memory=false\tremoved-disk=false\n",
+      "stdout": "fileprovider-observed-invalidation\tevents=1\tevent-kinds=metadata\tpaths=1\nfileprovider-observed-paths\tcount=1\tpaths=tmp/gfm-fozzy-fileprovider-event.icloud-placeholder\nfileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-event.icloud-placeholder\tprevious=downloaded\tcurrent=evicted\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\npreview-cache-invalidation\ttmp/gfm-fozzy-fileprovider-event.icloud-placeholder\tkind=thumbnail\treason=content-or-icloud\tinvalidate-memory=true\tinvalidate-disk=true\tremoved-memory=false\tremoved-disk=false\n",
       "stderr": "",
       "times": 1
     },
@@ -4079,7 +4079,7 @@
         "tmp/gfm-fozzy-fileprovider-remove.icloud.md"
       ],
       "exit_code": 0,
-      "stdout": "fileprovider-observed-invalidation\tevents=1\tevent-kinds=remove\tpaths=1\nfileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-remove.icloud.md\tprevious=downloaded\tcurrent=removed\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\n",
+      "stdout": "fileprovider-observed-invalidation\tevents=1\tevent-kinds=remove\tpaths=1\nfileprovider-observed-paths\tcount=1\tpaths=tmp/gfm-fozzy-fileprovider-remove.icloud.md\nfileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-remove.icloud.md\tprevious=downloaded\tcurrent=removed\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\n",
       "stderr": "",
       "times": 1
     },
@@ -4120,7 +4120,7 @@
         "tmp/gfm-fozzy-fileprovider-remove.icloud.md"
       ],
       "exit_code": 0,
-      "stdout": "fileprovider-observed-invalidation\tevents=1\tevent-kinds=remove\tpaths=1\nfileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-remove.icloud.md\tprevious=downloaded\tcurrent=removed\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\n",
+      "stdout": "fileprovider-observed-invalidation\tevents=1\tevent-kinds=remove\tpaths=1\nfileprovider-observed-paths\tcount=1\tpaths=tmp/gfm-fozzy-fileprovider-remove.icloud.md\nfileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-remove.icloud.md\tprevious=downloaded\tcurrent=removed\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\n",
       "stderr": "",
       "times": 1
     },
@@ -4169,7 +4169,7 @@
         "tmp/gfm-fozzy-fileprovider-removed-folder"
       ],
       "exit_code": 0,
-      "stdout": "fileprovider-observed-invalidation\tevents=1\tevent-kinds=remove\tpaths=1\nfileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-removed-folder/Child.icloud.md\tprevious=downloaded\tcurrent=removed\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\npreview-cache-invalidation\ttmp/gfm-fozzy-fileprovider-removed-folder/Child.icloud.md\tkind=thumbnail\treason=removed\tinvalidate-memory=true\tinvalidate-disk=true\tremoved-memory=false\tremoved-disk=false\n",
+      "stdout": "fileprovider-observed-invalidation\tevents=1\tevent-kinds=remove\tpaths=1\nfileprovider-observed-paths\tcount=1\tpaths=tmp/gfm-fozzy-fileprovider-removed-folder/Child.icloud.md\nfileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-removed-folder/Child.icloud.md\tprevious=downloaded\tcurrent=removed\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\npreview-cache-invalidation\ttmp/gfm-fozzy-fileprovider-removed-folder/Child.icloud.md\tkind=thumbnail\treason=removed\tinvalidate-memory=true\tinvalidate-disk=true\tremoved-memory=false\tremoved-disk=false\n",
       "stderr": "",
       "times": 1
     },
@@ -4243,7 +4243,7 @@
         "tmp/gfm-fozzy-fileprovider-rename-new.icloud-placeholder"
       ],
       "exit_code": 0,
-      "stdout": "fileprovider-observed-invalidation\tevents=1\tevent-kinds=rename\tpaths=2\nfileprovider-state-invalidation\tinitialized=false\tchanged=2\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-rename-new.icloud-placeholder\tprevious=local-only\tcurrent=evicted\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-rename-old.icloud-placeholder\tprevious=downloaded\tcurrent=removed\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\nsidebar-cloud-invalidation\ticloud-drive\tpath=tmp/gfm-fozzy-fileprovider-rename-new.icloud-placeholder\tprevious=none\tcurrent=cloud-only\tprogress=0\tinvalidate-row=true\treason=sidebar-cloud-state-changed\nsidebar-cloud-invalidation\ticloud-drive\tpath=tmp/gfm-fozzy-fileprovider-rename-old.icloud-placeholder\tprevious=available-offline\tcurrent=unavailable\tprogress=-\tinvalidate-row=true\treason=sidebar-cloud-state-changed\n",
+      "stdout": "fileprovider-observed-invalidation\tevents=1\tevent-kinds=rename\tpaths=2\nfileprovider-observed-paths\tcount=2\tpaths=tmp/gfm-fozzy-fileprovider-rename-new.icloud-placeholder,tmp/gfm-fozzy-fileprovider-rename-old.icloud-placeholder\nfileprovider-state-invalidation\tinitialized=false\tchanged=2\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-rename-new.icloud-placeholder\tprevious=local-only\tcurrent=evicted\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-rename-old.icloud-placeholder\tprevious=downloaded\tcurrent=removed\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\nsidebar-cloud-invalidation\ticloud-drive\tpath=tmp/gfm-fozzy-fileprovider-rename-new.icloud-placeholder\tprevious=none\tcurrent=cloud-only\tprogress=0\tinvalidate-row=true\treason=sidebar-cloud-state-changed\nsidebar-cloud-invalidation\ticloud-drive\tpath=tmp/gfm-fozzy-fileprovider-rename-old.icloud-placeholder\tprevious=available-offline\tcurrent=unavailable\tprogress=-\tinvalidate-row=true\treason=sidebar-cloud-state-changed\n",
       "stderr": "",
       "times": 1
     },
@@ -4292,7 +4292,7 @@
         "tmp/gfm-fozzy-fileprovider-observer-sidebar.icloud-placeholder"
       ],
       "exit_code": 0,
-      "stdout": "fileprovider-observed-invalidation\tevents=1\tevent-kinds=modify\tpaths=1\nfileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-observer-sidebar.icloud-placeholder\tprevious=downloaded\tcurrent=evicted\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\nsidebar-cloud-invalidation\ticloud-drive\tpath=tmp/gfm-fozzy-fileprovider-observer-sidebar.icloud-placeholder\tprevious=available-offline\tcurrent=cloud-only\tprogress=0\tinvalidate-row=true\treason=sidebar-cloud-state-changed\n",
+      "stdout": "fileprovider-observed-invalidation\tevents=1\tevent-kinds=modify\tpaths=1\nfileprovider-observed-paths\tcount=1\tpaths=tmp/gfm-fozzy-fileprovider-observer-sidebar.icloud-placeholder\nfileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-observer-sidebar.icloud-placeholder\tprevious=downloaded\tcurrent=evicted\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\nsidebar-cloud-invalidation\ticloud-drive\tpath=tmp/gfm-fozzy-fileprovider-observer-sidebar.icloud-placeholder\tprevious=available-offline\tcurrent=cloud-only\tprogress=0\tinvalidate-row=true\treason=sidebar-cloud-state-changed\n",
       "stderr": "",
       "times": 1
     },
@@ -4321,7 +4321,7 @@
         "tmp/gfm-fozzy-fileprovider-observer.icloud-placeholder"
       ],
       "exit_code": 0,
-      "stdout": "fileprovider-observed-invalidation\tevents=1\tevent-kinds=modify\tpaths=1\nfileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-observer.icloud-placeholder\tprevious=downloaded\tcurrent=evicted\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\n",
+      "stdout": "fileprovider-observed-invalidation\tevents=1\tevent-kinds=modify\tpaths=1\nfileprovider-observed-paths\tcount=1\tpaths=tmp/gfm-fozzy-fileprovider-observer.icloud-placeholder\nfileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-observer.icloud-placeholder\tprevious=downloaded\tcurrent=evicted\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\n",
       "stderr": "",
       "times": 1
     },
@@ -4359,7 +4359,7 @@
         "tmp/gfm-fozzy-fileprovider-observer-icon.icloud-placeholder"
       ],
       "exit_code": 0,
-      "stdout": "fileprovider-observed-invalidation\tevents=1\tevent-kinds=modify\tpaths=1\nfileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-observer-icon.icloud-placeholder\tprevious=downloaded\tcurrent=evicted\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\nnative-icon-invalidation\ttmp/gfm-fozzy-fileprovider-observer-icon.icloud-placeholder\tprevious=downloaded\tcurrent=evicted\tprevious-badges=cloud-available-offline\tcurrent-badges=cloud\tprevious-cache=fileprovider:downloaded:cloud-available-offline\tcurrent-cache=fileprovider:evicted:cloud\tinvalidate-cache=true\treason=native-icon-badges-changed\n",
+      "stdout": "fileprovider-observed-invalidation\tevents=1\tevent-kinds=modify\tpaths=1\nfileprovider-observed-paths\tcount=1\tpaths=tmp/gfm-fozzy-fileprovider-observer-icon.icloud-placeholder\nfileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-observer-icon.icloud-placeholder\tprevious=downloaded\tcurrent=evicted\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\nnative-icon-invalidation\ttmp/gfm-fozzy-fileprovider-observer-icon.icloud-placeholder\tprevious=downloaded\tcurrent=evicted\tprevious-badges=cloud-available-offline\tcurrent-badges=cloud\tprevious-cache=fileprovider:downloaded:cloud-available-offline\tcurrent-cache=fileprovider:evicted:cloud\tinvalidate-cache=true\treason=native-icon-badges-changed\n",
       "stderr": "",
       "times": 1
     },
@@ -4397,7 +4397,7 @@
         "tmp/gfm-fozzy-fileprovider-observer-metadata.icloud-placeholder"
       ],
       "exit_code": 0,
-      "stdout": "fileprovider-observed-invalidation\tevents=1\tevent-kinds=modify\tpaths=1\nfileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-observer-metadata.icloud-placeholder\tprevious=downloaded\tcurrent=evicted\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\nprovider-metadata-invalidation\ttmp/gfm-fozzy-fileprovider-observer-metadata.icloud-placeholder\tprevious=downloaded\tcurrent=evicted\treindex-metadata=true\tschedule-metadata-update=true\tinvalidate-query-cache=true\treason=provider-metadata-state-changed\n",
+      "stdout": "fileprovider-observed-invalidation\tevents=1\tevent-kinds=modify\tpaths=1\nfileprovider-observed-paths\tcount=1\tpaths=tmp/gfm-fozzy-fileprovider-observer-metadata.icloud-placeholder\nfileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-observer-metadata.icloud-placeholder\tprevious=downloaded\tcurrent=evicted\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\nprovider-metadata-invalidation\ttmp/gfm-fozzy-fileprovider-observer-metadata.icloud-placeholder\tprevious=downloaded\tcurrent=evicted\treindex-metadata=true\tschedule-metadata-update=true\tinvalidate-query-cache=true\treason=provider-metadata-state-changed\n",
       "stderr": "",
       "times": 1
     },
@@ -4437,7 +4437,7 @@
         "tmp/gfm-fozzy-fileprovider-observer-preview.icloud-placeholder"
       ],
       "exit_code": 0,
-      "stdout": "fileprovider-observed-invalidation\tevents=1\tevent-kinds=modify\tpaths=1\nfileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-observer-preview.icloud-placeholder\tprevious=downloaded\tcurrent=evicted\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\npreview-cache-invalidation\ttmp/gfm-fozzy-fileprovider-observer-preview.icloud-placeholder\tkind=thumbnail\treason=content-or-icloud\tinvalidate-memory=true\tinvalidate-disk=true\tremoved-memory=false\tremoved-disk=false\n",
+      "stdout": "fileprovider-observed-invalidation\tevents=1\tevent-kinds=modify\tpaths=1\nfileprovider-observed-paths\tcount=1\tpaths=tmp/gfm-fozzy-fileprovider-observer-preview.icloud-placeholder\nfileprovider-state-invalidation\tinitialized=false\tchanged=1\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\nfileprovider-invalidation\ttmp/gfm-fozzy-fileprovider-observer-preview.icloud-placeholder\tprevious=downloaded\tcurrent=evicted\tchanged=true\ticon=true\tpreview-memory=true\tpreview-disk=true\tsidebar=true\treindex-metadata=true\treason=fileprovider-state-changed\npreview-cache-invalidation\ttmp/gfm-fozzy-fileprovider-observer-preview.icloud-placeholder\tkind=thumbnail\treason=content-or-icloud\tinvalidate-memory=true\tinvalidate-disk=true\tremoved-memory=false\tremoved-disk=false\n",
       "stderr": "",
       "times": 1
     },

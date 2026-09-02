@@ -1400,6 +1400,13 @@ impl FileProviderObservedInvalidation {
                 .join(","),
             self.paths.len()
         )];
+        if !self.paths.is_empty() {
+            lines.push(format!(
+                "fileprovider-observed-paths\tcount={}\tpaths={}",
+                self.paths.len(),
+                affected_paths_field(&self.paths)
+            ));
+        }
         lines.push(self.report.as_tsv());
         lines.join("\n")
     }
@@ -4464,6 +4471,10 @@ mod tests {
         assert!(observed.as_tsv().contains(
             "fileprovider-observed-invalidation\tevents=1\tevent-kinds=metadata\tpaths=1"
         ));
+        assert!(observed.as_tsv().contains(&format!(
+            "fileprovider-observed-paths\tcount=1\tpaths={}",
+            escape_field(&snapshot.entries[0].path.display().to_string())
+        )));
 
         fs::remove_dir_all(root).unwrap();
     }
