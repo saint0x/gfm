@@ -9132,6 +9132,17 @@
         "tmp/gfm-fozzy-content-manifest-session-retry.state"
       ],
       "expect_exit": 0
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "volume-apfs-metadata-invalidation"
+      ],
+      "exit_code": 0,
+      "stdout": "volume-invalidation\tpath=/Volumes/APFS Metadata\tprevious-class=external\tprevious-mount=mounted\tprevious-reachable=true\tprevious-read-only=-\tcurrent-class=external\tcurrent-mount=mounted\tcurrent-reachable=true\tcurrent-read-only=-\tsidebar=true\toperation-policy=true\tindex-admission=true\trescan-index=true\tcancel-index-jobs=true\tclear-fsevents-cursor=true\tprevious-writable=-\tprevious-ejectable=-\tprevious-removable=-\tprevious-mountable=-\tprevious-case-sensitive=-\tprevious-case-preserving=-\tcurrent-writable=-\tcurrent-ejectable=-\tcurrent-removable=-\tcurrent-mountable=-\tcurrent-case-sensitive=-\tcurrent-case-preserving=-\tprevious-native-status=-\tprevious-native-reason=-\tprevious-resource-status=-\tprevious-resource-reason=-\tprevious-mount-status=-\tprevious-mount-reason=-\tcurrent-native-status=-\tcurrent-native-reason=-\tcurrent-resource-status=-\tcurrent-resource-reason=-\tcurrent-mount-status=-\tcurrent-mount-reason=-\tapi-status-changed=false\tapfs-metadata-changed=true\tfilesystem-identity-changed=true\tprevious-stable-id=diskarbitration:uuid:APFS-METADATA\tcurrent-stable-id=diskarbitration:uuid:APFS-METADATA\treason=volume-apfs-metadata-changed\n",
+      "stderr": "",
+      "times": 1
     }
   ]
 }

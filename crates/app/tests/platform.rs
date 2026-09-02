@@ -6578,6 +6578,31 @@ fn reports_api_status_volume_invalidation_from_binary() {
 }
 
 #[test]
+fn reports_apfs_metadata_volume_invalidation_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("volume-apfs-metadata-invalidation")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.starts_with(
+        "volume-invalidation\tpath=/Volumes/APFS Metadata\tprevious-class=external\t"
+    ));
+    assert!(stdout.contains("\tcurrent-class=external\tcurrent-mount=mounted\t"));
+    assert!(stdout.contains("\tapi-status-changed=false\t"));
+    assert!(stdout.contains("\tapfs-metadata-changed=true\t"));
+    assert!(stdout.contains("\tfilesystem-identity-changed=true\t"));
+    assert!(stdout.contains("\tindex-admission=true\trescan-index=true\t"));
+    assert!(stdout.contains("\tcancel-index-jobs=true\tclear-fsevents-cursor=true\t"));
+    assert!(stdout.ends_with("reason=volume-apfs-metadata-changed\n"));
+}
+
+#[test]
 fn probes_volume_event_stream_from_binary() {
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("volume-events-probe")

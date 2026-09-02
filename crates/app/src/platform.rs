@@ -742,6 +742,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "volume-api-status-invalidation" => {
             println!("{}", volume_api_status_invalidation().as_tsv());
         }
+        "volume-apfs-metadata-invalidation" => {
+            println!("{}", volume_apfs_metadata_invalidation().as_tsv());
+        }
         "volume-api-status-index-invalidation" => {
             println!("{}", volume_api_status_index_invalidation().as_tsv());
         }
@@ -2326,6 +2329,35 @@ fn volume_api_status_invalidation() -> VolumeInvalidationReport {
     .with_native_status("available")
     .with_resource_status("available")
     .with_mount_status("available");
+
+    VolumeInvalidationReport::evaluate(Some(&previous), Some(&current))
+}
+
+fn volume_apfs_metadata_invalidation() -> VolumeInvalidationReport {
+    let previous = IndexVolumeDescriptor::new(
+        "APFS Metadata",
+        "/Volumes/APFS Metadata",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(VolumeId(80))
+    .with_stable_identity("diskarbitration:uuid:APFS-METADATA")
+    .with_filesystem("apfs")
+    .with_volume_uuid("APFS-VOLUME-UUID")
+    .with_apfs_container_uuid("APFS-CONTAINER-OLD")
+    .with_apfs_role("data");
+    let current = IndexVolumeDescriptor::new(
+        "APFS Metadata",
+        "/Volumes/APFS Metadata",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(VolumeId(80))
+    .with_stable_identity("diskarbitration:uuid:APFS-METADATA")
+    .with_filesystem("apfs")
+    .with_volume_uuid("APFS-VOLUME-UUID")
+    .with_apfs_container_uuid("APFS-CONTAINER-NEW")
+    .with_apfs_role("system");
 
     VolumeInvalidationReport::evaluate(Some(&previous), Some(&current))
 }
