@@ -296,6 +296,7 @@ pub(crate) fn index_volume_descriptor(volume: &VolumeDescriptor) -> IndexVolumeD
     .with_removable(Some(volume.removable))
     .with_mountable(volume.mountable)
     .with_case_sensitive(volume.case_sensitive)
+    .with_case_preserving(volume.case_preserving)
     .with_filesystem_signature(index_volume_filesystem_signature(volume));
     if let Some(filesystem) = volume.filesystem.as_deref() {
         descriptor = descriptor.with_filesystem(filesystem);
@@ -1237,6 +1238,7 @@ mod tests {
         volume.ejectable = true;
         volume.mountable = Some(false);
         volume.case_sensitive = Some(true);
+        volume.case_preserving = Some(false);
 
         let descriptor = index_volume_descriptor(&volume);
 
@@ -1246,6 +1248,7 @@ mod tests {
         assert_eq!(descriptor.removable, Some(true));
         assert_eq!(descriptor.mountable, Some(false));
         assert_eq!(descriptor.case_sensitive, Some(true));
+        assert_eq!(descriptor.case_preserving, Some(false));
         assert!(descriptor
             .filesystem_signature
             .as_deref()

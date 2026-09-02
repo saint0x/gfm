@@ -2882,6 +2882,50 @@ fn volume_event_index_invalidation_cancels_jobs_when_case_sensitivity_changes() 
 }
 
 #[test]
+fn volume_event_index_invalidation_cancels_jobs_when_case_preserving_changes() {
+    let previous = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_case_preserving(Some(true))
+    .with_filesystem_signature("fs=apfs|case-preserving=1");
+    let current = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_case_preserving(Some(false))
+    .with_filesystem_signature("fs=apfs|case-preserving=0");
+
+    let report = VolumeEventIndexInvalidationReport::from_event(
+        IndexVolumeEventKind::DescriptionChanged,
+        Some(PathBuf::from("/Volumes/Work")),
+        Some(&previous),
+        Some(&current),
+        false,
+        false,
+    );
+
+    assert!(report.case_preserving_changed);
+    assert!(report.filesystem_signature_changed);
+    assert!(report.invalidate_index_admission);
+    assert!(report.rescan_index);
+    assert!(report.cancel_index_jobs);
+    assert!(report.clear_fsevents_cursor);
+    assert_eq!(report.reason, "volume-event-case-preserving-changed");
+    assert!(report
+        .as_tsv()
+        .contains("\tprevious-case-preserving=true\t"));
+    assert!(report
+        .as_tsv()
+        .contains("\tcurrent-case-preserving=false\t"));
+    assert!(report.as_tsv().contains("\tcase-preserving-changed=true\t"));
+}
+
+#[test]
 fn volume_event_index_invalidation_cancels_jobs_when_read_only_state_changes() {
     let previous = IndexVolumeDescriptor::new(
         "Work Drive",
@@ -3097,6 +3141,42 @@ fn volume_invalidation_rescans_when_case_sensitivity_changes() {
         .as_tsv()
         .contains("\tprevious-case-sensitive=false\t"));
     assert!(report.as_tsv().contains("\tcurrent-case-sensitive=true\t"));
+}
+
+#[test]
+fn volume_invalidation_rescans_when_case_preserving_changes() {
+    let previous = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_case_preserving(Some(true));
+    let current = IndexVolumeDescriptor::new(
+        "Work Drive",
+        "/Volumes/Work",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_case_preserving(Some(false));
+
+    let report = VolumeInvalidationReport::evaluate(Some(&previous), Some(&current));
+
+    assert!(report.invalidate_sidebar);
+    assert!(report.invalidate_operation_policy);
+    assert!(report.invalidate_index_admission);
+    assert!(report.rescan_index);
+    assert!(report.cancel_index_jobs);
+    assert!(report.clear_fsevents_cursor);
+    assert_eq!(report.previous_case_preserving, Some(true));
+    assert_eq!(report.current_case_preserving, Some(false));
+    assert_eq!(report.reason, "volume-case-preserving-changed");
+    assert!(report
+        .as_tsv()
+        .contains("\tprevious-case-preserving=true\t"));
+    assert!(report
+        .as_tsv()
+        .contains("\tcurrent-case-preserving=false\t"));
 }
 
 #[test]

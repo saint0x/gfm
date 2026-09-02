@@ -40,6 +40,22 @@ fn indexes_and_searches_real_files_from_binary() {
         )),
         "{index_stderr}"
     );
+    assert_index_volume_access(
+        &index_stderr,
+        "index-build-volume-access",
+        "index",
+        Some("root"),
+        &root,
+        "index",
+    );
+    assert_index_volume_access(
+        &index_stderr,
+        "index-build-volume-access",
+        "index records",
+        Some("output"),
+        index.parent().unwrap(),
+        "write",
+    );
 
     let search_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["search-index", index.to_str().unwrap(), "quarterly"])
@@ -136,6 +152,31 @@ fn index_retries_transient_failure_from_binary() {
         output.status.success(),
         "{}",
         String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_index_volume_access(
+        &stderr,
+        "index-build-volume-access",
+        "index",
+        Some("root"),
+        &root,
+        "index",
+    );
+    assert_index_volume_access(
+        &stderr,
+        "index-build-volume-access",
+        "index records",
+        Some("output"),
+        index.parent().unwrap(),
+        "write",
+    );
+    assert_index_volume_access(
+        &stderr,
+        "index-retry-volume-access",
+        "index",
+        Some("retry-probe"),
+        retry_probe.parent().unwrap(),
+        "write",
     );
     assert_eq!(fs::read_to_string(&retry_probe).unwrap(), "2");
     let journal_text = fs::read_to_string(&journal).unwrap();
@@ -652,6 +693,14 @@ fn lists_directory_entries_through_visible_worker_from_binary() {
             root.display()
         )),
         "{stderr}"
+    );
+    assert_index_volume_access(
+        &stderr,
+        "directory-listing-volume-access",
+        "directory listing",
+        Some("root"),
+        &root,
+        "read",
     );
 
     fs::remove_dir_all(root).unwrap();
@@ -19684,6 +19733,28 @@ fn assert_index_security_preflight(stderr: &[u8]) {
     assert!(stderr.contains("security-scope\t"), "{stderr}");
     assert!(stderr.contains("\tintent=index\t"), "{stderr}");
     assert!(stderr.contains("\taction=allow\t"), "{stderr}");
+}
+
+fn assert_index_volume_access(
+    stderr: &str,
+    prefix: &str,
+    worker: &str,
+    role: Option<&str>,
+    path: &Path,
+    intent: &str,
+) {
+    let role = role
+        .map(|role| format!("\trole={role}"))
+        .unwrap_or_default();
+    assert!(
+        stderr.contains(&format!(
+            "{prefix}\tworker={worker}{role}\tpath={}\tintent={intent}",
+            path.display()
+        )) && stderr.contains("\tstable-id=")
+            && !stderr.contains("\tstable-id=-\t")
+            && stderr.contains("\treason=cached-volume-report"),
+        "{stderr}"
+    );
 }
 
 fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {

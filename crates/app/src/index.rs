@@ -36,6 +36,17 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "directory listing",
                 &volume_report,
             )?;
+            eprintln!(
+                "{}",
+                index_volume_access_tsv(
+                    "directory-listing-volume-access",
+                    "directory listing",
+                    Some("root"),
+                    &path,
+                    AccessIntent::Read,
+                    &volume_report,
+                )
+            );
             let volume = volume_report.volume_for_path(&path).map(|volume| volume.id);
             let page = run_volume_task_cancellable(
                 volume,
@@ -79,6 +90,18 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let access_reports =
                 IndexBuildAccessReports::for_root_and_output_checked(&root, &output, || Ok(()))?;
             access_reports.preflight_volumes()?;
+            eprintln!(
+                "{}",
+                access_reports
+                    .root
+                    .volume_access_tsv("index-build-volume-access", Some("root"))
+            );
+            eprintln!(
+                "{}",
+                access_reports
+                    .output
+                    .volume_access_tsv("index-build-volume-access", Some("output"))
+            );
             let _output_access = access_reports.preflight_output_access_checked(|| Ok(()))?;
             let retry_probe_access_report = retry_probe
                 .as_ref()
@@ -88,6 +111,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 .transpose()?;
             if let Some(report) = &retry_probe_access_report {
                 report.preflight_volume()?;
+                eprintln!(
+                    "{}",
+                    report.volume_access_tsv("index-retry-volume-access", Some("retry-probe"))
+                );
             }
             let volume = access_reports.first_volume();
             let (record_count, inaccessible_count) =
@@ -1044,6 +1071,66 @@ impl IndexPathAccessReport {
             .volume_for_path(&self.path)
             .map(|volume| volume.id)
     }
+
+    fn volume_access_tsv(&self, prefix: &str, role: Option<&str>) -> String {
+        index_volume_access_tsv(
+            prefix,
+            self.worker,
+            role,
+            &self.path,
+            self.intent,
+            &self.volume_report,
+        )
+    }
+}
+
+fn index_volume_access_tsv(
+    prefix: &str,
+    worker: &str,
+    role: Option<&str>,
+    path: &Path,
+    intent: AccessIntent,
+    volume_report: &VolumeDiscoveryReport,
+) -> String {
+    let escaped_prefix = escape_index_tsv_field(prefix);
+    let escaped_worker = escape_index_tsv_field(worker);
+    let role_field = role
+        .map(|role| format!("\trole={}", escape_index_tsv_field(role)))
+        .unwrap_or_default();
+    if let Some(volume) = volume_report.volume_for_path(path) {
+        format!(
+            "{escaped_prefix}\tworker={escaped_worker}{role_field}\tpath={}\tintent={}\tvolume-id={}\tstable-id={}\tclass={}\tmount={}\treachable={}\tread-only={}\treason=cached-volume-report",
+            escape_index_tsv_field(&path.to_string_lossy()),
+            intent.as_str(),
+            volume.id.0,
+            escape_index_tsv_field(&volume.stable_identity),
+            volume.kind.as_str(),
+            volume.mount_state.as_str(),
+            format_index_optional_bool(volume.reachable),
+            volume.read_only,
+        )
+    } else {
+        format!(
+            "{escaped_prefix}\tworker={escaped_worker}{role_field}\tpath={}\tintent={}\tvolume-id=-\tstable-id=-\tclass=-\tmount=-\treachable=-\tread-only=-\treason=no-containing-volume",
+            escape_index_tsv_field(&path.to_string_lossy()),
+            intent.as_str(),
+        )
+    }
+}
+
+fn format_index_optional_bool(value: Option<bool>) -> &'static str {
+    match value {
+        Some(true) => "true",
+        Some(false) => "false",
+        None => "-",
+    }
+}
+
+fn escape_index_tsv_field(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
 }
 
 fn first_access_report_volume<'a>(
