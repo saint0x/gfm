@@ -437,6 +437,19 @@ fn live_search_routes_retry_transient_scan_failure_from_binary() {
         search_stdout.contains("LiveRetrySearch.md"),
         "{search_stdout}"
     );
+    let search_stderr = String::from_utf8(search_output.stderr).unwrap();
+    assert!(
+        search_stderr.contains(&format!(
+            "search-root-volume-access\tworker=search\tpath={}",
+            root.display()
+        )) && search_stderr.contains(&format!(
+            "search-retry-volume-access\tworker=search\tpath={}",
+            search_probe.parent().unwrap().display()
+        )) && search_stderr.contains("\tstable-id=")
+            && !search_stderr.contains("\tstable-id=-\t")
+            && search_stderr.contains("\treason=cached-volume-report"),
+        "{search_stderr}"
+    );
     assert_eq!(fs::read_to_string(&search_probe).unwrap(), "2");
     let search_journal_text = fs::read_to_string(&search_journal).unwrap();
     assert!(
@@ -473,6 +486,19 @@ fn live_search_routes_retry_transient_scan_failure_from_binary() {
     assert!(
         stream_stdout.contains("batch\t") && stream_stdout.contains("LiveRetrySearch.md"),
         "{stream_stdout}"
+    );
+    let stream_stderr = String::from_utf8(stream_output.stderr).unwrap();
+    assert!(
+        stream_stderr.contains(&format!(
+            "search-root-volume-access\tworker=search stream\tpath={}",
+            root.display()
+        )) && stream_stderr.contains(&format!(
+            "search-retry-volume-access\tworker=search stream\tpath={}",
+            stream_probe.parent().unwrap().display()
+        )) && stream_stderr.contains("\tstable-id=")
+            && !stream_stderr.contains("\tstable-id=-\t")
+            && stream_stderr.contains("\treason=cached-volume-report"),
+        "{stream_stderr}"
     );
     assert_eq!(fs::read_to_string(&stream_probe).unwrap(), "2");
     let stream_journal_text = fs::read_to_string(&stream_journal).unwrap();

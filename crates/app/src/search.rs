@@ -45,8 +45,16 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let root_access = SearchRootAccessReport::new_checked(root.clone(), || Ok(()))?;
             let retry_access = search_retry_probe_access_report(retry_probe.as_deref())?;
             root_access.preflight_volume("search")?;
+            eprintln!(
+                "{}",
+                root_access.as_tsv("search-root-volume-access", "search")
+            );
             if let Some(retry_access) = retry_access.as_ref() {
                 retry_access.preflight_volume("search")?;
+                eprintln!(
+                    "{}",
+                    retry_access.as_tsv("search-retry-volume-access", "search")
+                );
             }
             let volume = root_access.volume().or_else(|| {
                 retry_access
@@ -105,8 +113,16 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let root_access = SearchRootAccessReport::new_checked(root.clone(), || Ok(()))?;
             let retry_access = search_retry_probe_access_report(retry_probe.as_deref())?;
             root_access.preflight_volume("search stream")?;
+            eprintln!(
+                "{}",
+                root_access.as_tsv("search-root-volume-access", "search stream")
+            );
             if let Some(retry_access) = retry_access.as_ref() {
                 retry_access.preflight_volume("search stream")?;
+                eprintln!(
+                    "{}",
+                    retry_access.as_tsv("search-retry-volume-access", "search stream")
+                );
             }
             let volume = root_access.volume().or_else(|| {
                 retry_access
@@ -1540,27 +1556,7 @@ impl ArchiveVolumeAccessReports {
 
 impl ArchiveVolumeAccessReport {
     fn as_tsv(&self, prefix: &str, worker: &str) -> String {
-        if let Some(volume) = self.volume_report.volume_for_path(&self.path) {
-            format!(
-                "{}\tworker={}\tpath={}\tvolume-id={}\tstable-id={}\tclass={}\tmount={}\treachable={}\tread-only={}\treason=cached-volume-report",
-                escape_tsv_field(prefix),
-                escape_tsv_field(worker),
-                escape_tsv_field(&self.path.to_string_lossy()),
-                volume.id.0,
-                escape_tsv_field(&volume.stable_identity),
-                volume.kind.as_str(),
-                volume.mount_state.as_str(),
-                format_optional_bool(volume.reachable),
-                volume.read_only,
-            )
-        } else {
-            format!(
-                "{}\tworker={}\tpath={}\tvolume-id=-\tstable-id=-\tclass=-\tmount=-\treachable=-\tread-only=-\treason=no-containing-volume",
-                escape_tsv_field(prefix),
-                escape_tsv_field(worker),
-                escape_tsv_field(&self.path.to_string_lossy()),
-            )
-        }
+        volume_access_tsv(prefix, worker, None, &self.path, &self.volume_report)
     }
 }
 
@@ -1609,6 +1605,10 @@ impl SearchRootAccessReport {
         self.volume_report
             .volume_for_path(&self.path)
             .map(|volume| volume.id)
+    }
+
+    fn as_tsv(&self, prefix: &str, worker: &str) -> String {
+        volume_access_tsv(prefix, worker, None, &self.path, &self.volume_report)
     }
 }
 
@@ -1664,6 +1664,10 @@ impl SearchWriteAccessReport {
         self.volume_report
             .volume_for_path(&self.path)
             .map(|volume| volume.id)
+    }
+
+    fn as_tsv(&self, prefix: &str, worker: &str) -> String {
+        volume_access_tsv(prefix, worker, None, &self.path, &self.volume_report)
     }
 }
 
@@ -2192,27 +2196,13 @@ impl SearchIndexColumnsVolumeAccessReports {
 
 impl SearchIndexColumnsVolumeAccessReport {
     fn as_tsv(&self, worker: &str) -> String {
-        if let Some(volume) = self.volume_report.volume_for_path(&self.path) {
-            format!(
-                "search-index-columns-volume-access\tworker={}\trole={}\tpath={}\tvolume-id={}\tstable-id={}\tclass={}\tmount={}\treachable={}\tread-only={}\treason=cached-volume-report",
-                escape_tsv_field(worker),
-                escape_tsv_field(self.worker),
-                escape_tsv_field(&self.path.to_string_lossy()),
-                volume.id.0,
-                escape_tsv_field(&volume.stable_identity),
-                volume.kind.as_str(),
-                volume.mount_state.as_str(),
-                format_optional_bool(volume.reachable),
-                volume.read_only,
-            )
-        } else {
-            format!(
-                "search-index-columns-volume-access\tworker={}\trole={}\tpath={}\tvolume-id=-\tstable-id=-\tclass=-\tmount=-\treachable=-\tread-only=-\treason=no-containing-volume",
-                escape_tsv_field(worker),
-                escape_tsv_field(self.worker),
-                escape_tsv_field(&self.path.to_string_lossy()),
-            )
-        }
+        volume_access_tsv(
+            "search-index-columns-volume-access",
+            worker,
+            Some(self.worker),
+            &self.path,
+            &self.volume_report,
+        )
     }
 }
 
@@ -2814,27 +2804,13 @@ impl ContentIndexVolumeAccessReports {
 
 impl ContentIndexVolumeAccessReport {
     fn as_tsv(&self, worker: &str) -> String {
-        if let Some(volume) = self.volume_report.volume_for_path(&self.path) {
-            format!(
-                "content-index-volume-access\tworker={}\trole={}\tpath={}\tvolume-id={}\tstable-id={}\tclass={}\tmount={}\treachable={}\tread-only={}\treason=cached-volume-report",
-                escape_tsv_field(worker),
-                self.role,
-                escape_tsv_field(&self.path.to_string_lossy()),
-                volume.id.0,
-                escape_tsv_field(&volume.stable_identity),
-                volume.kind.as_str(),
-                volume.mount_state.as_str(),
-                format_optional_bool(volume.reachable),
-                volume.read_only,
-            )
-        } else {
-            format!(
-                "content-index-volume-access\tworker={}\trole={}\tpath={}\tvolume-id=-\tstable-id=-\tclass=-\tmount=-\treachable=-\tread-only=-\treason=no-containing-volume",
-                escape_tsv_field(worker),
-                self.role,
-                escape_tsv_field(&self.path.to_string_lossy()),
-            )
-        }
+        volume_access_tsv(
+            "content-index-volume-access",
+            worker,
+            Some(self.role),
+            &self.path,
+            &self.volume_report,
+        )
     }
 }
 
@@ -2929,27 +2905,13 @@ impl ContentIndexManifestVolumeAccessReports {
 
 impl ContentIndexManifestVolumeAccessReport {
     fn as_tsv(&self, worker: &str) -> String {
-        if let Some(volume) = self.volume_report.volume_for_path(&self.path) {
-            format!(
-                "content-index-manifest-volume-access\tworker={}\trole={}\tpath={}\tvolume-id={}\tstable-id={}\tclass={}\tmount={}\treachable={}\tread-only={}\treason=cached-volume-report",
-                escape_tsv_field(worker),
-                self.role,
-                escape_tsv_field(&self.path.to_string_lossy()),
-                volume.id.0,
-                escape_tsv_field(&volume.stable_identity),
-                volume.kind.as_str(),
-                volume.mount_state.as_str(),
-                format_optional_bool(volume.reachable),
-                volume.read_only,
-            )
-        } else {
-            format!(
-                "content-index-manifest-volume-access\tworker={}\trole={}\tpath={}\tvolume-id=-\tstable-id=-\tclass=-\tmount=-\treachable=-\tread-only=-\treason=no-containing-volume",
-                escape_tsv_field(worker),
-                self.role,
-                escape_tsv_field(&self.path.to_string_lossy()),
-            )
-        }
+        volume_access_tsv(
+            "content-index-manifest-volume-access",
+            worker,
+            Some(self.role),
+            &self.path,
+            &self.volume_report,
+        )
     }
 }
 
@@ -3162,27 +3124,13 @@ impl SidecarVolumeAccessReports {
 
 impl SidecarVolumeAccessReport {
     fn as_tsv(&self, worker: &str) -> String {
-        if let Some(volume) = self.volume_report.volume_for_path(&self.path) {
-            format!(
-                "sidecar-volume-access\tworker={}\trole={}\tpath={}\tvolume-id={}\tstable-id={}\tclass={}\tmount={}\treachable={}\tread-only={}\treason=cached-volume-report",
-                escape_tsv_field(worker),
-                self.role,
-                escape_tsv_field(&self.path.to_string_lossy()),
-                volume.id.0,
-                escape_tsv_field(&volume.stable_identity),
-                volume.kind.as_str(),
-                volume.mount_state.as_str(),
-                format_optional_bool(volume.reachable),
-                volume.read_only,
-            )
-        } else {
-            format!(
-                "sidecar-volume-access\tworker={}\trole={}\tpath={}\tvolume-id=-\tstable-id=-\tclass=-\tmount=-\treachable=-\tread-only=-\treason=no-containing-volume",
-                escape_tsv_field(worker),
-                self.role,
-                escape_tsv_field(&self.path.to_string_lossy()),
-            )
-        }
+        volume_access_tsv(
+            "sidecar-volume-access",
+            worker,
+            Some(self.role),
+            &self.path,
+            &self.volume_report,
+        )
     }
 }
 
@@ -3190,6 +3138,37 @@ fn format_optional_bool(value: Option<bool>) -> String {
     value
         .map(|value| value.to_string())
         .unwrap_or_else(|| "-".to_string())
+}
+
+fn volume_access_tsv(
+    prefix: &str,
+    worker: &str,
+    role: Option<&str>,
+    path: &Path,
+    volume_report: &VolumeDiscoveryReport,
+) -> String {
+    let escaped_prefix = escape_tsv_field(prefix);
+    let escaped_worker = escape_tsv_field(worker);
+    let role_field = role
+        .map(|role| format!("\trole={}", escape_tsv_field(role)))
+        .unwrap_or_default();
+    if let Some(volume) = volume_report.volume_for_path(path) {
+        format!(
+            "{escaped_prefix}\tworker={escaped_worker}{role_field}\tpath={}\tvolume-id={}\tstable-id={}\tclass={}\tmount={}\treachable={}\tread-only={}\treason=cached-volume-report",
+            escape_tsv_field(&path.to_string_lossy()),
+            volume.id.0,
+            escape_tsv_field(&volume.stable_identity),
+            volume.kind.as_str(),
+            volume.mount_state.as_str(),
+            format_optional_bool(volume.reachable),
+            volume.read_only,
+        )
+    } else {
+        format!(
+            "{escaped_prefix}\tworker={escaped_worker}{role_field}\tpath={}\tvolume-id=-\tstable-id=-\tclass=-\tmount=-\treachable=-\tread-only=-\treason=no-containing-volume",
+            escape_tsv_field(&path.to_string_lossy()),
+        )
+    }
 }
 
 fn escape_tsv_field(value: &str) -> String {
