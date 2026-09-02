@@ -261,7 +261,7 @@ impl ColumnSpec {
         format!(
             "column\t{}\t{}\t{}px\twidth={}px\tscroll-row={}\ttotal={}\tvisible={}..{}",
             self.index,
-            self.path.display(),
+            escape_path_field(&self.path),
             self.x_px,
             self.width_px,
             self.scroll_row,
@@ -331,8 +331,8 @@ impl ColumnRowSpec {
             self.id.node,
             kind_tsv(self.kind),
             self.y_px,
-            self.name,
-            self.path.display(),
+            escape_field(&self.name),
+            escape_path_field(&self.path),
             self.selected,
             self.expandable,
             self.previewable,
@@ -388,10 +388,22 @@ impl PreviewColumnSpec {
             self.id.node,
             kind_tsv(self.kind),
             self.role.as_str(),
-            self.name,
+            escape_field(&self.name),
             self.size
         )
     }
+}
+
+fn escape_path_field(path: &std::path::Path) -> String {
+    escape_field(&path.to_string_lossy())
+}
+
+fn escape_field(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -655,6 +667,43 @@ mod tests {
         assert!(tsv.contains("row\t0\t0\t1\t1\tdir\t0px\tFolder"));
         assert!(tsv.contains("row\t0\t1\t1\t2\tfile\t24px\tNote.txt"));
         assert!(tsv.contains("preview\t1\t1\t220px\twidth=280px\t2\tfile\tfile-preview\tNote.txt"));
+    }
+
+    #[test]
+    fn column_view_tsv_escapes_control_characters_in_text_fields() {
+        let selected = FileId::new(gfm_types::VolumeId(1), 1);
+        let contract = ColumnViewContract::from_sources(
+            vec![ColumnSource::new(
+                "/tmp/Root\tA\nB\rC",
+                vec![record(1, "Reports\tQ3\nDraft\rColumn.txt", FileKind::File)],
+            )
+            .with_selected(Some(selected))],
+            ColumnViewOptions::default().with_viewport_rows(1),
+        );
+        let tsv = contract.as_tsv();
+        let mut lines = tsv.lines();
+        let _header = lines.next().unwrap();
+        let column = lines.next().unwrap();
+        let row = lines.next().unwrap();
+        let preview = lines.next().unwrap();
+
+        assert!(
+            column.contains("column\t0\t/tmp/Root\\tA\\nB\\rC\t"),
+            "{tsv}"
+        );
+        assert_eq!(column.split('\t').count(), 8, "{tsv}");
+        assert!(
+            row.contains(
+                "Reports\\tQ3\\nDraft\\rColumn.txt\t/tmp/Reports\\tQ3\\nDraft\\rColumn.txt\t"
+            ),
+            "{tsv}"
+        );
+        assert_eq!(row.split('\t').count(), 13, "{tsv}");
+        assert!(
+            preview.contains("\tfile-preview\tReports\\tQ3\\nDraft\\rColumn.txt\tsize="),
+            "{tsv}"
+        );
+        assert_eq!(preview.split('\t').count(), 10, "{tsv}");
     }
 
     fn hidden(mut record: FileRecord) -> FileRecord {
