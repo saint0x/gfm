@@ -2716,7 +2716,7 @@ impl VolumeOperationReport {
         check()?;
         let path = path.as_ref().to_path_buf();
         check()?;
-        match path.try_exists() {
+        match volume_operation_path_exists(&path) {
             Ok(true) => {}
             Ok(false) => {
                 return Ok(Self::without_volume(
@@ -2731,7 +2731,7 @@ impl VolumeOperationReport {
                     path,
                     operation,
                     VolumeOperationDisposition::Unavailable,
-                    format!("volume-path-existence-unavailable: {err}"),
+                    format!("volume-path-metadata-unavailable: {err}"),
                 ));
             }
         }
@@ -3054,6 +3054,14 @@ fn operation_targets_volume_root(path: &Path, volume_path: &Path) -> bool {
     ) {
         (Some(path), Some(volume_path)) => path == volume_path,
         _ => false,
+    }
+}
+
+fn volume_operation_path_exists(path: &Path) -> std::io::Result<bool> {
+    match fs::metadata(path) {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err),
     }
 }
 
@@ -5642,6 +5650,27 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(err, GfmError::Cancelled);
+    }
+
+    #[test]
+    fn checked_volume_operation_can_cancel_after_path_metadata_probe() {
+        let root = unique_temp_dir("gfm-volume-operation-post-probe-cancelled");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let mut checks = 0usize;
+
+        let err = VolumeOperationReport::execute_checked(&root, VolumeOperation::Eject, || {
+            checks += 1;
+            if checks > 2 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert_eq!(checks, 3);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -8979,7 +9008,7 @@ mod tests {
         assert_eq!(report.disposition, VolumeOperationDisposition::Unavailable);
         assert_eq!(report.native_status, None);
         assert_eq!(report.volume, None);
-        assert!(report.reason.contains("volume-path-existence-unavailable"));
+        assert!(report.reason.contains("volume-path-metadata-unavailable"));
         assert!(report.as_tsv().contains("\tdisposition=unavailable\t"));
     }
 

@@ -8855,7 +8855,7 @@ fn volume_operation_reports_unavailable_path_probe_from_binary() {
     assert!(stdout.starts_with("volume-operation\teject\t"));
     assert!(stdout.contains("\tdisposition=unavailable\tnative-status=-\t"));
     assert!(stdout.contains("\tvolume-kind=-\tmount=-\t"));
-    assert!(stdout.contains("\treason=volume-path-existence-unavailable: "));
+    assert!(stdout.contains("\treason=volume-path-metadata-unavailable: "));
 }
 
 #[test]
