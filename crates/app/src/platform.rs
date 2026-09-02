@@ -622,7 +622,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "volume-events-state-drain-probe requires max events",
             )?;
             let previous_paths: Vec<PathBuf> = args.map(PathBuf::from).collect();
-            let mut state = VolumeEventState::new(volume_discovery_report(previous_paths, false)?);
+            let mut state =
+                VolumeEventState::new(volume_policy_discovery_report(previous_paths, false)?);
             let stream = VolumeEventStream::start();
             println!(
                 "{}",
@@ -815,8 +816,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "volume-topology-runtime-fanout" => {
             let (previous_paths, current_paths) = split_topology_paths(args)?;
-            let previous = VolumeDiscoveryReport::from_paths_checked(previous_paths)?;
-            let current = VolumeDiscoveryReport::from_paths_checked(current_paths)?;
+            let previous = VolumeDiscoveryReport::from_paths_policy_checked(previous_paths)?;
+            let current = VolumeDiscoveryReport::from_paths_policy_checked(current_paths)?;
             for line in volume_topology_runtime_fanout(&previous, &current) {
                 println!("{line}");
             }
@@ -907,7 +908,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     paths.push(PathBuf::from(arg));
                 }
             }
-            let volumes = volume_discovery_report(paths, false)?
+            let volumes = volume_policy_discovery_report(paths, false)?
                 .volumes
                 .iter()
                 .map(index_volume_descriptor)
@@ -950,8 +951,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "volume-topology-diff" => {
             let (previous_paths, current_paths) = split_topology_paths(args)?;
-            let previous = VolumeDiscoveryReport::from_paths_checked(previous_paths)?;
-            let current = VolumeDiscoveryReport::from_paths_checked(current_paths)?;
+            let previous = VolumeDiscoveryReport::from_paths_policy_checked(previous_paths)?;
+            let current = VolumeDiscoveryReport::from_paths_policy_checked(current_paths)?;
             println!(
                 "{}",
                 VolumeTopologyDiff::evaluate(&previous, &current).as_tsv()
@@ -959,8 +960,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "volume-topology-index-invalidation" => {
             let (previous_paths, current_paths) = split_topology_paths(args)?;
-            let previous = VolumeDiscoveryReport::from_paths_checked(previous_paths)?;
-            let current = VolumeDiscoveryReport::from_paths_checked(current_paths)?;
+            let previous = VolumeDiscoveryReport::from_paths_policy_checked(previous_paths)?;
+            let current = VolumeDiscoveryReport::from_paths_policy_checked(current_paths)?;
             println!(
                 "{}",
                 volume_topology_index_invalidation_tsv(&previous, &current)
@@ -1826,7 +1827,7 @@ fn volume_event_state_index_invalidation_from_args(
         "volume event state index invalidation requires an event kind after `--`",
     )?)?;
     let resolution = resolve_volume_event_path(kind, args.next().map(PathBuf::from))?;
-    let mut state = VolumeEventState::new(volume_discovery_report(previous_paths, false)?);
+    let mut state = VolumeEventState::new(volume_policy_discovery_report(previous_paths, false)?);
     let current = (kind != VolumeEventKind::Disappeared)
         .then_some(resolution.descriptor)
         .flatten();
@@ -1891,7 +1892,7 @@ fn volume_event_state_batch_from_args(
         ));
     }
 
-    let mut state = VolumeEventState::new(volume_discovery_report(previous_paths, false)?);
+    let mut state = VolumeEventState::new(volume_policy_discovery_report(previous_paths, false)?);
     state.apply_events_checked(events, || Ok(()))
 }
 
@@ -1923,7 +1924,7 @@ fn volume_event_runtime_fanout_from_args(
         "volume event runtime fanout requires an event kind after `--`",
     )?)?;
     let resolution = resolve_volume_event_path(kind, args.next().map(PathBuf::from))?;
-    let mut state = VolumeEventState::new(volume_discovery_report(previous_paths, false)?);
+    let mut state = VolumeEventState::new(volume_policy_discovery_report(previous_paths, false)?);
     let current = (kind != VolumeEventKind::Disappeared)
         .then_some(resolution.descriptor)
         .flatten();
@@ -3188,6 +3189,21 @@ fn volume_discovery_report(
     paths: Vec<PathBuf>,
     cancel_after_first: bool,
 ) -> Result<VolumeDiscoveryReport> {
+    volume_discovery_report_with_capacity(paths, cancel_after_first, true)
+}
+
+fn volume_policy_discovery_report(
+    paths: Vec<PathBuf>,
+    cancel_after_first: bool,
+) -> Result<VolumeDiscoveryReport> {
+    volume_discovery_report_with_capacity(paths, cancel_after_first, false)
+}
+
+fn volume_discovery_report_with_capacity(
+    paths: Vec<PathBuf>,
+    cancel_after_first: bool,
+    read_capacity: bool,
+) -> Result<VolumeDiscoveryReport> {
     run_volume_task_cancellable(
         None,
         Priority::Visible,
@@ -3202,9 +3218,15 @@ fn volume_discovery_report(
                 cancellation.check()
             };
             if paths.is_empty() {
-                VolumeDiscoveryReport::discover_checked(&mut check)
-            } else {
+                if read_capacity {
+                    VolumeDiscoveryReport::discover_checked(&mut check)
+                } else {
+                    VolumeDiscoveryReport::discover_policy_checked(&mut check)
+                }
+            } else if read_capacity {
                 VolumeDiscoveryReport::from_paths_checked_with_control(paths, &mut check)
+            } else {
+                VolumeDiscoveryReport::from_paths_policy_checked_with_control(paths, &mut check)
             }
         },
     )
@@ -5604,6 +5626,38 @@ mod tests {
             }
         );
         report.preflight_volume("preview access").unwrap();
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_policy_discovery_report_defers_capacity_reads() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-platform-volume-policy-discovery-capacity-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+
+        let full = volume_discovery_report(vec![root.clone()], false)
+            .expect("full volume discovery should produce a report");
+        let policy = volume_policy_discovery_report(vec![root.clone()], false)
+            .expect("policy volume discovery should produce a report");
+
+        let deferred_capacity = gfm_mac::VolumeCapacity {
+            total_bytes: 0,
+            available_bytes: 0,
+        };
+
+        assert_ne!(
+            full.volume_for_path(&root).unwrap().capacity,
+            deferred_capacity
+        );
+        assert_eq!(
+            policy.volume_for_path(&root).unwrap().capacity,
+            deferred_capacity
+        );
 
         std::fs::remove_dir_all(root).unwrap();
     }
