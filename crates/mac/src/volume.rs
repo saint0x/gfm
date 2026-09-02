@@ -450,7 +450,7 @@ impl VolumeDescriptor {
             "volume\t{}\t{}\tpath={}\tkind={}\tmount={}\tremovable={}\tnetwork={}\treachable={}\tejectable={}\ttotal={}\tavailable={}\teject={}\tmount={}\tunmount={}\tsource={}\treason={}\tstable-id={}\tnative-status={}\tnative-reason={}\twritable={}\tread-only={}\tcase-sensitive={}\tcase-preserving={}\tlocal={}\tinternal={}\tmountable={}\tbsd={}\tbsd-major={}\tbsd-minor={}\tbsd-unit={}\tvolume-uuid={}\tapfs-container-uuid={}\tapfs-role={}\tmedia-uuid={}\tfs={}\tmedia-content={}\tprotocol={}\tmodel={}\tvendor={}\tresource-status={}\tresource-reason={}\tresource-uuid={}\tresource-automounted={}\tresource-browsable={}\tresource-encrypted={}\tresource-reachable={}\tresource-root-filesystem={}\tresource-supports-file-cloning={}\tresource-supports-hard-links={}\tresource-supports-sparse-files={}\tresource-remount-url={}\tmount-status={}\tmount-reason={}\tmount-from={}\tmount-fs={}\tmount-flags={}\tmount-read-only={}\tmount-local={}\tvolume-type={}\tmedia-kind={}\tmedia-name={}\tmedia-path={}\tmedia-type={}\tmedia-leaf={}\tmedia-whole={}\tmedia-encrypted={}\tmedia-block-size={}\tmedia-size={}\tdevice-path={}",
             self.id.0,
             escape_field(&self.label),
-            self.path.display(),
+            escape_path_field(&self.path),
             self.kind.as_str(),
             self.mount_state.as_str(),
             self.removable,
@@ -1079,7 +1079,7 @@ impl VolumeTopologyChange {
             self.kind.as_str(),
             escape_field(&self.stable_identity),
             escape_field(&self.label),
-            self.path.display(),
+            escape_path_field(&self.path),
             self.previous_kind.map(VolumeKind::as_str).unwrap_or("-"),
             self.current_kind.map(VolumeKind::as_str).unwrap_or("-"),
             self.previous_mount_state
@@ -2709,7 +2709,7 @@ impl VolumeOperationReport {
         format!(
             "volume-operation\t{}\tpath={}\tdisposition={}\tnative-status={}\tdissenter-status={}\tcommand-state={}\tvolume-kind={}\tmount={}\tvolume-writable={}\tvolume-read-only={}\tvolume-network={}\tvolume-reachable={}\tvolume-ejectable={}\tvolume-removable={}\tvolume-case-sensitive={}\tvolume-case-preserving={}\tvolume-mountable={}\tstable-id={}\tbsd={}\tapfs-container-uuid={}\tapfs-role={}\tvolume-native-status={}\tvolume-native-reason={}\tvolume-resource-status={}\tvolume-resource-reason={}\tvolume-mount-status={}\tvolume-mount-reason={}\treason={}",
             self.operation.as_str(),
-            self.path.display(),
+            escape_path_field(&self.path),
             self.disposition.as_str(),
             self.native_status
                 .map(NativeVolumeOperationStatus::as_str)
@@ -4086,6 +4086,10 @@ fn escape_field(value: &str) -> String {
         .replace('\n', "\\n")
 }
 
+fn escape_path_field(path: &Path) -> String {
+    escape_field(&path.to_string_lossy())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4467,6 +4471,60 @@ mod tests {
         assert!(tsv.contains("\tmount-status=unavailable\tmount-reason=statfs failed\t"));
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_descriptor_tsv_escapes_control_characters_in_path() {
+        let root = unique_temp_dir("gfm-volume-descriptor-tsv-path");
+        let volume_path = root.join("Team\tShare\nOne");
+        fs::create_dir_all(&volume_path).unwrap();
+        let descriptor = VolumeDescriptor::for_path(&volume_path).unwrap();
+
+        let tsv = descriptor.as_tsv();
+
+        assert_eq!(tsv.lines().count(), 1, "{tsv}");
+        assert!(
+            tsv.contains("path=") && tsv.contains("Team\\tShare\\nOne\tkind="),
+            "{tsv}"
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_topology_tsv_escapes_control_characters_in_path() {
+        let root = unique_temp_dir("gfm-volume-topology-tsv-path");
+        let volume_path = root.join("Team\tShare\nOne");
+        fs::create_dir_all(&volume_path).unwrap();
+        let descriptor = VolumeDescriptor::for_path(&volume_path).unwrap();
+
+        let tsv = VolumeTopologyChange::connected(&descriptor).as_tsv();
+
+        assert_eq!(tsv.lines().count(), 1, "{tsv}");
+        assert!(
+            tsv.contains("\tpath=") && tsv.contains("Team\\tShare\\nOne\tprevious-kind="),
+            "{tsv}"
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_operation_tsv_escapes_control_characters_in_path() {
+        let report = VolumeOperationReport {
+            path: PathBuf::from("/Volumes/Team\tShare\nOne"),
+            operation: VolumeOperation::Unmount,
+            disposition: VolumeOperationDisposition::Refused,
+            native_status: None,
+            dissenter_status: None,
+            volume: None,
+            reason: "test refusal".to_string(),
+        };
+
+        let tsv = report.as_tsv();
+
+        assert_eq!(tsv.lines().count(), 1, "{tsv}");
+        assert!(tsv.contains("path=/Volumes/Team\\tShare\\nOne\t"), "{tsv}");
     }
 
     #[test]
