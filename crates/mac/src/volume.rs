@@ -1376,6 +1376,7 @@ pub struct VolumeEventStateTransition {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VolumeEventStateBatchReport {
     pub input_events: usize,
+    pub resolved_events: usize,
     pub applied_events: usize,
     pub resulting_volumes: usize,
     pub invalidate_sidebar: bool,
@@ -2054,12 +2055,23 @@ impl VolumeEventState {
         mut check: impl FnMut() -> Result<()>,
     ) -> Result<VolumeEventStateBatchReport> {
         check()?;
+        let events: Vec<_> = events.into_iter().collect();
+        let input_events = events.len();
+        self.apply_events_with_counts_checked(input_events, input_events, events, check)
+    }
+
+    fn apply_events_with_counts_checked(
+        &mut self,
+        input_events: usize,
+        resolved_events: usize,
+        events: impl IntoIterator<Item = VolumeEventReport>,
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<VolumeEventStateBatchReport> {
+        check()?;
         let mut staged = self.clone();
-        let mut input_events = 0usize;
         let mut transitions = Vec::new();
         for event in events {
             check()?;
-            input_events += 1;
             let transition = staged.apply_event_transition(&event);
             transitions.push(transition);
             check()?;
@@ -2067,6 +2079,7 @@ impl VolumeEventState {
         check()?;
         let report = VolumeEventStateBatchReport::from_transitions(
             input_events,
+            resolved_events,
             staged.report.volumes.len(),
             transitions,
         );
@@ -2226,11 +2239,13 @@ impl VolumeEventState {
 impl VolumeEventStateBatchReport {
     fn from_transitions(
         input_events: usize,
+        resolved_events: usize,
         resulting_volumes: usize,
         transitions: Vec<VolumeEventStateTransition>,
     ) -> Self {
         Self {
             input_events,
+            resolved_events,
             applied_events: transitions
                 .iter()
                 .filter(|transition| transition.applied)
@@ -2262,7 +2277,7 @@ impl VolumeEventStateBatchReport {
 
     pub fn as_tsv(&self) -> String {
         let mut lines = vec![format!(
-            "volume-event-state-batch\tinput={}\tapplied={}\tresulting-volumes={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}",
+            "volume-event-state-batch\tinput={}\tapplied={}\tresulting-volumes={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\tresolved={}",
             self.input_events,
             self.applied_events,
             self.resulting_volumes,
@@ -2271,7 +2286,8 @@ impl VolumeEventStateBatchReport {
             self.invalidate_index_admission,
             self.rescan_index,
             self.cancel_index_jobs,
-            self.clear_fsevents_cursor
+            self.clear_fsevents_cursor,
+            self.resolved_events
         )];
         lines.extend(
             self.transitions
@@ -2355,21 +2371,31 @@ impl VolumeEventStream {
         mut check: impl FnMut() -> Result<()>,
     ) -> Result<VolumeEventStateDrainReport> {
         check()?;
-        let mut events = Vec::with_capacity(max_events);
+        let mut native_events = Vec::with_capacity(max_events);
         for _ in 0..max_events {
             check()?;
-            let Some(event) = self.try_recv_checked(&mut check)? else {
+            let Some(event) = self.next_native_event()? else {
                 break;
             };
-            events.push(event);
+            native_events.push(event);
         }
-        check()?;
-        let batch = state.apply_events_checked(events, &mut check)?;
-        Ok(VolumeEventStateDrainReport {
-            attached: self.is_attached(),
-            max_events,
-            batch,
-        })
+        let raw_events = native_events.clone();
+        match self.resolve_and_apply_coalesced_state_events(
+            state,
+            native_events,
+            raw_events.len(),
+            &mut check,
+        ) {
+            Ok(batch) => Ok(VolumeEventStateDrainReport {
+                attached: self.is_attached(),
+                max_events,
+                batch,
+            }),
+            Err(err) => {
+                self.restore_native_events(raw_events);
+                Err(err)
+            }
+        }
     }
 
     pub fn shutdown(self) -> VolumeEventShutdownReport {
@@ -2397,12 +2423,88 @@ impl VolumeEventStream {
             pending.push_front(event);
         }
     }
+
+    fn restore_native_events(&self, events: Vec<gfm_mac_sys::NativeVolumeEvent>) {
+        if let Ok(mut pending) = self.pending.lock() {
+            for event in events.into_iter().rev() {
+                pending.push_front(event);
+            }
+        }
+    }
+
+    fn resolve_and_apply_coalesced_state_events(
+        &self,
+        state: &mut VolumeEventState,
+        native_events: Vec<gfm_mac_sys::NativeVolumeEvent>,
+        input_events: usize,
+        mut check: impl FnMut() -> Result<()>,
+    ) -> Result<VolumeEventStateBatchReport> {
+        check()?;
+        let native_events = coalesce_native_volume_events_for_state(native_events);
+        let resolved_events = native_events.len();
+        let mut events = Vec::with_capacity(resolved_events);
+        for event in native_events {
+            check()?;
+            events.push(VolumeEventReport::from_native_checked(event, &mut check)?);
+        }
+        check()?;
+        state.apply_events_with_counts_checked(input_events, resolved_events, events, check)
+    }
+}
+
+fn coalesce_native_volume_events_for_state(
+    events: Vec<gfm_mac_sys::NativeVolumeEvent>,
+) -> Vec<gfm_mac_sys::NativeVolumeEvent> {
+    let mut key_index = BTreeMap::new();
+    let mut retained = Vec::with_capacity(events.len());
+    for event in events {
+        let Some(key) = native_volume_event_coalescing_key(&event) else {
+            retained.push(event);
+            continue;
+        };
+        if let Some(index) = key_index.get(&key).copied() {
+            retained[index] = event;
+        } else {
+            key_index.insert(key, retained.len());
+            retained.push(event);
+        }
+    }
+    retained
+}
+
+fn native_volume_event_coalescing_key(event: &gfm_mac_sys::NativeVolumeEvent) -> Option<String> {
+    let description = &event.description;
+    description
+        .volume_uuid
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| format!("volume-uuid:{value}"))
+        .or_else(|| {
+            description
+                .media_uuid
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .map(|value| format!("media-uuid:{value}"))
+        })
+        .or_else(|| {
+            description
+                .media_bsd_name
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .map(|value| format!("bsd:{value}"))
+        })
+        .or_else(|| {
+            description
+                .volume_path
+                .as_ref()
+                .map(|path| format!("path:{}", path.to_string_lossy()))
+        })
 }
 
 impl VolumeEventStateDrainReport {
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume-events-state-drain\tattached={}\tmax={}\tinput={}\tapplied={}\tresulting-volumes={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\n{}",
+            "volume-events-state-drain\tattached={}\tmax={}\tinput={}\tapplied={}\tresulting-volumes={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\tresolved={}\n{}",
             self.attached,
             self.max_events,
             self.batch.input_events,
@@ -2414,6 +2516,7 @@ impl VolumeEventStateDrainReport {
             self.batch.rescan_index,
             self.batch.cancel_index_jobs,
             self.batch.clear_fsevents_cursor,
+            self.batch.resolved_events,
             self.batch.as_tsv()
         )
     }
@@ -6391,6 +6494,94 @@ mod tests {
     }
 
     #[test]
+    fn coalesces_native_volume_events_by_host_identity() {
+        let first = unique_temp_dir("gfm-volume-event-coalesce-first");
+        let second = unique_temp_dir("gfm-volume-event-coalesce-second");
+        let first_appeared = gfm_mac_sys::NativeVolumeEvent {
+            kind: gfm_mac_sys::NativeVolumeEventKind::Appeared,
+            description: native_description(|description| {
+                description.volume_uuid = Some("VOLUME-A".to_string());
+                description.volume_path = Some(first.clone());
+            }),
+        };
+        let first_changed = gfm_mac_sys::NativeVolumeEvent {
+            kind: gfm_mac_sys::NativeVolumeEventKind::DescriptionChanged,
+            description: native_description(|description| {
+                description.volume_uuid = Some("VOLUME-A".to_string());
+                description.volume_path = Some(first.clone());
+            }),
+        };
+        let second_appeared = gfm_mac_sys::NativeVolumeEvent {
+            kind: gfm_mac_sys::NativeVolumeEventKind::Appeared,
+            description: native_description(|description| {
+                description.volume_uuid = Some("VOLUME-B".to_string());
+                description.volume_path = Some(second.clone());
+            }),
+        };
+
+        let coalesced = coalesce_native_volume_events_for_state(vec![
+            first_appeared,
+            second_appeared,
+            first_changed,
+        ]);
+
+        assert_eq!(coalesced.len(), 2);
+        assert_eq!(
+            coalesced[0].description.volume_uuid.as_deref(),
+            Some("VOLUME-A")
+        );
+        assert_eq!(
+            coalesced[0].kind,
+            gfm_mac_sys::NativeVolumeEventKind::DescriptionChanged
+        );
+        assert_eq!(
+            coalesced[1].description.volume_uuid.as_deref(),
+            Some("VOLUME-B")
+        );
+        fs::remove_dir_all(first).unwrap();
+        fs::remove_dir_all(second).unwrap();
+    }
+
+    #[test]
+    fn volume_event_stream_state_drain_reports_coalesced_native_events() {
+        let root = unique_temp_dir("gfm-volume-event-state-drain-coalesced");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let appeared = gfm_mac_sys::NativeVolumeEvent {
+            kind: gfm_mac_sys::NativeVolumeEventKind::Appeared,
+            description: native_description(|description| {
+                description.volume_path = Some(root.clone());
+            }),
+        };
+        let changed = gfm_mac_sys::NativeVolumeEvent {
+            kind: gfm_mac_sys::NativeVolumeEventKind::DescriptionChanged,
+            description: native_description(|description| {
+                description.volume_path = Some(root.clone());
+            }),
+        };
+        let mut state =
+            VolumeEventState::new(VolumeDiscoveryReport::from_paths(vec![root.clone()]));
+        let stream = VolumeEventStream {
+            stream: gfm_mac_sys::NativeVolumeEventStream::start(),
+            pending: Mutex::new(std::collections::VecDeque::from([appeared, changed])),
+        };
+
+        let report = stream
+            .drain_into_state_checked(&mut state, 8, || Ok(()))
+            .unwrap();
+        let tsv = report.as_tsv();
+
+        assert_eq!(report.batch.input_events, 2);
+        assert_eq!(report.batch.resolved_events, 1);
+        assert_eq!(report.batch.transitions.len(), 1);
+        assert!(tsv.contains("\tinput=2\t"), "{tsv}");
+        assert!(tsv.contains("\tresolved=1\n"), "{tsv}");
+        assert!(tsv.contains("volume-event-state-batch\tinput=2\t"), "{tsv}");
+        assert!(tsv.contains("\tresolved=1\n"), "{tsv}");
+        drop(stream);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn volume_event_stream_state_drain_applies_zero_bound_without_mutating_state() {
         let root = unique_temp_dir("gfm-volume-event-state-drain-zero");
         fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
@@ -6426,6 +6617,168 @@ mod tests {
         assert_eq!(err, GfmError::Cancelled);
         assert!(state.report().volumes.is_empty());
         drop(stream);
+    }
+
+    #[test]
+    fn coalesces_native_volume_events_for_state_by_path_before_resolution() {
+        let first = PathBuf::from("/Volumes/First");
+        let second = PathBuf::from("/Volumes/Second");
+        let events = vec![
+            gfm_mac_sys::NativeVolumeEvent {
+                kind: gfm_mac_sys::NativeVolumeEventKind::Appeared,
+                description: native_description(|description| {
+                    description.volume_path = Some(first.clone());
+                    description.reason = Some("first-appeared".to_string());
+                }),
+            },
+            gfm_mac_sys::NativeVolumeEvent {
+                kind: gfm_mac_sys::NativeVolumeEventKind::Unavailable,
+                description: native_description(|description| {
+                    description.status = NativeVolumeStatus::Unavailable;
+                    description.reason = Some("diskarbitration-callback-unavailable".to_string());
+                }),
+            },
+            gfm_mac_sys::NativeVolumeEvent {
+                kind: gfm_mac_sys::NativeVolumeEventKind::DescriptionChanged,
+                description: native_description(|description| {
+                    description.volume_path = Some(second.clone());
+                    description.reason = Some("second-description".to_string());
+                }),
+            },
+            gfm_mac_sys::NativeVolumeEvent {
+                kind: gfm_mac_sys::NativeVolumeEventKind::Disappeared,
+                description: native_description(|description| {
+                    description.volume_path = Some(first.clone());
+                    description.status = NativeVolumeStatus::Missing;
+                    description.reason = Some("first-disappeared".to_string());
+                }),
+            },
+        ];
+
+        let coalesced = coalesce_native_volume_events_for_state(events);
+
+        assert_eq!(coalesced.len(), 3);
+        assert_eq!(
+            coalesced[0].kind,
+            gfm_mac_sys::NativeVolumeEventKind::Disappeared
+        );
+        assert_eq!(coalesced[0].description.volume_path.as_ref(), Some(&first));
+        assert_eq!(
+            coalesced[0].description.reason.as_deref(),
+            Some("first-disappeared")
+        );
+        assert_eq!(
+            coalesced[1].kind,
+            gfm_mac_sys::NativeVolumeEventKind::Unavailable
+        );
+        assert_eq!(coalesced[1].description.volume_path, None);
+        assert_eq!(
+            coalesced[2].kind,
+            gfm_mac_sys::NativeVolumeEventKind::DescriptionChanged
+        );
+        assert_eq!(coalesced[2].description.volume_path.as_ref(), Some(&second));
+    }
+
+    #[test]
+    fn volume_event_stream_state_drain_reports_raw_and_resolved_counts() {
+        let root = unique_temp_dir("gfm-volume-event-state-drain-counts");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let events = [
+            gfm_mac_sys::NativeVolumeEvent {
+                kind: gfm_mac_sys::NativeVolumeEventKind::Appeared,
+                description: native_description(|description| {
+                    description.volume_path = Some(root.clone());
+                    description.reason = Some("raw-appeared".to_string());
+                }),
+            },
+            gfm_mac_sys::NativeVolumeEvent {
+                kind: gfm_mac_sys::NativeVolumeEventKind::DescriptionChanged,
+                description: native_description(|description| {
+                    description.volume_path = Some(root.clone());
+                    description.reason = Some("raw-description".to_string());
+                }),
+            },
+        ];
+        let stream = VolumeEventStream {
+            stream: gfm_mac_sys::NativeVolumeEventStream::start(),
+            pending: Mutex::new(std::collections::VecDeque::from(events)),
+        };
+        let mut state = VolumeEventState::new(VolumeDiscoveryReport {
+            volumes: Vec::new(),
+        });
+
+        let report = stream
+            .drain_into_state_checked(&mut state, 8, || Ok(()))
+            .unwrap();
+        let tsv = report.as_tsv();
+
+        assert_eq!(report.batch.input_events, 2);
+        assert_eq!(report.batch.resolved_events, 1);
+        assert_eq!(report.batch.transitions.len(), 1);
+        assert_eq!(
+            report.batch.transitions[0].invalidation.reason,
+            "raw-description"
+        );
+        assert_eq!(state.report().volumes.len(), 1);
+        assert!(tsv.contains("\tinput=2\t"));
+        assert!(tsv.contains("\tresolved=1"));
+        drop(stream);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_event_stream_state_drain_restores_raw_events_when_cancelled_after_poll() {
+        let root = unique_temp_dir("gfm-volume-event-state-drain-cancel-raw");
+        fs::write(root.join(VOLUME_MARKER), "external-removable\n").unwrap();
+        let events = [
+            gfm_mac_sys::NativeVolumeEvent {
+                kind: gfm_mac_sys::NativeVolumeEventKind::Appeared,
+                description: native_description(|description| {
+                    description.volume_path = Some(root.clone());
+                    description.reason = Some("restore-appeared".to_string());
+                }),
+            },
+            gfm_mac_sys::NativeVolumeEvent {
+                kind: gfm_mac_sys::NativeVolumeEventKind::DescriptionChanged,
+                description: native_description(|description| {
+                    description.volume_path = Some(root.clone());
+                    description.reason = Some("restore-description".to_string());
+                }),
+            },
+        ];
+        let stream = VolumeEventStream {
+            stream: gfm_mac_sys::NativeVolumeEventStream::start(),
+            pending: Mutex::new(std::collections::VecDeque::from(events)),
+        };
+        let mut state = VolumeEventState::new(VolumeDiscoveryReport {
+            volumes: Vec::new(),
+        });
+        let mut checks = 0usize;
+
+        let err = stream
+            .drain_into_state_checked(&mut state, 2, || {
+                checks += 1;
+                if checks >= 4 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            })
+            .unwrap_err();
+        let report = stream
+            .drain_into_state_checked(&mut state, 2, || Ok(()))
+            .unwrap();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert_eq!(report.batch.input_events, 2);
+        assert_eq!(report.batch.resolved_events, 1);
+        assert_eq!(
+            report.batch.transitions[0].invalidation.reason,
+            "restore-description"
+        );
+        assert_eq!(state.report().volumes.len(), 1);
+        drop(stream);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
