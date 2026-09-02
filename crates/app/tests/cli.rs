@@ -5426,7 +5426,15 @@ fn searches_persisted_tags_from_binary() {
         )) && column_search_stderr.contains(&format!(
             "security-worker-admission\tworker=search index columns columns\tpath={}",
             columns.display()
-        )),
+        )) && column_search_stderr.contains(&format!(
+            "search-index-columns-volume-access\tworker=search index columns\trole=search index columns records\tpath={}",
+            index.display()
+        )) && column_search_stderr.contains(&format!(
+            "search-index-columns-volume-access\tworker=search index columns\trole=search index columns columns\tpath={}",
+            columns.display()
+        )) && column_search_stderr.contains("\tstable-id=")
+            && !column_search_stderr.contains("\tstable-id=-\t")
+            && column_search_stderr.contains("\treason=cached-volume-report"),
         "{column_search_stderr}"
     );
     let column_search_stdout = String::from_utf8(column_search.stdout).unwrap();
@@ -5931,7 +5939,16 @@ fn searches_persisted_tags_from_binary() {
         )) && sidecar_scoped_stderr.contains(&format!(
             "security-worker-admission\tworker=sidecar volume scope content\tpath={}",
             content.display()
-        )) && sidecar_scoped_stderr.contains("sidecar-volume-scope")
+        )) && sidecar_scoped_stderr.contains(&format!(
+            "sidecar-volume-access\tworker=sidecar volume scope\trole=records\tpath={}",
+            index.display()
+        )) && sidecar_scoped_stderr.contains(&format!(
+            "sidecar-volume-access\tworker=sidecar volume scope\trole=content\tpath={}",
+            content.display()
+        )) && sidecar_scoped_stderr.contains("\tstable-id=")
+            && !sidecar_scoped_stderr.contains("\tstable-id=-\t")
+            && sidecar_scoped_stderr.contains("\treason=cached-volume-report")
+            && sidecar_scoped_stderr.contains("sidecar-volume-scope")
             && sidecar_scoped_stderr.contains("\trecords-loaded=0")
             && sidecar_scoped_stderr.contains("\tcandidate-ids=0")
             && sidecar_scoped_stderr.contains("\tfull-hydration=false")
@@ -11873,7 +11890,16 @@ fn searches_persisted_text_content_from_binary() {
         )) && stderr.contains(&format!(
             "security-worker-admission\tworker=content index search content\tpath={}",
             content.display()
+        )) && stderr.contains(&format!(
+            "content-index-volume-access\tworker=content index search\trole=records\tpath={}",
+            records.display()
+        )) && stderr.contains(&format!(
+            "content-index-volume-access\tworker=content index search\trole=content\tpath={}",
+            content.display()
         )) && stderr.contains("content-keys 1")
+            && stderr.contains("\tstable-id=")
+            && !stderr.contains("\tstable-id=-\t")
+            && stderr.contains("\treason=cached-volume-report")
             && stderr.contains("records-loaded 1")
             && stderr.contains("candidate-ids 1")
             && stderr.contains("full-hydration false"),

@@ -2034,6 +2034,7 @@ fn run_search_index_columns(
         SearchIndexColumnsVolumeAccessReports::for_paths_checked(&records, &columns, || Ok(()))?;
     let retry_access = search_retry_probe_access_report(retry_probe.as_deref())?;
     volume_reports.preflight_volumes()?;
+    volume_reports.emit_admission_diagnostics(WORKER);
     if let Some(retry_access) = retry_access.as_ref() {
         retry_access.preflight_volume(WORKER)?;
     }
@@ -2158,6 +2159,12 @@ impl SearchIndexColumnsVolumeAccessReports {
         Ok(())
     }
 
+    fn emit_admission_diagnostics(&self, worker: &str) {
+        for entry in &self.entries {
+            eprintln!("{}", entry.as_tsv(worker));
+        }
+    }
+
     fn first_volume(&self) -> Option<VolumeId> {
         self.entries.iter().find_map(|entry| {
             entry
@@ -2165,6 +2172,32 @@ impl SearchIndexColumnsVolumeAccessReports {
                 .volume_for_path(&entry.path)
                 .map(|volume| volume.id)
         })
+    }
+}
+
+impl SearchIndexColumnsVolumeAccessReport {
+    fn as_tsv(&self, worker: &str) -> String {
+        if let Some(volume) = self.volume_report.volume_for_path(&self.path) {
+            format!(
+                "search-index-columns-volume-access\tworker={}\trole={}\tpath={}\tvolume-id={}\tstable-id={}\tclass={}\tmount={}\treachable={}\tread-only={}\treason=cached-volume-report",
+                escape_tsv_field(worker),
+                escape_tsv_field(self.worker),
+                escape_tsv_field(&self.path.to_string_lossy()),
+                volume.id.0,
+                escape_tsv_field(&volume.stable_identity),
+                volume.kind.as_str(),
+                volume.mount_state.as_str(),
+                format_optional_bool(volume.reachable),
+                volume.read_only,
+            )
+        } else {
+            format!(
+                "search-index-columns-volume-access\tworker={}\trole={}\tpath={}\tvolume-id=-\tstable-id=-\tclass=-\tmount=-\treachable=-\tread-only=-\treason=no-containing-volume",
+                escape_tsv_field(worker),
+                escape_tsv_field(self.worker),
+                escape_tsv_field(&self.path.to_string_lossy()),
+            )
+        }
     }
 }
 
@@ -2682,6 +2715,7 @@ fn preflight_content_index_set_volume_access(
         || Ok(()),
     )?;
     reports.preflight_volumes(worker)?;
+    reports.emit_admission_diagnostics(worker);
     Ok(reports)
 }
 
@@ -2739,6 +2773,12 @@ impl ContentIndexVolumeAccessReports {
         Ok(())
     }
 
+    fn emit_admission_diagnostics(&self, worker: &str) {
+        for entry in &self.entries {
+            eprintln!("{}", entry.as_tsv(worker));
+        }
+    }
+
     fn first_volume(&self) -> Option<VolumeId> {
         self.entries.iter().find_map(|entry| {
             entry
@@ -2752,6 +2792,32 @@ impl ContentIndexVolumeAccessReports {
         self.entries.first().ok_or_else(|| {
             GfmError::Format("content index search records access report missing".to_string())
         })
+    }
+}
+
+impl ContentIndexVolumeAccessReport {
+    fn as_tsv(&self, worker: &str) -> String {
+        if let Some(volume) = self.volume_report.volume_for_path(&self.path) {
+            format!(
+                "content-index-volume-access\tworker={}\trole={}\tpath={}\tvolume-id={}\tstable-id={}\tclass={}\tmount={}\treachable={}\tread-only={}\treason=cached-volume-report",
+                escape_tsv_field(worker),
+                self.role,
+                escape_tsv_field(&self.path.to_string_lossy()),
+                volume.id.0,
+                escape_tsv_field(&volume.stable_identity),
+                volume.kind.as_str(),
+                volume.mount_state.as_str(),
+                format_optional_bool(volume.reachable),
+                volume.read_only,
+            )
+        } else {
+            format!(
+                "content-index-volume-access\tworker={}\trole={}\tpath={}\tvolume-id=-\tstable-id=-\tclass=-\tmount=-\treachable=-\tread-only=-\treason=no-containing-volume",
+                escape_tsv_field(worker),
+                self.role,
+                escape_tsv_field(&self.path.to_string_lossy()),
+            )
+        }
     }
 }
 
@@ -3022,6 +3088,12 @@ impl SidecarVolumeAccessReports {
         Ok(())
     }
 
+    fn emit_admission_diagnostics(&self, worker: &str) {
+        for entry in &self.entries {
+            eprintln!("{}", entry.as_tsv(worker));
+        }
+    }
+
     fn first_volume(&self) -> Option<VolumeId> {
         self.entries.iter().find_map(|entry| {
             entry
@@ -3030,6 +3102,45 @@ impl SidecarVolumeAccessReports {
                 .map(|volume| volume.id)
         })
     }
+}
+
+impl SidecarVolumeAccessReport {
+    fn as_tsv(&self, worker: &str) -> String {
+        if let Some(volume) = self.volume_report.volume_for_path(&self.path) {
+            format!(
+                "sidecar-volume-access\tworker={}\trole={}\tpath={}\tvolume-id={}\tstable-id={}\tclass={}\tmount={}\treachable={}\tread-only={}\treason=cached-volume-report",
+                escape_tsv_field(worker),
+                self.role,
+                escape_tsv_field(&self.path.to_string_lossy()),
+                volume.id.0,
+                escape_tsv_field(&volume.stable_identity),
+                volume.kind.as_str(),
+                volume.mount_state.as_str(),
+                format_optional_bool(volume.reachable),
+                volume.read_only,
+            )
+        } else {
+            format!(
+                "sidecar-volume-access\tworker={}\trole={}\tpath={}\tvolume-id=-\tstable-id=-\tclass=-\tmount=-\treachable=-\tread-only=-\treason=no-containing-volume",
+                escape_tsv_field(worker),
+                self.role,
+                escape_tsv_field(&self.path.to_string_lossy()),
+            )
+        }
+    }
+}
+
+fn format_optional_bool(value: Option<bool>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn escape_tsv_field(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
 }
 
 struct SidecarSearchOutput {
@@ -3470,6 +3581,7 @@ fn preflight_sidecar_index_volume_access(
 ) -> Result<SidecarVolumeAccessReports> {
     let reports = SidecarVolumeAccessReports::for_paths_checked(paths.borrowed(), || Ok(()))?;
     reports.preflight_volumes(worker)?;
+    reports.emit_admission_diagnostics(worker);
     Ok(reports)
 }
 
