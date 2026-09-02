@@ -2103,7 +2103,7 @@ fn volume_event_operation_policy_invalidation_tsv(
     current: Option<&VolumeDescriptor>,
 ) -> String {
     format!(
-        "volume-event-operation-policy-invalidation\tkind={}\tpath={}\tprevious-class={}\tprevious-mount={}\tprevious-read-only={}\tprevious-network={}\tprevious-reachable={}\tprevious-removable={}\tprevious-case-preserving={}\tprevious-slow={}\tcurrent-class={}\tcurrent-mount={}\tcurrent-read-only={}\tcurrent-network={}\tcurrent-reachable={}\tcurrent-removable={}\tcurrent-case-preserving={}\tcurrent-slow={}\tinvalidate-policy={}\treason={}",
+        "volume-event-operation-policy-invalidation\tkind={}\tpath={}\tprevious-class={}\tprevious-mount={}\tprevious-read-only={}\tprevious-network={}\tprevious-reachable={}\tprevious-removable={}\tprevious-case-sensitive={}\tprevious-case-preserving={}\tprevious-slow={}\tcurrent-class={}\tcurrent-mount={}\tcurrent-read-only={}\tcurrent-network={}\tcurrent-reachable={}\tcurrent-removable={}\tcurrent-case-sensitive={}\tcurrent-case-preserving={}\tcurrent-slow={}\tinvalidate-policy={}\treason={}",
         platform.kind.as_str(),
         platform
             .path
@@ -2127,6 +2127,7 @@ fn volume_event_operation_policy_invalidation_tsv(
             .map(|reachable| reachable.to_string())
             .unwrap_or_else(|| "-".to_string()),
         option_bool_tsv(platform.previous_removable),
+        option_bool_tsv(platform.previous_case_sensitive),
         option_bool_tsv(platform.previous_case_preserving),
         previous
             .map(volume_reports_slow_for_operation_policy)
@@ -2149,6 +2150,7 @@ fn volume_event_operation_policy_invalidation_tsv(
             .map(|reachable| reachable.to_string())
             .unwrap_or_else(|| "-".to_string()),
         option_bool_tsv(platform.current_removable),
+        option_bool_tsv(platform.current_case_sensitive),
         option_bool_tsv(platform.current_case_preserving),
         current
             .map(volume_reports_slow_for_operation_policy)

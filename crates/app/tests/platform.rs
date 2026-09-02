@@ -7393,6 +7393,7 @@ fn reports_volume_event_runtime_fanout_from_binary() {
     assert!(stdout.contains("\tprevious-network=false\t"));
     assert!(stdout.contains("\tprevious-reachable=true\t"));
     assert!(stdout.contains("\tprevious-removable=true\t"));
+    assert!(stdout.contains("\tprevious-case-sensitive=false\t"));
     assert!(stdout.contains("\tprevious-case-preserving=true\t"));
     assert!(stdout.contains("\tprevious-slow="));
     assert!(stdout.contains("\tcurrent-class=-\tcurrent-mount=-\t"));
@@ -7400,6 +7401,7 @@ fn reports_volume_event_runtime_fanout_from_binary() {
     assert!(stdout.contains("\tcurrent-network=-\t"));
     assert!(stdout.contains("\tcurrent-reachable=-\t"));
     assert!(stdout.contains("\tcurrent-removable=-\t"));
+    assert!(stdout.contains("\tcurrent-case-sensitive=-\t"));
     assert!(stdout.contains("\tcurrent-case-preserving=-\t"));
     assert!(stdout.contains("\tcurrent-slow=-\t"));
     assert!(stdout.contains("\tinvalidate-policy=true\treason=volume-event-disappeared\n"));
@@ -7443,6 +7445,7 @@ fn reports_volume_event_runtime_fanout_from_binary() {
     assert!(kept_stdout.contains("\tcurrent-network=false\t"));
     assert!(kept_stdout.contains("\tcurrent-reachable=true\t"));
     assert!(kept_stdout.contains("\tcurrent-removable=true\t"));
+    assert!(kept_stdout.contains("\tcurrent-case-sensitive=false\t"));
     assert!(kept_stdout.contains("\tcurrent-case-preserving=true\t"));
     assert!(kept_stdout.contains("\tcurrent-slow=false\t"));
     assert!(kept_stdout.contains("\tinvalidate-policy=true\treason=volume-event-appeared\n"));

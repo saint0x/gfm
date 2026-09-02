@@ -768,18 +768,19 @@ fn operation_volume_copy_policy_report(operation: &Operation) -> Result<String> 
     let policy = operation_volume_copy_policy_from_report(operation, &report);
     Ok(match operation {
         Operation::Copy { from, to } | Operation::Move { from, to } => format!(
-            "operation-volume-copy-policy\tsource={}\tdestination={}\tsource-class={}\tdestination-class={}\tbuffer-bytes={}\tfile-cloning={}\thard-links={}\tsparse-files={}\tvolumes={}",
+            "operation-volume-copy-policy\tsource={}\tdestination={}\tsource-class={}\tdestination-class={}\tbuffer-bytes={}\tfile-cloning={}\tdistinct-volumes={}\thard-links={}\tsparse-files={}\tvolumes={}",
             from.display(),
             to.display(),
             operation_volume_class_name(policy.class_for_path(from)),
             operation_volume_class_name(policy.class_for_path(to)),
             policy.copy_buffer_bytes_for_paths(from, to),
             policy.file_cloning_supported_for_paths(from, to),
+            policy.paths_are_known_distinct_volumes(from, to),
             policy.hard_links_supported_for_path(to),
             policy.sparse_files_supported_for_path(to),
             report.volumes.len()
         ),
-        _ => "operation-volume-copy-policy\tsource=-\tdestination=-\tsource-class=-\tdestination-class=-\tbuffer-bytes=0\tfile-cloning=false\thard-links=false\tsparse-files=false\tvolumes=0".to_string(),
+        _ => "operation-volume-copy-policy\tsource=-\tdestination=-\tsource-class=-\tdestination-class=-\tbuffer-bytes=0\tfile-cloning=false\tdistinct-volumes=false\thard-links=false\tsparse-files=false\tvolumes=0".to_string(),
     })
 }
 
@@ -1856,6 +1857,7 @@ mod tests {
         assert!(report.contains("\tdestination-class=external\t"));
         assert!(report.contains("\tbuffer-bytes=65536\t"));
         assert!(report.contains("\tfile-cloning=false\t"));
+        assert!(report.contains("\tdistinct-volumes=true\t"));
         assert!(report.contains("\thard-links=true\t"));
         assert!(report.contains("\tsparse-files=true\t"));
         assert!(report.contains("\tvolumes="));
