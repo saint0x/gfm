@@ -739,6 +739,7 @@ pub struct FileProviderOperationReport {
     pub path: PathBuf,
     pub operation: FileProviderOperation,
     pub disposition: FileProviderOperationDisposition,
+    pub native_status: Option<NativeFileProviderOperationStatus>,
     pub before: FileProviderStateReport,
     pub after: Option<FileProviderStateReport>,
     pub reason: Option<String>,
@@ -922,11 +923,12 @@ impl FileProviderInvalidationReport {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "fileprovider-invalidation\t{}\tprevious={}\tcurrent={}\tchanged={}\ticon={}\tpreview-memory={}\tpreview-disk={}\tsidebar={}\treindex-metadata={}\treason={}",
+            "fileprovider-invalidation\t{}\tprevious={}\tcurrent={}\tchanged={}\t{}\ticon={}\tpreview-memory={}\tpreview-disk={}\tsidebar={}\treindex-metadata={}\treason={}",
             self.path.display(),
             self.previous.as_str(),
             self.current.storage_state.as_str(),
             self.state_changed,
+            prefixed_state_tsv_fields("current", Some(&self.current)),
             self.invalidate_icon,
             self.invalidate_preview_memory,
             self.invalidate_preview_disk,
@@ -1673,6 +1675,7 @@ impl FileProviderOperationReport {
                     path,
                     operation,
                     disposition: FileProviderOperationDisposition::Completed,
+                    native_status: Some(result.status),
                     before,
                     after,
                     reason: None,
@@ -1687,6 +1690,7 @@ impl FileProviderOperationReport {
                 path,
                 operation,
                 disposition: disposition_for_native_fileprovider_operation(result.status),
+                native_status: Some(result.status),
                 before,
                 after: None,
                 reason: result.reason,
@@ -1696,10 +1700,13 @@ impl FileProviderOperationReport {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "fileprovider-operation\t{}\toperation={}\tdisposition={}\t{}\t{}\treason={}",
+            "fileprovider-operation\t{}\toperation={}\tdisposition={}\tnative-status={}\t{}\t{}\treason={}",
             self.path.display(),
             self.operation.as_str(),
             self.disposition.as_str(),
+            self.native_status
+                .map(native_fileprovider_operation_status_str)
+                .unwrap_or("-"),
             prefixed_state_tsv_fields("before", Some(&self.before)),
             prefixed_state_tsv_fields("after", self.after.as_ref()),
             self.reason
@@ -1719,6 +1726,7 @@ impl FileProviderOperationReport {
             path,
             operation,
             disposition: FileProviderOperationDisposition::Refused,
+            native_status: None,
             before,
             after: None,
             reason: Some(reason.into()),
@@ -1736,6 +1744,7 @@ impl FileProviderOperationReport {
             path,
             operation,
             disposition,
+            native_status: None,
             before,
             after: None,
             reason: Some(reason.into()),
@@ -1751,6 +1760,7 @@ impl FileProviderOperationReport {
             path,
             operation,
             disposition: FileProviderOperationDisposition::Missing,
+            native_status: None,
             before,
             after: None,
             reason: Some("fileprovider-path-missing".to_string()),
@@ -1767,6 +1777,7 @@ impl FileProviderOperationReport {
             path,
             operation,
             disposition: FileProviderOperationDisposition::Unavailable,
+            native_status: None,
             before,
             after: None,
             reason: Some(reason.into()),
@@ -1903,6 +1914,20 @@ fn disposition_for_native_fileprovider_operation(
             FileProviderOperationDisposition::Unsupported
         }
         NativeFileProviderOperationStatus::Failed => FileProviderOperationDisposition::Failed,
+    }
+}
+
+fn native_fileprovider_operation_status_str(
+    status: NativeFileProviderOperationStatus,
+) -> &'static str {
+    match status {
+        NativeFileProviderOperationStatus::Completed => "completed",
+        NativeFileProviderOperationStatus::Missing => "missing",
+        NativeFileProviderOperationStatus::PermissionDenied => "permission-denied",
+        NativeFileProviderOperationStatus::Unavailable => "unavailable",
+        NativeFileProviderOperationStatus::Cancelled => "cancelled",
+        NativeFileProviderOperationStatus::Failed => "failed",
+        NativeFileProviderOperationStatus::UnsupportedPath => "unsupported-path",
     }
 }
 
@@ -4154,6 +4179,14 @@ mod tests {
         assert!(report.invalidate_icon);
         assert!(report.invalidate_preview_memory);
         assert!(report.invalidate_preview_disk);
+        let tsv = report.as_tsv();
+        assert!(tsv.contains("\tcurrent-domain=icloud-drive\t"));
+        assert!(tsv.contains("\tcurrent-state=evicted\t"));
+        assert!(tsv.contains("\tcurrent-materialization=remote-placeholder\t"));
+        assert!(tsv.contains("\tcurrent-materialization-source=xattr-fallback\t"));
+        assert!(tsv.contains("\tcurrent-materialization-confidence=xattr-fallback\t"));
+        assert!(tsv.contains("\tcurrent-offline=true\t"));
+        assert!(tsv.contains("\tcurrent-badges=cloud\t"));
         assert!(report.invalidate_sidebar);
         assert!(report.reindex_metadata);
 
@@ -5291,12 +5324,14 @@ mod tests {
             download.disposition,
             FileProviderOperationDisposition::Refused
         );
+        assert_eq!(download.native_status, None);
         assert_eq!(
             download.reason.as_deref(),
             Some("operation-disabled-for-current-state")
         );
         assert_eq!(download.before.storage_state, CloudStorageState::LocalOnly);
         let download_tsv = download.as_tsv();
+        assert!(download_tsv.contains("\tdisposition=refused\tnative-status=-\t"));
         assert!(download_tsv.contains("\tbefore-domain=local\t"));
         assert!(download_tsv.contains("\tbefore-state=local-only\t"));
         assert!(download_tsv.contains("\tbefore-materialization=not-provider-backed\t"));
@@ -5585,6 +5620,37 @@ mod tests {
         .expect_err("completed native FileProvider operation must still honor cancelled publish");
 
         assert_eq!(err, GfmError::Cancelled);
+    }
+
+    #[test]
+    fn native_fileprovider_operation_status_is_reported_after_submission() {
+        let path = PathBuf::from("/tmp/gfm-fileprovider-operation-denied.icloud");
+        let before = FileProviderStateReport::removed(path.clone());
+        let result = NativeFileProviderOperationResult {
+            status: NativeFileProviderOperationStatus::PermissionDenied,
+            reason: Some("ubiquity permission denied".to_string()),
+        };
+
+        let report = FileProviderOperationReport::from_native_result_checked(
+            path,
+            FileProviderOperation::Evict,
+            before,
+            result,
+            || Ok(()),
+        )
+        .unwrap();
+
+        assert_eq!(report.disposition, FileProviderOperationDisposition::Denied);
+        assert_eq!(
+            report.native_status,
+            Some(NativeFileProviderOperationStatus::PermissionDenied)
+        );
+        assert!(report
+            .as_tsv()
+            .contains("\tdisposition=denied\tnative-status=permission-denied\t"));
+        assert!(report
+            .as_tsv()
+            .ends_with("reason=ubiquity permission denied"));
     }
 
     #[test]

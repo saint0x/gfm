@@ -3082,6 +3082,7 @@ fn refuses_fileprovider_operations_without_native_provider_from_binary() {
     assert_worker_admitted(&download_stderr, "fileprovider operation", &evicted);
     assert!(download_stdout.starts_with("fileprovider-operation\t"));
     assert!(download_stdout.contains("\toperation=download\tdisposition=refused\t"));
+    assert!(download_stdout.contains("\tnative-status=-\t"));
     assert!(download_stdout.contains("\tbefore-domain=icloud-drive\t"));
     assert!(download_stdout.contains("\tbefore-state=evicted\t"));
     assert!(download_stdout.contains("\tbefore-materialization=remote-placeholder\t"));
@@ -3108,6 +3109,7 @@ fn refuses_fileprovider_operations_without_native_provider_from_binary() {
     let evict_stderr = String::from_utf8_lossy(&evict_output.stderr);
     assert_worker_admitted(&evict_stderr, "fileprovider operation", &downloaded);
     assert!(evict_stdout.contains("\toperation=evict\tdisposition=refused\t"));
+    assert!(evict_stdout.contains("\tnative-status=-\t"));
     assert!(evict_stdout.contains("\tbefore-domain=local\t"));
     assert!(evict_stdout.contains("\tbefore-state=local-only\t"));
     assert!(evict_stdout.contains("\tbefore-materialization=not-provider-backed\t"));
@@ -3132,6 +3134,7 @@ fn refuses_fileprovider_operations_without_native_provider_from_binary() {
     let conflict_stderr = String::from_utf8_lossy(&conflict_output.stderr);
     assert_worker_admitted(&conflict_stderr, "fileprovider operation", &conflict);
     assert!(conflict_stdout.contains("\toperation=evict\tdisposition=refused\t"));
+    assert!(conflict_stdout.contains("\tnative-status=-\t"));
     assert!(conflict_stdout.contains("\tbefore-state=conflict\t"));
     assert!(conflict_stdout.contains("\tbefore-materialization=conflict\t"));
     assert!(conflict_stdout.contains("\tbefore-conflict=true\t"));
@@ -3155,6 +3158,7 @@ fn refuses_fileprovider_operations_without_native_provider_from_binary() {
     let missing_stderr = String::from_utf8_lossy(&missing_output.stderr);
     assert_worker_admitted(&missing_stderr, "fileprovider operation", &missing);
     assert!(missing_stdout.contains("\toperation=download\tdisposition=missing\t"));
+    assert!(missing_stdout.contains("\tnative-status=-\t"));
     assert!(missing_stdout.contains("\tbefore-state=unknown\t"));
     assert!(missing_stdout.contains("\tbefore-materialization=unknown\t"));
     assert!(
@@ -3193,7 +3197,15 @@ fn reports_fileprovider_invalidation_from_binary() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_worker_admitted(&stderr, "fileprovider invalidation", &evicted);
     assert!(stdout.starts_with("fileprovider-invalidation\t"));
-    assert!(stdout.contains("\tprevious=downloaded\tcurrent=evicted\tchanged=true\t"));
+    assert!(stdout.contains("\tprevious=downloaded\tcurrent=evicted\t"));
+    assert!(stdout.contains("\tchanged=true\t"));
+    assert!(stdout.contains("\tcurrent-domain=icloud-drive\t"));
+    assert!(stdout.contains("\tcurrent-state=evicted\t"));
+    assert!(stdout.contains("\tcurrent-materialization=remote-placeholder\t"));
+    assert!(stdout.contains("\tcurrent-materialization-source=xattr-fallback\t"));
+    assert!(stdout.contains("\tcurrent-materialization-confidence=xattr-fallback\t"));
+    assert!(stdout.contains("\tcurrent-offline=true\t"));
+    assert!(stdout.contains("\tcurrent-badges=cloud\t"));
     assert!(stdout.contains("\ticon=true\tpreview-memory=true\tpreview-disk=true\t"));
     assert!(stdout.contains("\tsidebar=true\treindex-metadata=true\t"));
     assert!(stdout.ends_with("reason=fileprovider-state-changed\n"));
