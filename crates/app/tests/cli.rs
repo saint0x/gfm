@@ -19114,6 +19114,15 @@ fn volume_producers_persist_runtime_payload_and_progress_from_binary() {
         )),
         "{stderr}"
     );
+    assert!(
+        stderr.contains(&format!(
+            "preview-volume-access\tworker=thumbnail generation\tpath={}\tintent=preview",
+            image.display()
+        )) && stderr.contains("\tstable-id=")
+            && !stderr.contains("\tstable-id=-\t")
+            && stderr.contains("\treason=cached-volume-report"),
+        "{stderr}"
+    );
 
     let catalog_text = fs::read_to_string(&catalog).unwrap();
     assert!(catalog_text.contains("\tthumbnail\t"), "{catalog_text}");
@@ -19515,6 +19524,15 @@ fn visible_adaptive_quicklook_persists_runtime_payload_and_progress_under_pressu
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("security-scope\t"), "{stderr}");
     assert!(stderr.contains("\tintent=preview\t"), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "preview-volume-access\tworker=adaptive quicklook preview\tpath={}\tintent=preview",
+            document.display()
+        )) && stderr.contains("\tstable-id=")
+            && !stderr.contains("\tstable-id=-\t")
+            && stderr.contains("\treason=cached-volume-report"),
+        "{stderr}"
+    );
 
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("quicklook-session\t"), "{stdout}");

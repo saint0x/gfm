@@ -1953,6 +1953,17 @@ impl PreviewAccessReport {
         )
     }
 
+    fn volume_access_tsv(&self, worker: &str) -> String {
+        platform_volume_access_tsv(
+            "preview-volume-access",
+            worker,
+            &self.path,
+            AccessIntent::Preview,
+            &self.volume_path,
+            &self.volume_report,
+        )
+    }
+
     fn access_checked(
         &self,
         worker: &str,
@@ -2001,6 +2012,52 @@ impl PreviewAccessReport {
             &self.volume_report,
         )
     }
+}
+
+fn platform_volume_access_tsv(
+    prefix: &str,
+    worker: &str,
+    path: &Path,
+    intent: AccessIntent,
+    volume_path: &Path,
+    report: &VolumeDiscoveryReport,
+) -> String {
+    if let Some(volume) = report.volume_for_path(volume_path) {
+        format!(
+            "{}\tworker={}\tpath={}\tintent={}\tvolume-id={}\tstable-id={}\tclass={}\tmount={}\treachable={}\tread-only={}\treason=cached-volume-report",
+            escape_platform_tsv_field(prefix),
+            escape_platform_tsv_field(worker),
+            escape_platform_tsv_field(&path.to_string_lossy()),
+            intent.as_str(),
+            volume.id.0,
+            escape_platform_tsv_field(&volume.stable_identity),
+            volume.kind.as_str(),
+            volume.mount_state.as_str(),
+            format_platform_optional_bool(volume.reachable),
+            volume.read_only,
+        )
+    } else {
+        format!(
+            "{}\tworker={}\tpath={}\tintent={}\tvolume-id=-\tstable-id=-\tclass=-\tmount=-\treachable=-\tread-only=-\treason=no-containing-volume",
+            escape_platform_tsv_field(prefix),
+            escape_platform_tsv_field(worker),
+            escape_platform_tsv_field(&path.to_string_lossy()),
+            intent.as_str(),
+        )
+    }
+}
+
+fn format_platform_optional_bool(value: Option<bool>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn escape_platform_tsv_field(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
 }
 
 fn preview_volume_id_from_report(path: &Path, report: &VolumeDiscoveryReport) -> Option<VolumeId> {
@@ -2891,6 +2948,7 @@ fn run_quicklook_session(path: PathBuf) -> Result<QuickLookSessionContract> {
     const WORKER: &str = "quicklook preview";
     let access_report = PreviewAccessReport::new_checked(path, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
+    eprintln!("{}", access_report.volume_access_tsv(WORKER));
     let volume = access_report.volume();
     let payload_path = access_report.path.clone();
     run_preview_contract_cancellable_with_payload_path(
@@ -2908,8 +2966,15 @@ fn run_quicklook_session_retry_probe(
     const WORKER: &str = "quicklook preview";
     let access_report = PreviewAccessReport::new_checked(path, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
+    eprintln!("{}", access_report.volume_access_tsv(WORKER));
     let retry_probe = PreviewRetryProbe::new_checked(attempt_state, WORKER, || Ok(()))?;
     retry_probe.preflight_volume()?;
+    eprintln!(
+        "{}",
+        retry_probe
+            .access_report
+            .volume_access_tsv("preview-retry-volume-access", WORKER)
+    );
     let volume = access_report.volume();
     let payload_path = access_report.path.clone();
     run_preview_contract_cancellable_with_payload_path(
@@ -2927,6 +2992,7 @@ fn run_thumbnail_generation(path: PathBuf) -> Result<ThumbnailGenerationContract
     const WORKER: &str = "thumbnail generation";
     let access_report = PreviewAccessReport::new_checked(path, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
+    eprintln!("{}", access_report.volume_access_tsv(WORKER));
     let volume = access_report.volume();
     let payload_path = access_report.path.clone();
     run_preview_contract_cancellable_with_payload_path(
@@ -2946,8 +3012,15 @@ fn run_thumbnail_generation_retry_probe(
     const WORKER: &str = "thumbnail generation";
     let access_report = PreviewAccessReport::new_checked(path, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
+    eprintln!("{}", access_report.volume_access_tsv(WORKER));
     let retry_probe = PreviewRetryProbe::new_checked(attempt_state, WORKER, || Ok(()))?;
     retry_probe.preflight_volume()?;
+    eprintln!(
+        "{}",
+        retry_probe
+            .access_report
+            .volume_access_tsv("preview-retry-volume-access", WORKER)
+    );
     let volume = access_report.volume();
     let payload_path = access_report.path.clone();
     run_preview_contract_cancellable_with_payload_path(
@@ -3126,6 +3199,7 @@ fn run_adaptive_quicklook_session(
         pressure,
         move || {
             volume_access_report.preflight_volume(WORKER)?;
+            eprintln!("{}", volume_access_report.volume_access_tsv(WORKER));
             Ok(volume_access_report.volume())
         },
         payload_path,
@@ -3186,6 +3260,7 @@ fn run_adaptive_thumbnail_generation(
         pressure,
         move || {
             volume_access_report.preflight_volume(VOLUME_WORKER)?;
+            eprintln!("{}", volume_access_report.volume_access_tsv(VOLUME_WORKER));
             Ok(volume_access_report.volume())
         },
         payload_path,
@@ -3949,6 +4024,7 @@ fn parse_worker_admission_requests(
 }
 
 fn worker_admission_fanout_summary(admissions: &[SecurityWorkerAdmissionReport]) -> String {
+    let families = WorkerAdmissionFamilyCounts::from_admissions(admissions);
     let starts = admissions
         .iter()
         .filter(|admission| admission.worker_action == SecurityWorkerAction::Start)
@@ -3994,8 +4070,10 @@ fn worker_admission_fanout_summary(admissions: &[SecurityWorkerAdmissionReport])
         .iter()
         .find(|admission| admission.refresh_on_permission_change);
     format!(
-        "security-worker-admission-fanout\tworkers={}\tstart={}\tprompt={}\tmetadata-only={}\tdeny={}\tcan-touch-filesystem={}\tbookmark-access={}\trefresh-on-permission-change={}\tany-blocked={}\tall-blocked={}\trefresh-required={}\tfirst-blocked-worker={}\tfirst-blocked-action={}\tfirst-blocked-scope={}\tfirst-blocked-probe={}\tfirst-blocked-reason={}\tfirst-refresh-worker={}\tfirst-refresh-scope={}",
+        "security-worker-admission-fanout\tworkers={}\tworker-families={}\tblocked-worker-families={}\tstart={}\tprompt={}\tmetadata-only={}\tdeny={}\tcan-touch-filesystem={}\tbookmark-access={}\trefresh-on-permission-change={}\tany-blocked={}\tall-blocked={}\trefresh-required={}\tfirst-blocked-worker={}\tfirst-blocked-action={}\tfirst-blocked-scope={}\tfirst-blocked-probe={}\tfirst-blocked-reason={}\tfirst-refresh-worker={}\tfirst-refresh-scope={}",
         admissions.len(),
+        families.as_tsv_value(),
+        families.blocked_as_tsv_value(),
         starts,
         prompts,
         metadata_only,
@@ -4028,6 +4106,121 @@ fn worker_admission_fanout_summary(admissions: &[SecurityWorkerAdmissionReport])
             .map(|admission| admission.access.scope.as_str())
             .unwrap_or("-")
     )
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct WorkerAdmissionFamilyCounts {
+    index: usize,
+    preview: usize,
+    thumbnail: usize,
+    extraction: usize,
+    operation: usize,
+    other: usize,
+    blocked_index: usize,
+    blocked_preview: usize,
+    blocked_thumbnail: usize,
+    blocked_extraction: usize,
+    blocked_operation: usize,
+    blocked_other: usize,
+}
+
+impl WorkerAdmissionFamilyCounts {
+    fn from_admissions(admissions: &[SecurityWorkerAdmissionReport]) -> Self {
+        let mut counts = Self::default();
+        for admission in admissions {
+            let blocked = !admission.can_touch_filesystem;
+            match WorkerAdmissionFamily::from_admission(admission) {
+                WorkerAdmissionFamily::Index => {
+                    counts.index += 1;
+                    counts.blocked_index += usize::from(blocked);
+                }
+                WorkerAdmissionFamily::Preview => {
+                    counts.preview += 1;
+                    counts.blocked_preview += usize::from(blocked);
+                }
+                WorkerAdmissionFamily::Thumbnail => {
+                    counts.thumbnail += 1;
+                    counts.blocked_thumbnail += usize::from(blocked);
+                }
+                WorkerAdmissionFamily::Extraction => {
+                    counts.extraction += 1;
+                    counts.blocked_extraction += usize::from(blocked);
+                }
+                WorkerAdmissionFamily::Operation => {
+                    counts.operation += 1;
+                    counts.blocked_operation += usize::from(blocked);
+                }
+                WorkerAdmissionFamily::Other => {
+                    counts.other += 1;
+                    counts.blocked_other += usize::from(blocked);
+                }
+            }
+        }
+        counts
+    }
+
+    fn as_tsv_value(&self) -> String {
+        format!(
+            "index:{},preview:{},thumbnail:{},extraction:{},operation:{},other:{}",
+            self.index, self.preview, self.thumbnail, self.extraction, self.operation, self.other
+        )
+    }
+
+    fn blocked_as_tsv_value(&self) -> String {
+        format!(
+            "index:{},preview:{},thumbnail:{},extraction:{},operation:{},other:{}",
+            self.blocked_index,
+            self.blocked_preview,
+            self.blocked_thumbnail,
+            self.blocked_extraction,
+            self.blocked_operation,
+            self.blocked_other
+        )
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WorkerAdmissionFamily {
+    Index,
+    Preview,
+    Thumbnail,
+    Extraction,
+    Operation,
+    Other,
+}
+
+impl WorkerAdmissionFamily {
+    fn from_admission(admission: &SecurityWorkerAdmissionReport) -> Self {
+        let worker = admission.worker.to_ascii_lowercase();
+        if worker.contains("thumbnail") {
+            return Self::Thumbnail;
+        }
+        if worker.contains("extract") || worker.contains("content") {
+            return Self::Extraction;
+        }
+        if worker.contains("operation")
+            || worker.contains("copy")
+            || worker.contains("move")
+            || worker.contains("rename")
+            || worker.contains("trash")
+            || worker.contains("restore")
+            || worker.contains("export")
+        {
+            return Self::Operation;
+        }
+        if worker.contains("preview") || worker.contains("quicklook") {
+            return Self::Preview;
+        }
+        if worker.contains("index") || worker.contains("search") {
+            return Self::Index;
+        }
+        match admission.access.intent {
+            AccessIntent::Index => Self::Index,
+            AccessIntent::Preview => Self::Preview,
+            AccessIntent::Operate | AccessIntent::Write => Self::Operation,
+            AccessIntent::Read => Self::Other,
+        }
+    }
 }
 
 fn escape_field(value: &str) -> String {
@@ -4319,6 +4512,17 @@ impl PlatformAccessReport {
             worker,
             &self.volume_report,
             check_control,
+        )
+    }
+
+    fn volume_access_tsv(&self, prefix: &str, worker: &str) -> String {
+        platform_volume_access_tsv(
+            prefix,
+            worker,
+            &self.path,
+            self.intent,
+            &self.path,
+            &self.volume_report,
         )
     }
 
