@@ -4080,11 +4080,21 @@ fn direct_containing_mounted_volume_paths_checked(
     mut check: impl FnMut() -> Result<()>,
 ) -> Result<Vec<PathBuf>> {
     check()?;
-    let entry = gfm_mac_sys::copy_volume_mount_table_entry(path);
+    let probe_path = existing_volume_probe_path(path).unwrap_or_else(|| path.to_path_buf());
     check()?;
-    Ok(finder_visible_containing_mount_path(path, &entry)
+    let entry = gfm_mac_sys::copy_volume_mount_table_entry(&probe_path);
+    check()?;
+    Ok(finder_visible_containing_mount_path(&probe_path, &entry)
         .into_iter()
         .collect())
+}
+
+fn existing_volume_probe_path(path: &Path) -> Option<PathBuf> {
+    match path.try_exists() {
+        Ok(true) => Some(path.to_path_buf()),
+        Ok(false) => normalized_existing_ancestor_path(path),
+        Err(_) => None,
+    }
 }
 
 fn finder_visible_containing_mount_path(
@@ -6745,6 +6755,55 @@ mod tests {
         );
 
         assert_eq!(path, None);
+    }
+
+    #[test]
+    fn direct_containing_mount_path_uses_existing_ancestor_for_missing_descendant() {
+        let root = unique_temp_dir("gfm-volume-direct-missing-descendant");
+        let missing = root.join("New Folder").join("Draft.txt");
+
+        let paths = direct_containing_mounted_volume_paths_checked(&missing, || Ok(())).unwrap();
+
+        assert!(
+            paths.iter().any(|path| missing.starts_with(path)),
+            "{paths:?}"
+        );
+        assert!(!missing.exists());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn existing_volume_probe_path_resolves_missing_descendant_to_existing_ancestor() {
+        let root = unique_temp_dir("gfm-volume-probe-existing-ancestor");
+        let missing = root.join("New Folder").join("Draft.txt");
+
+        let probe = existing_volume_probe_path(&missing)
+            .expect("missing descendant should probe nearest existing ancestor");
+
+        assert_eq!(probe, root.canonicalize().unwrap());
+        assert!(!missing.exists());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn direct_containing_mount_path_resolves_relative_missing_descendant() {
+        let relative_root = PathBuf::from("target").join(format!(
+            "gfm-volume-direct-relative-missing-{}-{}",
+            std::process::id(),
+            TEMP_COUNTER.fetch_add(1, Ordering::SeqCst)
+        ));
+        let root = std::env::current_dir().unwrap().join(&relative_root);
+        fs::create_dir_all(&root).unwrap();
+        let missing = relative_root.join("New Folder").join("Draft.txt");
+
+        let paths = direct_containing_mounted_volume_paths_checked(&missing, || Ok(())).unwrap();
+
+        assert!(!paths.is_empty(), "{paths:?}");
+        assert!(!root.join("New Folder").join("Draft.txt").exists());
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
