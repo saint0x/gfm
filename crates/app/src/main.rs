@@ -1000,7 +1000,7 @@ fn print_usage() {
   gfm macrobench-fixture <workspace> [smoke|standard|million]
   gfm parity-fixture <workspace> [smoke|standard]
   gfm pixel-diff <expected.rgba> <actual.rgba> <width> <height> [mask.tsv]
-  gfm pixel-threshold-check <layout|text|icon|selection|focus|hover|toolbar|thumbnail|preview> <expected.rgba|png> <actual.rgba|png> <width> <height> [governed-mask.tsv]
+  gfm pixel-threshold-check <layout|text|icon|sidebar|selection|focus|hover|toolbar|thumbnail|preview|sheet|menu> <expected.rgba|png> <actual.rgba|png> <width> <height> [governed-mask.tsv]
   gfm parity-gate <manifest.tsv>
   gfm parity-review <manifest.tsv> <output-dir>
   gfm parity-profile <macos-build> [system|light|dark] [1x|2x|3x] [srgb|display-p3]

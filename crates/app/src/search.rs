@@ -3133,6 +3133,9 @@ impl SidecarVolumeAccessReports {
                         root: volume.path.to_string_lossy().into_owned(),
                         label: volume.label.clone(),
                         class: volume.kind.as_str(),
+                        writable: volume.writable,
+                        read_only: volume.read_only,
+                        reachable: format_optional_bool(volume.reachable),
                     });
             }
         }
@@ -3148,6 +3151,9 @@ struct SidecarAdmittedVolume {
     root: String,
     label: String,
     class: &'static str,
+    writable: bool,
+    read_only: bool,
+    reachable: String,
 }
 
 struct SidecarAdmittedVolumeSummary {
@@ -3163,13 +3169,16 @@ impl SidecarAdmittedVolumeSummary {
 
     fn as_tsv_fields(&self) -> String {
         format!(
-            "admitted-volume-count={}\tadmitted-volume-ids={}\tadmitted-volume-classes={}\tadmitted-volume-roots={}\tadmitted-volume-labels={}\tadmitted-volume-stable-ids={}",
+            "admitted-volume-count={}\tadmitted-volume-ids={}\tadmitted-volume-classes={}\tadmitted-volume-roots={}\tadmitted-volume-labels={}\tadmitted-volume-stable-ids={}\tadmitted-volume-writable={}\tadmitted-volume-read-only={}\tadmitted-volume-reachable={}",
             self.volumes.len(),
             self.join(|volume| volume.id.to_string()),
             self.join(|volume| volume.class.to_string()),
             self.join(|volume| volume.root.clone()),
             self.join(|volume| volume.label.clone()),
-            self.join(|volume| volume.stable_id.clone())
+            self.join(|volume| volume.stable_id.clone()),
+            self.join(|volume| volume.writable.to_string()),
+            self.join(|volume| volume.read_only.to_string()),
+            self.join(|volume| volume.reachable.clone())
         )
     }
 

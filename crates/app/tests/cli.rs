@@ -1823,6 +1823,24 @@ fn parity_gate_and_review_use_governed_masks_from_binary() {
 }
 
 #[test]
+fn usage_lists_all_pixel_threshold_surfaces_from_binary() {
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("unknown-command-for-usage")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.contains(
+        "pixel-threshold-check <layout|text|icon|sidebar|selection|focus|hover|toolbar|thumbnail|preview|sheet|menu>"
+    ));
+}
+
+#[test]
 fn parity_gate_rejects_unprovenanced_manifest_from_binary() {
     let root = unique_temp_dir("gfm-cli-parity-gate-missing-provenance");
     let expected = root.join("finder.rgba");
@@ -5610,6 +5628,9 @@ fn searches_persisted_tags_from_binary() {
             && !sidecar_search_stderr.contains("\tadmitted-volume-roots=-\t")
             && sidecar_search_stderr.contains("\tadmitted-volume-stable-ids=")
             && !sidecar_search_stderr.contains("\tadmitted-volume-stable-ids=-\t")
+            && sidecar_search_stderr.contains("\tadmitted-volume-writable=false\t")
+            && sidecar_search_stderr.contains("\tadmitted-volume-read-only=true\t")
+            && sidecar_search_stderr.contains("\tadmitted-volume-reachable=true\t")
             && sidecar_search_stderr.contains("metadata-keys 1")
             && sidecar_search_stderr.contains("prefix-keys 0")
             && sidecar_search_stderr.contains("substring-keys 0")
@@ -5702,6 +5723,9 @@ fn searches_persisted_tags_from_binary() {
             && !sidecar_budget_stderr.contains("\tadmitted-volume-roots=-\t")
             && sidecar_budget_stderr.contains("\tadmitted-volume-stable-ids=")
             && !sidecar_budget_stderr.contains("\tadmitted-volume-stable-ids=-\t")
+            && sidecar_budget_stderr.contains("\tadmitted-volume-writable=false\t")
+            && sidecar_budget_stderr.contains("\tadmitted-volume-read-only=true\t")
+            && sidecar_budget_stderr.contains("\tadmitted-volume-reachable=true\t")
             && sidecar_budget_stderr.contains("\trecords-loaded=1")
             && sidecar_budget_stderr.contains("\tcandidate-ids=1")
             && sidecar_budget_stderr.contains("\tfull-hydration=false")
@@ -5895,6 +5919,9 @@ fn searches_persisted_tags_from_binary() {
             && !sidecar_session_stderr.contains("\tadmitted-volume-roots=-\t")
             && sidecar_session_stderr.contains("\tadmitted-volume-stable-ids=")
             && !sidecar_session_stderr.contains("\tadmitted-volume-stable-ids=-\t")
+            && sidecar_session_stderr.contains("\tadmitted-volume-writable=false\t")
+            && sidecar_session_stderr.contains("\tadmitted-volume-read-only=true\t")
+            && sidecar_session_stderr.contains("\tadmitted-volume-reachable=true\t")
             && sidecar_session_stderr.contains("\tcontent-keys=1")
             && sidecar_session_stderr.contains("\tcontent-cache-hits=0")
             && sidecar_session_stderr.contains("\tcontent-cache-misses=1")
@@ -6057,6 +6084,9 @@ fn searches_persisted_tags_from_binary() {
             && !sidecar_scoped_stderr.contains("\tadmitted-volume-roots=-\t")
             && sidecar_scoped_stderr.contains("\tadmitted-volume-stable-ids=")
             && !sidecar_scoped_stderr.contains("\tadmitted-volume-stable-ids=-\t")
+            && sidecar_scoped_stderr.contains("\tadmitted-volume-writable=false\t")
+            && sidecar_scoped_stderr.contains("\tadmitted-volume-read-only=true\t")
+            && sidecar_scoped_stderr.contains("\tadmitted-volume-reachable=true\t")
             && sidecar_scoped_stderr.contains("\trecords-loaded=0")
             && sidecar_scoped_stderr.contains("\tcandidate-ids=0")
             && sidecar_scoped_stderr.contains("\tfull-hydration=false")
@@ -6144,6 +6174,9 @@ fn searches_persisted_tags_from_binary() {
             && sidecar_empty_scope_stderr.contains("\tadmitted-volume-ids=-\t")
             && sidecar_empty_scope_stderr.contains("\tadmitted-volume-roots=-\t")
             && sidecar_empty_scope_stderr.contains("\tadmitted-volume-stable-ids=-\t")
+            && sidecar_empty_scope_stderr.contains("\tadmitted-volume-writable=-\t")
+            && sidecar_empty_scope_stderr.contains("\tadmitted-volume-read-only=-\t")
+            && sidecar_empty_scope_stderr.contains("\tadmitted-volume-reachable=-\t")
             && sidecar_empty_scope_stderr.contains("\trecords-loaded=0")
             && sidecar_empty_scope_stderr.contains("\tcandidate-ids=0")
             && sidecar_empty_scope_stderr.contains("\tcontent-cache-misses=0")
