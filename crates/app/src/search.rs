@@ -183,7 +183,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             let pressure = parse_required_scheduling_pressure(args, "content search")?;
             let volume_report =
-                VolumeDiscoveryReport::for_containing_path_checked(&root, || Ok(()))?;
+                VolumeDiscoveryReport::for_containing_path_policy_checked(&root, || Ok(()))?;
             let extractor = Extractor::with_budget_profile(
                 extraction_budget_profile_from_volume_report(&root, pressure, &volume_report),
             );
@@ -1497,7 +1497,7 @@ impl ArchiveVolumeAccessReports {
             check_control()?;
             entries.push(ArchiveVolumeAccessReport {
                 path: path.to_path_buf(),
-                volume_report: VolumeDiscoveryReport::for_containing_path_checked(
+                volume_report: VolumeDiscoveryReport::for_containing_path_policy_checked(
                     path,
                     &mut check_control,
                 )?,
@@ -1570,7 +1570,7 @@ impl SearchRootAccessReport {
     fn new_checked(path: PathBuf, mut check_control: impl FnMut() -> Result<()>) -> Result<Self> {
         check_control()?;
         let volume_report =
-            VolumeDiscoveryReport::for_containing_path_checked(&path, &mut check_control)?;
+            VolumeDiscoveryReport::for_containing_path_policy_checked(&path, &mut check_control)?;
         check_control()?;
         Ok(Self {
             path,
@@ -1629,7 +1629,7 @@ impl SearchWriteAccessReport {
         let path = write_probe_path(path)?.to_path_buf();
         check_control()?;
         let volume_report =
-            VolumeDiscoveryReport::for_containing_path_checked(&path, &mut check_control)?;
+            VolumeDiscoveryReport::for_containing_path_policy_checked(&path, &mut check_control)?;
         check_control()?;
         Ok(Self {
             path,
@@ -2159,7 +2159,7 @@ impl SearchIndexColumnsVolumeAccessReports {
         Ok(SearchIndexColumnsVolumeAccessReport {
             path: path.to_path_buf(),
             worker,
-            volume_report: VolumeDiscoveryReport::for_containing_path_checked(
+            volume_report: VolumeDiscoveryReport::for_containing_path_policy_checked(
                 path,
                 &mut check_control,
             )?,
@@ -2748,7 +2748,7 @@ impl ContentIndexVolumeAccessReports {
         let mut entries = vec![ContentIndexVolumeAccessReport {
             path: records.to_path_buf(),
             role: "records",
-            volume_report: VolumeDiscoveryReport::for_containing_path_checked(
+            volume_report: VolumeDiscoveryReport::for_containing_path_policy_checked(
                 records,
                 &mut check_control,
             )?,
@@ -2758,7 +2758,7 @@ impl ContentIndexVolumeAccessReports {
             entries.push(ContentIndexVolumeAccessReport {
                 path: path.to_path_buf(),
                 role: "content",
-                volume_report: VolumeDiscoveryReport::for_containing_path_checked(
+                volume_report: VolumeDiscoveryReport::for_containing_path_policy_checked(
                     path,
                     &mut check_control,
                 )?,
@@ -2849,7 +2849,7 @@ impl ContentIndexManifestVolumeAccessReports {
         Ok(ContentIndexManifestVolumeAccessReport {
             path: path.to_path_buf(),
             role,
-            volume_report: VolumeDiscoveryReport::for_containing_path_checked(
+            volume_report: VolumeDiscoveryReport::for_containing_path_policy_checked(
                 path,
                 &mut check_control,
             )?,
@@ -3084,7 +3084,7 @@ impl SidecarVolumeAccessReports {
             entries.push(SidecarVolumeAccessReport {
                 path: path.to_path_buf(),
                 role,
-                volume_report: VolumeDiscoveryReport::for_containing_path_checked(
+                volume_report: VolumeDiscoveryReport::for_containing_path_policy_checked(
                     path,
                     &mut check_control,
                 )?,
@@ -4021,6 +4021,7 @@ fn stream_stage(stage: SearchStreamStage) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gfm_mac::VolumeCapacity;
 
     #[test]
     fn unique_search_paths_preserves_first_occurrence_order() {
@@ -4136,6 +4137,32 @@ mod tests {
 
         assert_eq!(result, Err(GfmError::Cancelled));
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn search_root_access_report_defers_volume_capacity_reads() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-search-root-policy-capacity-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+
+        let report = SearchRootAccessReport::new_checked(root.clone(), || Ok(())).unwrap();
+        let volume = report.volume_report.volume_for_path(&root).unwrap();
+
+        assert_eq!(report.volume(), Some(volume.id));
+        assert_eq!(
+            volume.capacity,
+            VolumeCapacity {
+                total_bytes: 0,
+                available_bytes: 0
+            }
+        );
+        report.preflight_volume("search").unwrap();
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

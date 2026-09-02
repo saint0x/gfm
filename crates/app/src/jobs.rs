@@ -255,7 +255,7 @@ impl JobPathAccessReport {
     ) -> Result<Self> {
         check_control()?;
         let volume_report =
-            VolumeDiscoveryReport::for_containing_path_checked(&path, &mut check_control)?;
+            VolumeDiscoveryReport::for_containing_path_policy_checked(&path, &mut check_control)?;
         check_control()?;
         Ok(Self {
             path,
