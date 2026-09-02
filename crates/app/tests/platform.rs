@@ -7280,6 +7280,8 @@ fn reports_volume_event_state_batch_from_binary() {
         stdout.starts_with("volume-event-state-batch\tinput=2\tapplied=2\tresulting-volumes=1\t")
     );
     assert!(stdout.contains("\tsidebar=true\toperation-policy=true\tindex-admission=true\t"));
+    assert!(stdout.contains("\trescan-index=true\tcancel-index-jobs=true\t"));
+    assert!(stdout.contains("\tclear-fsevents-cursor=true"));
     assert!(stdout.contains("\nvolume-event-invalidation\tkind=appeared\t"));
     assert!(stdout.contains("\nvolume-event-invalidation\tkind=disappeared\t"));
     assert!(stdout.contains("\tcurrent-mount=unmounted\t"));

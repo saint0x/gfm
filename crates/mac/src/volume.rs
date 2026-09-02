@@ -1331,6 +1331,8 @@ pub struct VolumeEventStateBatchReport {
     pub invalidate_operation_policy: bool,
     pub invalidate_index_admission: bool,
     pub rescan_index: bool,
+    pub cancel_index_jobs: bool,
+    pub clear_fsevents_cursor: bool,
     pub transitions: Vec<VolumeEventStateTransition>,
 }
 
@@ -2157,20 +2159,30 @@ impl VolumeEventStateBatchReport {
             rescan_index: transitions
                 .iter()
                 .any(|transition| transition.invalidation.rescan_index),
+            cancel_index_jobs: transitions
+                .iter()
+                .any(volume_event_transition_cancels_index_jobs),
+            clear_fsevents_cursor: transitions.iter().any(|transition| {
+                transition.invalidation.invalidate_index_admission
+                    || transition.invalidation.rescan_index
+                    || volume_event_transition_cancels_index_jobs(transition)
+            }),
             transitions,
         }
     }
 
     pub fn as_tsv(&self) -> String {
         let mut lines = vec![format!(
-            "volume-event-state-batch\tinput={}\tapplied={}\tresulting-volumes={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}",
+            "volume-event-state-batch\tinput={}\tapplied={}\tresulting-volumes={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}",
             self.input_events,
             self.applied_events,
             self.resulting_volumes,
             self.invalidate_sidebar,
             self.invalidate_operation_policy,
             self.invalidate_index_admission,
-            self.rescan_index
+            self.rescan_index,
+            self.cancel_index_jobs,
+            self.clear_fsevents_cursor
         )];
         lines.extend(
             self.transitions
@@ -2178,6 +2190,17 @@ impl VolumeEventStateBatchReport {
                 .map(|transition| transition.invalidation.as_tsv()),
         );
         lines.join("\n")
+    }
+}
+
+fn volume_event_transition_cancels_index_jobs(transition: &VolumeEventStateTransition) -> bool {
+    match transition.invalidation.kind {
+        VolumeEventKind::Appeared => false,
+        VolumeEventKind::DescriptionChanged => {
+            transition.invalidation.invalidate_index_admission
+                || transition.invalidation.rescan_index
+        }
+        VolumeEventKind::Disappeared | VolumeEventKind::Unavailable => true,
     }
 }
 
@@ -6425,12 +6448,17 @@ mod tests {
         assert!(batch.invalidate_operation_policy);
         assert!(batch.invalidate_index_admission);
         assert!(batch.rescan_index);
+        assert!(batch.cancel_index_jobs);
+        assert!(batch.clear_fsevents_cursor);
         assert_eq!(batch.transitions[0].current.as_ref(), Some(&appeared));
         assert_eq!(batch.transitions[1].previous.as_ref(), Some(&previous));
         assert_eq!(state.report().volumes, vec![appeared]);
         assert!(batch
             .as_tsv()
             .starts_with("volume-event-state-batch\tinput=2\tapplied=2\tresulting-volumes=1\t"));
+        assert!(batch.as_tsv().contains(
+            "\tindex-admission=true\trescan-index=true\tcancel-index-jobs=true\tclear-fsevents-cursor=true"
+        ));
 
         fs::remove_dir_all(previous_root).unwrap();
         fs::remove_dir_all(appeared_root).unwrap();
