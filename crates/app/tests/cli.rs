@@ -19827,6 +19827,10 @@ fn assert_operation_volume_access(
         )) && stderr.contains(&format!("\tclass={class}\tmount={mount}\t"))
             && stderr.contains("\tstable-id=")
             && !stderr.contains("\tstable-id=-\t")
+            && stderr.contains("\tlabel=")
+            && !stderr.contains("\tlabel=-\t")
+            && stderr.contains("\tvolume-root=")
+            && !stderr.contains("\tvolume-root=-\t")
             && stderr.contains("\treason=cached-volume-report"),
         "{stderr}"
     );
