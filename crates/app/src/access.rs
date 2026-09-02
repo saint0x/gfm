@@ -55,8 +55,13 @@ pub(crate) fn worker_admission_volume_gate_report_checked(
     let volume_report =
         VolumeDiscoveryReport::for_containing_path_checked(&volume_path, &mut check_control)?;
     check_control()?;
-    let admission =
-        worker_admission_with_volume_report(path, intent, worker.clone(), &volume_report);
+    let admission = worker_admission_with_volume_report_for_probe(
+        path,
+        &volume_path,
+        intent,
+        worker.clone(),
+        &volume_report,
+    );
     if worker_admission_blocked_by_volume(&admission) {
         return Ok(WorkerAdmissionVolumeGateReport {
             admission,
@@ -66,7 +71,13 @@ pub(crate) fn worker_admission_volume_gate_report_checked(
     }
     let _ = refresh_permission_state(PermissionRefreshAudience::Workers, &worker)?;
     check_control()?;
-    let admission = worker_admission_with_volume_report(path, intent, worker, &volume_report);
+    let admission = worker_admission_with_volume_report_for_probe(
+        path,
+        &volume_path,
+        intent,
+        worker,
+        &volume_report,
+    );
     Ok(WorkerAdmissionVolumeGateReport {
         admission,
         volume_path,
@@ -80,9 +91,19 @@ pub(crate) fn worker_admission_with_volume_report(
     worker: impl Into<String>,
     volume_report: &VolumeDiscoveryReport,
 ) -> SecurityWorkerAdmissionReport {
-    let worker = worker.into();
     let volume_path = absolute_volume_probe_path(path);
-    if let Some(block) = volume_access_block_in_report(&volume_path, intent, &worker, volume_report)
+    worker_admission_with_volume_report_for_probe(path, &volume_path, intent, worker, volume_report)
+}
+
+fn worker_admission_with_volume_report_for_probe(
+    path: &Path,
+    volume_path: &Path,
+    intent: AccessIntent,
+    worker: impl Into<String>,
+    volume_report: &VolumeDiscoveryReport,
+) -> SecurityWorkerAdmissionReport {
+    let worker = worker.into();
+    if let Some(block) = volume_access_block_in_report(volume_path, intent, &worker, volume_report)
     {
         let access = SecurityScopedAccessReport::blocked_before_filesystem_probe_with_state(
             path,
@@ -150,11 +171,22 @@ pub(crate) fn worker_admissions_with_volume_report(
     requests: &[WorkerAdmissionRequest],
     volume_report: &VolumeDiscoveryReport,
 ) -> Vec<SecurityWorkerAdmissionReport> {
+    let volume_path = absolute_volume_probe_path(path);
+    worker_admissions_with_volume_report_for_probe(path, &volume_path, requests, volume_report)
+}
+
+fn worker_admissions_with_volume_report_for_probe(
+    path: &Path,
+    volume_path: &Path,
+    requests: &[WorkerAdmissionRequest],
+    volume_report: &VolumeDiscoveryReport,
+) -> Vec<SecurityWorkerAdmissionReport> {
     requests
         .iter()
         .map(|request| {
-            worker_admission_with_volume_report(
+            worker_admission_with_volume_report_for_probe(
                 path,
+                volume_path,
                 request.intent,
                 request.worker.clone(),
                 volume_report,

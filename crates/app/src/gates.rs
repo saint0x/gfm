@@ -284,7 +284,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             println!(
                 "parity-gate\tmanifest={}\tentries={}\tviolations={}\tpassed={}",
-                manifest.display(),
+                escape_gate_tsv_path(&manifest),
                 report.entries.len(),
                 report.violations(),
                 report.passed()
@@ -298,8 +298,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     entry.diff.unmasked_mismatches,
                     entry.diff.masked_mismatches,
                     entry.diff.max_channel_delta,
-                    entry.input.expected_path.display(),
-                    entry.input.actual_path.display()
+                    escape_gate_tsv_path(&entry.input.expected_path),
+                    escape_gate_tsv_path(&entry.input.actual_path)
                 );
                 for violation in &entry.evaluation.violations {
                     println!("{}\t{}", entry.input.surface.as_str(), violation.as_tsv());
@@ -349,24 +349,42 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             println!(
                 "parity-review\tmanifest={}\toutput={}\tentries={}\tviolations={}\tpassed={}",
-                manifest.display(),
-                output_dir.display(),
+                escape_gate_tsv_path(&manifest),
+                escape_gate_tsv_path(&output_dir),
                 bundle.report.entries.len(),
                 bundle.report.violations(),
                 bundle.report.passed()
             );
-            println!("review\t{}", bundle.review_path.display());
-            println!("entries\t{}", bundle.entries_path.display());
-            println!("violations\t{}", bundle.violations_path.display());
-            println!("first-unmasked\t{}", bundle.first_mismatch_path.display());
-            println!("regions\t{}", bundle.region_summary_path.display());
+            println!("review\t{}", escape_gate_tsv_path(&bundle.review_path));
+            println!("entries\t{}", escape_gate_tsv_path(&bundle.entries_path));
+            println!(
+                "violations\t{}",
+                escape_gate_tsv_path(&bundle.violations_path)
+            );
+            println!(
+                "first-unmasked\t{}",
+                escape_gate_tsv_path(&bundle.first_mismatch_path)
+            );
+            println!(
+                "regions\t{}",
+                escape_gate_tsv_path(&bundle.region_summary_path)
+            );
             println!(
                 "mask-justifications\t{}",
-                bundle.mask_justification_path.display()
+                escape_gate_tsv_path(&bundle.mask_justification_path)
             );
-            println!("visual-diffs\t{}", bundle.visual_diff_dir.display());
-            println!("source-artifacts\t{}", bundle.source_artifact_dir.display());
-            println!("bundle\t{}", bundle.bundle_manifest_path.display());
+            println!(
+                "visual-diffs\t{}",
+                escape_gate_tsv_path(&bundle.visual_diff_dir)
+            );
+            println!(
+                "source-artifacts\t{}",
+                escape_gate_tsv_path(&bundle.source_artifact_dir)
+            );
+            println!(
+                "bundle\t{}",
+                escape_gate_tsv_path(&bundle.bundle_manifest_path)
+            );
             if !bundle.report.passed() {
                 return Err(GfmError::Format(format!(
                     "parity review captured {} violation(s)",
@@ -771,6 +789,14 @@ fn read_parity_manifest_inputs_checked(
     check_control()?;
     let base = manifest.parent().unwrap_or_else(|| Path::new("."));
     parse_parity_gate_manifest(&content, base)
+}
+
+fn escape_gate_tsv_path(path: &Path) -> String {
+    escape_gate_tsv_field(&path.to_string_lossy())
+}
+
+fn escape_gate_tsv_field(value: &str) -> String {
+    value.replace(['\t', '\n', '\r'], " ")
 }
 
 fn parity_artifact_access_reports_checked(
