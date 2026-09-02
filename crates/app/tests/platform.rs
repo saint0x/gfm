@@ -890,7 +890,6 @@ fn reports_security_worker_admission_fanout_from_binary() {
         "gfm-security-worker-fanout-state-{}",
         std::process::id()
     ));
-    let path = root.join("Preview.pdf");
     let state = state_root.join("permission-state.tsv");
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::remove_dir_all(&state_root);
@@ -898,6 +897,8 @@ fn reports_security_worker_admission_fanout_from_binary() {
     std::fs::create_dir_all(&state_root).unwrap();
     std::fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
     seed_stale_permission_state(&state);
+    let root = std::fs::canonicalize(root).unwrap();
+    let path = root.join("Preview.pdf");
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .env("GFM_PERMISSION_STATE", &state)
@@ -937,6 +938,20 @@ fn reports_security_worker_admission_fanout_from_binary() {
     assert!(stdout.contains("\tfirst-blocked-scope=none\t"));
     assert!(stdout.contains("\tfirst-blocked-probe=unknown\t"));
     assert!(stdout.contains("\tfirst-blocked-reason="));
+    assert!(stdout.contains("\tfirst-blocked-volume-id="), "{stdout}");
+    assert!(
+        stdout.contains("\tfirst-blocked-volume-class=network\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(&format!("\tfirst-blocked-volume-root={}\t", root.display())),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tfirst-blocked-volume-label="), "{stdout}");
+    assert!(
+        !stdout.contains("\tfirst-blocked-volume-stable-id=-\t"),
+        "{stdout}"
+    );
     assert!(stdout.contains("\tfirst-refresh-worker=index worker\t"));
     assert!(stdout.contains("\tfirst-refresh-scope=none\n"));
     for (worker, intent) in [
@@ -996,9 +1011,10 @@ fn security_worker_admission_fanout_refuses_unavailable_volume_api_from_binary()
         "gfm-security-worker-fanout-unavailable-{}",
         std::process::id()
     ));
-    let path = root.join("Missing.pdf");
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
+    let root = std::fs::canonicalize(root).unwrap();
+    let path = root.join("Missing.pdf");
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("security-worker-admission-fanout-unavailable-volume-api")
@@ -1036,6 +1052,20 @@ fn security_worker_admission_fanout_refuses_unavailable_volume_api_from_binary()
     assert!(stdout.contains("\tfirst-blocked-scope=none\t"));
     assert!(stdout.contains("\tfirst-blocked-probe=unavailable\t"));
     assert!(stdout.contains("\tfirst-blocked-reason="));
+    assert!(stdout.contains("\tfirst-blocked-volume-id="), "{stdout}");
+    assert!(
+        stdout.contains("\tfirst-blocked-volume-class=network\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(&format!("\tfirst-blocked-volume-root={}\t", root.display())),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tfirst-blocked-volume-label="), "{stdout}");
+    assert!(
+        !stdout.contains("\tfirst-blocked-volume-stable-id=-\t"),
+        "{stdout}"
+    );
     assert!(stdout.contains("\tfirst-refresh-worker=index worker\t"));
     assert!(stdout.contains("\tfirst-refresh-scope=none\n"));
     assert_eq!(

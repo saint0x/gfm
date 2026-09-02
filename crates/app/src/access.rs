@@ -27,6 +27,13 @@ pub(crate) struct WorkerAdmissionVolumeGateReport {
     pub(crate) volume_report: VolumeDiscoveryReport,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WorkerAdmissionsVolumeGateReport {
+    pub(crate) admissions: Vec<SecurityWorkerAdmissionReport>,
+    pub(crate) volume_path: PathBuf,
+    pub(crate) volume_report: VolumeDiscoveryReport,
+}
+
 pub(crate) fn worker_admission_with_volume_gate_checked(
     path: &Path,
     intent: AccessIntent,
@@ -88,11 +95,23 @@ pub(crate) fn worker_admission_with_volume_report(
     access.worker_admission(worker)
 }
 
+#[cfg(test)]
 pub(crate) fn worker_admissions_with_shared_volume_report_checked(
     path: &Path,
     requests: &[WorkerAdmissionRequest],
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<SecurityWorkerAdmissionReport>> {
+    Ok(
+        worker_admissions_volume_gate_report_checked(path, requests, &mut check_control)?
+            .admissions,
+    )
+}
+
+pub(crate) fn worker_admissions_volume_gate_report_checked(
+    path: &Path,
+    requests: &[WorkerAdmissionRequest],
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<WorkerAdmissionsVolumeGateReport> {
     check_control()?;
     let subject = worker_admission_fanout_subject(requests);
     let _ = refresh_permission_state(PermissionRefreshAudience::Workers, &subject)?;
@@ -101,11 +120,12 @@ pub(crate) fn worker_admissions_with_shared_volume_report_checked(
     let volume_report =
         VolumeDiscoveryReport::for_containing_path_checked(&volume_path, &mut check_control)?;
     check_control()?;
-    Ok(worker_admissions_with_volume_report(
-        path,
-        requests,
-        &volume_report,
-    ))
+    let admissions = worker_admissions_with_volume_report(path, requests, &volume_report);
+    Ok(WorkerAdmissionsVolumeGateReport {
+        admissions,
+        volume_path,
+        volume_report,
+    })
 }
 
 pub(crate) fn worker_admissions_with_volume_report(

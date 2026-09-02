@@ -2,7 +2,7 @@ use crate::access::{
     preflight_access_scope_checked, preflight_access_scope_checked_with_volume_report,
     preflight_volume_access_scope_with_report, volume_api_status_context,
     worker_admission_blocked_by_volume, worker_admission_with_volume_gate_checked,
-    worker_admission_with_volume_report, worker_admissions_with_shared_volume_report_checked,
+    worker_admission_with_volume_report, worker_admissions_volume_gate_report_checked,
     worker_admissions_with_volume_report, ScopedAccessGuard, WorkerAdmissionRequest,
 };
 use crate::volume::{resolve_volume_event_path, volume_event_invalidation_for_descriptor};
@@ -99,10 +99,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "security-worker-admission-fanout requires a path",
             )?;
             let requests = parse_worker_admission_requests(args)?;
-            let admissions =
-                worker_admissions_with_shared_volume_report_checked(&path, &requests, || Ok(()))?;
-            println!("{}", worker_admission_fanout_summary(&admissions));
-            for admission in admissions {
+            let report = worker_admissions_volume_gate_report_checked(&path, &requests, || Ok(()))?;
+            println!("{}", worker_admission_fanout_summary(&report));
+            for admission in report.admissions {
                 println!("{}", admission.as_tsv());
             }
         }
@@ -130,9 +129,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let report = VolumeDiscoveryReport {
                 volumes: vec![volume],
             };
-            let admissions = worker_admissions_with_volume_report(&path, &requests, &report);
-            println!("{}", worker_admission_fanout_summary(&admissions));
-            for admission in admissions {
+            let gate_report = crate::access::WorkerAdmissionsVolumeGateReport {
+                admissions: worker_admissions_with_volume_report(&path, &requests, &report),
+                volume_path: path.clone(),
+                volume_report: report,
+            };
+            println!("{}", worker_admission_fanout_summary(&gate_report));
+            for admission in gate_report.admissions {
                 println!("{}", admission.as_tsv());
             }
         }
@@ -4110,7 +4113,10 @@ fn parse_worker_admission_requests(
     Ok(requests)
 }
 
-fn worker_admission_fanout_summary(admissions: &[SecurityWorkerAdmissionReport]) -> String {
+fn worker_admission_fanout_summary(
+    report: &crate::access::WorkerAdmissionsVolumeGateReport,
+) -> String {
+    let admissions = &report.admissions;
     let families = WorkerAdmissionFamilyCounts::from_admissions(admissions);
     let starts = admissions
         .iter()
@@ -4156,8 +4162,10 @@ fn worker_admission_fanout_summary(admissions: &[SecurityWorkerAdmissionReport])
     let first_refresh = admissions
         .iter()
         .find(|admission| admission.refresh_on_permission_change);
+    let first_blocked_volume =
+        first_blocked.and_then(|_| report.volume_report.volume_for_path(&report.volume_path));
     format!(
-        "security-worker-admission-fanout\tworkers={}\tworker-families={}\tblocked-worker-families={}\tstart={}\tprompt={}\tmetadata-only={}\tdeny={}\tcan-touch-filesystem={}\tbookmark-access={}\trefresh-on-permission-change={}\tany-blocked={}\tall-blocked={}\trefresh-required={}\tfirst-blocked-worker={}\tfirst-blocked-action={}\tfirst-blocked-scope={}\tfirst-blocked-probe={}\tfirst-blocked-reason={}\tfirst-refresh-worker={}\tfirst-refresh-scope={}",
+        "security-worker-admission-fanout\tworkers={}\tworker-families={}\tblocked-worker-families={}\tstart={}\tprompt={}\tmetadata-only={}\tdeny={}\tcan-touch-filesystem={}\tbookmark-access={}\trefresh-on-permission-change={}\tany-blocked={}\tall-blocked={}\trefresh-required={}\tfirst-blocked-worker={}\tfirst-blocked-action={}\tfirst-blocked-scope={}\tfirst-blocked-probe={}\tfirst-blocked-reason={}\tfirst-blocked-volume-id={}\tfirst-blocked-volume-class={}\tfirst-blocked-volume-root={}\tfirst-blocked-volume-label={}\tfirst-blocked-volume-stable-id={}\tfirst-refresh-worker={}\tfirst-refresh-scope={}",
         admissions.len(),
         families.as_tsv_value(),
         families.blocked_as_tsv_value(),
@@ -4185,6 +4193,21 @@ fn worker_admission_fanout_summary(admissions: &[SecurityWorkerAdmissionReport])
             .unwrap_or("-"),
         first_blocked
             .map(|admission| escape_field(&admission.reason))
+            .unwrap_or_else(|| "-".to_string()),
+        first_blocked_volume
+            .map(|volume| volume.id.0.to_string())
+            .unwrap_or_else(|| "-".to_string()),
+        first_blocked_volume
+            .map(|volume| volume.kind.as_str())
+            .unwrap_or("-"),
+        first_blocked_volume
+            .map(|volume| escape_field(&volume.path.display().to_string()))
+            .unwrap_or_else(|| "-".to_string()),
+        first_blocked_volume
+            .map(|volume| escape_field(&volume.label))
+            .unwrap_or_else(|| "-".to_string()),
+        first_blocked_volume
+            .map(|volume| escape_field(&volume.stable_identity))
             .unwrap_or_else(|| "-".to_string()),
         first_refresh
             .map(|admission| escape_field(&admission.worker))
@@ -4743,9 +4766,15 @@ mod tests {
 
     #[test]
     fn worker_admission_fanout_summary_escapes_first_blocked_fields() {
-        let path = std::path::PathBuf::from("/Users/me/Documents/report.pdf");
+        let root = std::env::temp_dir().join(format!(
+            "gfm-worker-fanout-summary-escape-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("report.pdf");
         let access = SecurityScopedAccessReport {
-            path,
+            path: path.clone(),
             intent: AccessIntent::Preview,
             scope: gfm_mac::ProtectedScope::Documents,
             probe: gfm_mac::AccessProbeState::Denied,
@@ -4766,8 +4795,19 @@ mod tests {
             refresh_on_permission_change: true,
             reason: "preview worker must avoid\nfile IO".to_string(),
         };
+        let mut volume = VolumeDescriptor::for_path(&root).unwrap();
+        volume.label = "blocked\tvolume".to_string();
+        volume.stable_identity = "diskarbitration:uuid:BLOCKED\nVOLUME".to_string();
+        volume.kind = gfm_mac::VolumeKind::Network;
+        let report = crate::access::WorkerAdmissionsVolumeGateReport {
+            admissions: vec![admission],
+            volume_path: path,
+            volume_report: VolumeDiscoveryReport {
+                volumes: vec![volume],
+            },
+        };
 
-        let summary = worker_admission_fanout_summary(&[admission]);
+        let summary = worker_admission_fanout_summary(&report);
 
         assert!(summary.contains("\tany-blocked=true\t"), "{summary}");
         assert!(summary.contains("\tall-blocked=true\t"), "{summary}");
@@ -4781,9 +4821,24 @@ mod tests {
             "{summary}"
         );
         assert!(
+            summary.contains("\tfirst-blocked-volume-class=network\t"),
+            "{summary}"
+        );
+        assert!(
+            summary.contains("\tfirst-blocked-volume-label=blocked\\tvolume\t"),
+            "{summary}"
+        );
+        assert!(
+            summary.contains(
+                "\tfirst-blocked-volume-stable-id=diskarbitration:uuid:BLOCKED\\nVOLUME\t"
+            ),
+            "{summary}"
+        );
+        assert!(
             summary.contains("\tfirst-refresh-worker=preview\\tworker\t"),
             "{summary}"
         );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
