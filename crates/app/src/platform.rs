@@ -745,6 +745,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "volume-api-status-invalidation" => {
             println!("{}", volume_api_status_invalidation().as_tsv());
         }
+        "volume-api-reason-invalidation" => {
+            println!("{}", volume_api_reason_invalidation().as_tsv());
+        }
         "volume-current-api-unavailable-invalidation" => {
             let root = required_path(
                 args.next(),
@@ -760,6 +763,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "volume-api-status-index-invalidation" => {
             println!("{}", volume_api_status_index_invalidation().as_tsv());
+        }
+        "volume-api-reason-index-invalidation" => {
+            println!("{}", volume_api_reason_index_invalidation().as_tsv());
         }
         "volume-root-filesystem-invalidation" => {
             println!("{}", volume_root_filesystem_invalidation().as_tsv());
@@ -2410,6 +2416,35 @@ fn volume_api_status_invalidation() -> VolumeInvalidationReport {
     VolumeInvalidationReport::evaluate(Some(&previous), Some(&current))
 }
 
+fn volume_api_reason_invalidation() -> VolumeInvalidationReport {
+    let previous = IndexVolumeDescriptor::new(
+        "API Reason",
+        "/Volumes/API Reason",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(VolumeId(48))
+    .with_stable_identity("diskarbitration:uuid:API-REASON")
+    .with_native_status("unavailable")
+    .with_native_reason("DiskArbitration unavailable before volume invalidation")
+    .with_resource_status("available")
+    .with_mount_status("available");
+    let current = IndexVolumeDescriptor::new(
+        "API Reason",
+        "/Volumes/API Reason",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(VolumeId(48))
+    .with_stable_identity("diskarbitration:uuid:API-REASON")
+    .with_native_status("unavailable")
+    .with_native_reason("DiskArbitration denied during volume invalidation")
+    .with_resource_status("available")
+    .with_mount_status("available");
+
+    VolumeInvalidationReport::evaluate(Some(&previous), Some(&current))
+}
+
 fn volume_current_api_unavailable_invalidation(root: PathBuf) -> Result<VolumeInvalidationReport> {
     let mut volume = VolumeDescriptor::for_path(&root)?;
     volume.kind = gfm_mac::VolumeKind::External;
@@ -2542,6 +2577,44 @@ fn volume_api_status_index_invalidation() -> VolumeEventIndexInvalidationReport 
     VolumeEventIndexInvalidationReport::from_event(
         IndexVolumeEventKind::DescriptionChanged,
         Some(PathBuf::from("/Volumes/API Status Test")),
+        Some(&previous),
+        Some(&current),
+        false,
+        false,
+    )
+}
+
+fn volume_api_reason_index_invalidation() -> VolumeEventIndexInvalidationReport {
+    let previous = IndexVolumeDescriptor::new(
+        "API Reason Test",
+        "/Volumes/API Reason Test",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(VolumeId(49))
+    .with_stable_identity("diskarbitration:uuid:API-REASON-INDEX")
+    .with_native_status("unavailable")
+    .with_native_reason("DiskArbitration unavailable before index invalidation")
+    .with_resource_status("available")
+    .with_mount_status("available")
+    .with_filesystem_signature("fs=apfs");
+    let current = IndexVolumeDescriptor::new(
+        "API Reason Test",
+        "/Volumes/API Reason Test",
+        IndexVolumeClass::External,
+        IndexMountState::Mounted,
+    )
+    .with_volume_id(VolumeId(49))
+    .with_stable_identity("diskarbitration:uuid:API-REASON-INDEX")
+    .with_native_status("unavailable")
+    .with_native_reason("DiskArbitration denied during index invalidation")
+    .with_resource_status("available")
+    .with_mount_status("available")
+    .with_filesystem_signature("fs=apfs");
+
+    VolumeEventIndexInvalidationReport::from_event(
+        IndexVolumeEventKind::DescriptionChanged,
+        Some(PathBuf::from("/Volumes/API Reason Test")),
         Some(&previous),
         Some(&current),
         false,

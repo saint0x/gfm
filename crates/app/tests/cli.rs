@@ -152,12 +152,15 @@ fn search_volume_access_escapes_control_characters_from_binary() {
             && !stderr.contains("\tstable-id=-\t")
             && stderr.contains("\tvolume-root=")
             && stderr.contains("\tvolume-label=")
+            && stderr.contains("\tvolume-native-status=")
+            && stderr.contains("\tvolume-resource-status=")
+            && stderr.contains("\tvolume-mount-status=")
             && stderr.contains("\treason=cached-volume-report"),
         "{stderr}"
     );
     for line in stderr.lines() {
         if line.starts_with("search-root-volume-access\t") {
-            assert_eq!(line.split('\t').count(), 13, "{line}");
+            assert_eq!(line.split('\t').count(), 19, "{line}");
         }
     }
 
@@ -828,12 +831,15 @@ fn list_volume_access_escapes_control_characters_from_binary() {
             && !stderr.contains("\tstable-id=-\t")
             && stderr.contains("\tvolume-root=")
             && stderr.contains("\tvolume-label=")
+            && stderr.contains("\tvolume-native-status=")
+            && stderr.contains("\tvolume-resource-status=")
+            && stderr.contains("\tvolume-mount-status=")
             && stderr.contains("\treason=cached-volume-report"),
         "{stderr}"
     );
     for line in stderr.lines() {
         if line.starts_with("directory-listing-volume-access\t") {
-            assert_eq!(line.split('\t').count(), 15, "{line}");
+            assert_eq!(line.split('\t').count(), 21, "{line}");
         }
     }
 

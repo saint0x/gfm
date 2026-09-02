@@ -647,6 +647,7 @@ pub struct VolumeInvalidationReport {
     pub current_mount_status: Option<String>,
     pub current_mount_reason: Option<String>,
     pub api_status_changed: bool,
+    pub api_reason_changed: bool,
     pub apfs_metadata_changed: bool,
     pub filesystem_identity_changed: bool,
     pub invalidate_sidebar: bool,
@@ -706,6 +707,7 @@ pub struct VolumeEventIndexInvalidationReport {
     pub case_sensitive_changed: bool,
     pub case_preserving_changed: bool,
     pub api_status_changed: bool,
+    pub api_reason_changed: bool,
     pub stable_identity_changed: bool,
     pub apfs_metadata_changed: bool,
     pub filesystem_identity_changed: bool,
@@ -769,6 +771,16 @@ impl VolumeInvalidationReport {
                 || known_optional_value_lost_or_changed(
                     &previous_mount_status,
                     &current_mount_status,
+                );
+        let api_reason_changed =
+            known_optional_value_lost_or_changed(&previous_native_reason, &current_native_reason)
+                || known_optional_value_lost_or_changed(
+                    &previous_resource_reason,
+                    &current_resource_reason,
+                )
+                || known_optional_value_lost_or_changed(
+                    &previous_mount_reason,
+                    &current_mount_reason,
                 );
         let apfs_metadata_changed = apfs_metadata_changed(previous.as_ref(), current.as_ref());
         let filesystem_identity_changed =
@@ -959,6 +971,15 @@ impl VolumeInvalidationReport {
                 true,
                 "volume-api-status-changed",
             ),
+            (Some(previous), Some(_)) if api_reason_changed => (
+                true,
+                true,
+                true,
+                true,
+                previous.mount_state == IndexMountState::Mounted,
+                true,
+                "volume-api-reason-changed",
+            ),
             (Some(previous), Some(_)) if apfs_metadata_changed => (
                 true,
                 true,
@@ -1042,6 +1063,7 @@ impl VolumeInvalidationReport {
             current_mount_status,
             current_mount_reason,
             api_status_changed,
+            api_reason_changed,
             apfs_metadata_changed,
             filesystem_identity_changed,
             invalidate_sidebar,
@@ -1056,7 +1078,7 @@ impl VolumeInvalidationReport {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume-invalidation\tpath={}\tprevious-class={}\tprevious-mount={}\tprevious-reachable={}\tprevious-read-only={}\tcurrent-class={}\tcurrent-mount={}\tcurrent-reachable={}\tcurrent-read-only={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\tprevious-writable={}\tprevious-ejectable={}\tprevious-removable={}\tprevious-mountable={}\tprevious-case-sensitive={}\tprevious-case-preserving={}\tcurrent-writable={}\tcurrent-ejectable={}\tcurrent-removable={}\tcurrent-mountable={}\tcurrent-case-sensitive={}\tcurrent-case-preserving={}\tprevious-native-status={}\tprevious-native-reason={}\tprevious-resource-status={}\tprevious-resource-reason={}\tprevious-mount-status={}\tprevious-mount-reason={}\tcurrent-native-status={}\tcurrent-native-reason={}\tcurrent-resource-status={}\tcurrent-resource-reason={}\tcurrent-mount-status={}\tcurrent-mount-reason={}\tapi-status-changed={}\tapfs-metadata-changed={}\tfilesystem-identity-changed={}\tprevious-stable-id={}\tcurrent-stable-id={}\treason={}",
+            "volume-invalidation\tpath={}\tprevious-class={}\tprevious-mount={}\tprevious-reachable={}\tprevious-read-only={}\tcurrent-class={}\tcurrent-mount={}\tcurrent-reachable={}\tcurrent-read-only={}\tsidebar={}\toperation-policy={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\tprevious-writable={}\tprevious-ejectable={}\tprevious-removable={}\tprevious-mountable={}\tprevious-case-sensitive={}\tprevious-case-preserving={}\tcurrent-writable={}\tcurrent-ejectable={}\tcurrent-removable={}\tcurrent-mountable={}\tcurrent-case-sensitive={}\tcurrent-case-preserving={}\tprevious-native-status={}\tprevious-native-reason={}\tprevious-resource-status={}\tprevious-resource-reason={}\tprevious-mount-status={}\tprevious-mount-reason={}\tcurrent-native-status={}\tcurrent-native-reason={}\tcurrent-resource-status={}\tcurrent-resource-reason={}\tcurrent-mount-status={}\tcurrent-mount-reason={}\tapi-status-changed={}\tapi-reason-changed={}\tapfs-metadata-changed={}\tfilesystem-identity-changed={}\tprevious-stable-id={}\tcurrent-stable-id={}\treason={}",
             escape_field(&self.path.to_string_lossy()),
             self.previous_class
                 .map(IndexVolumeClass::as_str)
@@ -1111,6 +1133,7 @@ impl VolumeInvalidationReport {
             format_optional_string(self.current_mount_status.as_deref()),
             format_optional_string(self.current_mount_reason.as_deref()),
             self.api_status_changed,
+            self.api_reason_changed,
             self.apfs_metadata_changed,
             self.filesystem_identity_changed,
             format_optional_string(self.previous_stable_identity.as_deref()),
@@ -1182,6 +1205,20 @@ impl VolumeEventIndexInvalidationReport {
         );
         let api_status_changed =
             native_status_changed || resource_status_changed || mount_status_changed;
+        let native_reason_changed = known_optional_value_lost_or_changed(
+            &previous.and_then(|volume| volume.native_reason.clone()),
+            &current.and_then(|volume| volume.native_reason.clone()),
+        );
+        let resource_reason_changed = known_optional_value_lost_or_changed(
+            &previous.and_then(|volume| volume.resource_reason.clone()),
+            &current.and_then(|volume| volume.resource_reason.clone()),
+        );
+        let mount_reason_changed = known_optional_value_lost_or_changed(
+            &previous.and_then(|volume| volume.mount_reason.clone()),
+            &current.and_then(|volume| volume.mount_reason.clone()),
+        );
+        let api_reason_changed =
+            native_reason_changed || resource_reason_changed || mount_reason_changed;
         let event_visible = path.is_some()
             || previous.is_some()
             || current.is_some()
@@ -1197,7 +1234,8 @@ impl VolumeEventIndexInvalidationReport {
             || mountable_changed
             || case_sensitive_changed
             || case_preserving_changed
-            || api_status_changed;
+            || api_status_changed
+            || api_reason_changed;
         let invalidate_index_admission =
             event_visible && (source_invalidates_index_admission || descriptor_changed);
         let rescan_index = event_visible && (source_rescans_index || descriptor_changed);
@@ -1239,6 +1277,9 @@ impl VolumeEventIndexInvalidationReport {
             }
             IndexVolumeEventKind::DescriptionChanged if api_status_changed => {
                 "volume-event-api-status-changed"
+            }
+            IndexVolumeEventKind::DescriptionChanged if api_reason_changed => {
+                "volume-event-api-reason-changed"
             }
             IndexVolumeEventKind::DescriptionChanged if apfs_metadata_changed => {
                 "volume-event-apfs-metadata-changed"
@@ -1312,6 +1353,7 @@ impl VolumeEventIndexInvalidationReport {
             case_sensitive_changed,
             case_preserving_changed,
             api_status_changed,
+            api_reason_changed,
             stable_identity_changed,
             apfs_metadata_changed,
             filesystem_identity_changed,
@@ -1326,7 +1368,7 @@ impl VolumeEventIndexInvalidationReport {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "volume-event-index-invalidation\tkind={}\tpath={}\tprevious-volume={}\tprevious-class={}\tprevious-mount={}\tprevious-reachable={}\tprevious-read-only={}\tcurrent-volume={}\tcurrent-class={}\tcurrent-mount={}\tcurrent-reachable={}\tcurrent-read-only={}\tread-only-changed={}\tidentity-changed={}\tfilesystem-changed={}\tapfs-metadata-changed={}\tfilesystem-identity-changed={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\tprevious-writable={}\tprevious-ejectable={}\tprevious-removable={}\tprevious-mountable={}\tprevious-case-sensitive={}\tprevious-case-preserving={}\tcurrent-writable={}\tcurrent-ejectable={}\tcurrent-removable={}\tcurrent-mountable={}\tcurrent-case-sensitive={}\tcurrent-case-preserving={}\twritable-changed={}\tejectable-changed={}\tremovable-changed={}\tmountable-changed={}\tcase-sensitive-changed={}\tcase-preserving-changed={}\tprevious-native-status={}\tprevious-native-reason={}\tprevious-resource-status={}\tprevious-resource-reason={}\tprevious-mount-status={}\tprevious-mount-reason={}\tcurrent-native-status={}\tcurrent-native-reason={}\tcurrent-resource-status={}\tcurrent-resource-reason={}\tcurrent-mount-status={}\tcurrent-mount-reason={}\tapi-status-changed={}\tprevious-stable-id={}\tcurrent-stable-id={}\treason={}",
+            "volume-event-index-invalidation\tkind={}\tpath={}\tprevious-volume={}\tprevious-class={}\tprevious-mount={}\tprevious-reachable={}\tprevious-read-only={}\tcurrent-volume={}\tcurrent-class={}\tcurrent-mount={}\tcurrent-reachable={}\tcurrent-read-only={}\tread-only-changed={}\tidentity-changed={}\tfilesystem-changed={}\tapfs-metadata-changed={}\tfilesystem-identity-changed={}\tindex-admission={}\trescan-index={}\tcancel-index-jobs={}\tclear-fsevents-cursor={}\tprevious-writable={}\tprevious-ejectable={}\tprevious-removable={}\tprevious-mountable={}\tprevious-case-sensitive={}\tprevious-case-preserving={}\tcurrent-writable={}\tcurrent-ejectable={}\tcurrent-removable={}\tcurrent-mountable={}\tcurrent-case-sensitive={}\tcurrent-case-preserving={}\twritable-changed={}\tejectable-changed={}\tremovable-changed={}\tmountable-changed={}\tcase-sensitive-changed={}\tcase-preserving-changed={}\tprevious-native-status={}\tprevious-native-reason={}\tprevious-resource-status={}\tprevious-resource-reason={}\tprevious-mount-status={}\tprevious-mount-reason={}\tcurrent-native-status={}\tcurrent-native-reason={}\tcurrent-resource-status={}\tcurrent-resource-reason={}\tcurrent-mount-status={}\tcurrent-mount-reason={}\tapi-status-changed={}\tapi-reason-changed={}\tprevious-stable-id={}\tcurrent-stable-id={}\treason={}",
             self.kind.as_str(),
             self.path
                 .as_ref()
@@ -1400,6 +1442,7 @@ impl VolumeEventIndexInvalidationReport {
             format_optional_string(self.current_mount_status.as_deref()),
             format_optional_string(self.current_mount_reason.as_deref()),
             self.api_status_changed,
+            self.api_reason_changed,
             format_optional_string(self.previous_stable_identity.as_deref()),
             format_optional_string(self.current_stable_identity.as_deref()),
             escape_field(&self.reason)
@@ -1639,6 +1682,72 @@ mod tests {
         let tsv = report.as_tsv();
         assert!(tsv.contains("\tprevious-removable=false\t"), "{tsv}");
         assert!(tsv.contains("\tcurrent-removable=true\t"), "{tsv}");
+    }
+
+    #[test]
+    fn volume_invalidation_reports_api_reason_changes_without_status_changes() {
+        let previous = external_volume("/Volumes/Api")
+            .with_native_status("unavailable")
+            .with_native_reason("DiskArbitration unavailable before refresh")
+            .with_resource_status("available")
+            .with_mount_status("available");
+        let current = external_volume("/Volumes/Api")
+            .with_native_status("unavailable")
+            .with_native_reason("DiskArbitration denied after refresh")
+            .with_resource_status("available")
+            .with_mount_status("available");
+
+        let report = VolumeInvalidationReport::evaluate(Some(&previous), Some(&current));
+
+        assert!(!report.api_status_changed);
+        assert!(report.api_reason_changed);
+        assert!(report.invalidate_sidebar);
+        assert!(report.invalidate_operation_policy);
+        assert!(report.invalidate_index_admission);
+        assert!(report.rescan_index);
+        assert!(report.cancel_index_jobs);
+        assert_eq!(report.reason, "volume-api-reason-changed");
+        let tsv = report.as_tsv();
+        assert!(tsv.contains("\tapi-status-changed=false\t"), "{tsv}");
+        assert!(tsv.contains("\tapi-reason-changed=true\t"), "{tsv}");
+        assert!(tsv.contains("\treason=volume-api-reason-changed"), "{tsv}");
+    }
+
+    #[test]
+    fn volume_event_index_invalidation_reports_api_reason_changes_without_status_changes() {
+        let previous = external_volume("/Volumes/Api Event")
+            .with_native_status("unavailable")
+            .with_native_reason("DiskArbitration unavailable before event")
+            .with_resource_status("available")
+            .with_mount_status("available");
+        let current = external_volume("/Volumes/Api Event")
+            .with_native_status("unavailable")
+            .with_native_reason("DiskArbitration denied after event")
+            .with_resource_status("available")
+            .with_mount_status("available");
+
+        let report = VolumeEventIndexInvalidationReport::from_event(
+            IndexVolumeEventKind::DescriptionChanged,
+            Some(PathBuf::from("/Volumes/Api Event")),
+            Some(&previous),
+            Some(&current),
+            false,
+            false,
+        );
+
+        assert!(!report.api_status_changed);
+        assert!(report.api_reason_changed);
+        assert!(report.invalidate_index_admission);
+        assert!(report.rescan_index);
+        assert!(report.cancel_index_jobs);
+        assert_eq!(report.reason, "volume-event-api-reason-changed");
+        let tsv = report.as_tsv();
+        assert!(tsv.contains("\tapi-status-changed=false\t"), "{tsv}");
+        assert!(tsv.contains("\tapi-reason-changed=true\t"), "{tsv}");
+        assert!(
+            tsv.contains("\treason=volume-event-api-reason-changed"),
+            "{tsv}"
+        );
     }
 
     #[test]

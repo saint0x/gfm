@@ -972,7 +972,7 @@ fn content_volume_access_tsv(
 ) -> String {
     if let Some(volume) = volume_report.volume_for_path(path) {
         format!(
-            "{}\tworker={}\tpath={}\tintent={}\tvolume-id={}\tstable-id={}\tclass={}\tmount={}\treachable={}\twritable={}\tread-only={}\tvolume-root={}\tvolume-label={}\treason=cached-volume-report",
+            "{}\tworker={}\tpath={}\tintent={}\tvolume-id={}\tstable-id={}\tclass={}\tmount={}\treachable={}\twritable={}\tread-only={}\tvolume-root={}\tvolume-label={}\tvolume-native-status={}\tvolume-native-reason={}\tvolume-resource-status={}\tvolume-resource-reason={}\tvolume-mount-status={}\tvolume-mount-reason={}\treason=cached-volume-report",
             escape_content_tsv_field(prefix),
             escape_content_tsv_field(worker),
             escape_content_tsv_field(&path.to_string_lossy()),
@@ -986,10 +986,25 @@ fn content_volume_access_tsv(
             volume.read_only,
             escape_content_tsv_field(&volume.path.to_string_lossy()),
             escape_content_tsv_field(&volume.label),
+            volume
+                .native_status
+                .map(|status| status.as_str().to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            format_content_optional_string(volume.native_reason.as_deref()),
+            volume
+                .resource_status
+                .map(|status| status.as_str().to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            format_content_optional_string(volume.resource_reason.as_deref()),
+            volume
+                .mount_table_status
+                .map(|status| status.as_str().to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            format_content_optional_string(volume.mount_table_reason.as_deref()),
         )
     } else {
         format!(
-            "{}\tworker={}\tpath={}\tintent={}\tvolume-id=-\tstable-id=-\tclass=-\tmount=-\treachable=-\twritable=-\tread-only=-\tvolume-root=-\tvolume-label=-\treason=no-containing-volume",
+            "{}\tworker={}\tpath={}\tintent={}\tvolume-id=-\tstable-id=-\tclass=-\tmount=-\treachable=-\twritable=-\tread-only=-\tvolume-root=-\tvolume-label=-\tvolume-native-status=-\tvolume-native-reason=-\tvolume-resource-status=-\tvolume-resource-reason=-\tvolume-mount-status=-\tvolume-mount-reason=-\treason=no-containing-volume",
             escape_content_tsv_field(prefix),
             escape_content_tsv_field(worker),
             escape_content_tsv_field(&path.to_string_lossy()),
@@ -1001,6 +1016,13 @@ fn content_volume_access_tsv(
 fn format_content_optional_bool(value: Option<bool>) -> String {
     value
         .map(|value| value.to_string())
+        .unwrap_or_else(|| "-".to_string())
+}
+
+fn format_content_optional_string(value: Option<&str>) -> String {
+    value
+        .map(escape_content_tsv_field)
+        .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "-".to_string())
 }
 
@@ -2242,6 +2264,11 @@ mod tests {
         let mut report =
             VolumeDiscoveryReport::for_containing_path_checked(&path, || Ok(())).unwrap();
         report.volumes[0].label = "Content\tVolume\nLabel\r".to_string();
+        report.volumes[0].native_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        report.volumes[0].native_reason = Some("native\tblocked\nnow\r".to_string());
+        report.volumes[0].resource_status = Some(gfm_mac::NativeVolumeStatus::Available);
+        report.volumes[0].mount_table_status = Some(gfm_mac::NativeVolumeStatus::Unavailable);
+        report.volumes[0].mount_table_reason = Some("mount\ttable\nblocked\r".to_string());
 
         let tsv = content_volume_access_tsv(
             "content\tprefix",
@@ -2264,7 +2291,13 @@ mod tests {
             tsv.contains("\tvolume-label=Content\\tVolume\\nLabel\\r\t"),
             "{tsv}"
         );
-        assert_eq!(tsv.split('\t').count(), 14, "{tsv}");
+        assert!(tsv.contains("\tvolume-native-status=unavailable\t"));
+        assert!(tsv.contains("\tvolume-native-reason=native\\tblocked\\nnow\\r\t"));
+        assert!(tsv.contains("\tvolume-resource-status=available\t"));
+        assert!(tsv.contains("\tvolume-resource-reason=-\t"));
+        assert!(tsv.contains("\tvolume-mount-status=unavailable\t"));
+        assert!(tsv.contains("\tvolume-mount-reason=mount\\ttable\\nblocked\\r\t"));
+        assert_eq!(tsv.split('\t').count(), 20, "{tsv}");
 
         fs::remove_dir_all(root).unwrap();
     }
