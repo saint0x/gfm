@@ -4132,7 +4132,8 @@ fn direct_containing_mounted_volume_paths_checked(
     mut check: impl FnMut() -> Result<()>,
 ) -> Result<Vec<PathBuf>> {
     check()?;
-    let probe_path = existing_volume_probe_path(path).unwrap_or_else(|| path.to_path_buf());
+    let probe_path =
+        existing_volume_probe_path_checked(path, &mut check)?.unwrap_or_else(|| path.to_path_buf());
     check()?;
     let entry = gfm_mac_sys::copy_volume_mount_table_entry(&probe_path);
     check()?;
@@ -4141,11 +4142,35 @@ fn direct_containing_mounted_volume_paths_checked(
         .collect())
 }
 
+#[cfg(test)]
 fn existing_volume_probe_path(path: &Path) -> Option<PathBuf> {
-    match path.try_exists() {
+    existing_volume_probe_path_checked(path, || Ok(()))
+        .ok()
+        .flatten()
+}
+
+fn existing_volume_probe_path_checked(
+    path: &Path,
+    mut check: impl FnMut() -> Result<()>,
+) -> Result<Option<PathBuf>> {
+    check()?;
+    let probe = match volume_lookup_path_exists(path) {
         Ok(true) => Some(path.to_path_buf()),
-        Ok(false) => normalized_existing_ancestor_path(path),
-        Err(_) => None,
+        Ok(false) => normalized_existing_ancestor_path_checked(path, &mut check)?,
+        Err(_) => path
+            .parent()
+            .map(|parent| normalized_existing_ancestor_path_checked(parent, &mut check))
+            .transpose()?
+            .flatten(),
+    };
+    Ok(probe)
+}
+
+fn volume_lookup_path_exists(path: &Path) -> std::io::Result<bool> {
+    match fs::metadata(path) {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err),
     }
 }
 
@@ -4444,12 +4469,27 @@ fn normalized_lookup_path(path: &Path) -> Option<PathBuf> {
 }
 
 fn normalized_existing_ancestor_path(path: &Path) -> Option<PathBuf> {
+    normalized_existing_ancestor_path_checked(path, || Ok(()))
+        .ok()
+        .flatten()
+}
+
+fn normalized_existing_ancestor_path_checked(
+    path: &Path,
+    mut check: impl FnMut() -> Result<()>,
+) -> Result<Option<PathBuf>> {
     let mut candidate = path;
     loop {
-        if let Ok(true) = candidate.try_exists() {
-            return candidate.canonicalize().ok();
+        check()?;
+        match volume_lookup_path_exists(candidate) {
+            Ok(true) => return Ok(candidate.canonicalize().ok()),
+            Ok(false) => {}
+            Err(_) => {}
         }
-        candidate = candidate.parent()?;
+        let Some(parent) = candidate.parent() else {
+            return Ok(None);
+        };
+        candidate = parent;
     }
 }
 
@@ -6869,6 +6909,26 @@ mod tests {
         );
         assert!(!missing.exists());
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn checked_direct_containing_mount_path_can_cancel_after_probe_metadata() {
+        let root = unique_temp_dir("gfm-volume-direct-post-probe-cancelled");
+        let mut checks = 0usize;
+
+        let err = direct_containing_mounted_volume_paths_checked(&root, || {
+            checks += 1;
+            if checks > 2 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert_eq!(checks, 3);
         fs::remove_dir_all(root).unwrap();
     }
 
