@@ -13681,6 +13681,20 @@ fn search_content_index_manifest_retries_transient_archive_read_failure_from_bin
         journal_text.contains("1\t2\tcompleted\tcontent index manifest search"),
         "{journal_text}"
     );
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(
+        catalog_text.contains(&format!(
+            "payload\t1\tindexing\tcontent index manifest search\t{}\t",
+            records.display()
+        )) && catalog_text.contains("\tvisible:content index manifest search:adaptive"),
+        "{catalog_text}"
+    );
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("progress\t1\tvisible\tvisible\tcontent index manifest search\t")
+            && progress_text.contains("\tcompleted\t3\t3\tcompleted\t"),
+        "{progress_text}"
+    );
 
     fs::remove_dir_all(root).unwrap();
     fs::remove_file(records).unwrap();
@@ -13848,6 +13862,20 @@ fn search_content_index_manifest_session_retries_transient_archive_read_failure_
     assert!(
         journal_text.contains("1\t2\tcompleted\tcontent index manifest session"),
         "{journal_text}"
+    );
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(
+        catalog_text.contains(&format!(
+            "payload\t1\tindexing\tcontent index manifest session\t{}\t",
+            records.display()
+        )) && catalog_text.contains("\tvisible:content index manifest session:adaptive"),
+        "{catalog_text}"
+    );
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("progress\t1\tvisible\tvisible\tcontent index manifest session\t")
+            && progress_text.contains("\tcompleted\t3\t3\tcompleted\t"),
+        "{progress_text}"
     );
 
     fs::remove_dir_all(root).unwrap();
