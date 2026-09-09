@@ -4,13 +4,18 @@ use crate::access::{
     preflight_access_scope_checked_with_volume_report, preflight_volume_access_scope_with_report,
     ScopedAccessGuard,
 };
-use crate::runtime::run_volume_task_cancellable;
-use crate::{parse_u64_arg, parse_usize_arg, required_path};
+use crate::runtime::{
+    run_scheduled_volume_task_cancellable_with_runtime_and_payload_path, RuntimeJobHandle,
+    ScheduledTaskOutcome,
+};
+use crate::{
+    parse_u64_arg, parse_usize_arg, platform::current_host_job_scheduling_pressure, required_path,
+};
 use gfm_index::{
     ContentArchiveCleanupPolicy, ContentArchiveManifest, ContentArchiveManifestEntry,
     ContentMergeTier,
 };
-use gfm_jobs::Priority;
+use gfm_jobs::{Cancellation, JobPayloadKind, JobProgressState, Priority};
 use gfm_mac::{AccessIntent, VolumeDiscoveryReport};
 use gfm_store::{
     cleanup_inactive_content_archives_checked, content_manifest_promotion_journal_path,
@@ -170,12 +175,45 @@ fn run_manifest_cleanup(
         ManifestAccessReports::cleanup_for_paths(&manifest_path, &candidates, true, WORKER)?;
     access_reports.preflight_volumes()?;
     let volume = access_reports.first_volume();
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _access = access_reports.access_checked(|| cancellation.check())?;
-        cancellation.check()?;
-        render_manifest_cleanup(&manifest_path, &candidates, || cancellation.check())
-    })
+    visible_manifest_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Indexing,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            manifest_path.clone(),
+            move |cancellation, runtime| {
+                runtime.resize_checked(3, "content-manifest-cleanup:preflight", || {
+                    cancellation.check()
+                })?;
+                let _access = access_reports.access_checked(|| cancellation.check())?;
+                manifest_runtime_phase(
+                    &runtime,
+                    1,
+                    "content-manifest-cleanup:cleanup",
+                    &cancellation,
+                )?;
+                let (summary, lines) =
+                    render_manifest_cleanup(&manifest_path, &candidates, || cancellation.check())?;
+                manifest_runtime_phase(
+                    &runtime,
+                    2,
+                    "content-manifest-cleanup:render",
+                    &cancellation,
+                )?;
+                runtime.remember_completion_detail(summary.replace('\t', " "))?;
+                manifest_runtime_phase(
+                    &runtime,
+                    3,
+                    "content-manifest-cleanup:complete",
+                    &cancellation,
+                )?;
+                Ok((summary, lines))
+            },
+        )?,
+        WORKER,
+    )
 }
 
 fn run_content_cleanup_plan(
@@ -189,26 +227,59 @@ fn run_content_cleanup_plan(
         ManifestAccessReports::cleanup_for_paths(&manifest_path, &candidates, false, WORKER)?;
     access_reports.preflight_volumes()?;
     let volume = access_reports.first_volume();
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _access = access_reports.access_checked(|| cancellation.check())?;
-        let manifest =
-            ContentArchiveManifest::read_checked(&manifest_path, || cancellation.check())?;
-        let active_archive_paths = manifest.resolved_archive_paths(&manifest_path);
-        let active_archive_access_reports = ManifestAccessReports::read_paths_checked(
-            &active_archive_paths,
-            ACTIVE_ARCHIVE_WORKER,
-            || cancellation.check(),
-        )?;
-        active_archive_access_reports.preflight_volumes()?;
-        cancellation.check()?;
-        let _active_archive_access =
-            active_archive_access_reports.access_checked(|| cancellation.check())?;
-        cancellation.check()?;
-        render_cleanup_plan(&manifest_path, &candidates, &policy, || {
-            cancellation.check()
-        })
-    })
+    visible_manifest_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Indexing,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            manifest_path.clone(),
+            move |cancellation, runtime| {
+                runtime
+                    .resize_checked(4, "content-cleanup-plan:preflight", || cancellation.check())?;
+                let _access = access_reports.access_checked(|| cancellation.check())?;
+                manifest_runtime_phase(
+                    &runtime,
+                    1,
+                    "content-cleanup-plan:manifest",
+                    &cancellation,
+                )?;
+                let manifest =
+                    ContentArchiveManifest::read_checked(&manifest_path, || cancellation.check())?;
+                let active_archive_paths = manifest.resolved_archive_paths(&manifest_path);
+                manifest_runtime_phase(
+                    &runtime,
+                    2,
+                    "content-cleanup-plan:active-archives",
+                    &cancellation,
+                )?;
+                let active_archive_access_reports = ManifestAccessReports::read_paths_checked(
+                    &active_archive_paths,
+                    ACTIVE_ARCHIVE_WORKER,
+                    || cancellation.check(),
+                )?;
+                active_archive_access_reports.preflight_volumes()?;
+                cancellation.check()?;
+                let _active_archive_access =
+                    active_archive_access_reports.access_checked(|| cancellation.check())?;
+                manifest_runtime_phase(&runtime, 3, "content-cleanup-plan:plan", &cancellation)?;
+                let (summary, lines) =
+                    render_cleanup_plan(&manifest_path, &candidates, &policy, || {
+                        cancellation.check()
+                    })?;
+                runtime.remember_completion_detail(summary.replace('\t', " "))?;
+                manifest_runtime_phase(
+                    &runtime,
+                    4,
+                    "content-cleanup-plan:complete",
+                    &cancellation,
+                )?;
+                Ok((summary, lines))
+            },
+        )?,
+        WORKER,
+    )
 }
 
 fn render_manifest_cleanup(
@@ -647,64 +718,126 @@ fn run_manifest_write(
     let access_reports = ManifestAccessReports::write_for_paths(&manifest_path, &archives)?;
     access_reports.preflight_volumes()?;
     let volume = access_reports.first_volume();
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _access = access_reports.access_checked(|| cancellation.check())?;
-        cancellation.check()?;
-        let manifest = ContentArchiveManifest::new(archives)?;
-        manifest.write_checked(&manifest_path, || cancellation.check())?;
-        Ok(format!(
-            "content-manifest\tarchives={}",
-            manifest.archives.len()
-        ))
-    })
+    visible_manifest_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Indexing,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            manifest_path.clone(),
+            move |cancellation, runtime| {
+                runtime.resize_checked(3, "content-manifest-write:preflight", || {
+                    cancellation.check()
+                })?;
+                let _access = access_reports.access_checked(|| cancellation.check())?;
+                manifest_runtime_phase(&runtime, 1, "content-manifest-write:build", &cancellation)?;
+                let manifest = ContentArchiveManifest::new(archives.clone())?;
+                manifest_runtime_phase(
+                    &runtime,
+                    2,
+                    "content-manifest-write:persist",
+                    &cancellation,
+                )?;
+                manifest.write_checked(&manifest_path, || cancellation.check())?;
+                runtime.remember_completion_detail(format!(
+                    "completed:archives:{}",
+                    manifest.archives.len()
+                ))?;
+                manifest_runtime_phase(
+                    &runtime,
+                    3,
+                    "content-manifest-write:complete",
+                    &cancellation,
+                )?;
+                Ok(format!(
+                    "content-manifest\tarchives={}",
+                    manifest.archives.len()
+                ))
+            },
+        )?,
+        WORKER,
+    )
 }
 
 fn run_manifest_inspect(manifest_path: PathBuf) -> Result<Vec<String>> {
+    const WORKER: &str = "content manifest inspect";
     let access_report = ManifestAccessReport::new_checked(
         manifest_path.clone(),
         AccessIntent::Read,
-        "content manifest inspect",
+        WORKER,
         || Ok(()),
     )?;
     access_report.preflight_volume()?;
     let volume = access_report.volume();
-    run_volume_task_cancellable(
-        volume,
-        Priority::Visible,
-        "content manifest inspect",
-        move |cancellation| {
-            cancellation.check()?;
-            let _manifest_access = access_report.access_checked(|| cancellation.check())?;
-            let manifest =
-                ContentArchiveManifest::read_checked(&manifest_path, || cancellation.check())?;
-            let paths = manifest.resolved_archive_paths(&manifest_path);
-            let archive_access_reports = ManifestAccessReports::read_paths_checked(
-                &paths,
-                "content manifest inspect archive",
-                || cancellation.check(),
-            )?;
-            archive_access_reports.preflight_volumes()?;
-            cancellation.check()?;
-            let _archive_access = archive_access_reports.access_checked(|| cancellation.check())?;
-            cancellation.check()?;
-            let set = MmapContentSet::open_checked(&paths, || cancellation.check())?;
-            let mut lines = vec![format!(
-                "content-manifest\tarchives={}\tterms={}\tbytes={}",
-                set.archive_count(),
-                set.indexed_terms(),
-                set.mapped_len()
-            )];
-            for (entry, path) in manifest.archives.iter().zip(paths) {
-                lines.push(format!(
-                    "archive\t{}\t{}\t{}",
-                    content_tier_name(entry.tier),
-                    escape_manifest_tsv_path(&entry.path),
-                    escape_manifest_tsv_path(&path)
-                ));
-            }
-            Ok(lines)
-        },
+    visible_manifest_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Indexing,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            manifest_path.clone(),
+            move |cancellation, runtime| {
+                runtime.resize_checked(4, "content-manifest-inspect:preflight", || {
+                    cancellation.check()
+                })?;
+                let _manifest_access = access_report.access_checked(|| cancellation.check())?;
+                manifest_runtime_phase(
+                    &runtime,
+                    1,
+                    "content-manifest-inspect:manifest",
+                    &cancellation,
+                )?;
+                let manifest =
+                    ContentArchiveManifest::read_checked(&manifest_path, || cancellation.check())?;
+                let paths = manifest.resolved_archive_paths(&manifest_path);
+                manifest_runtime_phase(
+                    &runtime,
+                    2,
+                    "content-manifest-inspect:archives",
+                    &cancellation,
+                )?;
+                let archive_access_reports = ManifestAccessReports::read_paths_checked(
+                    &paths,
+                    "content manifest inspect archive",
+                    || cancellation.check(),
+                )?;
+                archive_access_reports.preflight_volumes()?;
+                cancellation.check()?;
+                let _archive_access =
+                    archive_access_reports.access_checked(|| cancellation.check())?;
+                manifest_runtime_phase(&runtime, 3, "content-manifest-inspect:map", &cancellation)?;
+                let set = MmapContentSet::open_checked(&paths, || cancellation.check())?;
+                let mut lines = vec![format!(
+                    "content-manifest\tarchives={}\tterms={}\tbytes={}",
+                    set.archive_count(),
+                    set.indexed_terms(),
+                    set.mapped_len()
+                )];
+                for (entry, path) in manifest.archives.iter().zip(paths) {
+                    lines.push(format!(
+                        "archive\t{}\t{}\t{}",
+                        content_tier_name(entry.tier),
+                        escape_manifest_tsv_path(&entry.path),
+                        escape_manifest_tsv_path(&path)
+                    ));
+                }
+                runtime.remember_completion_detail(format!(
+                    "completed:archives:{} terms:{}",
+                    set.archive_count(),
+                    set.indexed_terms()
+                ))?;
+                manifest_runtime_phase(
+                    &runtime,
+                    4,
+                    "content-manifest-inspect:complete",
+                    &cancellation,
+                )?;
+                Ok(lines)
+            },
+        )?,
+        WORKER,
     )
 }
 
@@ -712,29 +845,57 @@ fn run_manifest_recovery_plan(
     manifest_path: PathBuf,
     discovered: Vec<ContentArchiveManifestEntry>,
 ) -> Result<Vec<String>> {
+    const WORKER: &str = "content manifest recovery plan";
     let access_reports =
         ManifestAccessReports::recovery_plan_for_paths(&manifest_path, &discovered)?;
     access_reports.preflight_volumes()?;
     let volume = access_reports.first_volume();
-    run_volume_task_cancellable(
-        volume,
-        Priority::Visible,
-        "content manifest recovery plan",
-        move |cancellation| {
-            cancellation.check()?;
-            let _access = access_reports.access_checked(|| cancellation.check())?;
-            cancellation.check()?;
-            let plan = plan_content_manifest_recovery_checked(&manifest_path, &discovered, || {
-                cancellation.check()
-            })?;
-            cancellation.check()?;
-            let mut lines = vec![plan.as_tsv()];
-            lines.extend(format_content_archive_health(
-                "invalid",
-                &plan.invalid_archives,
-            ));
-            Ok(lines)
-        },
+    visible_manifest_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Indexing,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            manifest_path.clone(),
+            move |cancellation, runtime| {
+                runtime.resize_checked(3, "content-manifest-recovery-plan:preflight", || {
+                    cancellation.check()
+                })?;
+                let _access = access_reports.access_checked(|| cancellation.check())?;
+                manifest_runtime_phase(
+                    &runtime,
+                    1,
+                    "content-manifest-recovery-plan:evaluate",
+                    &cancellation,
+                )?;
+                let plan =
+                    plan_content_manifest_recovery_checked(&manifest_path, &discovered, || {
+                        cancellation.check()
+                    })?;
+                manifest_runtime_phase(
+                    &runtime,
+                    2,
+                    "content-manifest-recovery-plan:render",
+                    &cancellation,
+                )?;
+                let invalid_count = plan.invalid_archives.len();
+                let mut lines = vec![plan.as_tsv()];
+                lines.extend(format_content_archive_health(
+                    "invalid",
+                    &plan.invalid_archives,
+                ));
+                runtime.remember_completion_detail(format!("completed:invalid:{invalid_count}"))?;
+                manifest_runtime_phase(
+                    &runtime,
+                    3,
+                    "content-manifest-recovery-plan:complete",
+                    &cancellation,
+                )?;
+                Ok(lines)
+            },
+        )?,
+        WORKER,
     )
 }
 
@@ -751,38 +912,69 @@ fn run_manifest_recover(
     write_reports.preflight_volumes()?;
     access_reports.entries.extend(write_reports.entries);
     let volume = access_reports.first_volume();
-    run_volume_task_cancellable(
-        volume,
-        Priority::Visible,
-        "content manifest recovery",
-        move |cancellation| {
-            cancellation.check()?;
-            let _access = access_reports.access_checked(|| cancellation.check())?;
-            cancellation.check()?;
-            let report =
-                recover_content_manifest_checked(&manifest_path, &discovered, &quarantine, || {
+    visible_manifest_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Indexing,
+            "content manifest recovery",
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            manifest_path.clone(),
+            move |cancellation, runtime| {
+                runtime.resize_checked(3, "content-manifest-recovery:preflight", || {
                     cancellation.check()
                 })?;
-            cancellation.check()?;
-            let mut lines = vec![
-                report.before.as_tsv(),
-                format!(
-                    "content-manifest-recovery\twrote-manifest={}\tquarantined-manifest={}",
+                let _access = access_reports.access_checked(|| cancellation.check())?;
+                manifest_runtime_phase(
+                    &runtime,
+                    1,
+                    "content-manifest-recovery:recover",
+                    &cancellation,
+                )?;
+                let report = recover_content_manifest_checked(
+                    &manifest_path,
+                    &discovered,
+                    &quarantine,
+                    || cancellation.check(),
+                )?;
+                manifest_runtime_phase(
+                    &runtime,
+                    2,
+                    "content-manifest-recovery:render",
+                    &cancellation,
+                )?;
+                let mut lines = vec![
+                    report.before.as_tsv(),
+                    format!(
+                        "content-manifest-recovery\twrote-manifest={}\tquarantined-manifest={}",
+                        report.wrote_manifest,
+                        report
+                            .quarantined_manifest_path
+                            .as_ref()
+                            .map(|path| escape_manifest_tsv_path(path))
+                            .unwrap_or_else(|| "-".to_string())
+                    ),
+                    report.after.as_tsv(),
+                ];
+                lines.extend(format_content_archive_health(
+                    "invalid-before",
+                    &report.before.invalid_archives,
+                ));
+                runtime.remember_completion_detail(format!(
+                    "completed:wrote:{} invalid-before:{}",
                     report.wrote_manifest,
-                    report
-                        .quarantined_manifest_path
-                        .as_ref()
-                        .map(|path| escape_manifest_tsv_path(path))
-                        .unwrap_or_else(|| "-".to_string())
-                ),
-                report.after.as_tsv(),
-            ];
-            lines.extend(format_content_archive_health(
-                "invalid-before",
-                &report.before.invalid_archives,
-            ));
-            Ok(lines)
-        },
+                    report.before.invalid_archives.len()
+                ))?;
+                manifest_runtime_phase(
+                    &runtime,
+                    3,
+                    "content-manifest-recovery:complete",
+                    &cancellation,
+                )?;
+                Ok(lines)
+            },
+        )?,
+        "content manifest recovery",
     )
 }
 
@@ -796,34 +988,65 @@ fn run_manifest_promotion(
         ManifestAccessReports::promotion_for_paths(&manifest_path, &new_archive, &retired_paths)?;
     access_reports.preflight_volumes()?;
     let volume = access_reports.first_volume();
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _access = access_reports.access_checked(|| cancellation.check())?;
-        cancellation.check()?;
-        let promotion = promote_content_archive_manifest_checked(
-            &manifest_path,
-            new_archive,
-            &retired_paths,
-            || cancellation.check(),
-        )?;
-        let summary = format!(
-            "content-manifest-promoted\tarchives={}\tretired={}\tmissing-retirements={}",
-            promotion.manifest.archives.len(),
-            promotion.retired_archives.len(),
-            promotion.missing_retirements.len()
-        );
-        let mut lines = Vec::new();
-        for path in promotion.retired_archives {
-            lines.push(format!("retire\t{}", escape_manifest_tsv_path(&path)));
-        }
-        for path in promotion.missing_retirements {
-            lines.push(format!(
-                "missing-retirement\t{}",
-                escape_manifest_tsv_path(&path)
-            ));
-        }
-        Ok((summary, lines))
-    })
+    visible_manifest_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Indexing,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            manifest_path.clone(),
+            move |cancellation, runtime| {
+                runtime.resize_checked(3, "content-manifest-promotion:preflight", || {
+                    cancellation.check()
+                })?;
+                let _access = access_reports.access_checked(|| cancellation.check())?;
+                manifest_runtime_phase(
+                    &runtime,
+                    1,
+                    "content-manifest-promotion:promote",
+                    &cancellation,
+                )?;
+                let promotion = promote_content_archive_manifest_checked(
+                    &manifest_path,
+                    new_archive.clone(),
+                    &retired_paths,
+                    || cancellation.check(),
+                )?;
+                manifest_runtime_phase(
+                    &runtime,
+                    2,
+                    "content-manifest-promotion:render",
+                    &cancellation,
+                )?;
+                let summary = format!(
+                    "content-manifest-promoted\tarchives={}\tretired={}\tmissing-retirements={}",
+                    promotion.manifest.archives.len(),
+                    promotion.retired_archives.len(),
+                    promotion.missing_retirements.len()
+                );
+                let mut lines = Vec::new();
+                for path in promotion.retired_archives {
+                    lines.push(format!("retire\t{}", escape_manifest_tsv_path(&path)));
+                }
+                for path in promotion.missing_retirements {
+                    lines.push(format!(
+                        "missing-retirement\t{}",
+                        escape_manifest_tsv_path(&path)
+                    ));
+                }
+                runtime.remember_completion_detail(summary.replace('\t', " "))?;
+                manifest_runtime_phase(
+                    &runtime,
+                    3,
+                    "content-manifest-promotion:complete",
+                    &cancellation,
+                )?;
+                Ok((summary, lines))
+            },
+        )?,
+        WORKER,
+    )
 }
 
 fn run_manifest_promotion_recovery_plan(manifest_path: PathBuf) -> Result<String> {
@@ -832,33 +1055,75 @@ fn run_manifest_promotion_recovery_plan(manifest_path: PathBuf) -> Result<String
     let access_reports = ManifestAccessReports::promotion_recovery_plan_for_path(&manifest_path)?;
     access_reports.preflight_volumes()?;
     let volume = access_reports.first_volume();
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _access = access_reports.access_checked(|| cancellation.check())?;
-        let journal_path = content_manifest_promotion_journal_path(&manifest_path);
-        let archive_paths = if manifest_path_exists(&journal_path, "promotion journal")? {
-            let journal = ContentManifestPromotionJournal::read_checked(&journal_path, || {
-                cancellation.check()
-            })?;
-            promotion_recovery_archive_paths(&manifest_path, &journal)?
-        } else {
-            Vec::new()
-        };
-        let archive_access_reports =
-            ManifestAccessReports::read_paths_checked(&archive_paths, ARCHIVE_WORKER, || {
-                cancellation.check()
-            })?;
-        archive_access_reports.preflight_volumes()?;
-        cancellation.check()?;
-        let _archive_access = archive_access_reports.access_checked(|| cancellation.check())?;
-        cancellation.check()?;
-        Ok(
-            plan_content_manifest_promotion_recovery_checked(manifest_path, || {
-                cancellation.check()
-            })?
-            .as_tsv(),
-        )
-    })
+    visible_manifest_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Indexing,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            manifest_path.clone(),
+            move |cancellation, runtime| {
+                runtime.resize_checked(
+                    4,
+                    "content-manifest-promotion-recovery-plan:preflight",
+                    || cancellation.check(),
+                )?;
+                let _access = access_reports.access_checked(|| cancellation.check())?;
+                manifest_runtime_phase(
+                    &runtime,
+                    1,
+                    "content-manifest-promotion-recovery-plan:journal",
+                    &cancellation,
+                )?;
+                let journal_path = content_manifest_promotion_journal_path(&manifest_path);
+                let archive_paths = if manifest_path_exists(&journal_path, "promotion journal")? {
+                    let journal =
+                        ContentManifestPromotionJournal::read_checked(&journal_path, || {
+                            cancellation.check()
+                        })?;
+                    promotion_recovery_archive_paths(&manifest_path, &journal)?
+                } else {
+                    Vec::new()
+                };
+                manifest_runtime_phase(
+                    &runtime,
+                    2,
+                    "content-manifest-promotion-recovery-plan:archives",
+                    &cancellation,
+                )?;
+                let archive_access_reports = ManifestAccessReports::read_paths_checked(
+                    &archive_paths,
+                    ARCHIVE_WORKER,
+                    || cancellation.check(),
+                )?;
+                archive_access_reports.preflight_volumes()?;
+                cancellation.check()?;
+                let _archive_access =
+                    archive_access_reports.access_checked(|| cancellation.check())?;
+                manifest_runtime_phase(
+                    &runtime,
+                    3,
+                    "content-manifest-promotion-recovery-plan:evaluate",
+                    &cancellation,
+                )?;
+                let line =
+                    plan_content_manifest_promotion_recovery_checked(&manifest_path, || {
+                        cancellation.check()
+                    })?
+                    .as_tsv();
+                runtime.remember_completion_detail("completed".to_string())?;
+                manifest_runtime_phase(
+                    &runtime,
+                    4,
+                    "content-manifest-promotion-recovery-plan:complete",
+                    &cancellation,
+                )?;
+                Ok(line)
+            },
+        )?,
+        WORKER,
+    )
 }
 
 fn run_manifest_promotion_recover(manifest_path: PathBuf) -> Result<Vec<String>> {
@@ -867,37 +1132,84 @@ fn run_manifest_promotion_recover(manifest_path: PathBuf) -> Result<Vec<String>>
     let access_reports = ManifestAccessReports::promotion_recovery_for_path(&manifest_path)?;
     access_reports.preflight_volumes()?;
     let volume = access_reports.first_volume();
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _access = access_reports.access_checked(|| cancellation.check())?;
-        let journal_path = content_manifest_promotion_journal_path(&manifest_path);
-        let archive_paths = if manifest_path_exists(&journal_path, "promotion journal")? {
-            let journal = ContentManifestPromotionJournal::read_checked(&journal_path, || {
-                cancellation.check()
-            })?;
-            promotion_recovery_archive_paths(&manifest_path, &journal)?
-        } else {
-            Vec::new()
-        };
-        let archive_access_reports =
-            ManifestAccessReports::read_paths_checked(&archive_paths, ARCHIVE_WORKER, || {
-                cancellation.check()
-            })?;
-        archive_access_reports.preflight_volumes()?;
-        cancellation.check()?;
-        let _archive_access = archive_access_reports.access_checked(|| cancellation.check())?;
-        cancellation.check()?;
-        let recovery =
-            recover_content_manifest_promotion_checked(manifest_path, || cancellation.check())?;
-        Ok(vec![
-            recovery.before.as_tsv(),
-            format!(
-                "content-manifest-promotion-recovery\tcompleted-promotion={}\tremoved-journal={}",
-                recovery.completed_promotion, recovery.removed_journal
-            ),
-            recovery.after.as_tsv(),
-        ])
-    })
+    visible_manifest_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Indexing,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            manifest_path.clone(),
+            move |cancellation, runtime| {
+                runtime.resize_checked(
+                    4,
+                    "content-manifest-promotion-recovery:preflight",
+                    || cancellation.check(),
+                )?;
+                let _access = access_reports.access_checked(|| cancellation.check())?;
+                manifest_runtime_phase(
+                    &runtime,
+                    1,
+                    "content-manifest-promotion-recovery:journal",
+                    &cancellation,
+                )?;
+                let journal_path = content_manifest_promotion_journal_path(&manifest_path);
+                let archive_paths = if manifest_path_exists(&journal_path, "promotion journal")? {
+                    let journal =
+                        ContentManifestPromotionJournal::read_checked(&journal_path, || {
+                            cancellation.check()
+                        })?;
+                    promotion_recovery_archive_paths(&manifest_path, &journal)?
+                } else {
+                    Vec::new()
+                };
+                manifest_runtime_phase(
+                    &runtime,
+                    2,
+                    "content-manifest-promotion-recovery:archives",
+                    &cancellation,
+                )?;
+                let archive_access_reports = ManifestAccessReports::read_paths_checked(
+                    &archive_paths,
+                    ARCHIVE_WORKER,
+                    || cancellation.check(),
+                )?;
+                archive_access_reports.preflight_volumes()?;
+                cancellation.check()?;
+                let _archive_access =
+                    archive_access_reports.access_checked(|| cancellation.check())?;
+                manifest_runtime_phase(
+                    &runtime,
+                    3,
+                    "content-manifest-promotion-recovery:recover",
+                    &cancellation,
+                )?;
+                let recovery = recover_content_manifest_promotion_checked(&manifest_path, || {
+                    cancellation.check()
+                })?;
+                let lines = vec![
+                    recovery.before.as_tsv(),
+                    format!(
+                        "content-manifest-promotion-recovery\tcompleted-promotion={}\tremoved-journal={}",
+                        recovery.completed_promotion, recovery.removed_journal
+                    ),
+                    recovery.after.as_tsv(),
+                ];
+                runtime.remember_completion_detail(format!(
+                    "completed:promotion:{} journal:{}",
+                    recovery.completed_promotion, recovery.removed_journal
+                ))?;
+                manifest_runtime_phase(
+                    &runtime,
+                    4,
+                    "content-manifest-promotion-recovery:complete",
+                    &cancellation,
+                )?;
+                Ok(lines)
+            },
+        )?,
+        WORKER,
+    )
 }
 
 fn promotion_recovery_archive_paths(
@@ -1005,6 +1317,23 @@ fn manifest_path_exists(path: &Path, label: &str) -> Result<bool> {
             format!("manifest {label} existence unavailable: {err}"),
         )),
     }
+}
+
+fn manifest_runtime_phase(
+    runtime: &RuntimeJobHandle,
+    completed_units: u64,
+    detail: &'static str,
+    cancellation: &Cancellation,
+) -> Result<()> {
+    runtime.progress_checked(JobProgressState::Running, completed_units, detail, || {
+        cancellation.check()
+    })
+}
+
+fn visible_manifest_result<T>(outcome: ScheduledTaskOutcome<T>, label: &'static str) -> Result<T> {
+    outcome
+        .result
+        .ok_or_else(|| GfmError::Format(format!("{label} deferred before visible execution")))
 }
 
 fn existing_read_probe_path(path: &Path) -> Result<&Path> {
