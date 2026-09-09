@@ -1,3 +1,4 @@
+mod capture;
 mod gates;
 mod macrobench;
 mod parity;
@@ -5,6 +6,11 @@ mod parity_gate;
 mod parity_profile;
 mod pixel;
 
+pub use capture::{
+    capture_parity_screenshot, capture_parity_screenshot_checked, plan_parity_capture_commands,
+    CaptureRegion, ParityCaptureTarget, ParityScreenshotCaptureOptions,
+    ParityScreenshotCaptureReport,
+};
 pub use gates::{
     evaluate_regression_gate, run_large_sidecar_gate, run_regression_gate,
     run_search_typing_benchmark, run_search_typing_session_benchmark, LargeSidecarGateOptions,

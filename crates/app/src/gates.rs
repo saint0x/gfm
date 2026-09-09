@@ -9,14 +9,16 @@ use crate::{
 use gfm_jobs::Priority;
 use gfm_mac::{AccessIntent, VolumeDiscoveryReport};
 use gfm_testkit::{
-    diff_rgba_files, evaluate_pixel_threshold, materialize_macrobench_fixture_report,
-    materialize_parity_fixture, parse_parity_gate_manifest, read_governed_mask_file,
-    read_mask_file, run_large_sidecar_gate, run_macrobench, run_parity_gate, run_regression_gate,
-    run_search_typing_benchmark, run_search_typing_session_benchmark, write_parity_review_bundle,
-    ColorProfile, DisplayScale, LargeSidecarGateOptions, MacOsParityProfile, MacrobenchOptions,
-    MacrobenchScale, MacrobenchStage, ParityAppearance, ParityFixtureOptions, ParityFixtureScale,
-    ParityGateInput, ParitySurface, PixelDiffOptions, PixelDriftThreshold, PixelSize,
-    RegressionGateOptions, SearchTypingBenchmarkOptions,
+    capture_parity_screenshot_checked, diff_rgba_files, evaluate_pixel_threshold,
+    materialize_macrobench_fixture_report, materialize_parity_fixture, parse_parity_gate_manifest,
+    read_governed_mask_file, read_mask_file, run_large_sidecar_gate, run_macrobench,
+    run_parity_gate, run_regression_gate, run_search_typing_benchmark,
+    run_search_typing_session_benchmark, write_parity_review_bundle, ColorProfile, DisplayScale,
+    LargeSidecarGateOptions, MacOsParityProfile, MacrobenchOptions, MacrobenchScale,
+    MacrobenchStage, ParityAppearance, ParityCaptureTarget, ParityFixtureOptions,
+    ParityFixtureScale, ParityGateInput, ParityScreenshotCaptureOptions, ParitySurface,
+    PixelDiffOptions, PixelDriftThreshold, PixelSize, RegressionGateOptions,
+    SearchTypingBenchmarkOptions,
 };
 use gfm_types::{GfmError, Result};
 use std::fs;
@@ -120,6 +122,36 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     scenario.directories
                 );
             }
+        }
+        "parity-capture" => {
+            let options = parity_capture_options(args)?;
+            let access_reports = parity_capture_access_reports(&options)?;
+            access_reports.preflight_volumes()?;
+            let volume = access_reports.first_volume();
+            let report = run_volume_task_cancellable(
+                volume,
+                Priority::Visible,
+                "parity capture",
+                move |cancellation| {
+                    cancellation.check()?;
+                    let _access = access_reports.access_checked(|| cancellation.check())?;
+                    cancellation.check()?;
+                    capture_parity_screenshot_checked(&options, || cancellation.check())
+                },
+            )?;
+            println!(
+                "parity-capture\ttarget={}\tfixture={}\toutput={}\tprovenance={}\tregion={},{},{},{}\tprepare={}\tcapture={}",
+                report.target.as_str(),
+                escape_gate_tsv_path(&report.fixture_root),
+                escape_gate_tsv_path(&report.output_png),
+                escape_gate_tsv_path(&report.provenance_tsv),
+                report.window_region.x,
+                report.window_region.y,
+                report.window_region.width,
+                report.window_region.height,
+                escape_gate_tsv_field(&report.prepare_command.join(" ")),
+                escape_gate_tsv_field(&report.capture_command.join(" "))
+            );
         }
         "pixel-diff" => {
             let expected = required_path(args.next(), "pixel-diff requires an expected RGBA path")?;
@@ -784,6 +816,31 @@ fn pixel_diff_access_reports_checked(
     Ok(GateAccessReports::new(entries))
 }
 
+fn parity_capture_access_reports(
+    options: &ParityScreenshotCaptureOptions,
+) -> Result<GateAccessReports> {
+    Ok(GateAccessReports::new(vec![
+        GateAccessReport::new_checked(
+            options.fixture_root.clone(),
+            AccessIntent::Read,
+            "parity capture fixture",
+            || Ok(()),
+        )?,
+        GateAccessReport::new_checked(
+            options.output_png.clone(),
+            AccessIntent::Write,
+            "parity capture output",
+            || Ok(()),
+        )?,
+        GateAccessReport::new_checked(
+            options.provenance_tsv.clone(),
+            AccessIntent::Write,
+            "parity capture provenance",
+            || Ok(()),
+        )?,
+    ]))
+}
+
 fn read_parity_manifest_inputs_checked(
     manifest: &Path,
     mut check_control: impl FnMut() -> Result<()>,
@@ -1036,6 +1093,82 @@ fn parity_fixture_options(
     Ok(ParityFixtureOptions {
         workspace: root,
         scale,
+    })
+}
+
+fn parity_capture_options(
+    args: &mut impl Iterator<Item = String>,
+) -> Result<ParityScreenshotCaptureOptions> {
+    let target = args
+        .next()
+        .ok_or_else(|| GfmError::Format("parity-capture requires a target".to_string()))
+        .and_then(|value| ParityCaptureTarget::parse(&value))?;
+    let fixture_root = required_path(args.next(), "parity-capture requires a fixture root")?;
+    let output_png = required_path(args.next(), "parity-capture requires an output PNG path")?;
+    let provenance_tsv =
+        required_path(args.next(), "parity-capture requires a provenance TSV path")?;
+    let scenario = args
+        .next()
+        .ok_or_else(|| GfmError::Format("parity-capture requires a scenario".to_string()))?;
+    let view_mode = args
+        .next()
+        .ok_or_else(|| GfmError::Format("parity-capture requires a view mode".to_string()))?
+        .parse()
+        .map_err(GfmError::Format)?;
+    let macos_build = args
+        .next()
+        .ok_or_else(|| GfmError::Format("parity-capture requires a macOS build".to_string()))?;
+    let hardware_profile = args.next().ok_or_else(|| {
+        GfmError::Format("parity-capture requires a hardware profile".to_string())
+    })?;
+    let display_profile = args
+        .next()
+        .ok_or_else(|| GfmError::Format("parity-capture requires a display profile".to_string()))?;
+    let app_version = args
+        .next()
+        .ok_or_else(|| GfmError::Format("parity-capture requires an app version".to_string()))?;
+    let captured_at = args
+        .next()
+        .ok_or_else(|| GfmError::Format("parity-capture requires captured-at".to_string()))?;
+    let reviewer = args
+        .next()
+        .ok_or_else(|| GfmError::Format("parity-capture requires a reviewer".to_string()))?;
+    let signer = args
+        .next()
+        .ok_or_else(|| GfmError::Format("parity-capture requires a signer".to_string()))?;
+    let approved_mask_set = args.next().ok_or_else(|| {
+        GfmError::Format("parity-capture requires an approved mask set".to_string())
+    })?;
+    let appearance = parse_parity_appearance(args.next())?;
+    let scale = parse_display_scale(args.next())?;
+    let color_profile = parse_color_profile(args.next())?;
+    let window_origin_x = parse_u32_arg(args.next(), "parity-capture requires a window x")?;
+    let window_origin_y = parse_u32_arg(args.next(), "parity-capture requires a window y")?;
+    let width = parse_u32_arg(args.next(), "parity-capture requires a window width")?;
+    let height = parse_u32_arg(args.next(), "parity-capture requires a window height")?;
+    let gfm_app = args.next().map(PathBuf::from);
+    Ok(ParityScreenshotCaptureOptions {
+        target,
+        fixture_root,
+        output_png,
+        provenance_tsv,
+        scenario,
+        view_mode,
+        macos_build,
+        hardware_profile,
+        display_profile,
+        app_version,
+        captured_at,
+        reviewer,
+        signer,
+        approved_mask_set,
+        appearance,
+        scale,
+        color_profile,
+        window_origin_x,
+        window_origin_y,
+        window_size: PixelSize::new(width, height),
+        gfm_app,
     })
 }
 

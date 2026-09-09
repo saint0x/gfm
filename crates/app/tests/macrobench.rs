@@ -96,6 +96,8 @@ fn materializes_parity_fixture_from_binary() {
 fn benchmark_workspace_routes_refuse_unreachable_volume_before_materializing_from_binary() {
     let offline = unique_temp_dir("gfm-cli-gate-workspace-preflight-offline");
     fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let capture_output = offline.join("finder.png");
+    let capture_provenance = offline.join("finder.provenance.tsv");
 
     let cases = [
         (
@@ -112,6 +114,34 @@ fn benchmark_workspace_routes_refuse_unreachable_volume_before_materializing_fro
             vec!["parity-fixture", offline.to_str().unwrap(), "smoke"],
             "parity fixture workspace",
             "fixture\t",
+        ),
+        (
+            vec![
+                "parity-capture",
+                "finder",
+                offline.to_str().unwrap(),
+                capture_output.to_str().unwrap(),
+                capture_provenance.to_str().unwrap(),
+                "icon",
+                "icon",
+                "25A354",
+                "macbookpro18,3",
+                "studio-display-p3",
+                "0.1.0",
+                "2026-09-09T00:00:00Z",
+                "codex",
+                "codex",
+                "macos-25A354-default",
+                "dark",
+                "2x",
+                "display-p3",
+                "40",
+                "70",
+                "1040",
+                "720",
+            ],
+            "parity capture fixture",
+            "parity-capture\t",
         ),
         (
             vec!["regression-gate", offline.to_str().unwrap(), "smoke"],
@@ -168,6 +198,8 @@ fn benchmark_workspace_routes_refuse_unreachable_volume_before_materializing_fro
 
     assert!(!offline.join("gfm-macrobench-fixture").exists());
     assert!(!offline.join("gfm-parity-fixture").exists());
+    assert!(!offline.join("finder.png").exists());
+    assert!(!offline.join("finder.provenance.tsv").exists());
     assert!(!offline.join("gfm-large-sidecar-gate").exists());
     assert!(!offline.join("gfm-search-typing-benchmark").exists());
 
@@ -1094,6 +1126,56 @@ fn reports_parity_profile_from_binary() {
         stdout.contains("symbol\tview.column\trectangle.split.3x1"),
         "{stdout}"
     );
+}
+
+#[test]
+fn parity_capture_rejects_unresolved_system_appearance_before_native_capture_from_binary() {
+    let root = unique_temp_dir("gfm-cli-parity-capture-system-appearance");
+    let fixture = root.join("fixture");
+    fs::create_dir_all(&fixture).unwrap();
+    let output_png = root.join("finder.png");
+    let provenance = root.join("finder.provenance.tsv");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "parity-capture",
+            "finder",
+            fixture.to_str().unwrap(),
+            output_png.to_str().unwrap(),
+            provenance.to_str().unwrap(),
+            "list",
+            "list",
+            "24D70",
+            "macbookpro18,3",
+            "studio-display-p3",
+            "0.1.0",
+            "2026-09-09T00:00:00Z",
+            "codex",
+            "codex",
+            "macos-24D70-default",
+            "system",
+            "2x",
+            "display-p3",
+            "40",
+            "70",
+            "1040",
+            "720",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("parity-capture\t"), "{stdout}");
+    assert!(
+        stderr.contains("parity capture appearance must be resolved light or dark"),
+        "{stderr}"
+    );
+    assert!(!output_png.exists());
+    assert!(!provenance.exists());
+
+    fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
