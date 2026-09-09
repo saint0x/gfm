@@ -580,12 +580,14 @@ fn write_disk_entry_bytes_checked(
 }
 
 fn disk_cache_path_exists(path: &Path) -> Result<bool> {
-    path.try_exists().map_err(|err| {
-        GfmError::io(
+    match fs::metadata(path) {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(GfmError::io(
             path,
             format!("preview disk cache existence unavailable: {err}"),
-        )
-    })
+        )),
+    }
 }
 
 fn disk_cache_file_exists(path: &Path) -> Result<bool> {

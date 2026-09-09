@@ -12495,7 +12495,7 @@ fn quarantined_adaptive_extraction_worker_refuses_unreachable_store_before_recor
         "{stderr}"
     );
     assert!(
-        !stderr.contains("extraction write path existence unavailable"),
+        !stderr.contains("extraction write path metadata unavailable"),
         "{stderr}"
     );
     assert!(
@@ -12692,7 +12692,7 @@ fn extract_quarantine_refuses_unreachable_store_before_recording_from_binary() {
         "{stderr}"
     );
     assert!(
-        !stderr.contains("extraction write path existence unavailable"),
+        !stderr.contains("extraction write path metadata unavailable"),
         "{stderr}"
     );
     assert!(

@@ -785,12 +785,12 @@ fn extraction_path_is_file(path: &Path, label: &str) -> Result<bool> {
 }
 
 fn write_probe_path(path: &Path) -> Result<&Path> {
-    match path.try_exists() {
-        Ok(true) => Ok(path),
-        Ok(false) => Ok(crate::parent_or_cwd(path)),
+    match fs::metadata(path) {
+        Ok(_) => Ok(path),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(crate::parent_or_cwd(path)),
         Err(err) => Err(GfmError::io(
             path,
-            format!("extraction write path existence unavailable: {err}"),
+            format!("extraction write path metadata unavailable: {err}"),
         )),
     }
 }
@@ -1467,7 +1467,7 @@ mod tests {
         );
         assert!(
             !err.to_string()
-                .contains("extraction write path existence unavailable"),
+                .contains("extraction write path metadata unavailable"),
             "{err}"
         );
         assert!(!store.exists());
@@ -1538,7 +1538,7 @@ mod tests {
         ));
         assert!(
             !err.to_string()
-                .contains("extraction write path existence unavailable"),
+                .contains("extraction write path metadata unavailable"),
             "{err}"
         );
         assert!(!stdout.exists());
@@ -1558,7 +1558,7 @@ mod tests {
         assert!(matches!(err, GfmError::Io { .. }));
         assert!(err
             .to_string()
-            .contains("extraction write path existence unavailable"));
+            .contains("extraction write path metadata unavailable"));
         assert!(err.to_string().contains(&output.display().to_string()));
 
         fs::remove_dir_all(root).unwrap();

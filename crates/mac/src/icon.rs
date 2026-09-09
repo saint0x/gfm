@@ -5,6 +5,7 @@ use crate::{
 };
 use gfm_types::{FileKind, FileRecord};
 use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 const FINDER_INFO_XATTR: &str = "com.apple.FinderInfo";
@@ -537,7 +538,11 @@ fn cache_key(
 fn has_finder_custom_icon(record: &FileRecord) -> bool {
     finder_info_has_custom_icon(&record.path)
         || (record.kind == FileKind::Directory
-            && record.path.join(CUSTOM_FOLDER_ICON_FILE).try_exists().ok() == Some(true))
+            && folder_icon_resource_exists(&record.path.join(CUSTOM_FOLDER_ICON_FILE)))
+}
+
+fn folder_icon_resource_exists(path: &Path) -> bool {
+    fs::metadata(path).is_ok()
 }
 
 fn finder_info_has_custom_icon(path: &Path) -> bool {
