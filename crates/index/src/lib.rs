@@ -85,6 +85,7 @@ pub use repair::{RepairPriority, RepairReason, RepairSchedule, SubtreeRepairJob}
 pub use scan::{FairScanReport, FairScanScheduler, FairScanSummary, ScanLane};
 pub use session::{
     ContentIndexQuerySession, ContentQueryCacheInvalidationReport, ContentQuerySessionReport,
+    IndexQuerySupersession,
 };
 pub use state::{IndexVolumeState, INDEX_STATE_SCHEMA_VERSION};
 pub use volume::{

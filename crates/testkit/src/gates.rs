@@ -2,8 +2,8 @@ use crate::{
     run_macrobench, MacrobenchOptions, MacrobenchReport, MacrobenchScenario, MacrobenchStage,
 };
 use gfm_index::{
-    Indexer, LiveIndex, SearchArchiveLookup, SearchLookupBudget, SearchLookupTelemetry,
-    SidecarIndexQuerySession,
+    IndexQuerySupersession, Indexer, LiveIndex, SearchArchiveLookup, SearchLookupBudget,
+    SearchLookupTelemetry, SidecarIndexQuerySession,
 };
 use gfm_store::{
     fuzzy_postings_from_records, metadata_postings_from_records, prefix_postings_from_records,
@@ -567,6 +567,7 @@ pub fn run_search_typing_session_benchmark(
         &fuzzy_path,
         &content_path,
     )?;
+    let supersession = IndexQuerySupersession::new();
     let queries = incremental_queries(
         &options.query,
         bounded_typing_start_chars(&options.query, options.budget.min_archive_prefix_chars),
@@ -579,7 +580,7 @@ pub fn run_search_typing_session_benchmark(
     }
 
     for query in &queries {
-        session.search_with_budget(query, options.limit, options.budget)?;
+        supersession.search_sidecar_with_budget(&session, query, options.limit, options.budget)?;
     }
 
     let repetitions = options.repetitions.max(1);
@@ -596,7 +597,12 @@ pub fn run_search_typing_session_benchmark(
         for query in &queries {
             let lookup_before = session.lookup_telemetry();
             let started = Instant::now();
-            let report = session.search_with_budget(query, options.limit, options.budget)?;
+            let report = supersession.search_sidecar_with_budget(
+                &session,
+                query,
+                options.limit,
+                options.budget,
+            )?;
             durations.push(started.elapsed());
             let lookup_after = session.lookup_telemetry();
             lookup_telemetry.merge(&report.search.lookup);

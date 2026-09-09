@@ -2095,6 +2095,24 @@ mod tests {
     }
 
     #[test]
+    fn index_query_supersession_cancels_previous_sidecar_query_token() {
+        let fixture = SidecarFixture::new("supersession-sidecar");
+        let session = fixture.session();
+        let supersession = crate::IndexQuerySupersession::new();
+        let previous = supersession.begin();
+
+        let report = supersession
+            .search_sidecar(&session, "finderlatency", 5)
+            .unwrap();
+
+        assert!(matches!(previous.check(), Err(GfmError::Cancelled)));
+        assert_eq!(report.search.hits.len(), 1);
+        assert_eq!(report.search.hits[0].record.id, fixture.record.id);
+        assert_eq!(report.result_cache_hits, 0);
+        assert_eq!(report.result_cache_misses, 1);
+    }
+
+    #[test]
     fn sidecar_candidate_expansion_honors_cancelled_tokens() {
         let cancellation = Cancellation::default();
         cancellation.cancel();

@@ -1,3 +1,4 @@
+use crate::lookup::{SidecarIndexQuerySession, SidecarQuerySessionReport};
 use crate::{ContentQueryLoadReport, LiveIndex, ProviderMetadataInvalidationReport};
 use gfm_jobs::Cancellation;
 use gfm_search::{
@@ -46,6 +47,115 @@ impl ContentQueryCacheInvalidationReport {
             self.result_entries_after,
             escape_tsv_field(&self.reason)
         )
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct IndexQuerySupersession {
+    active: Mutex<Option<Cancellation>>,
+}
+
+impl IndexQuerySupersession {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn begin(&self) -> Cancellation {
+        let next = Cancellation::default();
+        let mut active = self.active_lock();
+        if let Some(previous) = active.replace(next.clone()) {
+            previous.cancel();
+        }
+        next
+    }
+
+    pub fn cancel_active(&self) {
+        let mut active = self.active_lock();
+        if let Some(previous) = active.take() {
+            previous.cancel();
+        }
+    }
+
+    pub fn search_sidecar(
+        &self,
+        session: &SidecarIndexQuerySession,
+        query: &str,
+        limit: usize,
+    ) -> Result<SidecarQuerySessionReport> {
+        let cancellation = self.begin();
+        session.search_cancellable(query, limit, &cancellation)
+    }
+
+    pub fn search_sidecar_with_budget(
+        &self,
+        session: &SidecarIndexQuerySession,
+        query: &str,
+        limit: usize,
+        budget: SearchLookupBudget,
+    ) -> Result<SidecarQuerySessionReport> {
+        let cancellation = self.begin();
+        session.search_with_budget_cancellable(query, limit, budget, &cancellation)
+    }
+
+    pub fn search_sidecar_with_volume_scope(
+        &self,
+        session: &SidecarIndexQuerySession,
+        query: &str,
+        limit: usize,
+        scope: &SearchVolumeScope,
+    ) -> Result<SidecarQuerySessionReport> {
+        let cancellation = self.begin();
+        session.search_with_volume_scope_budget_cancellable(
+            query,
+            limit,
+            scope,
+            SearchLookupBudget::default(),
+            &cancellation,
+        )
+    }
+
+    pub fn search_content(
+        &self,
+        session: &ContentIndexQuerySession,
+        query: &str,
+        limit: usize,
+    ) -> Result<ContentQuerySessionReport> {
+        let cancellation = self.begin();
+        session.search_cancellable(query, limit, &cancellation)
+    }
+
+    pub fn search_content_with_budget(
+        &self,
+        session: &ContentIndexQuerySession,
+        query: &str,
+        limit: usize,
+        budget: SearchLookupBudget,
+    ) -> Result<ContentQuerySessionReport> {
+        let cancellation = self.begin();
+        session.search_with_budget_cancellable(query, limit, budget, &cancellation)
+    }
+
+    pub fn search_content_with_volume_scope(
+        &self,
+        session: &ContentIndexQuerySession,
+        query: &str,
+        limit: usize,
+        scope: &SearchVolumeScope,
+    ) -> Result<ContentQuerySessionReport> {
+        let cancellation = self.begin();
+        session.search_with_volume_scope_budget_cancellable(
+            query,
+            limit,
+            scope,
+            SearchLookupBudget::default(),
+            &cancellation,
+        )
+    }
+
+    fn active_lock(&self) -> MutexGuard<'_, Option<Cancellation>> {
+        self.active
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
@@ -1267,6 +1377,40 @@ mod tests {
         assert_eq!(session.posting_cache_telemetry(), (0, 0));
         assert_eq!(session.record_cache_telemetry(), (0, 0));
         assert_eq!(session.result_cache_telemetry(), (0, 0));
+    }
+
+    #[test]
+    fn index_query_supersession_cancels_previous_content_query_token() {
+        let fixture = ContentSessionFixture::new("supersession-content");
+        let session = fixture.session();
+        let supersession = IndexQuerySupersession::new();
+        let previous = supersession.begin();
+
+        let report = supersession.search_content(&session, "needle", 5).unwrap();
+
+        assert!(matches!(previous.check(), Err(GfmError::Cancelled)));
+        assert_eq!(report.search.hits.len(), 1);
+        assert_eq!(report.search.hits[0].record.name, "Needle.md");
+        assert_eq!(report.result_cache_hits, 0);
+        assert_eq!(report.result_cache_misses, 1);
+    }
+
+    #[test]
+    fn index_query_supersession_recovers_poisoned_active_lock() {
+        let supersession = IndexQuerySupersession::new();
+        let previous = supersession.begin();
+
+        let _ = panic::catch_unwind(AssertUnwindSafe(|| {
+            let _guard = supersession
+                .active
+                .lock()
+                .expect("initial index query supersession lock");
+            panic!("poison index query supersession lock");
+        }));
+        let next = supersession.begin();
+
+        assert!(matches!(previous.check(), Err(GfmError::Cancelled)));
+        assert!(next.check().is_ok());
     }
 
     #[test]
