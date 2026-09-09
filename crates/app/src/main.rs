@@ -969,6 +969,7 @@ fn print_usage() {
   gfm fileprovider-invalidation-scan <state.tsv> <paths...>
   gfm fileprovider-invalidation-event <state.tsv> <create|metadata|modify|remove|rescan|other|rename> <path> [rename-to]
   gfm fileprovider-observed-metadata-invalidation <state.tsv> <create|metadata|modify|remove|rescan|other|rename> <path> [rename-to]
+  gfm fileprovider-observed-fanout-invalidation <state.tsv> <create|metadata|modify|remove|rescan|other|rename> <path> [rename-to]
   gfm fileprovider-observer-probe <state.tsv> <root> <target>
   gfm fileprovider-observer-metadata-probe <state.tsv> <root> <target>
   gfm volume-discovery [paths...]

@@ -55,8 +55,8 @@ use gfm_preview::{
 };
 use gfm_types::{FileEvent, FileEventKind, FileId, FileRecord, GfmError, Result, VolumeId};
 use gfm_ui::{
-    SidebarVolumeEventKind, SidebarVolumeInvalidation, SidebarVolumeKind, SidebarVolumeMountState,
-    SidebarVolumeSpec,
+    SidebarCloudInvalidation, SidebarCloudState, SidebarVolumeEventKind, SidebarVolumeInvalidation,
+    SidebarVolumeKind, SidebarVolumeMountState, SidebarVolumeSpec,
 };
 use std::collections::{BTreeSet, HashSet};
 use std::ffi::OsString;
@@ -546,6 +546,28 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "fileprovider observed metadata invalidation",
             )?;
             println!("{}", observed_metadata_invalidation_tsv(&observed));
+        }
+        "fileprovider-observed-fanout-invalidation" => {
+            let state_path = required_path(
+                args.next(),
+                "fileprovider-observed-fanout-invalidation requires a state path",
+            )?;
+            let event_kind = required_string(
+                args.next(),
+                "fileprovider-observed-fanout-invalidation requires an event kind",
+            )?;
+            let path = required_path(
+                args.next(),
+                "fileprovider-observed-fanout-invalidation requires a path",
+            )?;
+            let event =
+                parse_fileprovider_event(&event_kind, path, args.next().map(PathBuf::from))?;
+            let observed = run_fileprovider_observed_invalidation(
+                state_path,
+                event,
+                "fileprovider observed fanout invalidation",
+            )?;
+            println!("{}", observed_fanout_invalidation_tsv(&observed));
         }
         "fileprovider-observer-probe" => {
             let state_path = required_path(
@@ -3420,6 +3442,63 @@ fn observed_native_icon_invalidation_tsv(observed: &FileProviderObservedInvalida
             .map(|report| report.as_tsv()),
     );
     lines.join("\n")
+}
+
+fn observed_fanout_invalidation_tsv(observed: &FileProviderObservedInvalidation) -> String {
+    let mut lines = vec![observed.as_tsv()];
+    for report in &observed.report.changes {
+        lines.push(NativeIconInvalidationReport::from_fileprovider(report).as_tsv());
+        let preview = decide_invalidation(preview_invalidation_for_fileprovider(report));
+        lines.push(format!(
+            "preview-fileprovider-invalidation\t{}\treason={}\tinvalidate-memory={}\tinvalidate-disk={}",
+            escape_field(&report.path.to_string_lossy()),
+            preview.reason,
+            preview.invalidate_memory,
+            preview.invalidate_disk
+        ));
+        lines.push(
+            SidebarCloudInvalidation::new(
+                report.path.clone(),
+                sidebar_cloud_state(report.previous),
+                sidebar_cloud_state(report.current.storage_state),
+                report.current.progress.percent_milli,
+                report.invalidate_sidebar,
+                report.reason,
+            )
+            .with_progress_context(
+                Some(report.current.progress.source.to_string()),
+                report.current.progress.reason.clone(),
+            )
+            .as_tsv(),
+        );
+        lines.push(
+            ProviderMetadataInvalidationReport::from_provider_transition(
+                report.path.clone(),
+                report.previous.as_str(),
+                report.current.storage_state.as_str(),
+                report.reindex_metadata,
+                report.state_changed,
+                report.reason,
+            )
+            .as_tsv(),
+        );
+    }
+    lines.join("\n")
+}
+
+fn sidebar_cloud_state(state: CloudStorageState) -> SidebarCloudState {
+    match state {
+        CloudStorageState::LocalOnly => SidebarCloudState::None,
+        CloudStorageState::Downloaded => SidebarCloudState::AvailableOffline,
+        CloudStorageState::Evicted => SidebarCloudState::CloudOnly,
+        CloudStorageState::Downloading => SidebarCloudState::Downloading,
+        CloudStorageState::Uploading => SidebarCloudState::Syncing,
+        CloudStorageState::Waiting => SidebarCloudState::Waiting,
+        CloudStorageState::Conflict => SidebarCloudState::Conflict,
+        CloudStorageState::Offline => SidebarCloudState::Unavailable,
+        CloudStorageState::Unknown => SidebarCloudState::Waiting,
+        CloudStorageState::Removed => SidebarCloudState::Unavailable,
+    }
 }
 
 fn run_fileprovider_read<T>(

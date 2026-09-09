@@ -12009,6 +12009,78 @@ fn fileprovider_observed_metadata_invalidation_persists_snapshot_on_visible_work
 }
 
 #[test]
+fn fileprovider_observed_fanout_invalidation_feeds_all_downstream_contracts_from_binary() {
+    let root = unique_temp_dir("gfm-cli-fileprovider-fanout-root");
+    let state = root.join("fileprovider-state.tsv");
+    let item = root.join("Remote.icloud-placeholder");
+    fs::write(&item, "remote placeholder").unwrap();
+    xattr::set(&item, "com.apple.icloud.placeholder", b"1").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "fileprovider-observed-fanout-invalidation",
+            state.to_str().unwrap(),
+            "metadata",
+            item.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_worker_admitted(&stderr, "fileprovider observed fanout invalidation", &root);
+    assert_worker_admitted(&stderr, "fileprovider observed fanout invalidation", &item);
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains(
+            "fileprovider-observed-invalidation\tevents=1\tevent-kinds=metadata\tpaths=1"
+        ),
+        "{stdout}"
+    );
+    assert!(stdout.contains("native-icon-invalidation\t"), "{stdout}");
+    assert!(
+        stdout.contains("preview-fileprovider-invalidation\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("sidebar-cloud-invalidation\t"), "{stdout}");
+    assert!(
+        stdout.contains("provider-metadata-invalidation\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tinvalidate-cache=true\t"), "{stdout}");
+    assert!(
+        stdout.contains("\treason=content-or-icloud\tinvalidate-memory=true\tinvalidate-disk=true"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\tinvalidate-row=true\treason=sidebar-cloud-state-changed"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\tschedule-metadata-update=true\tinvalidate-query-cache=true\t"),
+        "{stdout}"
+    );
+
+    let stored = fs::read_to_string(&state).unwrap();
+    assert!(
+        stored.starts_with("gfm-fileprovider-state-v2\n"),
+        "{stored}"
+    );
+    assert!(
+        stored.contains("domain=icloud-drive;state=evicted;"),
+        "{stored}"
+    );
+    assert!(stored.contains(&item.display().to_string()), "{stored}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn preview_cache_fileprovider_observed_invalidation_runs_on_visible_worker_from_binary() {
     let root = unique_temp_dir("gfm-cli-preview-fileprovider-observed-root");
     let cache = root.join("preview-cache");
