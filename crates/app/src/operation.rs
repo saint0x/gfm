@@ -964,25 +964,24 @@ fn preflight_operation_target_probe(
         if requirement.role != OperationAccessRole::DestinationParent {
             continue;
         }
-        let probe_path = operation_target_probe_path_checked(
+        let probe = operation_target_probe_path_checked(
             &requirement.path,
             requirement.role,
             volume_report,
             &mut check_control,
         )?;
         check_control()?;
-        if volume_blocks_operation_probe(volume_report, &probe_path) {
+        if volume_blocks_operation_probe(volume_report, &probe.path) {
             continue;
         }
         check_control()?;
-        match probe_path.try_exists() {
-            Ok(_) => {}
-            Err(err) => {
-                return Err(GfmError::io(
-                    &probe_path,
+        if probe.exists.is_none() {
+            operation_target_path_exists(&probe.path).map_err(|err| {
+                GfmError::io(
+                    &probe.path,
                     format!("operation target path existence unavailable: {err}"),
-                ));
-            }
+                )
+            })?;
         }
     }
     Ok(())
@@ -1583,6 +1582,7 @@ fn stored_bookmark_decision_with_refresh_checked(
 #[cfg(test)]
 fn operation_access_probe_path(path: &Path, role: OperationAccessRole) -> PathBuf {
     operation_access_probe_path_with_policy(path, role, None, ProbePathErrorPolicy::Stop, || Ok(()))
+        .map(|probe| probe.path)
         .unwrap_or_else(|_| path.to_path_buf())
 }
 
@@ -1599,6 +1599,7 @@ fn operation_access_probe_path_checked(
         ProbePathErrorPolicy::Stop,
         check_control,
     )
+    .map(|probe| probe.path)
 }
 
 fn operation_target_probe_path_checked(
@@ -1606,7 +1607,7 @@ fn operation_target_probe_path_checked(
     role: OperationAccessRole,
     volume_report: &VolumeDiscoveryReport,
     check_control: impl FnMut() -> Result<()>,
-) -> Result<PathBuf> {
+) -> Result<OperationProbePath> {
     operation_access_probe_path_with_policy(
         path,
         role,
@@ -1622,27 +1623,48 @@ enum ProbePathErrorPolicy {
     Report,
 }
 
+struct OperationProbePath {
+    path: PathBuf,
+    exists: Option<bool>,
+}
+
 fn operation_access_probe_path_with_policy(
     path: &Path,
     role: OperationAccessRole,
     volume_report: Option<&VolumeDiscoveryReport>,
     error_policy: ProbePathErrorPolicy,
     mut check_control: impl FnMut() -> Result<()>,
-) -> Result<PathBuf> {
+) -> Result<OperationProbePath> {
     check_control()?;
     if !matches!(role, OperationAccessRole::DestinationParent) {
-        return Ok(path.to_path_buf());
+        return Ok(OperationProbePath {
+            path: path.to_path_buf(),
+            exists: None,
+        });
     }
     if volume_report.is_some_and(|report| volume_blocks_operation_probe(report, path)) {
-        return Ok(path.to_path_buf());
+        return Ok(OperationProbePath {
+            path: path.to_path_buf(),
+            exists: None,
+        });
     }
     let mut candidate = path.to_path_buf();
     loop {
         check_control()?;
-        match candidate.try_exists() {
-            Ok(true) => break,
+        match operation_target_path_exists(&candidate) {
+            Ok(true) => {
+                return Ok(OperationProbePath {
+                    path: candidate,
+                    exists: Some(true),
+                });
+            }
             Err(err) => match error_policy {
-                ProbePathErrorPolicy::Stop => break,
+                ProbePathErrorPolicy::Stop => {
+                    return Ok(OperationProbePath {
+                        path: candidate,
+                        exists: None,
+                    });
+                }
                 ProbePathErrorPolicy::Report => {
                     return Err(GfmError::io(
                         &candidate,
@@ -1652,16 +1674,29 @@ fn operation_access_probe_path_with_policy(
             },
             Ok(false) => {
                 let Some(parent) = candidate.parent() else {
-                    break;
+                    return Ok(OperationProbePath {
+                        path: candidate,
+                        exists: Some(false),
+                    });
                 };
                 if parent == candidate {
-                    break;
+                    return Ok(OperationProbePath {
+                        path: candidate,
+                        exists: Some(false),
+                    });
                 }
                 candidate = parent.to_path_buf();
             }
         }
     }
-    Ok(candidate)
+}
+
+fn operation_target_path_exists(path: &Path) -> std::io::Result<bool> {
+    match fs::metadata(path) {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err),
+    }
 }
 
 fn volume_blocks_operation_probe(report: &VolumeDiscoveryReport, path: &Path) -> bool {
@@ -2625,6 +2660,26 @@ mod tests {
             unavailable_child
         );
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn checked_destination_parent_probe_returns_known_existing_probe_state() {
+        let root = unique_temp_dir("gfm-app-op-destination-parent-known-state");
+        let destination = root.join("missing").join("leaf.txt");
+        let report = VolumeDiscoveryReport::from_paths(vec![root.clone()]);
+
+        let probe = operation_target_probe_path_checked(
+            &destination,
+            OperationAccessRole::DestinationParent,
+            &report,
+            || Ok(()),
+        )
+        .unwrap();
+
+        assert_eq!(probe.path, root);
+        assert_eq!(probe.exists, Some(true));
+        assert!(!destination.exists());
         fs::remove_dir_all(root).unwrap();
     }
 
