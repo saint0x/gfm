@@ -166,7 +166,13 @@ fn preflight_permission_state_volume_with_report(
         });
     }
     if volume.reachable != Some(false) {
-        if !volume.read_only || read_only_root_allows_permission_state_write(volume, probe_path) {
+        if !volume.read_only
+            || read_only_root_allows_permission_state_write_checked(
+                volume,
+                probe_path,
+                &mut check_control,
+            )?
+        {
             return Ok(());
         }
         return Err(GfmError::Permission {
@@ -198,11 +204,25 @@ fn read_only_root_allows_permission_state_write(
     volume: &gfm_mac::VolumeDescriptor,
     probe_path: &Path,
 ) -> bool {
-    volume.path == Path::new("/")
+    read_only_root_allows_permission_state_write_checked(volume, probe_path, || Ok(()))
+        .unwrap_or(false)
+}
+
+fn read_only_root_allows_permission_state_write_checked(
+    volume: &gfm_mac::VolumeDescriptor,
+    probe_path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<bool> {
+    if volume.path != Path::new("/") {
+        return Ok(false);
+    }
+    check_control()?;
+    Ok(
         && matches!(
             SecurityScopedAccessReport::evaluate(probe_path, AccessIntent::Write).action,
             SecurityDecisionAction::Allow
-        )
+        ),
+    )
 }
 
 fn permission_state_is_file_checked(
@@ -240,12 +260,10 @@ fn write_probe_existing_ancestor_checked(
     preflight_permission_state_write_target_volume_checked(path, &mut check_control)?;
     check_control()?;
     let mut candidate = write_probe_path(path)?.to_path_buf();
-    while !candidate.try_exists().map_err(|err| {
-        GfmError::io(
-            &candidate,
-            format!("permission state ancestor existence unavailable: {err}"),
-        )
-    })? {
+    loop {
+        if permission_state_ancestor_exists_checked(&candidate, &mut check_control)? {
+            break;
+        }
         check_control()?;
         let Some(parent) = candidate.parent() else {
             break;
@@ -258,6 +276,21 @@ fn write_probe_existing_ancestor_checked(
     }
     check_control()?;
     Ok(candidate)
+}
+
+fn permission_state_ancestor_exists_checked(
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<bool> {
+    check_control()?;
+    match fs::metadata(path) {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("permission state ancestor existence unavailable: {err}"),
+        )),
+    }
 }
 
 fn preflight_permission_state_write_target_volume_checked(
@@ -354,6 +387,11 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[cfg(unix)]
+    use std::ffi::OsString;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt;
 
     static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -851,6 +889,29 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn permission_state_ancestor_exists_checked_honors_pre_cancelled_control_before_metadata() {
+        let path = invalid_path("gfm-permission-refresh-ancestor-pre-cancel");
+
+        let err = permission_state_ancestor_exists_checked(&path, || Err(GfmError::Cancelled))
+            .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn permission_state_ancestor_exists_checked_surfaces_unavailable_metadata() {
+        let path = invalid_path("gfm-permission-refresh-ancestor-invalid");
+
+        let err = permission_state_ancestor_exists_checked(&path, || Ok(())).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("permission state ancestor existence unavailable"));
+    }
+
     #[test]
     fn refresh_state_refuses_read_only_system_root_when_probe_is_denied() {
         let state = PathBuf::from("/System/gfm-permission-state.tsv");
@@ -881,5 +942,15 @@ mod tests {
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    #[cfg(unix)]
+    fn invalid_path(label: &str) -> PathBuf {
+        let mut bytes = std::env::temp_dir().into_os_string().into_vec();
+        bytes.push(b'/');
+        bytes.extend_from_slice(label.as_bytes());
+        bytes.push(0);
+        bytes.extend_from_slice(b"path");
+        PathBuf::from(OsString::from_vec(bytes))
     }
 }
