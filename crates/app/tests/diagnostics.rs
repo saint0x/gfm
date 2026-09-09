@@ -797,6 +797,7 @@ fn diagnostics_exports_trace_and_selects_parity_baseline_from_binary() {
     let trace = root.join("trace.json");
     let config = root.join("config.toml");
     let baseline = root.join("baselines");
+    write_parity_baseline_manifest(&baseline, "25A354");
 
     let trace_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["diagnostics-trace-export", trace.to_str().unwrap()])
@@ -829,7 +830,7 @@ fn diagnostics_exports_trace_and_selects_parity_baseline_from_binary() {
     );
     let parity_stderr = String::from_utf8_lossy(&parity_output.stderr);
     assert_worker_admitted(&parity_stderr, "diagnostics parity config", &root);
-    assert_worker_admitted(&parity_stderr, "diagnostics parity baseline", &root);
+    assert_worker_admitted(&parity_stderr, "diagnostics parity baseline", &baseline);
     let saved = fs::read_to_string(config).unwrap();
     assert!(saved.contains("25A354"), "{saved}");
     assert!(saved.contains("baselines"), "{saved}");
@@ -842,6 +843,7 @@ fn diagnostics_parity_baseline_escapes_control_character_paths_from_binary() {
     let root = unique_temp_dir("gfm-cli-diagnostics-parity-escaped");
     let config = root.join("config\tfile.toml");
     let baseline = root.join("baselines\troot");
+    write_parity_baseline_manifest(&baseline, "25A354");
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
@@ -863,6 +865,34 @@ fn diagnostics_parity_baseline_escapes_control_character_paths_from_binary() {
     assert!(stdout.contains("baselines\\troot"), "{stdout}");
     assert!(!stdout.contains("config\tfile.toml"), "{stdout}");
     assert!(!stdout.contains("baselines\troot"), "{stdout}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn diagnostics_parity_baseline_rejects_missing_manifest_from_binary() {
+    let root = unique_temp_dir("gfm-cli-diagnostics-parity-missing-manifest");
+    let config = root.join("config.toml");
+    let baseline = root.join("baselines");
+    fs::create_dir_all(&baseline).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "diagnostics-parity-baseline",
+            config.to_str().unwrap(),
+            baseline.to_str().unwrap(),
+            "25A354",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("25A354"), "{stdout}");
+    assert!(stderr.contains("parity baseline manifest"), "{stderr}");
+    assert!(stderr.contains("manifest.tsv"), "{stderr}");
+    assert!(!config.exists());
 
     fs::remove_dir_all(root).unwrap();
 }
@@ -1011,6 +1041,17 @@ fn assert_worker_admitted(stderr: &str, worker: &str, path: &Path) {
         }),
         "{stderr}"
     );
+}
+
+fn write_parity_baseline_manifest(root: &Path, macos_build: &str) {
+    fs::create_dir_all(root).unwrap();
+    fs::write(
+        root.join("manifest.tsv"),
+        format!(
+            "profile\tmacos-build={macos_build}\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-{macos_build}-default\n"
+        ),
+    )
+    .unwrap();
 }
 
 fn unique_temp_dir(prefix: &str) -> PathBuf {

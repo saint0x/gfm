@@ -197,6 +197,7 @@ pub struct ParityBaselineReport {
     pub config_path: PathBuf,
     pub baseline_root: PathBuf,
     pub macos_build: String,
+    pub manifest_path: PathBuf,
 }
 
 pub fn select_parity_baseline(
@@ -227,6 +228,8 @@ pub fn select_parity_baseline_checked(
         ));
     }
     check_control()?;
+    let manifest_path = validate_parity_baseline_manifest(&baseline_root, &macos_build)?;
+    check_control()?;
     let mut config = store.load_or_create_default_checked(&mut check_control)?;
     check_control()?;
     config.parity.baseline_root = baseline_root.clone();
@@ -237,7 +240,179 @@ pub fn select_parity_baseline_checked(
         config_path: store.path().to_path_buf(),
         baseline_root,
         macos_build,
+        manifest_path,
     })
+}
+
+fn validate_parity_baseline_manifest(baseline_root: &Path, macos_build: &str) -> Result<PathBuf> {
+    let manifest_path = baseline_root.join("manifest.tsv");
+    let content = fs::read_to_string(&manifest_path).map_err(|err| {
+        GfmError::io(
+            &manifest_path,
+            format!("parity baseline manifest unavailable: {err}"),
+        )
+    })?;
+    let mut saw_matching_profile = false;
+    for (line_index, line) in content.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let fields = line.split('\t').collect::<Vec<_>>();
+        if fields.first() != Some(&"profile") {
+            continue;
+        }
+        let profile = BaselineManifestProfile::parse(line_index, &fields)?;
+        if profile.macos_build == macos_build {
+            saw_matching_profile = true;
+            profile.validate(line_index)?;
+            break;
+        }
+    }
+    if !saw_matching_profile {
+        return Err(GfmError::Format(format!(
+            "parity baseline manifest {} does not contain macOS build `{macos_build}`",
+            manifest_path.display()
+        )));
+    }
+    Ok(manifest_path)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BaselineManifestProfile {
+    macos_build: String,
+    fixture_manifest: String,
+    captured_at: String,
+    capture_command: String,
+    reviewer: String,
+    signer: String,
+    approved_mask_set: String,
+}
+
+impl BaselineManifestProfile {
+    fn parse(line_index: usize, fields: &[&str]) -> Result<Self> {
+        let mut profile = Self {
+            macos_build: String::new(),
+            fixture_manifest: String::new(),
+            captured_at: String::new(),
+            capture_command: String::new(),
+            reviewer: String::new(),
+            signer: String::new(),
+            approved_mask_set: String::new(),
+        };
+        for field in fields.iter().skip(1) {
+            let Some((key, value)) = field.split_once('=') else {
+                return Err(GfmError::Format(format!(
+                    "parity baseline manifest line {} has invalid profile field `{field}`",
+                    line_index + 1
+                )));
+            };
+            match key {
+                "macos-build" => profile.macos_build = value.to_string(),
+                "fixture-manifest" => profile.fixture_manifest = value.to_string(),
+                "captured-at" => profile.captured_at = value.to_string(),
+                "capture-command" => profile.capture_command = value.to_string(),
+                "reviewer" => profile.reviewer = value.to_string(),
+                "signer" => profile.signer = value.to_string(),
+                "approved-mask-set" => profile.approved_mask_set = value.to_string(),
+                _ => {}
+            }
+        }
+        Ok(profile)
+    }
+
+    fn validate(&self, line_index: usize) -> Result<()> {
+        for (name, value) in [
+            ("macos-build", self.macos_build.as_str()),
+            ("fixture-manifest", self.fixture_manifest.as_str()),
+            ("captured-at", self.captured_at.as_str()),
+            ("capture-command", self.capture_command.as_str()),
+            ("reviewer", self.reviewer.as_str()),
+            ("signer", self.signer.as_str()),
+            ("approved-mask-set", self.approved_mask_set.as_str()),
+        ] {
+            if value.trim().is_empty() {
+                return Err(GfmError::Format(format!(
+                    "parity baseline manifest line {} missing {name}",
+                    line_index + 1
+                )));
+            }
+        }
+        if !is_valid_utc_capture_timestamp(&self.captured_at) {
+            return Err(GfmError::Format(format!(
+                "parity baseline manifest line {} has invalid captured-at `{}`",
+                line_index + 1,
+                self.captured_at
+            )));
+        }
+        if !approved_mask_set_matches_macos_build(&self.approved_mask_set, &self.macos_build) {
+            return Err(GfmError::Format(format!(
+                "parity baseline manifest line {} has approved-mask-set `{}` that does not match macos-build `{}`",
+                line_index + 1,
+                self.approved_mask_set,
+                self.macos_build
+            )));
+        }
+        Ok(())
+    }
+}
+
+fn approved_mask_set_matches_macos_build(mask_set: &str, macos_build: &str) -> bool {
+    mask_set
+        .split(|ch: char| !(ch.is_ascii_alphanumeric()))
+        .any(|token| token == macos_build)
+}
+
+fn is_valid_utc_capture_timestamp(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != 20
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || bytes[10] != b'T'
+        || bytes[13] != b':'
+        || bytes[16] != b':'
+        || bytes[19] != b'Z'
+    {
+        return false;
+    }
+    for (index, byte) in bytes.iter().enumerate() {
+        if !matches!(index, 4 | 7 | 10 | 13 | 16 | 19) && !byte.is_ascii_digit() {
+            return false;
+        }
+    }
+
+    let year = parse_fixed_u32(bytes, 0, 4);
+    let month = parse_fixed_u32(bytes, 5, 7);
+    let day = parse_fixed_u32(bytes, 8, 10);
+    let hour = parse_fixed_u32(bytes, 11, 13);
+    let minute = parse_fixed_u32(bytes, 14, 16);
+    let second = parse_fixed_u32(bytes, 17, 19);
+    if year == 0 || !(1..=12).contains(&month) || hour > 23 || minute > 59 || second > 59 {
+        return false;
+    }
+
+    let max_day = days_in_month(year, month);
+    (1..=max_day).contains(&day)
+}
+
+fn parse_fixed_u32(bytes: &[u8], start: usize, end: usize) -> u32 {
+    bytes[start..end]
+        .iter()
+        .fold(0, |value, byte| value * 10 + u32::from(byte - b'0'))
+}
+
+const fn days_in_month(year: u32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => 0,
+    }
+}
+
+const fn is_leap_year(year: u32) -> bool {
+    (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -507,6 +682,7 @@ mod tests {
     fn selects_parity_baseline_in_config_store() {
         let root = unique_temp_dir("gfm-diagnostics-parity");
         let store = ConfigStore::new(root.join("config.toml"));
+        write_parity_baseline_manifest(&root.join("baselines"), "25A354");
 
         let report = select_parity_baseline(&store, root.join("baselines"), "25A354").unwrap();
         let config = store.load().unwrap();
@@ -514,6 +690,7 @@ mod tests {
         assert_eq!(report.config_path, root.join("config.toml"));
         assert_eq!(config.parity.baseline_root, root.join("baselines"));
         assert_eq!(config.parity.profile.macos_build, "25A354");
+        assert_eq!(report.manifest_path, root.join("baselines/manifest.tsv"));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -536,6 +713,8 @@ mod tests {
     fn cancellable_parity_baseline_preserves_existing_config() {
         let root = unique_temp_dir("gfm-diagnostics-parity-cancel-preserve");
         let store = ConfigStore::new(root.join("config.toml"));
+        write_parity_baseline_manifest(&root.join("baselines-a"), "25A354");
+        write_parity_baseline_manifest(&root.join("baselines-b"), "25A355");
         select_parity_baseline(&store, root.join("baselines-a"), "25A354").unwrap();
         let before = fs::read(store.path()).unwrap();
         let mut checks = 0usize;
@@ -553,6 +732,52 @@ mod tests {
         assert!(matches!(result, Err(GfmError::Cancelled)));
         assert!(checks >= 8);
         assert_eq!(fs::read(store.path()).unwrap(), before);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn parity_baseline_selection_rejects_missing_manifest() {
+        let root = unique_temp_dir("gfm-diagnostics-parity-missing-manifest");
+        let store = ConfigStore::new(root.join("config.toml"));
+        fs::create_dir_all(root.join("baselines")).unwrap();
+
+        let err = select_parity_baseline(&store, root.join("baselines"), "25A354").unwrap_err();
+
+        assert!(err.to_string().contains("parity baseline manifest"));
+        assert!(!store.path().exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn parity_baseline_selection_rejects_mismatched_build_manifest() {
+        let root = unique_temp_dir("gfm-diagnostics-parity-mismatched-manifest");
+        let store = ConfigStore::new(root.join("config.toml"));
+        write_parity_baseline_manifest(&root.join("baselines"), "25B999");
+
+        let err = select_parity_baseline(&store, root.join("baselines"), "25A354").unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("does not contain macOS build `25A354`"));
+        assert!(!store.path().exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn parity_baseline_selection_rejects_incomplete_manifest_profile() {
+        let root = unique_temp_dir("gfm-diagnostics-parity-incomplete-manifest");
+        let store = ConfigStore::new(root.join("config.toml"));
+        fs::create_dir_all(root.join("baselines")).unwrap();
+        fs::write(
+            root.join("baselines/manifest.tsv"),
+            "profile\tmacos-build=25A354\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\n",
+        )
+        .unwrap();
+
+        let err = select_parity_baseline(&store, root.join("baselines"), "25A354").unwrap_err();
+
+        assert!(err.to_string().contains("missing approved-mask-set"));
+        assert!(!store.path().exists());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -607,5 +832,16 @@ mod tests {
         ));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    fn write_parity_baseline_manifest(root: &Path, macos_build: &str) {
+        fs::create_dir_all(root).unwrap();
+        fs::write(
+            root.join("manifest.tsv"),
+            format!(
+                "profile\tmacos-build={macos_build}\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-{macos_build}-default\n"
+            ),
+        )
+        .unwrap();
     }
 }

@@ -703,6 +703,46 @@ fn parity_gate_rejects_unresolved_system_appearance_from_binary() {
 }
 
 #[test]
+fn parity_gate_rejects_surface_specific_capture_from_wrong_fixture_scenario_from_binary() {
+    let root = unique_temp_dir("gfm-cli-parity-gate-wrong-fixture-scenario");
+    let manifest = root.join("gate.tsv");
+    let fixture_manifest = root.join("fixtures/manifest.tsv");
+    fs::write(root.join("expected.rgba"), [0, 0, 0, 255]).unwrap();
+    fs::write(root.join("actual.rgba"), [0, 0, 0, 255]).unwrap();
+    fs::create_dir_all(root.join("fixtures/icon")).unwrap();
+    fs::write(
+        &fixture_manifest,
+        format!(
+            "scenario\troot\tfinder-view\tfiles\tdirectories\nicon\t{}\ticon\t1\t0\n",
+            root.join("fixtures/icon").display()
+        ),
+    )
+    .unwrap();
+    fs::write(
+        &manifest,
+        "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\texpected.rgba\tactual.rgba\t1\t1\t\t1040\t720\tactive\ticon\tfixtures/icon\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["parity-gate", manifest.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("parity-gate\t"), "{stdout}");
+    assert!(
+        stderr.contains("with view mode icon and matching scenario"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("toolbar"), "{stderr}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn parity_gate_rejects_duplicate_capture_profile_rows_from_binary() {
     let root = unique_temp_dir("gfm-cli-parity-gate-duplicate-profile-row");
     let manifest = root.join("gate.tsv");
@@ -1123,14 +1163,23 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
 fn write_capture_provenance_artifacts(root: &Path, fixture_root: &str) {
     fs::create_dir_all(root.join("fixtures")).unwrap();
     fs::create_dir_all(root.join(fixture_root)).unwrap();
+    let scenario = Path::new(fixture_root)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap();
+    let view = match scenario {
+        "list" | "text" => "list",
+        "column" | "sidebar" => "column",
+        "gallery" | "search" => "gallery",
+        _ => "icon",
+    };
     fs::write(
         root.join("fixtures/manifest.tsv"),
         format!(
-            "scenario\troot\tfinder-view\tfiles\tdirectories\nfixture-icon\t{}\ticon\t1\t0\nfixture-list\t{}\tlist\t1\t0\nfixture-column\t{}\tcolumn\t1\t0\nfixture-gallery\t{}\tgallery\t1\t0\n",
+            "scenario\troot\tfinder-view\tfiles\tdirectories\n{}\t{}\t{}\t1\t0\n",
+            scenario,
             root.join(fixture_root).display(),
-            root.join(fixture_root).display(),
-            root.join(fixture_root).display(),
-            root.join(fixture_root).display()
+            view
         ),
     )
     .unwrap();

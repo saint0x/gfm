@@ -426,17 +426,35 @@ fn validate_fixture_manifest_contains_capture(
         let root = resolve_manifest_path(base, fields[1]);
         if paths_refer_to_same_capture_root(&root, &provenance.fixture_root)
             && fields[2] == provenance.view_mode.as_str()
+            && fixture_scenario_matches_surface(fields[0], input.surface)
         {
             return Ok(());
         }
     }
     Err(GfmError::Format(format!(
-        "parity gate entry for {} requires captured fixture manifest {} to reference fixture root {} with view mode {}",
+        "parity gate entry for {} requires captured fixture manifest {} to reference fixture root {} with view mode {} and matching scenario",
         input.surface.as_str(),
         fixture_manifest.display(),
         provenance.fixture_root.display(),
         provenance.view_mode.as_str()
     )))
+}
+
+fn fixture_scenario_matches_surface(scenario: &str, surface: ParitySurface) -> bool {
+    match surface {
+        ParitySurface::Sidebar => scenario == "sidebar",
+        ParitySurface::Selection => scenario == "selection",
+        ParitySurface::Toolbar => scenario == "toolbar",
+        ParitySurface::Sheet => matches!(scenario, "sheet" | "conflict-sheet"),
+        ParitySurface::Menu => scenario == "menu",
+        ParitySurface::Layout
+        | ParitySurface::Text
+        | ParitySurface::Icon
+        | ParitySurface::Focus
+        | ParitySurface::Hover
+        | ParitySurface::Thumbnail
+        | ParitySurface::Preview => true,
+    }
 }
 
 fn paths_refer_to_same_capture_root(left: &Path, right: &Path) -> bool {
@@ -1565,6 +1583,36 @@ mod tests {
     }
 
     #[test]
+    fn parity_gate_rejects_surface_specific_capture_from_wrong_fixture_scenario() {
+        let root = unique_temp_dir("gfm-parity-gate-wrong-fixture-scenario");
+        fs::write(root.join("expected.rgba"), [1, 2, 3, 255]).unwrap();
+        fs::write(root.join("actual.rgba"), [1, 2, 3, 255]).unwrap();
+        fs::create_dir_all(root.join("fixtures/icon")).unwrap();
+        fs::write(
+            root.join("fixtures/manifest.tsv"),
+            format!(
+                "scenario\troot\tfinder-view\tfiles\tdirectories\nicon\t{}\ticon\t1\t0\n",
+                root.join("fixtures/icon").display()
+            ),
+        )
+        .unwrap();
+        fs::write(
+            root.join("gate.tsv"),
+            "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=light\tscale=2x\tcolor-profile=srgb\nentry\ttoolbar\texpected.rgba\tactual.rgba\t1\t1\t\t1040\t720\tactive\ticon\tfixtures/icon\n",
+        )
+        .unwrap();
+
+        let err = run_parity_gate_manifest(root.join("gate.tsv")).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("with view mode icon and matching scenario"));
+        assert!(err.to_string().contains("toolbar"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn parity_gate_rejects_provenance_mask_without_approved_set() {
         let root = unique_temp_dir("gfm-parity-gate-mask-missing-approval");
         fs::write(root.join("expected.rgba"), [1, 2, 3, 255]).unwrap();
@@ -2040,14 +2088,23 @@ mod tests {
     fn write_capture_provenance_artifacts(root: &Path, fixture_root: &str) {
         fs::create_dir_all(root.join("fixtures")).unwrap();
         fs::create_dir_all(root.join(fixture_root)).unwrap();
+        let scenario = Path::new(fixture_root)
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap();
+        let view = match scenario {
+            "list" | "text" => "list",
+            "column" | "sidebar" => "column",
+            "gallery" | "search" => "gallery",
+            _ => "icon",
+        };
         fs::write(
             root.join("fixtures/manifest.tsv"),
             format!(
-                "scenario\troot\tfinder-view\tfiles\tdirectories\nfixture-icon\t{}\ticon\t1\t0\nfixture-list\t{}\tlist\t1\t0\nfixture-column\t{}\tcolumn\t1\t0\nfixture-gallery\t{}\tgallery\t1\t0\n",
+                "scenario\troot\tfinder-view\tfiles\tdirectories\n{}\t{}\t{}\t1\t0\n",
+                scenario,
                 root.join(fixture_root).display(),
-                root.join(fixture_root).display(),
-                root.join(fixture_root).display(),
-                root.join(fixture_root).display()
+                view
             ),
         )
         .unwrap();
