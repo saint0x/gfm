@@ -36,9 +36,8 @@ GFM is macOS-only. It is a native Rust + GPUI Finder-parity file manager with GF
 1. Implement real Finder screenshot capture for each target macOS build/profile, including appearance, scale factor, color profile, focus state, view mode, window size, fixture root, and surface metadata.
 2. Implement deterministic GFM screenshot capture for the identical fixture matrix and profile metadata.
 3. Fail CI on every unapproved Finder drift for layout, text, icons, toolbar, sidebar, selection, focus, hover, thumbnail, preview, sheet, and menu regions.
-4. Add baseline update review bundles containing Finder screenshot, GFM screenshot, visual diff, first unmasked mismatch, per-region summaries, mask justifications, and signer/reviewer metadata.
-5. Enforce per-build mask files with tight rectangles and durable reasons. Masks are allowed only for unavoidable OS-owned dynamic pixels, never for GFM-owned layout/text/icon drift.
-6. Verify with crate tests, binary parity-gate tests, generated review artifacts, and Fozzy scenario coverage. Leave `STATUS.md` items 7 through 14 in place until the whole capture/baseline/diff/CI/review workflow is complete.
+4. Enforce per-build mask files with tight rectangles and durable reasons. Masks are allowed only for unavoidable OS-owned dynamic pixels, never for GFM-owned layout/text/icon drift.
+5. Verify with crate tests, binary parity-gate tests, generated review artifacts, and Fozzy scenario coverage. Leave `STATUS.md` items 7 through 14 in place until the whole capture/baseline/diff/CI/review workflow is complete.
 
 ## Performance-Critical Work Agent 2 Should Prefer
 
