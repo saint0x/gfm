@@ -11205,6 +11205,20 @@ fn extract_report_retries_transient_failure_from_binary() {
         journal_text.contains("1\t2\tcompleted\tcontent extraction"),
         "{journal_text}"
     );
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(
+        catalog_text.contains(&format!(
+            "payload\t1\textraction\tcontent extraction\t{}\t",
+            path.display()
+        )) && catalog_text.contains("\tvisible:content extraction:adaptive"),
+        "{catalog_text}"
+    );
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("progress\t1\tvisible\tvisible\tcontent extraction\t")
+            && progress_text.contains("\tcompleted\t3\t3\tcompleted:text:extracted\t"),
+        "{progress_text}"
+    );
 
     fs::remove_dir_all(root).unwrap();
     fs::remove_file(journal).unwrap();

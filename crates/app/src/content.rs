@@ -18,7 +18,7 @@ use crate::runtime::{
     run_scheduled_volume_task_cancellable_with_volume,
     run_scheduled_volume_task_cancellable_with_volume_and_payload_path,
     run_volume_task_cancellable, run_volume_task_cancellable_without_progress,
-    runtime_progress_store, RuntimeJobHandle,
+    runtime_progress_store, RuntimeJobHandle, ScheduledTaskOutcome,
 };
 use crate::{
     optional_path_arg, parse_battery_state, parse_io_pressure,
@@ -974,12 +974,12 @@ pub(crate) fn run_content_search_with_volume_report(
                 &volume_report,
                 || cancellation.check(),
             )?;
-            content_search_phase(&runtime, 1, "content-search:scan", &cancellation)?;
+            content_runtime_phase(&runtime, 1, "content-search:scan", &cancellation)?;
             let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
             let mut live = snapshot.into_live();
-            content_search_phase(&runtime, 2, "content-search:extract", &cancellation)?;
+            content_runtime_phase(&runtime, 2, "content-search:extract", &cancellation)?;
             let indexed = live.index_content_cancellable(&extractor, &cancellation)?;
-            content_search_phase(&runtime, 3, "content-search:query", &cancellation)?;
+            content_runtime_phase(&runtime, 3, "content-search:query", &cancellation)?;
             let hits =
                 live.search_with_snippets_cancellable(&query, 50, &extractor, 96, &cancellation)?;
             runtime.remember_completion_detail(format!(
@@ -989,12 +989,10 @@ pub(crate) fn run_content_search_with_volume_report(
             Ok((indexed, hits))
         },
     )?;
-    outcome.result.ok_or_else(|| {
-        GfmError::Format("content extraction search deferred before visible search".to_string())
-    })
+    visible_scheduled_result(outcome, "content extraction search")
 }
 
-fn content_search_phase(
+fn content_runtime_phase(
     runtime: &RuntimeJobHandle,
     completed_units: u64,
     detail: &'static str,
@@ -1003,6 +1001,12 @@ fn content_search_phase(
     runtime.progress_checked(JobProgressState::Running, completed_units, detail, || {
         cancellation.check()
     })
+}
+
+fn visible_scheduled_result<T>(outcome: ScheduledTaskOutcome<T>, label: &'static str) -> Result<T> {
+    outcome
+        .result
+        .ok_or_else(|| GfmError::Format(format!("{label} deferred before visible execution")))
 }
 
 fn content_volume_access_tsv(
@@ -1128,17 +1132,20 @@ fn run_extraction_report_after_preflight(
             .as_ref()
             .and_then(ForegroundContentIndexAccessReport::volume)
     });
-    run_retriable_volume_task_cancellable_with_payload_path(
-        volume,
+    let outcome = run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
         Priority::Visible,
+        JobPayloadKind::Extraction,
         worker,
+        current_host_job_scheduling_pressure(),
+        || Ok(volume),
         path.clone(),
-        move |cancellation| {
+        move |cancellation, runtime| {
             let path = path.clone();
             let extractor = extractor.clone();
             let retry_probe = retry_probe.clone();
             let retry_probe_access_report = retry_probe_access_report.clone();
             cancellation.check()?;
+            runtime.resize_checked(3, "content-extraction:preflight", || cancellation.check())?;
             if let (Some(retry_probe), Some(retry_probe_access_report)) =
                 (retry_probe.as_ref(), retry_probe_access_report.as_ref())
             {
@@ -1150,13 +1157,21 @@ fn run_extraction_report_after_preflight(
                 )?;
             }
             let _access = access_report.access_checked(worker, || cancellation.check())?;
-            cancellation.check()?;
+            content_runtime_phase(&runtime, 1, "content-extraction:read", &cancellation)?;
             let report = extractor.extract_path_report_checked(&path, || cancellation.check())?;
+            content_runtime_phase(&runtime, 2, "content-extraction:quarantine", &cancellation)?;
             let mut quarantine = ExtractionQuarantine::default();
             let decision = quarantine.record_report(&report);
+            content_runtime_phase(&runtime, 3, "content-extraction:format", &cancellation)?;
+            runtime.remember_completion_detail(format!(
+                "completed:{}:{}",
+                report.format.as_str(),
+                report.status.as_str()
+            ))?;
             Ok(format!("{}\n{}\n", report.as_tsv(), decision.as_tsv()))
         },
-    )
+    )?;
+    visible_scheduled_result(outcome, worker)
 }
 
 fn preflight_content_input_admission_before_runtime(
