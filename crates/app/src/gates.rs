@@ -10,12 +10,13 @@ use gfm_jobs::Priority;
 use gfm_mac::{AccessIntent, VolumeDiscoveryReport};
 use gfm_testkit::{
     capture_parity_screenshot_checked, diff_rgba_files, evaluate_pixel_threshold,
-    materialize_macrobench_fixture_report, materialize_parity_fixture, parse_parity_gate_manifest,
-    read_governed_mask_file, read_mask_file, run_large_sidecar_gate, run_macrobench,
-    run_macrobench_report, run_parity_gate, run_regression_gate, run_search_typing_benchmark,
-    run_search_typing_session_benchmark, verify_macrobench_artifacts, write_parity_review_bundle,
-    ColorProfile, DisplayScale, LargeSidecarGateOptions, MacOsParityProfile, MacrobenchOptions,
-    MacrobenchScale, MacrobenchStage, ParityAppearance, ParityCaptureMatrixOptions,
+    inspect_macrobench_workspace_capacity, materialize_macrobench_fixture_report,
+    materialize_parity_fixture, parse_parity_gate_manifest, read_governed_mask_file,
+    read_mask_file, run_large_sidecar_gate, run_macrobench, run_macrobench_report, run_parity_gate,
+    run_regression_gate, run_search_typing_benchmark, run_search_typing_session_benchmark,
+    verify_macrobench_artifacts, write_parity_review_bundle, ColorProfile, DisplayScale,
+    LargeSidecarGateOptions, MacOsParityProfile, MacrobenchOptions, MacrobenchScale,
+    MacrobenchStage, ParityAppearance, ParityCaptureMatrixOptions,
     ParityCapturePairManifestOptions, ParityCaptureTarget, ParityFixtureOptions,
     ParityFixtureScale, ParityFocusState, ParityGateInput, ParityScreenshotCaptureOptions,
     ParitySurface, PixelDiffOptions, PixelDriftThreshold, PixelSize, RegressionGateOptions,
@@ -139,6 +140,30 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 verification.max_peak_resident_bytes,
                 verification.budget_violations,
                 verification.passed
+            );
+        }
+        "macrobench-capacity" => {
+            let (workspace, scale) =
+                macrobench_fixture_options(args.next(), args.next(), "macrobench-capacity")?;
+            let report = inspect_macrobench_workspace_capacity(&workspace, scale)?;
+            println!(
+                "macrobench-capacity\tworkspace={}\tprobe={}\tfiles={}\tdirectories={}\testimated-fixture-bytes={}\treserve-bytes={}\trequired-available-bytes={}\tavailable-bytes={}\ttotal-bytes={}\trequired-nodes={}\treserve-nodes={}\trequired-available-nodes={}\tavailable-nodes={}\ttotal-nodes={}\tready={}\treason={}",
+                report.workspace.display(),
+                report.probe_path.display(),
+                report.estimate.files,
+                report.estimate.directories,
+                report.estimate.estimated_fixture_bytes,
+                report.estimate.reserve_bytes,
+                report.estimate.required_available_bytes,
+                report.available_bytes,
+                report.total_bytes,
+                report.estimate.required_nodes,
+                report.estimate.reserve_nodes,
+                report.estimate.required_available_nodes,
+                report.available_nodes,
+                report.total_nodes,
+                report.ready,
+                report.reason.as_deref().unwrap_or("")
             );
         }
         "macrobench-fixture" => {

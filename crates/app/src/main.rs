@@ -1022,6 +1022,7 @@ fn print_usage() {
   gfm macrobench <workspace> [smoke|standard|million]
   gfm macrobench-report <output-dir> <workspace> [smoke|standard|million]
   gfm macrobench-report-verify <output-dir> <min-files-materialized>
+  gfm macrobench-capacity <workspace> [smoke|standard|million]
   gfm macrobench-fixture <workspace> [smoke|standard|million]
   gfm parity-fixture <workspace> [smoke|standard]
   gfm parity-capture <finder|gfm> <fixture-root> <output.png> <provenance.tsv> <scenario> <icon|list|column|gallery> <macos-build> <hardware-profile> <display-profile> <app-version> <captured-at> <reviewer> <signer> <approved-mask-set> <light|dark> <1x|2x|3x> <srgb|display-p3> <active|inactive> <x> <y> <width> <height> [GFM.app] [--expires-at <timestamp>]

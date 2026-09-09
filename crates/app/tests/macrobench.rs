@@ -157,6 +157,50 @@ fn verifies_retained_macrobench_report_from_binary() {
 }
 
 #[test]
+fn reports_macrobench_capacity_from_binary_without_materializing() {
+    let root = unique_temp_dir("gfm-cli-macrobench-capacity");
+    let future_workspace = root.join("future").join("workspace");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "macrobench-capacity",
+            future_workspace.to_str().unwrap(),
+            "smoke",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(
+        stdout.contains("macrobench-capacity\tworkspace="),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tprobe="), "{stdout}");
+    assert!(stdout.contains("\tfiles=201\t"), "{stdout}");
+    assert!(stdout.contains("\trequired-available-bytes="), "{stdout}");
+    assert!(stdout.contains("\tavailable-bytes="), "{stdout}");
+    assert!(stdout.contains("\trequired-available-nodes="), "{stdout}");
+    assert!(stdout.contains("\tavailable-nodes="), "{stdout}");
+    assert!(stdout.contains("\tready=true\t"), "{stdout}");
+    assert!(stdout.contains("\treason="), "{stdout}");
+    assert!(
+        !future_workspace.exists(),
+        "macrobench-capacity must not create the inspected future workspace"
+    );
+    assert!(
+        !root.join("gfm-macrobench-fixture").exists(),
+        "macrobench-capacity must not materialize fixture data"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn materializes_macrobench_fixture_from_binary() {
     let root = unique_temp_dir("gfm-cli-macrobench-fixture");
 

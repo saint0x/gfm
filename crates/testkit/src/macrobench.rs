@@ -269,6 +269,19 @@ pub struct MacrobenchFixtureCapacityEstimate {
     pub required_available_bytes: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MacrobenchWorkspaceCapacityReport {
+    pub workspace: PathBuf,
+    pub probe_path: PathBuf,
+    pub estimate: MacrobenchFixtureCapacityEstimate,
+    pub total_bytes: u64,
+    pub available_bytes: u64,
+    pub total_nodes: u64,
+    pub available_nodes: u64,
+    pub ready: bool,
+    pub reason: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MacrobenchStage {
     IndexBuild,
@@ -465,49 +478,101 @@ pub fn preflight_macrobench_workspace_capacity(
     workspace: impl AsRef<Path>,
     scale: MacrobenchScale,
 ) -> Result<MacrobenchFixtureCapacityEstimate> {
-    let workspace = workspace.as_ref();
+    let report = inspect_macrobench_workspace_capacity(workspace, scale)?;
+    if let Some(reason) = report.reason {
+        return Err(GfmError::Format(reason));
+    }
+    Ok(report.estimate)
+}
+
+pub fn inspect_macrobench_workspace_capacity(
+    workspace: impl AsRef<Path>,
+    scale: MacrobenchScale,
+) -> Result<MacrobenchWorkspaceCapacityReport> {
+    let workspace = workspace.as_ref().to_path_buf();
+    let probe_path = existing_capacity_probe_path(&workspace)?;
     let estimate = scale.capacity_estimate();
-    let volume = VolumeDescriptor::for_path_checked(workspace, || Ok(()))?;
-    let available = volume.capacity.available_bytes;
-    let node_capacity = read_volume_node_capacity(workspace)?;
+    let volume = VolumeDescriptor::for_path_checked(&probe_path, || Ok(()))?;
+    let node_capacity = read_volume_node_capacity(&probe_path)?;
+    let total_bytes = volume.capacity.total_bytes;
+    let available_bytes = volume.capacity.available_bytes;
+    let total_nodes = node_capacity.total_nodes;
     let available_nodes = node_capacity.available_nodes;
-    if available == 0 {
-        return Err(GfmError::Format(format!(
-            "macrobench workspace capacity unavailable for {}",
-            workspace.display()
-        )));
-    }
-    if available_nodes == 0 {
-        return Err(GfmError::Format(format!(
-            "macrobench workspace node capacity unavailable for {}",
-            workspace.display()
-        )));
-    }
-    if available < estimate.required_available_bytes {
-        return Err(GfmError::Format(format!(
-            "macrobench workspace capacity insufficient for {}: available={} required={} estimated-fixture={} reserve={} files={} directories={}",
+    let reason = if available_bytes == 0 {
+        Some(format!(
+            "macrobench workspace capacity unavailable for {} via {}",
             workspace.display(),
-            available,
+            probe_path.display()
+        ))
+    } else if available_nodes == 0 {
+        Some(format!(
+            "macrobench workspace node capacity unavailable for {} via {}",
+            workspace.display(),
+            probe_path.display()
+        ))
+    } else if available_bytes < estimate.required_available_bytes {
+        Some(format!(
+            "macrobench workspace capacity insufficient for {} via {}: available={} required={} estimated-fixture={} reserve={} files={} directories={}",
+            workspace.display(),
+            probe_path.display(),
+            available_bytes,
             estimate.required_available_bytes,
             estimate.estimated_fixture_bytes,
             estimate.reserve_bytes,
             estimate.files,
             estimate.directories
-        )));
-    }
-    if available_nodes < estimate.required_available_nodes {
-        return Err(GfmError::Format(format!(
-            "macrobench workspace node capacity insufficient for {}: available-nodes={} required-nodes={} fixture-nodes={} reserve-nodes={} files={} directories={}",
+        ))
+    } else if available_nodes < estimate.required_available_nodes {
+        Some(format!(
+            "macrobench workspace node capacity insufficient for {} via {}: available-nodes={} required-nodes={} fixture-nodes={} reserve-nodes={} files={} directories={}",
             workspace.display(),
+            probe_path.display(),
             available_nodes,
             estimate.required_available_nodes,
             estimate.required_nodes,
             estimate.reserve_nodes,
             estimate.files,
             estimate.directories
-        )));
+        ))
+    } else {
+        None
+    };
+    Ok(MacrobenchWorkspaceCapacityReport {
+        workspace,
+        probe_path,
+        estimate,
+        total_bytes,
+        available_bytes,
+        total_nodes,
+        available_nodes,
+        ready: reason.is_none(),
+        reason,
+    })
+}
+
+fn existing_capacity_probe_path(path: &Path) -> Result<PathBuf> {
+    for ancestor in path.ancestors() {
+        if ancestor.as_os_str().is_empty() {
+            continue;
+        }
+        match fs::metadata(ancestor) {
+            Ok(metadata) if metadata.is_dir() => return Ok(ancestor.to_path_buf()),
+            Ok(_) => continue,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(err) => {
+                return Err(GfmError::io(
+                    ancestor,
+                    format!("macrobench workspace capacity probe unavailable: {err}"),
+                ));
+            }
+        }
     }
-    Ok(estimate)
+    std::env::current_dir().map_err(|err| {
+        GfmError::Format(format!(
+            "macrobench workspace capacity probe unavailable for {}: {err}",
+            path.display()
+        ))
+    })
 }
 
 pub fn verify_macrobench_artifacts(
@@ -1192,6 +1257,72 @@ mod tests {
         assert!(
             !root.join(FIXTURE_ROOT).exists(),
             "capacity preflight must not materialize fixture data"
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn inspects_macrobench_capacity_for_future_workspace_without_materializing() {
+        let root = unique_temp_dir("gfm-testkit-macrobench-capacity-report");
+        let future_workspace = root.join("future").join("workspace");
+
+        let report =
+            inspect_macrobench_workspace_capacity(&future_workspace, MacrobenchScale::smoke())
+                .unwrap();
+
+        assert_eq!(report.workspace, future_workspace);
+        assert_eq!(report.probe_path, root);
+        assert_eq!(report.estimate.files, 201);
+        assert!(report.total_bytes >= report.available_bytes);
+        assert!(report.total_nodes >= report.available_nodes);
+        assert!(report.ready, "{report:?}");
+        assert_eq!(report.reason, None);
+        assert!(
+            !report.workspace.exists(),
+            "capacity inspection must not create the future workspace"
+        );
+        assert!(
+            !root.join(FIXTURE_ROOT).exists(),
+            "capacity inspection must not materialize fixture data"
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reports_unready_capacity_for_impossible_macrobench_scale() {
+        let root = unique_temp_dir("gfm-testkit-macrobench-capacity-unready");
+        let future_workspace = root.join("future").join("workspace");
+        let scale = MacrobenchScale {
+            small_files: usize::MAX,
+            medium_files: 0,
+            huge_files: 0,
+            developer_projects: 0,
+            document_files: 0,
+            media_files: 0,
+            icloud_files: 0,
+            external_files: 0,
+            network_files: 0,
+        };
+
+        let report = inspect_macrobench_workspace_capacity(&future_workspace, scale).unwrap();
+
+        assert!(!report.ready, "{report:?}");
+        assert!(
+            report
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("macrobench workspace capacity insufficient")),
+            "{report:?}"
+        );
+        assert!(
+            !future_workspace.exists(),
+            "capacity inspection must not create the future workspace"
+        );
+        assert!(
+            !root.join(FIXTURE_ROOT).exists(),
+            "capacity inspection must not materialize fixture data"
         );
 
         fs::remove_dir_all(root).unwrap();

@@ -23,12 +23,13 @@ pub use gates::{
     SearchTypingBenchmarkViolation, SearchTypingSessionBenchmarkReport,
 };
 pub use macrobench::{
-    materialize_macrobench_fixture, materialize_macrobench_fixture_report,
-    preflight_macrobench_workspace_capacity, run_macrobench, run_macrobench_report,
-    verify_macrobench_artifacts, write_macrobench_artifacts, MacrobenchArtifactReport,
-    MacrobenchArtifactVerification, MacrobenchFixtureCapacityEstimate, MacrobenchFixtureReport,
-    MacrobenchFixtureScenarioReport, MacrobenchMeasurement, MacrobenchOptions, MacrobenchReport,
-    MacrobenchScale, MacrobenchScenario, MacrobenchStage,
+    inspect_macrobench_workspace_capacity, materialize_macrobench_fixture,
+    materialize_macrobench_fixture_report, preflight_macrobench_workspace_capacity, run_macrobench,
+    run_macrobench_report, verify_macrobench_artifacts, write_macrobench_artifacts,
+    MacrobenchArtifactReport, MacrobenchArtifactVerification, MacrobenchFixtureCapacityEstimate,
+    MacrobenchFixtureReport, MacrobenchFixtureScenarioReport, MacrobenchMeasurement,
+    MacrobenchOptions, MacrobenchReport, MacrobenchScale, MacrobenchScenario, MacrobenchStage,
+    MacrobenchWorkspaceCapacityReport,
 };
 pub use parity::{
     materialize_parity_fixture, ParityFixtureOptions, ParityFixtureReport, ParityFixtureScale,
