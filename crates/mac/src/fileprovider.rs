@@ -2803,7 +2803,7 @@ fn storage_state_for_path_with_probe(
     } else {
         match known_path_exists
             .map(Ok)
-            .unwrap_or_else(|| path.try_exists())
+            .unwrap_or_else(|| fileprovider_operation_path_exists(path))
         {
             Ok(true) => CloudStorageState::Downloaded,
             Ok(false) => CloudStorageState::Unknown,
