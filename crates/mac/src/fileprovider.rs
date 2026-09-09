@@ -2550,7 +2550,7 @@ fn should_read_provider_xattrs(
     }
     has_path_hint
         || native_identity.status == NativeFileProviderIdentityStatus::Available
-        || native.is_ubiquitous == Some(true)
+        || native_resource_is_ubiquitous(native)
         || native_has_ubiquitous_materialization_evidence(native)
 }
 
@@ -2565,7 +2565,7 @@ fn should_query_native_fileprovider_identity(path: &Path, hints: &CloudHints) ->
     if native_resource_proves_local_only(&hints.native, &hints.native_identity) {
         return false;
     }
-    hints.native.is_ubiquitous == Some(true)
+    native_resource_is_ubiquitous(&hints.native)
         || native_has_ubiquitous_materialization_evidence(&hints.native)
         || hints.provider_identifier.is_some()
         || hints
@@ -2596,7 +2596,7 @@ fn domain_for_path(path: &Path, hints: &CloudHints) -> FileProviderDomain {
         .domain_identifier
         .as_deref()
         .is_some_and(is_icloud_domain_identifier)
-        || hints.native.is_ubiquitous == Some(true)
+        || native_resource_is_ubiquitous(&hints.native)
         || native_has_ubiquitous_materialization_evidence(&hints.native)
         || path_components(path)
             .iter()
@@ -2708,7 +2708,7 @@ fn storage_state_for_path_with_probe(
         return Ok(CloudStorageState::LocalOnly);
     }
 
-    if hints.native.is_ubiquitous == Some(true)
+    if native_resource_is_ubiquitous(&hints.native)
         || native_has_ubiquitous_materialization_evidence(&hints.native)
     {
         if native_has_offline_error(&hints.native) {
@@ -2720,7 +2720,7 @@ fn storage_state_for_path_with_probe(
         if native_has_provider_zero_byte_materialization_evidence(hints) {
             return Ok(CloudStorageState::Downloaded);
         }
-        if hints.native.is_ubiquitous == Some(true) {
+        if native_resource_is_ubiquitous(&hints.native) {
             return Ok(CloudStorageState::Unknown);
         }
     }
@@ -2999,6 +2999,9 @@ fn path_only_provider_hint(source: &str) -> bool {
 }
 
 fn native_storage_state(values: &NativeFileProviderResourceValues) -> Option<CloudStorageState> {
+    if !native_resource_values_available(values) {
+        return None;
+    }
     if values.is_excluded_from_sync == Some(true) {
         Some(CloudStorageState::LocalOnly)
     } else if values.has_unresolved_conflicts == Some(true) {
@@ -3048,6 +3051,9 @@ fn native_storage_state(values: &NativeFileProviderResourceValues) -> Option<Clo
 }
 
 fn native_has_remote_placeholder_evidence(values: &NativeFileProviderResourceValues) -> bool {
+    if !native_resource_values_available(values) {
+        return false;
+    }
     matches!(
         values.downloading_status,
         Some(NativeUbiquitousDownloadingStatus::NotDownloaded)
@@ -3057,6 +3063,9 @@ fn native_has_remote_placeholder_evidence(values: &NativeFileProviderResourceVal
 }
 
 fn native_has_unallocated_placeholder_evidence(values: &NativeFileProviderResourceValues) -> bool {
+    if !native_resource_values_available(values) {
+        return false;
+    }
     let allocated = values
         .total_file_allocated_size_bytes
         .or(values.file_allocated_size_bytes);
@@ -3134,7 +3143,7 @@ fn materialization_source_for_state(
         return CloudMaterializationSource::Filesystem;
     }
     if (state == CloudStorageState::LocalOnly && native_proves_local_only(hints))
-        || hints.native.is_ubiquitous == Some(true)
+        || native_resource_is_ubiquitous(&hints.native)
         || native_has_ubiquitous_materialization_evidence(&hints.native)
         || native_allocated_file_materialization_reports_state(state, hints)
     {
@@ -3235,7 +3244,7 @@ fn materialization_reason_for_state(
     if state == CloudStorageState::LocalOnly && native_proves_local_only(hints) {
         return Some("native-url-resource-not-provider-backed".to_string());
     }
-    if hints.native.is_ubiquitous == Some(true)
+    if native_resource_is_ubiquitous(&hints.native)
         || native_has_ubiquitous_materialization_evidence(&hints.native)
         || native_allocated_file_materialization_reports_state(state, hints)
     {
@@ -3384,23 +3393,25 @@ fn progress_for_state(state: CloudStorageState, hints: &CloudHints) -> CloudTran
     match state {
         CloudStorageState::LocalOnly => CloudTransferProgress::idle("not-fileprovider-backed"),
         CloudStorageState::Downloaded => {
-            if hints.native.percent_downloaded_milli == Some(100_000)
-                || hints.native.is_downloaded == Some(true)
-                || matches!(
-                    hints.native.downloading_status,
-                    Some(
-                        NativeUbiquitousDownloadingStatus::Downloaded
-                            | NativeUbiquitousDownloadingStatus::Current
-                    )
-                )
+            if native_resource_values_available(&hints.native)
+                && (hints.native.percent_downloaded_milli == Some(100_000)
+                    || hints.native.is_downloaded == Some(true)
+                    || matches!(
+                        hints.native.downloading_status,
+                        Some(
+                            NativeUbiquitousDownloadingStatus::Downloaded
+                                | NativeUbiquitousDownloadingStatus::Current
+                        )
+                    ))
             {
                 CloudTransferProgress::from_native(
                     CloudTransferDirection::Download,
                     Some(100_000),
                     hints.native.download_requested.unwrap_or(false),
                 )
-            } else if hints.native.percent_uploaded_milli == Some(100_000)
-                || hints.native.is_uploaded == Some(true)
+            } else if native_resource_values_available(&hints.native)
+                && (hints.native.percent_uploaded_milli == Some(100_000)
+                    || hints.native.is_uploaded == Some(true))
             {
                 CloudTransferProgress::from_native(
                     CloudTransferDirection::Upload,
@@ -3423,8 +3434,12 @@ fn progress_for_state(state: CloudStorageState, hints: &CloudHints) -> CloudTran
         }
         CloudStorageState::Evicted => CloudTransferProgress {
             direction: CloudTransferDirection::Download,
-            percent_milli: hints.native.percent_downloaded_milli.or(Some(0)),
-            requested: hints.native.download_requested.unwrap_or(false),
+            percent_milli: native_resource_values_available(&hints.native)
+                .then_some(hints.native.percent_downloaded_milli)
+                .flatten()
+                .or(Some(0)),
+            requested: native_resource_values_available(&hints.native)
+                && hints.native.download_requested.unwrap_or(false),
             complete: false,
             indeterminate: false,
             source: if native_has_remote_placeholder_evidence(&hints.native) {
@@ -3438,21 +3453,36 @@ fn progress_for_state(state: CloudStorageState, hints: &CloudHints) -> CloudTran
                     .to_string(),
             ),
         },
-        CloudStorageState::Downloading => CloudTransferProgress::from_native(
-            CloudTransferDirection::Download,
-            hints.native.percent_downloaded_milli,
-            hints.native.download_requested.unwrap_or(true),
-        ),
-        CloudStorageState::Uploading => CloudTransferProgress::from_native(
-            CloudTransferDirection::Upload,
-            hints.native.percent_uploaded_milli,
-            false,
-        ),
-        CloudStorageState::Waiting => CloudTransferProgress::from_native(
-            CloudTransferDirection::Materialize,
-            hints.native.percent_downloaded_milli,
-            hints.native.download_requested.unwrap_or(false),
-        ),
+        CloudStorageState::Downloading if native_resource_values_available(&hints.native) => {
+            CloudTransferProgress::from_native(
+                CloudTransferDirection::Download,
+                hints.native.percent_downloaded_milli,
+                hints.native.download_requested.unwrap_or(true),
+            )
+        }
+        CloudStorageState::Downloading => {
+            CloudTransferProgress::from_native(CloudTransferDirection::Download, None, true)
+        }
+        CloudStorageState::Uploading if native_resource_values_available(&hints.native) => {
+            CloudTransferProgress::from_native(
+                CloudTransferDirection::Upload,
+                hints.native.percent_uploaded_milli,
+                false,
+            )
+        }
+        CloudStorageState::Uploading => {
+            CloudTransferProgress::from_native(CloudTransferDirection::Upload, None, false)
+        }
+        CloudStorageState::Waiting if native_resource_values_available(&hints.native) => {
+            CloudTransferProgress::from_native(
+                CloudTransferDirection::Materialize,
+                hints.native.percent_downloaded_milli,
+                hints.native.download_requested.unwrap_or(false),
+            )
+        }
+        CloudStorageState::Waiting => {
+            CloudTransferProgress::from_native(CloudTransferDirection::Materialize, None, false)
+        }
         CloudStorageState::Conflict => CloudTransferProgress::idle("conflict-requires-resolution"),
         CloudStorageState::Offline => CloudTransferProgress::idle("provider-offline"),
         CloudStorageState::Unknown => CloudTransferProgress::idle("unknown-provider-state"),
@@ -3547,7 +3577,7 @@ fn removed_provider_domain_for_path(path: &Path) -> FileProviderDomain {
 }
 
 fn provider_commands_available(hints: &CloudHints) -> bool {
-    hints.native.is_ubiquitous == Some(true)
+    native_resource_is_ubiquitous(&hints.native)
         || native_has_ubiquitous_materialization_evidence(&hints.native)
 }
 
@@ -3684,10 +3714,21 @@ fn native_has_offline_error(values: &NativeFileProviderResourceValues) -> bool {
 fn native_has_ubiquitous_materialization_evidence(
     values: &NativeFileProviderResourceValues,
 ) -> bool {
+    if !native_resource_values_available(values) {
+        return false;
+    }
     if values.is_ubiquitous == Some(false) || values.is_excluded_from_sync == Some(true) {
         return false;
     }
     native_storage_state(values).is_some() || native_has_offline_error(values)
+}
+
+fn native_resource_is_ubiquitous(values: &NativeFileProviderResourceValues) -> bool {
+    native_resource_values_available(values) && values.is_ubiquitous == Some(true)
+}
+
+fn native_resource_values_available(values: &NativeFileProviderResourceValues) -> bool {
+    values.status == gfm_mac_sys::NativeFileProviderStatus::Available
 }
 
 fn escape_field(value: &str) -> String {
@@ -9005,6 +9046,75 @@ mod tests {
             report.materialization_reason.as_deref(),
             Some("native FileProvider URL resource values unavailable")
         );
+    }
+
+    #[test]
+    fn unavailable_native_url_values_ignore_contradictory_downloaded_bits() {
+        let path = PathBuf::from("/tmp/Downloaded.icloud");
+        let mut native = native_values();
+        native.status = NativeFileProviderStatus::Unavailable;
+        native.reason = Some("native FileProvider URL resource values unavailable".to_string());
+        native.is_ubiquitous = Some(true);
+        native.is_downloaded = Some(true);
+        native.percent_downloaded_milli = Some(100_000);
+        native.file_size_bytes = Some(64);
+        native.file_allocated_size_bytes = Some(64);
+        let hints = CloudHints {
+            native,
+            native_identity: identity_not_queried(),
+            xattrs: Vec::new(),
+            xattr_values: Vec::new(),
+            provider_identifier: None,
+            source: "native-url-resource".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.domain, FileProviderDomain::ICloudDrive);
+        assert_eq!(report.storage_state, CloudStorageState::Unknown);
+        assert_eq!(report.materialization, CloudMaterialization::Unknown);
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::NativeUrlResourceUnavailable
+        );
+        assert_eq!(
+            report.materialization_reason.as_deref(),
+            Some("native FileProvider URL resource values unavailable")
+        );
+        assert_eq!(report.progress.direction, CloudTransferDirection::Idle);
+        assert_eq!(report.progress.percent_milli, None);
+    }
+
+    #[test]
+    fn unavailable_native_url_values_ignore_contradictory_inflight_bits() {
+        let path = PathBuf::from("/tmp/Downloading.icloud");
+        let mut native = native_values();
+        native.status = NativeFileProviderStatus::Unavailable;
+        native.reason = Some("native FileProvider URL resource values unavailable".to_string());
+        native.is_ubiquitous = Some(true);
+        native.is_downloading = Some(true);
+        native.percent_downloaded_milli = Some(42_000);
+        native.download_requested = Some(true);
+        let hints = CloudHints {
+            native,
+            native_identity: identity_not_queried(),
+            xattrs: Vec::new(),
+            xattr_values: Vec::new(),
+            provider_identifier: None,
+            source: "native-url-resource".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.domain, FileProviderDomain::ICloudDrive);
+        assert_eq!(report.storage_state, CloudStorageState::Unknown);
+        assert_eq!(report.materialization, CloudMaterialization::Unknown);
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::NativeUrlResourceUnavailable
+        );
+        assert_eq!(report.progress.direction, CloudTransferDirection::Idle);
+        assert_eq!(report.progress.percent_milli, None);
     }
 
     #[test]
