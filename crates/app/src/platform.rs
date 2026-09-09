@@ -9,10 +9,10 @@ use crate::volume::{resolve_volume_event_path, volume_event_invalidation_for_des
 use crate::{
     index_volume_descriptor, parse_required_scheduling_pressure, parse_usize_arg,
     run_preview_contract_adaptive_with_volume_and_payload_path,
-    run_preview_contract_cancellable_with_payload_path,
     runtime::{
-        default_job_journal_path, preflight_runtime_job_state, run_volume_task_cancellable,
-        RuntimeJobHandle,
+        default_job_journal_path, preflight_runtime_job_state,
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path,
+        run_volume_task_cancellable, RuntimeJobHandle,
     },
 };
 use gfm_fs::record_for_path_checked;
@@ -3666,8 +3666,9 @@ fn run_icon_preview_retry_probe(
     );
     let volume = access_report.volume();
     let payload_path = access_report.path.clone();
-    run_preview_contract_cancellable_with_payload_path(
+    run_preview_retry_contract(
         volume,
+        Priority::Visible,
         JobPayloadKind::Preview,
         WORKER,
         payload_path,
@@ -3724,8 +3725,9 @@ fn run_quicklook_session_retry_probe(
     );
     let volume = access_report.volume();
     let payload_path = access_report.path.clone();
-    run_preview_contract_cancellable_with_payload_path(
+    run_preview_retry_contract(
         volume,
+        Priority::Visible,
         JobPayloadKind::Preview,
         WORKER,
         payload_path,
@@ -3782,8 +3784,9 @@ fn run_thumbnail_generation_retry_probe(
     );
     let volume = access_report.volume();
     let payload_path = access_report.path.clone();
-    run_preview_contract_cancellable_with_payload_path(
+    run_preview_retry_contract(
         volume,
+        Priority::Background,
         JobPayloadKind::Thumbnail,
         WORKER,
         payload_path,
@@ -3792,6 +3795,58 @@ fn run_thumbnail_generation_retry_probe(
             build_thumbnail_generation_contract(&access_report, WORKER, pressure, &cancellation)
         },
     )
+}
+
+fn run_preview_retry_contract<T>(
+    volume: Option<gfm_types::VolumeId>,
+    priority: Priority,
+    payload_kind: JobPayloadKind,
+    worker: &'static str,
+    payload_path: PathBuf,
+    build: impl Fn(Cancellation) -> Result<T> + Send + Sync + 'static,
+) -> Result<T>
+where
+    T: Send + 'static,
+{
+    let pressure = current_host_job_scheduling_pressure();
+    let outcome = run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+        priority,
+        payload_kind,
+        worker,
+        pressure,
+        || Ok(volume),
+        payload_path,
+        move |cancellation, runtime| {
+            cancellation.check()?;
+            runtime.resize_checked(3, "preview-retry:preflight", || cancellation.check())?;
+            let contract = build(cancellation.clone())?;
+            runtime.progress_checked(
+                JobProgressState::Running,
+                1,
+                "preview-retry:build",
+                || cancellation.check(),
+            )?;
+            runtime.remember_completion_detail("completed:contract".to_string())?;
+            runtime.progress_checked(
+                JobProgressState::Running,
+                2,
+                "preview-retry:complete",
+                || cancellation.check(),
+            )?;
+            runtime.progress_checked(
+                JobProgressState::Running,
+                3,
+                "preview-retry:reported",
+                || cancellation.check(),
+            )?;
+            Ok(contract)
+        },
+    )?;
+    outcome.result.ok_or_else(|| {
+        GfmError::Format(format!(
+            "{worker} retry probe deferred before visible preview execution"
+        ))
+    })
 }
 
 fn build_icon_preview_contract(

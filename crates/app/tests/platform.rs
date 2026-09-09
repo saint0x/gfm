@@ -1500,10 +1500,14 @@ fn quicklook_session_retries_transient_preview_failure_from_binary() {
     let document = root.join("Retry.pdf");
     let retry_probe = root.join("quicklook-retry.state");
     let journal = root.join("jobs.gfmjournal");
+    let catalog = root.join("jobs.gfmjobs");
+    let progress = root.join("jobs.gfmprogress");
     std::fs::write(&document, b"%PDF-1.7\nretry quicklook").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .env("GFM_JOB_JOURNAL", &journal)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
         .arg("quicklook-session-retry-probe")
         .arg(&document)
         .arg(&retry_probe)
@@ -1564,6 +1568,20 @@ fn quicklook_session_retries_transient_preview_failure_from_binary() {
         journal_text.contains("1\t2\tcompleted\tquicklook preview"),
         "{journal_text}"
     );
+    let catalog_text = std::fs::read_to_string(&catalog).unwrap();
+    assert!(
+        catalog_text.contains(&format!(
+            "payload\t1\tpreview\tquicklook preview\t{}\t",
+            document.display()
+        )) && catalog_text.contains("\tvisible:quicklook preview:adaptive"),
+        "{catalog_text}"
+    );
+    let progress_text = std::fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("progress\t1\tvisible\tvisible\tquicklook preview\t")
+            && progress_text.contains("\tcompleted\t3\t3\tcompleted:contract\t"),
+        "{progress_text}"
+    );
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -1577,10 +1595,14 @@ fn thumbnail_generation_retries_transient_preview_failure_from_binary() {
     let image = root.join("Retry.png");
     let retry_probe = root.join("thumbnail-retry.state");
     let journal = root.join("jobs.gfmjournal");
+    let catalog = root.join("jobs.gfmjobs");
+    let progress = root.join("jobs.gfmprogress");
     std::fs::write(&image, b"\x89PNG\r\n\x1a\nretry thumbnail").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .env("GFM_JOB_JOURNAL", &journal)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
         .arg("thumbnail-generation-retry-probe")
         .arg(&image)
         .arg(&retry_probe)
@@ -1633,6 +1655,20 @@ fn thumbnail_generation_retries_transient_preview_failure_from_binary() {
     assert!(
         journal_text.contains("1\t2\tcompleted\tthumbnail generation"),
         "{journal_text}"
+    );
+    let catalog_text = std::fs::read_to_string(&catalog).unwrap();
+    assert!(
+        catalog_text.contains(&format!(
+            "payload\t1\tthumbnail\tthumbnail generation\t{}\t",
+            image.display()
+        )) && catalog_text.contains("\tbackground:thumbnail generation:adaptive"),
+        "{catalog_text}"
+    );
+    let progress_text = std::fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("progress\t1\tbackground\tbackground\tthumbnail generation\t")
+            && progress_text.contains("\tcompleted\t3\t3\tcompleted:contract\t"),
+        "{progress_text}"
     );
 
     let _ = std::fs::remove_dir_all(root);
@@ -2156,9 +2192,13 @@ fn icon_preview_retries_transient_preview_failure_from_binary() {
     let app = root.join("GFM.app");
     let retry_probe = root.join("icon-preview-retry.state");
     let journal = root.join("jobs.gfmjournal");
+    let catalog = root.join("jobs.gfmjobs");
+    let progress = root.join("jobs.gfmprogress");
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .env("GFM_JOB_JOURNAL", &journal)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
         .arg("icon-preview-retry-probe")
         .arg(&app)
         .arg(&retry_probe)
@@ -2210,6 +2250,20 @@ fn icon_preview_retries_transient_preview_failure_from_binary() {
     assert!(
         journal_text.contains("1\t2\tcompleted\ticon preview"),
         "{journal_text}"
+    );
+    let catalog_text = std::fs::read_to_string(&catalog).unwrap();
+    assert!(
+        catalog_text.contains(&format!(
+            "payload\t1\tpreview\ticon preview\t{}\t",
+            app.display()
+        )) && catalog_text.contains("\tvisible:icon preview:adaptive"),
+        "{catalog_text}"
+    );
+    let progress_text = std::fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("progress\t1\tvisible\tvisible\ticon preview\t")
+            && progress_text.contains("\tcompleted\t3\t3\tcompleted:contract\t"),
+        "{progress_text}"
     );
 
     let _ = std::fs::remove_dir_all(root);

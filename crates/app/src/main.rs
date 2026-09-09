@@ -732,26 +732,6 @@ pub(crate) fn parent_or_cwd(path: &Path) -> &Path {
     }
 }
 
-pub(crate) fn run_preview_contract_cancellable_with_payload_path<T>(
-    volume: Option<VolumeId>,
-    payload_kind: JobPayloadKind,
-    label: &'static str,
-    payload_path: impl Into<PathBuf>,
-    build: impl Fn(gfm_jobs::Cancellation) -> Result<T> + Send + Sync + 'static,
-) -> Result<T>
-where
-    T: Send + 'static,
-{
-    runtime::run_retriable_volume_task_cancellable_with_kind_and_payload_path(
-        volume,
-        Priority::Visible,
-        payload_kind,
-        label,
-        payload_path,
-        build,
-    )
-}
-
 pub(crate) fn run_preview_contract_adaptive_with_volume_and_payload_path<T>(
     priority: Priority,
     payload_kind: JobPayloadKind,
