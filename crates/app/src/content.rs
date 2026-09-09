@@ -13,7 +13,7 @@ use crate::extract::{
 use crate::platform::{current_host_job_scheduling_pressure, scheduling_pressure_tsv};
 use crate::runtime::{
     default_content_job_path, default_extraction_quarantine_path, default_job_journal_path,
-    run_retriable_volume_task_cancellable_with_payload_path, run_scheduled_volume_task_cancellable,
+    run_scheduled_volume_task_cancellable,
     run_scheduled_volume_task_cancellable_with_runtime_and_payload_path,
     run_scheduled_volume_task_cancellable_with_volume,
     run_scheduled_volume_task_cancellable_with_volume_and_payload_path,
@@ -402,18 +402,24 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     .as_ref()
                     .and_then(ForegroundContentIndexAccessReport::volume)
             });
-            let (inaccessible_len, indexed) =
-                run_retriable_volume_task_cancellable_with_payload_path(
-                    volume,
+            let (inaccessible_len, indexed) = visible_scheduled_result(
+                run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
                     Priority::Visible,
+                    JobPayloadKind::Indexing,
                     "content segment index",
+                    current_host_job_scheduling_pressure(),
+                    || Ok(volume),
                     output.clone(),
-                    move |cancellation| {
+                    move |cancellation, runtime| {
                         let root = root.clone();
                         let output = output.clone();
                         let retry_probe = retry_probe.clone();
                         let retry_probe_access_report = retry_probe_access_report.clone();
+                        let access_reports = access_reports.clone();
                         cancellation.check()?;
+                        runtime.resize_checked(3, "content-segment-index:preflight", || {
+                            cancellation.check()
+                        })?;
                         if let (Some(retry_probe), Some(retry_probe_access_report)) =
                             (retry_probe.as_ref(), retry_probe_access_report.as_ref())
                         {
@@ -426,19 +432,39 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         }
                         let _access = access_reports
                             .access_checked("content segment index", || cancellation.check())?;
-                        cancellation.check()?;
+                        content_runtime_phase(
+                            &runtime,
+                            1,
+                            "content-segment-index:scan",
+                            &cancellation,
+                        )?;
                         let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
                         let inaccessible_len = snapshot.inaccessible.len();
-                        cancellation.check()?;
+                        content_runtime_phase(
+                            &runtime,
+                            2,
+                            "content-segment-index:write",
+                            &cancellation,
+                        )?;
                         let indexed = snapshot.save_content_segment_cancellable(
                             output,
                             &Extractor::default(),
                             Vec::new(),
                             &cancellation,
                         )?;
+                        content_runtime_phase(
+                            &runtime,
+                            3,
+                            "content-segment-index:complete",
+                            &cancellation,
+                        )?;
+                        runtime
+                            .remember_completion_detail(format!("completed:{indexed} indexed"))?;
                         Ok((inaccessible_len, indexed))
                     },
-                )?;
+                )?,
+                "content segment index",
+            )?;
             eprintln!(
                 "content-segmented {} files; {} inaccessible",
                 indexed, inaccessible_len
