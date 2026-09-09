@@ -1859,7 +1859,7 @@ impl FileProviderOperationReport {
             ));
         }
         check_control()?;
-        if before.domain == FileProviderDomain::Local || !before.source_contains_native_resource() {
+        if !before.supports_ubiquity_operation_backend() {
             return Ok(Self::refused(
                 path,
                 operation,
@@ -2343,6 +2343,10 @@ impl FileProviderStateReport {
         self.source
             .split('+')
             .any(|source| source == "native-url-resource")
+    }
+
+    fn supports_ubiquity_operation_backend(&self) -> bool {
+        self.domain == FileProviderDomain::ICloudDrive && self.source_contains_native_resource()
     }
 }
 
@@ -6314,6 +6318,50 @@ mod tests {
             report.commands.reason.as_deref(),
             Some("not-native-provider-backed")
         );
+        assert!(!report.supports_ubiquity_operation_backend());
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn third_party_fileprovider_materialization_never_uses_icloud_operation_backend() {
+        let root = unique_temp_dir();
+        let path = root.join("ProviderItem.txt");
+        fs::write(&path, "provider").unwrap();
+        let mut native = native_values();
+        native.has_unresolved_conflicts = Some(false);
+        native.is_downloading = Some(false);
+        native.is_uploading = Some(false);
+        native.file_size_bytes = Some(1024);
+        native.file_allocated_size_bytes = Some(1024);
+        let hints = CloudHints {
+            native,
+            native_identity: NativeFileProviderIdentity {
+                status: NativeFileProviderIdentityStatus::Available,
+                item_identifier: Some("item-456".to_string()),
+                domain_identifier: Some("com.example.drive.account".to_string()),
+                reason: None,
+            },
+            xattrs: Vec::new(),
+            xattr_values: Vec::new(),
+            provider_identifier: Some("com.example.drive.account".to_string()),
+            source: "native-url-resource+nsfileprovidermanager".to_string(),
+        };
+
+        let report = FileProviderStateReport::from_hints(path, hints);
+
+        assert_eq!(report.domain, FileProviderDomain::FileProvider);
+        assert_eq!(
+            report.materialization_source,
+            CloudMaterializationSource::NativeUrlResource
+        );
+        assert_eq!(report.commands.download, CloudCommandState::Disabled);
+        assert_eq!(report.commands.evict, CloudCommandState::Disabled);
+        assert_eq!(
+            report.commands.reason.as_deref(),
+            Some("not-native-provider-backed")
+        );
+        assert!(!report.supports_ubiquity_operation_backend());
 
         fs::remove_dir_all(root).unwrap();
     }
