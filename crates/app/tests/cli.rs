@@ -3854,12 +3854,16 @@ fn reports_fair_scan_from_binary() {
     let root = unique_temp_dir("gfm-cli-fair-scan-root");
     let visible = root.join("Visible");
     let background = root.join("Background");
+    let catalog = unique_temp_path("gfm-cli-fair-scan-runtime", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-fair-scan-runtime", "gfmprogress");
     fs::create_dir_all(&visible).unwrap();
     fs::create_dir_all(&background).unwrap();
     fs::write(visible.join("Needle.md"), "visible").unwrap();
     fs::write(background.join("Bulk.md"), "background").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
         .args([
             "fair-scan",
             root.to_str().unwrap(),
@@ -3887,8 +3891,26 @@ fn reports_fair_scan_from_binary() {
     assert!(stdout.starts_with("fair-scan\t"), "{stdout}");
     assert!(stdout.contains("\tvisible-records="), "{stdout}");
     assert!(stdout.contains("\tbackground-records="), "{stdout}");
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(
+        catalog_text.contains(&format!(
+            "payload\t1\tindexing\tindex\t{}\t",
+            root.display()
+        )) && catalog_text.contains("\tvisible:index:adaptive"),
+        "{catalog_text}"
+    );
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("progress\t1\tvisible\tvisible\tindex\t")
+            && progress_text.contains("\tcompleted\t3\t3\tcompleted:")
+            && progress_text.contains(" visible:")
+            && progress_text.contains(" background\t"),
+        "{progress_text}"
+    );
 
     fs::remove_dir_all(root).unwrap();
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
 }
 
 #[test]

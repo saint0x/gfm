@@ -369,23 +369,42 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             access_reports.preflight_volumes()?;
             let volume = access_reports.first_volume();
-            let report = run_volume_task_cancellable(
-                volume,
-                Priority::Visible,
+            let report = visible_scheduled_result(
+                run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+                    Priority::Visible,
+                    JobPayloadKind::Indexing,
+                    "index",
+                    current_host_job_scheduling_pressure(),
+                    || Ok(volume),
+                    root.clone(),
+                    move |cancellation, runtime| {
+                        let root = root.clone();
+                        let visible_roots = visible_roots.clone();
+                        let access_reports = access_reports.clone();
+                        cancellation.check()?;
+                        runtime
+                            .resize_checked(3, "fair-scan:preflight", || cancellation.check())?;
+                        let _root_access =
+                            access_reports.root_access_checked(|| cancellation.check())?;
+                        index_runtime_phase(&runtime, 1, "fair-scan:visible-roots", &cancellation)?;
+                        let _visible_accesses =
+                            access_reports.read_accesses_checked(|| cancellation.check())?;
+                        index_runtime_phase(&runtime, 2, "fair-scan:build", &cancellation)?;
+                        let report = Indexer::default().build_fair_cancellable(
+                            root,
+                            &visible_roots,
+                            visible_burst,
+                            &cancellation,
+                        )?;
+                        index_runtime_phase(&runtime, 3, "fair-scan:complete", &cancellation)?;
+                        runtime.remember_completion_detail(format!(
+                            "completed:{} visible:{} background",
+                            report.summary.visible_records, report.summary.background_records
+                        ))?;
+                        Ok(report)
+                    },
+                )?,
                 "index",
-                move |cancellation| {
-                    let _root_access =
-                        access_reports.root_access_checked(|| cancellation.check())?;
-                    let _visible_accesses =
-                        access_reports.read_accesses_checked(|| cancellation.check())?;
-                    cancellation.check()?;
-                    Indexer::default().build_fair_cancellable(
-                        root,
-                        &visible_roots,
-                        visible_burst,
-                        &cancellation,
-                    )
-                },
             )?;
             println!("{}", report.as_tsv());
         }
