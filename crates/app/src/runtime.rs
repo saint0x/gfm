@@ -309,7 +309,7 @@ where
     let payload_path = payload_path.into();
     let scheduling = pressure.decide(priority, 1, 1);
     let stores = RuntimeJobBeginStores::from_environment();
-    let mut scheduler = Scheduler::new_starting_after(stores.max_job_id_checked()?);
+    let mut scheduler = Scheduler::new_starting_after(stores.max_job_id_checked(label)?);
     let mut job = scheduler.schedule_payload(priority, payload_kind, label);
     let journal = JobJournal::new(default_job_journal_path());
     if scheduling.action == SchedulingAction::Defer {
@@ -475,14 +475,18 @@ impl RuntimeJobBeginStores {
         }
     }
 
-    fn max_job_id_checked(&self) -> Result<gfm_jobs::JobId> {
+    fn max_job_id_checked(&self, worker: &str) -> Result<gfm_jobs::JobId> {
         let mut max_id = 0;
         if let Some(catalog) = &self.payload_catalog {
+            let _catalog_access =
+                preflight_runtime_write_checked(catalog.path(), worker, || Ok(()))?;
             for record in catalog.read()? {
                 max_id = max_id.max(record.id.value());
             }
         }
         if let Some(store) = &self.progress_store {
+            let _progress_access =
+                preflight_runtime_write_checked(store.path(), worker, || Ok(()))?;
             for snapshot in store.read()? {
                 max_id = max_id.max(snapshot.id.value());
             }
@@ -491,8 +495,8 @@ impl RuntimeJobBeginStores {
     }
 }
 
-pub(crate) fn runtime_job_id_floor_checked() -> Result<gfm_jobs::JobId> {
-    RuntimeJobBeginStores::from_environment().max_job_id_checked()
+pub(crate) fn runtime_job_id_floor_checked(worker: &str) -> Result<gfm_jobs::JobId> {
+    RuntimeJobBeginStores::from_environment().max_job_id_checked(worker)
 }
 
 impl RuntimeJobHandle {

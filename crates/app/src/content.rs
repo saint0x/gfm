@@ -3488,7 +3488,7 @@ pub(crate) fn run_content_job(
     let scheduling = pressure.decide(Priority::Background, 1, 1);
     let label = "background content index";
     if scheduling.action == SchedulingAction::Defer {
-        let mut scheduler = Scheduler::new_starting_after(runtime_job_id_floor_checked()?);
+        let mut scheduler = Scheduler::new_starting_after(runtime_job_id_floor_checked(label)?);
         let volume = spec.volume;
         let job = if let Some(volume) = volume {
             scheduler.schedule_on_volume_payload(
@@ -3529,7 +3529,7 @@ pub(crate) fn run_content_job(
         })?;
     let job_spec = spec.clone();
     let (job_result_tx, job_result_rx) = mpsc::sync_channel(1);
-    let mut scheduler = Scheduler::new_starting_after(runtime_job_id_floor_checked()?);
+    let mut scheduler = Scheduler::new_starting_after(runtime_job_id_floor_checked(label)?);
     let job = scheduler.schedule_on_volume_payload(
         Priority::Background,
         JobPayloadKind::Indexing,

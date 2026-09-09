@@ -21155,6 +21155,38 @@ fn volume_producers_refuse_unreachable_runtime_stores_before_progress_from_binar
 }
 
 #[test]
+fn runtime_id_floor_refuses_unreachable_existing_progress_store_before_read_from_binary() {
+    let root = unique_temp_dir("gfm-cli-runtime-id-floor-root");
+    let store_root = unique_temp_dir("gfm-cli-runtime-id-floor-unreachable");
+    let image = root.join("Image.png");
+    let progress = store_root.join("runtime.gfmprogress");
+    let original_progress =
+        "gfm-job-progress-v1\nprogress\t44\tbackground\tbackground\told thumbnail\t-\trunning\t0\t1\told\t123\n";
+    fs::write(&image, b"\x89PNG\r\n\x1a\nruntime id floor blocked").unwrap();
+    fs::write(store_root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    fs::write(&progress, original_progress).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args(["thumbnail-generation", image.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("thumbnail-generation\t"), "{stdout}");
+    assert!(
+        stderr.contains("thumbnail generation volume access blocked: unreachable volume network"),
+        "{stderr}"
+    );
+    assert_eq!(fs::read_to_string(&progress).unwrap(), original_progress);
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(store_root).unwrap();
+}
+
+#[test]
 fn visible_preview_producers_refuse_unreachable_targets_before_runtime_state_from_binary() {
     let root = unique_temp_dir("gfm-cli-runtime-preview-target-root");
     let quicklook = root.join("Preview.pdf");
