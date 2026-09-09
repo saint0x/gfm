@@ -77,26 +77,6 @@ where
     )
 }
 
-pub(crate) fn run_retriable_volume_task_cancellable_with_payload_path<T>(
-    volume: Option<VolumeId>,
-    priority: Priority,
-    label: &'static str,
-    payload_path: impl Into<PathBuf>,
-    work: impl Fn(Cancellation) -> Result<T> + Send + Sync + 'static,
-) -> Result<T>
-where
-    T: Send + 'static,
-{
-    run_retriable_volume_task_cancellable_with_kind_and_payload_path(
-        volume,
-        priority,
-        payload_kind_for_label(label),
-        label,
-        payload_path,
-        work,
-    )
-}
-
 pub(crate) fn run_retriable_volume_task_cancellable_with_kind_and_payload_path<T>(
     volume: Option<VolumeId>,
     priority: Priority,

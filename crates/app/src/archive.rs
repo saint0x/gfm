@@ -2,14 +2,15 @@ use crate::access::{
     preflight_access_scope_checked_with_volume_report, preflight_volume_access_scope_with_report,
     worker_admission_blocked_by_volume, worker_admission_with_volume_report, ScopedAccessGuard,
 };
+use crate::platform::current_host_job_scheduling_pressure;
 use crate::runtime::{
-    run_retriable_volume_task_cancellable_with_payload_path,
+    run_scheduled_volume_task_cancellable_with_runtime_and_payload_path,
     run_scheduled_volume_task_cancellable_with_volume_and_payload_path,
-    run_volume_task_cancellable,
+    run_volume_task_cancellable, RuntimeJobHandle, ScheduledTaskOutcome,
 };
 use crate::{optional_path_arg, parse_required_scheduling_pressure, parse_u64_arg, required_path};
 use gfm_index::{ContentArchiveManifestEntry, ContentMergeTier};
-use gfm_jobs::{Cancellation, Priority};
+use gfm_jobs::{Cancellation, JobPayloadKind, JobProgressState, Priority};
 use gfm_mac::{AccessIntent, VolumeDiscoveryReport};
 use gfm_store::{
     atomic_write_checked, dictionary_term_report_from_records, fuzzy_postings_from_records,
@@ -290,34 +291,69 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             if let Some(retry_probe) = &retry_probe_access {
                 retry_probe.preflight_volume()?;
             }
-            let rebuild = run_retriable_volume_task_cancellable_with_payload_path(
-                volume,
-                Priority::Visible,
-                "derived sidecar rebuild",
-                sidecar.clone(),
-                move |cancellation| {
-                    let records = records.clone();
-                    let sidecar = sidecar.clone();
-                    let backup_dir = backup_dir.clone();
-                    let retry_probe = retry_probe.clone();
-                    let retry_probe_access = retry_probe_access.clone();
-                    cancellation.check()?;
-                    if let (Some(retry_probe), Some(retry_probe_access)) =
-                        (retry_probe.as_ref(), retry_probe_access.as_ref())
-                    {
-                        fail_first_archive_retry_probe_attempt_with_access(
-                            retry_probe_access,
-                            retry_probe,
-                            "derived sidecar rebuild",
+            let rebuild = visible_scheduled_archive_result(
+                run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+                    Priority::Visible,
+                    JobPayloadKind::Indexing,
+                    "derived sidecar rebuild",
+                    current_host_job_scheduling_pressure(),
+                    || Ok(volume),
+                    sidecar.clone(),
+                    move |cancellation, runtime| {
+                        let records = records.clone();
+                        let sidecar = sidecar.clone();
+                        let backup_dir = backup_dir.clone();
+                        let retry_probe = retry_probe.clone();
+                        let retry_probe_access = retry_probe_access.clone();
+                        cancellation.check()?;
+                        runtime.resize_checked(3, "derived-sidecar-rebuild:preflight", || {
+                            cancellation.check()
+                        })?;
+                        if let (Some(retry_probe), Some(retry_probe_access)) =
+                            (retry_probe.as_ref(), retry_probe_access.as_ref())
+                        {
+                            fail_first_archive_retry_probe_attempt_with_access(
+                                retry_probe_access,
+                                retry_probe,
+                                "derived sidecar rebuild",
+                                &cancellation,
+                            )?;
+                        }
+                        let _access = access_reports.access_checked(|| cancellation.check())?;
+                        archive_runtime_phase(
+                            &runtime,
+                            1,
+                            "derived-sidecar-rebuild:build",
                             &cancellation,
                         )?;
-                    }
-                    let _access = access_reports.access_checked(|| cancellation.check())?;
-                    cancellation.check()?;
-                    rebuild_derived_sidecar_checked(records, kind, sidecar, backup_dir, || {
-                        cancellation.check()
-                    })
-                },
+                        let rebuild = rebuild_derived_sidecar_checked(
+                            records,
+                            kind,
+                            sidecar,
+                            backup_dir,
+                            || cancellation.check(),
+                        )?;
+                        archive_runtime_phase(
+                            &runtime,
+                            2,
+                            "derived-sidecar-rebuild:complete",
+                            &cancellation,
+                        )?;
+                        runtime.remember_completion_detail(format!(
+                            "completed:{} records:{}",
+                            sidecar_kind_name(kind),
+                            rebuild.rebuilt_records
+                        ))?;
+                        archive_runtime_phase(
+                            &runtime,
+                            3,
+                            "derived-sidecar-rebuild:reported",
+                            &cancellation,
+                        )?;
+                        Ok(rebuild)
+                    },
+                )?,
+                "derived sidecar rebuild",
             )?;
             println!("{}", rebuild.as_tsv());
         }
@@ -526,33 +562,66 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             if let Some(retry_probe) = &retry_probe_access {
                 retry_probe.preflight_volume()?;
             }
-            let report = run_retriable_volume_task_cancellable_with_payload_path(
-                volume,
-                Priority::Visible,
-                "sidecar repair",
-                quarantine.clone(),
-                move |cancellation| {
-                    let records = records.clone();
-                    let sidecars = sidecars.clone();
-                    let quarantine = quarantine.clone();
-                    let retry_probe = retry_probe.clone();
-                    let retry_probe_access = retry_probe_access.clone();
-                    cancellation.check()?;
-                    if let (Some(retry_probe), Some(retry_probe_access)) =
-                        (retry_probe.as_ref(), retry_probe_access.as_ref())
-                    {
-                        fail_first_archive_retry_probe_attempt_with_access(
-                            retry_probe_access,
-                            retry_probe,
-                            "sidecar repair",
+            let report = visible_scheduled_archive_result(
+                run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+                    Priority::Visible,
+                    JobPayloadKind::Repair,
+                    "sidecar repair",
+                    current_host_job_scheduling_pressure(),
+                    || Ok(volume),
+                    quarantine.clone(),
+                    move |cancellation, runtime| {
+                        let records = records.clone();
+                        let sidecars = sidecars.clone();
+                        let quarantine = quarantine.clone();
+                        let retry_probe = retry_probe.clone();
+                        let retry_probe_access = retry_probe_access.clone();
+                        cancellation.check()?;
+                        runtime.resize_checked(3, "sidecar-repair:preflight", || {
+                            cancellation.check()
+                        })?;
+                        if let (Some(retry_probe), Some(retry_probe_access)) =
+                            (retry_probe.as_ref(), retry_probe_access.as_ref())
+                        {
+                            fail_first_archive_retry_probe_attempt_with_access(
+                                retry_probe_access,
+                                retry_probe,
+                                "sidecar repair",
+                                &cancellation,
+                            )?;
+                        }
+                        let _access = access_reports.access_checked(|| cancellation.check())?;
+                        archive_runtime_phase(
+                            &runtime,
+                            1,
+                            "sidecar-repair:recover",
                             &cancellation,
                         )?;
-                    }
-                    let _access = access_reports.access_checked(|| cancellation.check())?;
-                    recover_sidecars_checked(&records, &sidecars, &quarantine, || {
-                        cancellation.check()
-                    })
-                },
+                        let report =
+                            recover_sidecars_checked(&records, &sidecars, &quarantine, || {
+                                cancellation.check()
+                            })?;
+                        archive_runtime_phase(
+                            &runtime,
+                            2,
+                            "sidecar-repair:complete",
+                            &cancellation,
+                        )?;
+                        runtime.remember_completion_detail(format!(
+                            "completed:rebuilt:{} quarantined:{}",
+                            report.rebuilt_sidecars.len(),
+                            report.quarantined_sidecars.len()
+                        ))?;
+                        archive_runtime_phase(
+                            &runtime,
+                            3,
+                            "sidecar-repair:reported",
+                            &cancellation,
+                        )?;
+                        Ok(report)
+                    },
+                )?,
+                "sidecar repair",
             )?;
             print_sidecar_recovery_report(report);
         }
@@ -635,6 +704,26 @@ where
         cancellation.check()?;
         read(path, &cancellation)
     })
+}
+
+fn archive_runtime_phase(
+    runtime: &RuntimeJobHandle,
+    completed_units: u64,
+    detail: &'static str,
+    cancellation: &Cancellation,
+) -> Result<()> {
+    runtime.progress_checked(JobProgressState::Running, completed_units, detail, || {
+        cancellation.check()
+    })
+}
+
+fn visible_scheduled_archive_result<T>(
+    outcome: ScheduledTaskOutcome<T>,
+    label: &'static str,
+) -> Result<T> {
+    outcome
+        .result
+        .ok_or_else(|| GfmError::Format(format!("{label} deferred before visible run")))
 }
 
 fn preflight_archive_input_denial_before_runtime(

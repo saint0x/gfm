@@ -3406,6 +3406,20 @@ fn derived_sidecar_rebuild_retry_probe_recovers_transient_failure_from_binary() 
         journal_text.contains("1\t2\tcompleted\tderived sidecar rebuild"),
         "{journal_text}"
     );
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(
+        catalog_text.contains(&format!(
+            "payload\t1\tindexing\tderived sidecar rebuild\t{}\t",
+            prefixes.display()
+        )) && catalog_text.contains("\tvisible:derived sidecar rebuild:adaptive"),
+        "{catalog_text}"
+    );
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("progress\t1\tvisible\tvisible\tderived sidecar rebuild\t")
+            && progress_text.contains("\tcompleted\t3\t3\tcompleted:prefixes records:2"),
+        "{progress_text}"
+    );
     let verify = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["prefix-verify", prefixes.to_str().unwrap()])
         .output()
@@ -8103,6 +8117,20 @@ fn sidecar_recover_retries_transient_corrupt_sidecar_from_binary() {
     assert!(
         journal_text.contains("1\t2\tcompleted\tsidecar repair"),
         "{journal_text}"
+    );
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(
+        catalog_text.contains(&format!(
+            "payload\t1\trepair\tsidecar repair\t{}\t",
+            quarantine.display()
+        )) && catalog_text.contains("\tvisible:sidecar repair:adaptive"),
+        "{catalog_text}"
+    );
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("progress\t1\tvisible\tvisible\tsidecar repair\t")
+            && progress_text.contains("\tcompleted\t3\t3\tcompleted:rebuilt:1 quarantined:0"),
+        "{progress_text}"
     );
     let prefix_verify = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["prefix-verify", prefixes.to_str().unwrap()])
