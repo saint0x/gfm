@@ -2816,10 +2816,10 @@ impl VolumeOperationReport {
             ));
         }
         check()?;
-        if let Some(reason) = operation_api_refusal_reason(&volume) {
+        if let Some((disposition, reason)) = operation_api_refusal(&volume) {
             return Ok(Self::with_volume(
                 operation,
-                VolumeOperationDisposition::Refused,
+                disposition,
                 None,
                 None,
                 volume,
@@ -3203,34 +3203,47 @@ fn disabled_command_reason(
     })
 }
 
-fn operation_api_refusal_reason(volume: &VolumeDescriptor) -> Option<&'static str> {
+fn operation_api_refusal(
+    volume: &VolumeDescriptor,
+) -> Option<(VolumeOperationDisposition, &'static str)> {
     [
         ("diskarbitration-volume", volume.native_status),
         ("url-resource-volume", volume.resource_status),
         ("mount-table-volume", volume.mount_table_status),
     ]
     .into_iter()
-    .find_map(|(prefix, status)| operation_api_status_refusal_reason(prefix, status))
+    .find_map(|(prefix, status)| operation_api_status_refusal(prefix, status))
 }
 
-fn operation_api_status_refusal_reason(
+#[cfg(test)]
+fn operation_api_refusal_reason(volume: &VolumeDescriptor) -> Option<&'static str> {
+    operation_api_refusal(volume).map(|(_, reason)| reason)
+}
+
+fn operation_api_status_refusal(
     prefix: &'static str,
     status: Option<NativeVolumeStatus>,
-) -> Option<&'static str> {
+) -> Option<(VolumeOperationDisposition, &'static str)> {
     match status {
         Some(NativeVolumeStatus::Available) | None => None,
-        Some(NativeVolumeStatus::Missing) => Some(match prefix {
-            "diskarbitration-volume" => "diskarbitration-volume-missing",
-            "url-resource-volume" => "url-resource-volume-missing",
-            "mount-table-volume" => "mount-table-volume-missing",
-            _ => "volume-api-missing",
-        }),
-        Some(NativeVolumeStatus::Unavailable) => Some(match prefix {
-            "diskarbitration-volume" => "diskarbitration-volume-unavailable",
-            "url-resource-volume" => "url-resource-volume-unavailable",
-            "mount-table-volume" => "mount-table-volume-unavailable",
-            _ => "volume-api-unavailable",
-        }),
+        Some(NativeVolumeStatus::Missing) => Some((
+            VolumeOperationDisposition::Missing,
+            match prefix {
+                "diskarbitration-volume" => "diskarbitration-volume-missing",
+                "url-resource-volume" => "url-resource-volume-missing",
+                "mount-table-volume" => "mount-table-volume-missing",
+                _ => "volume-api-missing",
+            },
+        )),
+        Some(NativeVolumeStatus::Unavailable) => Some((
+            VolumeOperationDisposition::Unavailable,
+            match prefix {
+                "diskarbitration-volume" => "diskarbitration-volume-unavailable",
+                "url-resource-volume" => "url-resource-volume-unavailable",
+                "mount-table-volume" => "mount-table-volume-unavailable",
+                _ => "volume-api-unavailable",
+            },
+        )),
     }
 }
 
@@ -5976,6 +5989,44 @@ mod tests {
         assert_eq!(
             operation_api_refusal_reason(&volume),
             Some("diskarbitration-volume-unavailable")
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_operation_api_gate_preserves_unavailable_disposition() {
+        let root = unique_temp_dir("gfm-volume-operation-api-unavailable-disposition");
+        let mut volume = VolumeDescriptor::for_path(&root).unwrap();
+        volume.native_status = Some(NativeVolumeStatus::Unavailable);
+        volume.resource_status = Some(NativeVolumeStatus::Available);
+        volume.mount_table_status = Some(NativeVolumeStatus::Available);
+
+        assert_eq!(
+            operation_api_refusal(&volume),
+            Some((
+                VolumeOperationDisposition::Unavailable,
+                "diskarbitration-volume-unavailable"
+            ))
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn volume_operation_api_gate_preserves_missing_disposition() {
+        let root = unique_temp_dir("gfm-volume-operation-api-missing-disposition");
+        let mut volume = VolumeDescriptor::for_path(&root).unwrap();
+        volume.native_status = Some(NativeVolumeStatus::Available);
+        volume.resource_status = Some(NativeVolumeStatus::Missing);
+        volume.mount_table_status = Some(NativeVolumeStatus::Available);
+
+        assert_eq!(
+            operation_api_refusal(&volume),
+            Some((
+                VolumeOperationDisposition::Missing,
+                "url-resource-volume-missing"
+            ))
         );
 
         fs::remove_dir_all(root).unwrap();
