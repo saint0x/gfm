@@ -53,8 +53,8 @@ pub enum CpuArchitecture {
 impl CpuArchitecture {
     pub fn parse(input: &str) -> Self {
         match input.trim() {
-            "arm64" | "arm64e" => Self::AppleSilicon,
-            "x86_64" => Self::Intel64,
+            "arm64" | "arm64e" | "apple-silicon" => Self::AppleSilicon,
+            "x86_64" | "intel64" => Self::Intel64,
             _ => Self::Unsupported,
         }
     }
@@ -577,6 +577,24 @@ mod tests {
             MacOsVersion::new(14, 0, 0)
         );
         assert!(MacOsVersion::parse("15.6.1.2").is_err());
+    }
+
+    #[test]
+    fn parses_native_and_canonical_cpu_architectures() {
+        assert_eq!(
+            CpuArchitecture::parse("arm64"),
+            CpuArchitecture::AppleSilicon
+        );
+        assert_eq!(
+            CpuArchitecture::parse("apple-silicon"),
+            CpuArchitecture::AppleSilicon
+        );
+        assert_eq!(CpuArchitecture::parse("x86_64"), CpuArchitecture::Intel64);
+        assert_eq!(CpuArchitecture::parse("intel64"), CpuArchitecture::Intel64);
+        assert_eq!(
+            CpuArchitecture::parse("riscv64"),
+            CpuArchitecture::Unsupported
+        );
     }
 
     #[test]

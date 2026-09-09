@@ -1,6 +1,6 @@
 use gfm_content::Extractor;
 use gfm_index::Indexer;
-use gfm_mac::current_process_memory;
+use gfm_mac::{current_host_profile, current_process_memory, CpuArchitecture, MacOsVersion};
 use gfm_telemetry::{PerformanceBudgets, ScenarioMetric};
 use gfm_types::{GfmError, Result};
 use std::collections::{BTreeMap, BTreeSet};
@@ -194,6 +194,11 @@ pub struct MacrobenchArtifactReport {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MacrobenchArtifactVerification {
     pub output_dir: PathBuf,
+    pub macos_version: MacOsVersion,
+    pub macos_build: String,
+    pub cpu_architecture: CpuArchitecture,
+    pub host_memory_bytes: u64,
+    pub logical_cpus: u16,
     pub files_materialized: usize,
     pub measurements: usize,
     pub scenarios: usize,
@@ -408,7 +413,28 @@ pub fn verify_macrobench_artifacts(
     let summary_measurements = required_summary_usize(&summary, "measurements")?;
     let summary_budget_violations = required_summary_usize(&summary, "budget_violations")?;
     let passed = required_summary_bool(&summary, "passed")?;
+    let macos_version = MacOsVersion::parse(required_summary_field(&summary, "macos_version")?)?;
+    let macos_build = required_summary_field(&summary, "macos_build")?.to_string();
+    let cpu_architecture =
+        CpuArchitecture::parse(required_summary_field(&summary, "cpu_architecture")?);
+    let host_memory_bytes = required_summary_u64(&summary, "host_memory_bytes")?;
+    let logical_cpus = required_summary_u16(&summary, "logical_cpus")?;
 
+    if macos_build.trim().is_empty() {
+        return Err(GfmError::Format(
+            "macrobench report missing macOS build provenance".to_string(),
+        ));
+    }
+    if cpu_architecture == CpuArchitecture::Unsupported {
+        return Err(GfmError::Format(
+            "macrobench report captured on unsupported CPU architecture".to_string(),
+        ));
+    }
+    if host_memory_bytes == 0 || logical_cpus == 0 {
+        return Err(GfmError::Format(
+            "macrobench report missing usable host hardware provenance".to_string(),
+        ));
+    }
     if files_materialized < min_files_materialized {
         return Err(GfmError::Format(format!(
             "macrobench report materialized {files_materialized} files below required floor {min_files_materialized}"
@@ -505,6 +531,11 @@ pub fn verify_macrobench_artifacts(
 
     Ok(MacrobenchArtifactVerification {
         output_dir: output_dir.to_path_buf(),
+        macos_version,
+        macos_build,
+        cpu_architecture,
+        host_memory_bytes,
+        logical_cpus,
         files_materialized,
         measurements: measurements.len(),
         scenarios: MacrobenchScenario::ALL.len(),
@@ -677,6 +708,7 @@ fn materialize_media(root: &Path, count: usize) -> Result<(usize, usize)> {
 
 fn write_macrobench_summary(report: &MacrobenchReport, path: &Path) -> Result<()> {
     let mut file = fs::File::create(path).map_err(|err| GfmError::io(path, err))?;
+    let host = current_host_profile()?;
     writeln!(file, "key\tvalue").map_err(|err| GfmError::io(path, err))?;
     writeln!(
         file,
@@ -684,6 +716,24 @@ fn write_macrobench_summary(report: &MacrobenchReport, path: &Path) -> Result<()
         escape_tsv_field(&report.fixture_root.display().to_string())
     )
     .map_err(|err| GfmError::io(path, err))?;
+    writeln!(
+        file,
+        "macos_version\t{}.{}.{}",
+        host.macos_version.major, host.macos_version.minor, host.macos_version.patch
+    )
+    .map_err(|err| GfmError::io(path, err))?;
+    writeln!(file, "macos_build\t{}", escape_tsv_field(&host.build))
+        .map_err(|err| GfmError::io(path, err))?;
+    writeln!(
+        file,
+        "cpu_architecture\t{}",
+        host.hardware.architecture.as_str()
+    )
+    .map_err(|err| GfmError::io(path, err))?;
+    writeln!(file, "host_memory_bytes\t{}", host.hardware.memory_bytes)
+        .map_err(|err| GfmError::io(path, err))?;
+    writeln!(file, "logical_cpus\t{}", host.hardware.logical_cpus)
+        .map_err(|err| GfmError::io(path, err))?;
     writeln!(file, "files_materialized\t{}", report.files_materialized)
         .map_err(|err| GfmError::io(path, err))?;
     writeln!(file, "measurements\t{}", report.measurements.len())
@@ -756,6 +806,11 @@ fn read_summary_tsv(path: &Path) -> Result<BTreeMap<String, String>> {
     }
     for key in [
         "fixture_root",
+        "macos_version",
+        "macos_build",
+        "cpu_architecture",
+        "host_memory_bytes",
+        "logical_cpus",
         "files_materialized",
         "measurements",
         "budget_violations",
@@ -833,19 +888,34 @@ fn read_budget_violations_tsv(path: &Path) -> Result<usize> {
 }
 
 fn required_summary_usize(summary: &BTreeMap<String, String>, key: &str) -> Result<usize> {
-    summary
-        .get(key)
-        .expect("summary keys are prevalidated")
+    required_summary_field(summary, key)?
         .parse::<usize>()
         .map_err(|err| GfmError::Format(format!("invalid summary {key}: {err}")))
 }
 
+fn required_summary_u64(summary: &BTreeMap<String, String>, key: &str) -> Result<u64> {
+    required_summary_field(summary, key)?
+        .parse::<u64>()
+        .map_err(|err| GfmError::Format(format!("invalid summary {key}: {err}")))
+}
+
+fn required_summary_u16(summary: &BTreeMap<String, String>, key: &str) -> Result<u16> {
+    required_summary_field(summary, key)?
+        .parse::<u16>()
+        .map_err(|err| GfmError::Format(format!("invalid summary {key}: {err}")))
+}
+
 fn required_summary_bool(summary: &BTreeMap<String, String>, key: &str) -> Result<bool> {
-    summary
-        .get(key)
-        .expect("summary keys are prevalidated")
+    required_summary_field(summary, key)?
         .parse::<bool>()
         .map_err(|err| GfmError::Format(format!("invalid summary {key}: {err}")))
+}
+
+fn required_summary_field<'a>(summary: &'a BTreeMap<String, String>, key: &str) -> Result<&'a str> {
+    summary
+        .get(key)
+        .map(String::as_str)
+        .ok_or_else(|| GfmError::Format(format!("missing summary key {key}")))
 }
 
 fn split_tsv_line<'a>(
@@ -986,6 +1056,11 @@ mod tests {
         let summary = fs::read_to_string(&artifacts.summary_path).unwrap();
         let measurements = fs::read_to_string(&artifacts.measurements_path).unwrap();
         let violations = fs::read_to_string(&artifacts.budget_violations_path).unwrap();
+        assert!(summary.contains("macos_version\t"), "{summary}");
+        assert!(summary.contains("macos_build\t"), "{summary}");
+        assert!(summary.contains("cpu_architecture\t"), "{summary}");
+        assert!(summary.contains("host_memory_bytes\t"), "{summary}");
+        assert!(summary.contains("logical_cpus\t"), "{summary}");
         assert!(summary.contains("files_materialized\t201"), "{summary}");
         assert!(summary.contains("measurements\t36"), "{summary}");
         assert!(measurements
@@ -1012,6 +1087,9 @@ mod tests {
         let verification = verify_macrobench_artifacts(&output, 201).unwrap();
 
         assert_eq!(verification.output_dir, output);
+        assert!(!verification.macos_build.is_empty());
+        assert!(verification.host_memory_bytes > 0);
+        assert!(verification.logical_cpus > 0);
         assert_eq!(verification.files_materialized, 201);
         assert_eq!(verification.measurements, MacrobenchScenario::ALL.len() * 4);
         assert_eq!(verification.scenarios, MacrobenchScenario::ALL.len());
@@ -1049,6 +1127,28 @@ mod tests {
         );
 
         fs::write(output.join("budget-violations.tsv"), "violation\n").unwrap();
+        let summary = fs::read_to_string(output.join("summary.tsv")).unwrap();
+        let without_host = summary
+            .lines()
+            .filter(|line| {
+                !line.starts_with("macos_version\t")
+                    && !line.starts_with("macos_build\t")
+                    && !line.starts_with("cpu_architecture\t")
+                    && !line.starts_with("host_memory_bytes\t")
+                    && !line.starts_with("logical_cpus\t")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(output.join("summary.tsv"), format!("{without_host}\n")).unwrap();
+        let missing_provenance = verify_macrobench_artifacts(&output, 201).unwrap_err();
+        assert!(
+            missing_provenance
+                .to_string()
+                .contains("missing summary key macos_version"),
+            "{missing_provenance}"
+        );
+
+        run_macrobench_report(&MacrobenchOptions::smoke(&root), &output).unwrap();
         let measurements = fs::read_to_string(output.join("measurements.tsv")).unwrap();
         let incomplete = measurements
             .lines()

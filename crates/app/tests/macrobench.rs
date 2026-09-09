@@ -53,6 +53,11 @@ fn writes_retained_macrobench_report_from_binary() {
     let summary = fs::read_to_string(output_dir.join("summary.tsv")).unwrap();
     let measurements = fs::read_to_string(output_dir.join("measurements.tsv")).unwrap();
     let violations = fs::read_to_string(output_dir.join("budget-violations.tsv")).unwrap();
+    assert!(summary.contains("macos_version\t"), "{summary}");
+    assert!(summary.contains("macos_build\t"), "{summary}");
+    assert!(summary.contains("cpu_architecture\t"), "{summary}");
+    assert!(summary.contains("host_memory_bytes\t"), "{summary}");
+    assert!(summary.contains("logical_cpus\t"), "{summary}");
     assert!(summary.contains("files_materialized\t201"), "{summary}");
     assert!(
         measurements.contains("small\tindex-build\t"),
@@ -105,6 +110,11 @@ fn verifies_retained_macrobench_report_from_binary() {
         stdout.contains("macrobench-report-verify\toutput="),
         "{stdout}"
     );
+    assert!(stdout.contains("\tmacos="), "{stdout}");
+    assert!(stdout.contains("\tbuild="), "{stdout}");
+    assert!(stdout.contains("\tarch="), "{stdout}");
+    assert!(stdout.contains("\thost-memory-bytes="), "{stdout}");
+    assert!(stdout.contains("\tlogical-cpus="), "{stdout}");
     assert!(stdout.contains("\tfiles=201\t"), "{stdout}");
     assert!(stdout.contains("\tmeasurements=36\t"), "{stdout}");
     assert!(stdout.contains("\tmax-peak-resident-bytes="), "{stdout}");

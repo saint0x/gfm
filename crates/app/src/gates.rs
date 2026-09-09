@@ -123,8 +123,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 },
             )?;
             println!(
-                "macrobench-report-verify\toutput={}\tfiles={}\tmeasurements={}\tscenarios={}\tstages-per-scenario={}\tmax-peak-resident-bytes={}\tbudget-violations={}\tpassed={}",
+                "macrobench-report-verify\toutput={}\tmacos={}.{}.{}\tbuild={}\tarch={}\thost-memory-bytes={}\tlogical-cpus={}\tfiles={}\tmeasurements={}\tscenarios={}\tstages-per-scenario={}\tmax-peak-resident-bytes={}\tbudget-violations={}\tpassed={}",
                 verification.output_dir.display(),
+                verification.macos_version.major,
+                verification.macos_version.minor,
+                verification.macos_version.patch,
+                verification.macos_build,
+                verification.cpu_architecture.as_str(),
+                verification.host_memory_bytes,
+                verification.logical_cpus,
                 verification.files_materialized,
                 verification.measurements,
                 verification.scenarios,
