@@ -1287,7 +1287,26 @@ fn parity_capture_options(
     let window_origin_y = parse_u32_arg(args.next(), "parity-capture requires a window y")?;
     let width = parse_u32_arg(args.next(), "parity-capture requires a window width")?;
     let height = parse_u32_arg(args.next(), "parity-capture requires a window height")?;
-    let gfm_app = args.next().map(PathBuf::from);
+    let mut gfm_app = None;
+    let mut expires_at = None;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--expires-at" => {
+                expires_at = Some(required_tail_string(
+                    args.next(),
+                    "parity-capture --expires-at requires a timestamp",
+                )?);
+            }
+            _ if target == ParityCaptureTarget::Gfm && gfm_app.is_none() => {
+                gfm_app = Some(PathBuf::from(arg));
+            }
+            _ => {
+                return Err(GfmError::Format(format!(
+                    "parity-capture got unexpected argument `{arg}`"
+                )));
+            }
+        }
+    }
     Ok(ParityScreenshotCaptureOptions {
         target,
         fixture_root,
@@ -1300,6 +1319,7 @@ fn parity_capture_options(
         display_profile,
         app_version,
         captured_at,
+        expires_at,
         reviewer,
         signer,
         approved_mask_set,
@@ -1361,6 +1381,7 @@ fn parity_capture_matrix_options(
     let width = parse_u32_arg(args.next(), "parity-capture-plan requires a window width")?;
     let height = parse_u32_arg(args.next(), "parity-capture-plan requires a window height")?;
     let gfm_app = required_path(args.next(), "parity-capture-plan requires a GFM.app path")?;
+    let expires_at = parse_optional_expires_at_tail(args, "parity-capture-plan")?;
     Ok(ParityCaptureMatrixOptions {
         plan_path,
         fixture_root,
@@ -1370,6 +1391,7 @@ fn parity_capture_matrix_options(
         display_profile,
         app_version,
         captured_at,
+        expires_at,
         reviewer,
         signer,
         approved_mask_set,
@@ -1464,6 +1486,7 @@ fn parity_capture_manifest_options(
         args.next(),
         "parity-capture-manifest requires a screenshot height",
     )?;
+    let expires_at = parse_optional_expires_at_tail(args, "parity-capture-manifest")?;
 
     let finder = ParityScreenshotCaptureOptions {
         target: ParityCaptureTarget::Finder,
@@ -1477,6 +1500,7 @@ fn parity_capture_manifest_options(
         display_profile: display_profile.clone(),
         app_version: app_version.clone(),
         captured_at: captured_at.clone(),
+        expires_at: expires_at.clone(),
         reviewer: reviewer.clone(),
         signer: signer.clone(),
         approved_mask_set: approved_mask_set.clone(),
@@ -1501,6 +1525,7 @@ fn parity_capture_manifest_options(
         display_profile,
         app_version,
         captured_at,
+        expires_at,
         reviewer,
         signer,
         approved_mask_set,
@@ -1520,6 +1545,33 @@ fn parity_capture_manifest_options(
         gfm,
         mask_path,
     })
+}
+
+fn parse_optional_expires_at_tail(
+    args: &mut impl Iterator<Item = String>,
+    command: &str,
+) -> Result<Option<String>> {
+    let mut expires_at = None;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--expires-at" => {
+                expires_at = Some(required_tail_string(
+                    args.next(),
+                    &format!("{command} --expires-at requires a timestamp"),
+                )?);
+            }
+            _ => {
+                return Err(GfmError::Format(format!(
+                    "{command} got unexpected argument `{arg}`"
+                )));
+            }
+        }
+    }
+    Ok(expires_at)
+}
+
+fn required_tail_string(value: Option<String>, message: &str) -> Result<String> {
+    value.ok_or_else(|| GfmError::Format(message.to_string()))
 }
 
 fn macrobench_stage(stage: MacrobenchStage) -> &'static str {

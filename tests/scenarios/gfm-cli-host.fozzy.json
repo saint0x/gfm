@@ -8180,7 +8180,9 @@
         "70",
         "1040",
         "720",
-        "/Applications/GFM.app"
+        "/Applications/GFM.app",
+        "--expires-at",
+        "2026-09-27T00:00:00Z"
       ],
       "exit_code": 0,
       "times": 1
@@ -8392,12 +8394,12 @@
     {
       "type": "fs_write",
       "path": "tmp/gfm-capture-finder.provenance.tsv",
-      "data": "target\tfinder\nfixture-root\ttmp/gfm-capture-root\noutput\ttmp/gfm-capture-finder.rgba\nscenario\ttext\nview-mode\tlist\nmacos-build\t25A354\nhardware-profile\tmacbookpro18,3\ndisplay-profile\tstudio-display-p3\napp-version\t0.1.0\ncaptured-at\t2026-09-09T00:00:00Z\ncapture-command\tscreencapture:-x:-R:0,0,1,1\nreviewer\tcodex\nsigner\tcodex\napproved-mask-set\tmacos-25A354-default\nappearance\tdark\nscale\t2x\ncolor-profile\tdisplay-p3\nfocus\tactive\nwindow-region\t0,0,1,1\n"
+      "data": "target\tfinder\nfixture-root\ttmp/gfm-capture-root\noutput\ttmp/gfm-capture-finder.rgba\nscenario\ttext\nview-mode\tlist\nmacos-build\t25A354\nhardware-profile\tmacbookpro18,3\ndisplay-profile\tstudio-display-p3\napp-version\t0.1.0\ncaptured-at\t2026-09-09T00:00:00Z\nexpires-at\t2026-09-27T00:00:00Z\ncapture-command\tscreencapture:-x:-R:0,0,1,1\nreviewer\tcodex\nsigner\tcodex\napproved-mask-set\tmacos-25A354-default\nappearance\tdark\nscale\t2x\ncolor-profile\tdisplay-p3\nfocus\tactive\nwindow-region\t0,0,1,1\n"
     },
     {
       "type": "fs_write",
       "path": "tmp/gfm-capture-gfm.provenance.tsv",
-      "data": "target\tgfm\nfixture-root\ttmp/gfm-capture-root\noutput\ttmp/gfm-capture-gfm.rgba\nscenario\ttext\nview-mode\tlist\nmacos-build\t25A354\nhardware-profile\tmacbookpro18,3\ndisplay-profile\tstudio-display-p3\napp-version\t0.1.0\ncaptured-at\t2026-09-09T00:00:00Z\ncapture-command\tscreencapture:-x:-R:0,0,1,1\nreviewer\tcodex\nsigner\tcodex\napproved-mask-set\tmacos-25A354-default\nappearance\tdark\nscale\t2x\ncolor-profile\tdisplay-p3\nfocus\tactive\nwindow-region\t0,0,1,1\n"
+      "data": "target\tgfm\nfixture-root\ttmp/gfm-capture-root\noutput\ttmp/gfm-capture-gfm.rgba\nscenario\ttext\nview-mode\tlist\nmacos-build\t25A354\nhardware-profile\tmacbookpro18,3\ndisplay-profile\tstudio-display-p3\napp-version\t0.1.0\ncaptured-at\t2026-09-09T00:00:00Z\nexpires-at\t2026-09-27T00:00:00Z\ncapture-command\tscreencapture:-x:-R:0,0,1,1\nreviewer\tcodex\nsigner\tcodex\napproved-mask-set\tmacos-25A354-default\nappearance\tdark\nscale\t2x\ncolor-profile\tdisplay-p3\nfocus\tactive\nwindow-region\t0,0,1,1\n"
     },
     {
       "type": "proc_when",
@@ -8425,7 +8427,9 @@
         "display-p3",
         "active",
         "1",
-        "1"
+        "1",
+        "--expires-at",
+        "2026-09-27T00:00:00Z"
       ],
       "exit_code": 0,
       "times": 1

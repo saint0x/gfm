@@ -138,6 +138,8 @@ fn writes_parity_capture_plan_from_binary() {
             "1040",
             "720",
             "/Applications/GFM.app",
+            "--expires-at",
+            "2026-09-27T00:00:00Z",
         ])
         .output()
         .unwrap();
@@ -158,6 +160,7 @@ fn writes_parity_capture_plan_from_binary() {
     assert!(content.contains("\tgfm parity-capture gfm "));
     assert!(content.contains("parity-capture-manifest"));
     assert!(content.contains("active 40 70 1040 720"));
+    assert!(content.contains("--expires-at 2026-09-27T00:00:00Z"));
     assert!(content.contains("mask-25A354-dark.tsv"));
 
     fs::remove_dir_all(root).unwrap();
@@ -741,7 +744,12 @@ fn writes_parity_capture_manifest_from_binary() {
         ),
     )
     .unwrap();
-    write_capture_pair_provenance_artifacts(&root, &finder, &gfm);
+    write_capture_pair_provenance_artifacts_with_expiry(
+        &root,
+        &finder,
+        &gfm,
+        "2026-09-27T00:00:00Z",
+    );
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
@@ -768,6 +776,8 @@ fn writes_parity_capture_manifest_from_binary() {
             "active",
             "1",
             "1",
+            "--expires-at",
+            "2026-09-27T00:00:00Z",
         ])
         .output()
         .unwrap();
@@ -784,6 +794,7 @@ fn writes_parity_capture_manifest_from_binary() {
 
     let content = fs::read_to_string(&manifest).unwrap();
     assert!(content.starts_with("manifest-version\t1\nprofile\tmacos-build=25A354\t"));
+    assert!(content.contains("\texpires-at=2026-09-27T00:00:00Z\t"));
     assert!(content.contains("\tappearance=dark\tscale=2x\tcolor-profile=display-p3\n"));
     assert!(content.contains("\nentry\ttext\t"));
     assert!(content.contains("\t1\t1\t\t1\t1\tactive\tlist\t"));
@@ -1542,18 +1553,29 @@ fn write_capture_artifact_provenance(
     .unwrap();
 }
 
-fn write_capture_pair_provenance_artifacts(root: &Path, finder: &Path, gfm: &Path) {
-    write_capture_provenance_artifact(root, finder, "finder");
-    write_capture_provenance_artifact(root, gfm, "gfm");
+fn write_capture_pair_provenance_artifacts_with_expiry(
+    root: &Path,
+    finder: &Path,
+    gfm: &Path,
+    expires_at: &str,
+) {
+    write_capture_provenance_artifact_with_expiry(root, finder, "finder", Some(expires_at));
+    write_capture_provenance_artifact_with_expiry(root, gfm, "gfm", Some(expires_at));
 }
 
-fn write_capture_provenance_artifact(root: &Path, output: &Path, target: &str) {
+fn write_capture_provenance_artifact_with_expiry(
+    root: &Path,
+    output: &Path,
+    target: &str,
+    expires_at: Option<&str>,
+) {
     fs::write(
         output.with_extension("provenance.tsv"),
         format!(
-            "target\t{target}\nfixture-root\t{}\noutput\t{}\nscenario\ttext\nview-mode\tlist\nmacos-build\t25A354\nhardware-profile\tmacbookpro18,3\ndisplay-profile\tstudio-display-p3\napp-version\t0.1.0\ncaptured-at\t2026-09-09T00:00:00Z\ncapture-command\tscreencapture:-x:-R:0,0,1,1\nreviewer\tcodex\nsigner\tcodex\napproved-mask-set\tmacos-25A354-default\nappearance\tdark\nscale\t2x\ncolor-profile\tdisplay-p3\nfocus\tactive\nwindow-region\t0,0,1,1\n",
+            "target\t{target}\nfixture-root\t{}\noutput\t{}\nscenario\ttext\nview-mode\tlist\nmacos-build\t25A354\nhardware-profile\tmacbookpro18,3\ndisplay-profile\tstudio-display-p3\napp-version\t0.1.0\ncaptured-at\t2026-09-09T00:00:00Z\nexpires-at\t{}\ncapture-command\tscreencapture:-x:-R:0,0,1,1\nreviewer\tcodex\nsigner\tcodex\napproved-mask-set\tmacos-25A354-default\nappearance\tdark\nscale\t2x\ncolor-profile\tdisplay-p3\nfocus\tactive\nwindow-region\t0,0,1,1\n",
             root.display(),
             output.display(),
+            expires_at.unwrap_or(""),
         ),
     )
     .unwrap();

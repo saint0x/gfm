@@ -467,6 +467,7 @@ struct CaptureArtifactProvenance {
     display_profile: String,
     app_version: String,
     captured_at: String,
+    expires_at: Option<String>,
     capture_command: String,
     reviewer: String,
     signer: String,
@@ -559,6 +560,30 @@ impl CaptureArtifactProvenance {
             input,
             provenance_path,
         )?;
+        match (&self.expires_at, &provenance.expires_at) {
+            (Some(actual), Some(expected)) => {
+                self.expect_value("expires-at", actual, expected, input, provenance_path)?;
+            }
+            (None, Some(expected)) => {
+                return Err(capture_artifact_provenance_mismatch(
+                    input,
+                    provenance_path,
+                    "expires-at",
+                    "",
+                    expected,
+                ));
+            }
+            (Some(actual), None) => {
+                return Err(capture_artifact_provenance_mismatch(
+                    input,
+                    provenance_path,
+                    "expires-at",
+                    actual,
+                    "",
+                ));
+            }
+            (None, None) => {}
+        }
         if !capture_command_matches(&provenance.capture_command, &self.capture_command, kind) {
             return Err(capture_artifact_provenance_mismatch(
                 input,
@@ -733,6 +758,9 @@ fn parse_capture_artifact_provenance(
             .to_string(),
         captured_at: required_capture_provenance_field(&fields, "captured-at", provenance_path)?
             .to_string(),
+        expires_at: optional_capture_provenance_field(&fields, "expires-at")
+            .filter(|value| !value.is_empty())
+            .map(str::to_string),
         capture_command: required_capture_provenance_field(
             &fields,
             "capture-command",
@@ -835,6 +863,13 @@ fn required_capture_provenance_field<'a>(
             provenance_path.display()
         ))
     })
+}
+
+fn optional_capture_provenance_field<'a>(
+    fields: &'a BTreeMap<String, String>,
+    key: &str,
+) -> Option<&'a str> {
+    fields.get(key).map(|value| value.as_str())
 }
 
 fn unescape_capture_tsv_field(
@@ -2471,6 +2506,27 @@ mod tests {
         assert!(err.to_string().contains("actual.provenance.tsv"));
         assert!(err.to_string().contains("capture provenance mismatch"));
         assert!(err.to_string().contains("field `output`"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn parity_gate_rejects_missing_artifact_expiry_when_manifest_expires() {
+        let root = unique_temp_dir("gfm-parity-gate-artifact-missing-expiry");
+        fs::write(root.join("expected.rgba"), [1, 2, 3, 255]).unwrap();
+        fs::write(root.join("actual.rgba"), [1, 2, 3, 255]).unwrap();
+        write_capture_provenance_artifacts(&root, "fixtures/toolbar");
+        fs::write(
+            root.join("gate.tsv"),
+            "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\texpires-at=2999-01-01T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=light\tscale=2x\tcolor-profile=srgb\nentry\ttoolbar\texpected.rgba\tactual.rgba\t1\t1\t\t1040\t720\tactive\ticon\tfixtures/toolbar\n",
+        )
+        .unwrap();
+
+        let err = run_parity_gate_manifest(root.join("gate.tsv")).unwrap_err();
+
+        assert!(err.to_string().contains("expected.provenance.tsv"));
+        assert!(err.to_string().contains("capture provenance mismatch"));
+        assert!(err.to_string().contains("field `expires-at`"));
 
         fs::remove_dir_all(root).unwrap();
     }

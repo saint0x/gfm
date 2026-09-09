@@ -45,6 +45,7 @@ pub struct ParityScreenshotCaptureOptions {
     pub display_profile: String,
     pub app_version: String,
     pub captured_at: String,
+    pub expires_at: Option<String>,
     pub reviewer: String,
     pub signer: String,
     pub approved_mask_set: String,
@@ -88,6 +89,7 @@ pub struct ParityCaptureMatrixOptions {
     pub display_profile: String,
     pub app_version: String,
     pub captured_at: String,
+    pub expires_at: Option<String>,
     pub reviewer: String,
     pub signer: String,
     pub approved_mask_set: String,
@@ -222,14 +224,20 @@ pub fn write_parity_capture_pair_manifest_checked(
         .as_ref()
         .map(|path| path.display().to_string())
         .unwrap_or_default();
+    let expires_at = finder
+        .expires_at
+        .as_deref()
+        .map(|value| format!("\texpires-at={}", escape_tsv_field(value)))
+        .unwrap_or_default();
     let content = format!(
-        "manifest-version\t1\nprofile\tmacos-build={}\thardware-profile={}\tdisplay-profile={}\tapp-version={}\tfixture-manifest={}\tcaptured-at={}\tcapture-command={}\treviewer={}\tsigner={}\tapproved-mask-set={}\tappearance={}\tscale={}\tcolor-profile={}\nentry\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+        "manifest-version\t1\nprofile\tmacos-build={}\thardware-profile={}\tdisplay-profile={}\tapp-version={}\tfixture-manifest={}\tcaptured-at={}{}\tcapture-command={}\treviewer={}\tsigner={}\tapproved-mask-set={}\tappearance={}\tscale={}\tcolor-profile={}\nentry\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
         escape_tsv_field(&finder.macos_build),
         escape_tsv_field(&finder.hardware_profile),
         escape_tsv_field(&finder.display_profile),
         escape_tsv_field(&finder.app_version),
         escape_tsv_field(&capture_fixture_manifest_path(&finder.fixture_root).to_string_lossy()),
         escape_tsv_field(&finder.captured_at),
+        expires_at,
         escape_tsv_field(&format!(
             "finder:screencapture:-x:-R:{},{},{},{};gfm:screencapture:-x:-R:{},{},{},{}",
             finder.window_origin_x,
@@ -353,6 +361,32 @@ fn validate_capture_metadata(options: &ParityScreenshotCaptureOptions) -> Result
             "parity capture appearance must be resolved light or dark".to_string(),
         ));
     }
+    if !is_valid_utc_capture_timestamp(&options.captured_at) {
+        return Err(GfmError::Format(format!(
+            "parity capture captured-at must use UTC second precision: {}",
+            options.captured_at
+        )));
+    }
+    if let Some(expires_at) = &options.expires_at {
+        if expires_at.trim().is_empty() {
+            return Err(GfmError::Format(
+                "parity capture expires-at cannot be empty".to_string(),
+            ));
+        }
+        if !is_valid_utc_capture_timestamp(expires_at) {
+            return Err(GfmError::Format(format!(
+                "parity capture expires-at must use UTC second precision: {expires_at}"
+            )));
+        }
+        if utc_capture_timestamp_epoch_seconds(&options.captured_at)
+            > utc_capture_timestamp_epoch_seconds(expires_at)
+        {
+            return Err(GfmError::Format(format!(
+                "parity capture captured-at `{}` cannot be after expires-at `{}`",
+                options.captured_at, expires_at
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -379,6 +413,7 @@ fn validate_capture_pair_manifest_options(
         || options.finder.display_profile != options.gfm.display_profile
         || options.finder.app_version != options.gfm.app_version
         || options.finder.captured_at != options.gfm.captured_at
+        || options.finder.expires_at != options.gfm.expires_at
         || options.finder.reviewer != options.gfm.reviewer
         || options.finder.signer != options.gfm.signer
         || options.finder.approved_mask_set != options.gfm.approved_mask_set
@@ -429,6 +464,7 @@ fn validate_capture_matrix_options(options: &ParityCaptureMatrixOptions) -> Resu
         display_profile: options.display_profile.clone(),
         app_version: options.app_version.clone(),
         captured_at: options.captured_at.clone(),
+        expires_at: options.expires_at.clone(),
         reviewer: options.reviewer.clone(),
         signer: options.signer.clone(),
         approved_mask_set: options.approved_mask_set.clone(),
@@ -561,6 +597,7 @@ fn matrix_capture_options(
         display_profile: options.display_profile.clone(),
         app_version: options.app_version.clone(),
         captured_at: options.captured_at.clone(),
+        expires_at: options.expires_at.clone(),
         reviewer: options.reviewer.clone(),
         signer: options.signer.clone(),
         approved_mask_set: options.approved_mask_set.clone(),
@@ -605,6 +642,7 @@ fn parity_capture_cli_command(options: &ParityScreenshotCaptureOptions) -> Vec<S
     if let Some(app) = &options.gfm_app {
         command.push(app.display().to_string());
     }
+    push_capture_expiry_args(&mut command, &options.expires_at);
     command
 }
 
@@ -621,7 +659,7 @@ struct MatrixManifestCommandInput<'a> {
 
 fn parity_capture_manifest_cli_command(input: &MatrixManifestCommandInput<'_>) -> Vec<String> {
     let options = input.options;
-    vec![
+    let mut command = vec![
         "gfm".to_string(),
         "parity-capture-manifest".to_string(),
         input.manifest_path.display().to_string(),
@@ -650,7 +688,16 @@ fn parity_capture_manifest_cli_command(input: &MatrixManifestCommandInput<'_>) -
         options.focus.as_str().to_string(),
         options.window_size.width.to_string(),
         options.window_size.height.to_string(),
-    ]
+    ];
+    push_capture_expiry_args(&mut command, &options.expires_at);
+    command
+}
+
+fn push_capture_expiry_args(command: &mut Vec<String>, expires_at: &Option<String>) {
+    if let Some(expires_at) = expires_at {
+        command.push("--expires-at".to_string());
+        command.push(expires_at.clone());
+    }
 }
 
 fn render_capture_matrix_plan(rows: &[ParityCaptureMatrixRow]) -> String {
@@ -752,8 +799,13 @@ fn write_capture_provenance(
     options: &ParityScreenshotCaptureOptions,
     region: &CaptureRegion,
 ) -> Result<()> {
+    let expires_at = options
+        .expires_at
+        .as_deref()
+        .map(|value| format!("expires-at\t{}\n", escape_tsv_field(value)))
+        .unwrap_or_default();
     let content = format!(
-        "target\t{}\nfixture-root\t{}\noutput\t{}\nscenario\t{}\nview-mode\t{}\nmacos-build\t{}\nhardware-profile\t{}\ndisplay-profile\t{}\napp-version\t{}\ncaptured-at\t{}\ncapture-command\t{}\nreviewer\t{}\nsigner\t{}\napproved-mask-set\t{}\nappearance\t{}\nscale\t{}\ncolor-profile\t{}\nfocus\t{}\nwindow-region\t{}\n",
+        "target\t{}\nfixture-root\t{}\noutput\t{}\nscenario\t{}\nview-mode\t{}\nmacos-build\t{}\nhardware-profile\t{}\ndisplay-profile\t{}\napp-version\t{}\ncaptured-at\t{}\n{}capture-command\t{}\nreviewer\t{}\nsigner\t{}\napproved-mask-set\t{}\nappearance\t{}\nscale\t{}\ncolor-profile\t{}\nfocus\t{}\nwindow-region\t{}\n",
         options.target.as_str(),
         escape_tsv_field(&options.fixture_root.to_string_lossy()),
         escape_tsv_field(&options.output_png.to_string_lossy()),
@@ -764,6 +816,7 @@ fn write_capture_provenance(
         escape_tsv_field(&options.display_profile),
         escape_tsv_field(&options.app_version),
         escape_tsv_field(&options.captured_at),
+        expires_at,
         escape_tsv_field(&format!(
             "screencapture:-x:-R:{}",
             region.screencapture_region()
@@ -793,6 +846,76 @@ fn escape_tsv_field(value: &str) -> String {
         .replace('\t', "\\t")
         .replace('\n', "\\n")
         .replace('\r', "\\r")
+}
+
+fn is_valid_utc_capture_timestamp(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != 20
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || bytes[10] != b'T'
+        || bytes[13] != b':'
+        || bytes[16] != b':'
+        || bytes[19] != b'Z'
+    {
+        return false;
+    }
+    for (index, byte) in bytes.iter().enumerate() {
+        if !matches!(index, 4 | 7 | 10 | 13 | 16 | 19) && !byte.is_ascii_digit() {
+            return false;
+        }
+    }
+    let year = parse_fixed_u32(bytes, 0, 4);
+    let month = parse_fixed_u32(bytes, 5, 7);
+    let day = parse_fixed_u32(bytes, 8, 10);
+    let hour = parse_fixed_u32(bytes, 11, 13);
+    let minute = parse_fixed_u32(bytes, 14, 16);
+    let second = parse_fixed_u32(bytes, 17, 19);
+    if year == 0 || !(1..=12).contains(&month) || hour > 23 || minute > 59 || second > 59 {
+        return false;
+    }
+    (1..=days_in_month(year, month)).contains(&day)
+}
+
+fn utc_capture_timestamp_epoch_seconds(value: &str) -> i64 {
+    let bytes = value.as_bytes();
+    let year = i64::from(parse_fixed_u32(bytes, 0, 4));
+    let month = i64::from(parse_fixed_u32(bytes, 5, 7));
+    let day = i64::from(parse_fixed_u32(bytes, 8, 10));
+    let hour = i64::from(parse_fixed_u32(bytes, 11, 13));
+    let minute = i64::from(parse_fixed_u32(bytes, 14, 16));
+    let second = i64::from(parse_fixed_u32(bytes, 17, 19));
+    days_from_civil(year, month, day) * 86_400 + hour * 3_600 + minute * 60 + second
+}
+
+fn parse_fixed_u32(bytes: &[u8], start: usize, end: usize) -> u32 {
+    bytes[start..end]
+        .iter()
+        .fold(0, |value, byte| value * 10 + u32::from(byte - b'0'))
+}
+
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let year = year - i64::from(month <= 2);
+    let era = year.div_euclid(400);
+    let year_of_era = year - era * 400;
+    let month_prime = month + if month > 2 { -3 } else { 9 };
+    let day_of_year = (153 * month_prime + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
+const fn days_in_month(year: u32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => 0,
+    }
+}
+
+const fn is_leap_year(year: u32) -> bool {
+    (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
 }
 
 #[cfg(test)]
@@ -913,6 +1036,7 @@ mod tests {
         let content = fs::read_to_string(manifest).unwrap();
         assert!(content.starts_with("manifest-version\t1\nprofile\tmacos-build=24D70\t"));
         assert!(content.contains("\tfixture-manifest="));
+        assert!(content.contains("\texpires-at=2026-09-27T00:00:00Z\t"));
         assert!(content.contains("\tcapture-command=finder:screencapture:-x:-R:40,70,1040,720;gfm:screencapture:-x:-R:40,70,1040,720\t"));
         assert!(content.contains("\nentry\ttext\t"));
         assert!(content.contains(&format!("\t{}\t", root.join("finder.png").display())));
@@ -921,6 +1045,46 @@ mod tests {
             "\t{}\t1040\t720\tactive\tlist\t",
             root.join("mask.tsv").display()
         )));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn capture_pair_manifest_omits_absent_expiry() {
+        let root = unique_temp_dir("gfm-parity-capture-pair-no-expiry");
+        fs::write(
+            root.join("manifest.tsv"),
+            "scenario\troot\tview\nlist\t.\tlist\n",
+        )
+        .unwrap();
+        let mut finder = sample_options(
+            ParityCaptureTarget::Finder,
+            &root,
+            root.join("finder.png"),
+            root.join("finder.provenance.tsv"),
+        );
+        let mut gfm = sample_options(
+            ParityCaptureTarget::Gfm,
+            &root,
+            root.join("gfm.png"),
+            root.join("gfm.provenance.tsv"),
+        );
+        finder.expires_at = None;
+        gfm.expires_at = None;
+        let manifest = root.join("gate.tsv");
+
+        write_parity_capture_pair_manifest(&ParityCapturePairManifestOptions {
+            manifest_path: manifest.clone(),
+            surface: ParitySurface::Text,
+            finder,
+            gfm,
+            mask_path: None,
+        })
+        .unwrap();
+
+        let content = fs::read_to_string(manifest).unwrap();
+        assert!(!content.contains("expires-at="), "{content}");
+        assert!(content.contains("\tcaptured-at=2026-09-09T00:00:00Z\tcapture-command="));
+
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -981,6 +1145,7 @@ mod tests {
             display_profile: "studio-display-p3".to_string(),
             app_version: "0.1.0".to_string(),
             captured_at: "2026-09-09T00:00:00Z".to_string(),
+            expires_at: Some("2026-09-27T00:00:00Z".to_string()),
             reviewer: "codex".to_string(),
             signer: "codex".to_string(),
             approved_mask_set: "macos-25A354-default".to_string(),
@@ -1019,6 +1184,7 @@ mod tests {
         assert!(content.starts_with("surface\tscenario\tview-mode\tfinder-output\t"));
         assert!(content.contains("\ntoolbar\ttoolbar\ticon\t"));
         assert!(content.contains("display-p3 active 40 70 1040 720"));
+        assert!(content.contains("--expires-at 2026-09-27T00:00:00Z"));
         assert!(content.contains("mask-25A354-dark.tsv"));
         fs::remove_dir_all(root).unwrap();
     }
@@ -1041,6 +1207,7 @@ mod tests {
             display_profile: "studio-display-p3".to_string(),
             app_version: "0.1.0".to_string(),
             captured_at: "2026-09-09T00:00:00Z".to_string(),
+            expires_at: Some("2026-09-27T00:00:00Z".to_string()),
             reviewer: "codex".to_string(),
             signer: "codex".to_string(),
             approved_mask_set: "macos-24D70-default".to_string(),
