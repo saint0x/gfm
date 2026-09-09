@@ -273,21 +273,46 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let policy = VolumeIndexPolicy::new(external, network).with_opted_in_roots(opted_in);
             let decision = policy.decide(&descriptor);
             let volume_id = Some(volume.id).or_else(|| state_access.volume());
-            let persisted = run_volume_task_cancellable(
-                volume_id,
-                Priority::Visible,
+            let persisted = visible_scheduled_result(
+                run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+                    Priority::Visible,
+                    JobPayloadKind::Indexing,
+                    "index admission state",
+                    current_host_job_scheduling_pressure(),
+                    || Ok(volume_id),
+                    state.clone(),
+                    move |cancellation, runtime| {
+                        let records = records.clone();
+                        let state = state.clone();
+                        let state_access = state_access.clone();
+                        let decision = decision.clone();
+                        cancellation.check()?;
+                        runtime.resize_checked(2, "index-admission:preflight", || {
+                            cancellation.check()
+                        })?;
+                        let _state_access = state_access.access_checked(|| cancellation.check())?;
+                        index_runtime_phase(&runtime, 1, "index-admission:write", &cancellation)?;
+                        let persisted = Indexer::default()
+                            .write_volume_decision_state_cancellable(
+                                &decision,
+                                records,
+                                state,
+                                &cancellation,
+                            )?;
+                        index_runtime_phase(
+                            &runtime,
+                            2,
+                            "index-admission:complete",
+                            &cancellation,
+                        )?;
+                        runtime.remember_completion_detail(format!(
+                            "completed:{}",
+                            persisted.index_action.as_deref().unwrap_or("-")
+                        ))?;
+                        Ok(persisted)
+                    },
+                )?,
                 "index admission state",
-                move |cancellation| {
-                    cancellation.check()?;
-                    let _state_access = state_access.access_checked(|| cancellation.check())?;
-                    cancellation.check()?;
-                    Indexer::default().write_volume_decision_state_cancellable(
-                        &decision,
-                        records,
-                        state,
-                        &cancellation,
-                    )
-                },
             )?;
             println!("{}", persisted.as_tsv());
         }

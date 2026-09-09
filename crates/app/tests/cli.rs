@@ -3655,9 +3655,13 @@ fn writes_index_admission_state_from_binary_without_records_crawl() {
     let root = unique_temp_dir("gfm-cli-index-admission-root");
     let index = unique_temp_path("gfm-cli-index-admission-records", "gfmidx");
     let state = unique_temp_path("gfm-cli-index-admission-state", "gfmstate");
+    let catalog = unique_temp_path("gfm-cli-index-admission-state", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-index-admission-state", "gfmprogress");
     fs::write(root.join("Admission.md"), "stateful admission").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
         .args([
             "index-admission-state",
             "enabled",
@@ -3681,6 +3685,20 @@ fn writes_index_admission_state_from_binary_without_records_crawl() {
     assert!(stdout.contains("\tinaccessible-count=0\t"), "{stdout}");
     assert!(stdout.contains("\tindex-action="), "{stdout}");
     assert!(stdout.contains("\tnative-status="), "{stdout}");
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(
+        catalog_text.contains(&format!(
+            "payload\t1\tindexing\tindex admission state\t{}\t",
+            state.display()
+        )) && catalog_text.contains("\tvisible:index admission state:adaptive"),
+        "{catalog_text}"
+    );
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("progress\t1\tvisible\tvisible\tindex admission state\t")
+            && progress_text.contains("\tcompleted\t2\t2\tcompleted:"),
+        "{progress_text}"
+    );
 
     let inspect = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["index-state-inspect", state.to_str().unwrap()])
@@ -3695,6 +3713,8 @@ fn writes_index_admission_state_from_binary_without_records_crawl() {
 
     fs::remove_dir_all(root).unwrap();
     fs::remove_file(state).unwrap();
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
 }
 
 #[test]
