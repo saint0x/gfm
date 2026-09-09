@@ -4034,9 +4034,13 @@ fn reports_rename_correlation_from_binary() {
     let root = unique_temp_dir("gfm-cli-rename-root");
     let from = root.join("RenameOld.md");
     let to = root.join("RenameNew.md");
+    let catalog = unique_temp_path("gfm-cli-rename-runtime", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-rename-runtime", "gfmprogress");
     fs::write(&from, "rename identity").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
         .args([
             "rename-correlation",
             from.to_str().unwrap(),
@@ -4066,7 +4070,22 @@ fn reports_rename_correlation_from_binary() {
     assert!(stdout.contains("\tpreserved=1"), "{stdout}");
     assert!(!from.exists());
     assert!(to.exists());
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(
+        catalog_text.contains(&format!("payload\t1\tindexing\tindex\t{}\t", to.display()))
+            && catalog_text.contains("\tvisible:index:adaptive"),
+        "{catalog_text}"
+    );
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("progress\t1\tvisible\tvisible\tindex\t")
+            && progress_text
+                .contains("\tcompleted\t4\t4\tcompleted:removed:1 inserted:1 preserved:1\t"),
+        "{progress_text}"
+    );
 
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -4154,9 +4173,13 @@ fn rename_correlation_refuses_unreachable_destination_before_indexing_from_binar
 fn reports_metadata_update_from_binary() {
     let root = unique_temp_dir("gfm-cli-metadata-root");
     let path = root.join("Metadata.md");
+    let catalog = unique_temp_path("gfm-cli-metadata-runtime", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-metadata-runtime", "gfmprogress");
     fs::write(&path, "metadata").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
         .args([
             "metadata-update",
             path.to_str().unwrap(),
@@ -4183,7 +4206,23 @@ fn reports_metadata_update_from_binary() {
     assert!(stdout.starts_with("metadata-update\t"), "{stdout}");
     assert!(stdout.contains("\texisted=true\t"), "{stdout}");
     assert!(stdout.contains("size"), "{stdout}");
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(
+        catalog_text.contains(&format!(
+            "payload\t1\tindexing\tindex\t{}\t",
+            path.display()
+        )) && catalog_text.contains("\tvisible:index:adaptive"),
+        "{catalog_text}"
+    );
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("progress\t1\tvisible\tvisible\tindex\t")
+            && progress_text.contains("\tcompleted\t4\t4\tcompleted:existed:true changed:"),
+        "{progress_text}"
+    );
 
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
     fs::remove_dir_all(root).unwrap();
 }
 

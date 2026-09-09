@@ -452,22 +452,52 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             access_reports.preflight_volumes()?;
             let volume = access_reports.first_volume();
-            let report = run_volume_task_cancellable(
-                volume,
-                Priority::Visible,
+            let report = visible_scheduled_result(
+                run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+                    Priority::Visible,
+                    JobPayloadKind::Indexing,
+                    "index",
+                    current_host_job_scheduling_pressure(),
+                    || Ok(volume),
+                    to.clone(),
+                    move |cancellation, runtime| {
+                        let root = root.clone();
+                        let from = from.clone();
+                        let to = to.clone();
+                        let access_reports = access_reports.clone();
+                        cancellation.check()?;
+                        runtime.resize_checked(4, "rename-correlation:preflight", || {
+                            cancellation.check()
+                        })?;
+                        let _root_access =
+                            access_reports.root_access_checked(|| cancellation.check())?;
+                        let _write_accesses =
+                            access_reports.write_accesses_checked(|| cancellation.check())?;
+                        index_runtime_phase(&runtime, 1, "rename-correlation:scan", &cancellation)?;
+                        let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
+                        index_runtime_phase(
+                            &runtime,
+                            2,
+                            "rename-correlation:rename",
+                            &cancellation,
+                        )?;
+                        std::fs::rename(&from, &to).map_err(|err| GfmError::io(&from, err))?;
+                        let mut live = LiveIndex::from_records(snapshot.records);
+                        let report = live.apply_rename_cancellable(&from, &to, &cancellation)?;
+                        runtime.remember_completion_detail(format!(
+                            "completed:removed:{} inserted:{} preserved:{}",
+                            report.removed, report.inserted, report.preserved
+                        ))?;
+                        index_runtime_phase(
+                            &runtime,
+                            4,
+                            "rename-correlation:complete",
+                            &cancellation,
+                        )?;
+                        Ok(report)
+                    },
+                )?,
                 "index",
-                move |cancellation| {
-                    let _root_access =
-                        access_reports.root_access_checked(|| cancellation.check())?;
-                    let _write_accesses =
-                        access_reports.write_accesses_checked(|| cancellation.check())?;
-                    cancellation.check()?;
-                    let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
-                    cancellation.check()?;
-                    std::fs::rename(&from, &to).map_err(|err| GfmError::io(&from, err))?;
-                    let mut live = LiveIndex::from_records(snapshot.records);
-                    live.apply_rename_cancellable(&from, &to, &cancellation)
-                },
             )?;
             println!("{}", report.as_tsv());
         }
@@ -489,32 +519,64 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             };
             access_reports.preflight_volumes()?;
             let volume = access_reports.first_volume();
-            let report = run_volume_task_cancellable(
-                volume,
-                Priority::Visible,
-                "index",
-                move |cancellation| {
-                    let _root_access =
-                        access_reports.root_access_checked(|| cancellation.check())?;
-                    let _path_access = if append.is_some() {
-                        Some(access_reports.write_accesses_checked(|| cancellation.check())?)
-                    } else {
-                        None
-                    };
-                    cancellation.check()?;
-                    let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
-                    if let Some(append) = append {
+            let report = visible_scheduled_result(
+                run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+                    Priority::Visible,
+                    JobPayloadKind::Indexing,
+                    "index",
+                    current_host_job_scheduling_pressure(),
+                    || Ok(volume),
+                    path.clone(),
+                    move |cancellation, runtime| {
+                        let root = root.clone();
+                        let path = path.clone();
+                        let append = append.clone();
+                        let access_reports = access_reports.clone();
                         cancellation.check()?;
-                        let mut file = std::fs::OpenOptions::new()
-                            .append(true)
-                            .open(&path)
-                            .map_err(|err| GfmError::io(&path, err))?;
-                        file.write_all(append.as_bytes())
-                            .map_err(|err| GfmError::io(&path, err))?;
-                    }
-                    let mut live = LiveIndex::from_records(snapshot.records);
-                    live.apply_metadata_update_cancellable(&path, &cancellation)
-                },
+                        runtime.resize_checked(4, "metadata-update:preflight", || {
+                            cancellation.check()
+                        })?;
+                        let _root_access =
+                            access_reports.root_access_checked(|| cancellation.check())?;
+                        let _path_access = if append.is_some() {
+                            Some(access_reports.write_accesses_checked(|| cancellation.check())?)
+                        } else {
+                            None
+                        };
+                        index_runtime_phase(&runtime, 1, "metadata-update:scan", &cancellation)?;
+                        let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
+                        if let Some(append) = append {
+                            index_runtime_phase(
+                                &runtime,
+                                2,
+                                "metadata-update:append",
+                                &cancellation,
+                            )?;
+                            let mut file = std::fs::OpenOptions::new()
+                                .append(true)
+                                .open(&path)
+                                .map_err(|err| GfmError::io(&path, err))?;
+                            file.write_all(append.as_bytes())
+                                .map_err(|err| GfmError::io(&path, err))?;
+                        }
+                        let mut live = LiveIndex::from_records(snapshot.records);
+                        let report =
+                            live.apply_metadata_update_cancellable(&path, &cancellation)?;
+                        runtime.remember_completion_detail(format!(
+                            "completed:existed:{} changed:{}",
+                            report.existed,
+                            report.changed.len()
+                        ))?;
+                        index_runtime_phase(
+                            &runtime,
+                            4,
+                            "metadata-update:complete",
+                            &cancellation,
+                        )?;
+                        Ok(report)
+                    },
+                )?,
+                "index",
             )?;
             println!("{}", report.as_tsv());
         }
