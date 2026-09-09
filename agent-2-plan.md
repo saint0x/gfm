@@ -24,13 +24,8 @@ GFM is macOS-only. It is a native Rust + GPUI Finder-parity file manager with GF
 ## DiskArbitration And Volume Remaining Work
 
 1. Replace remaining marker/path-derived volume classification with direct DiskArbitration, URL resource, mount table, and APFS/container metadata where available.
-2. Implement a long-lived DiskArbitration session owned by the macOS/platform layer, with explicit lifecycle, callback threading, cancellation, and teardown behavior.
-3. Add native eject, unmount, and mount operations with typed disposition, refusal reasons, permission failures, busy-volume failures, and user-cancelled outcomes.
-4. Extend the volume descriptor to include APFS container identity, volume role, case sensitivity, read-only state, network reachability, removable media truth, stable identity, and unavailable API states.
-5. Feed real volume descriptors into sidebar location rows, operation copy/chunk fallback policy, and index scheduling invalidation for slow, network, external, offline, and read-only volumes.
-6. Add live volume invalidation so sidebar rows, operation policy, and index admission update when mount, unmount, eject, disconnect, reconnect, or reachability changes occur.
-7. Add captured Finder pixel baselines for mounted volumes, eject controls, network volumes, offline volumes, disk images, read-only volumes, and volume error sheets.
-8. Verify with pure descriptor mapping tests, host-backed operator tests, downstream policy tests, and Fozzy coverage. Leave `STATUS.md` item 29 in place until the full DiskArbitration scope is complete.
+2. Add captured Finder pixel baselines for mounted volumes, eject controls, network volumes, offline volumes, disk images, read-only volumes, and volume error sheets.
+3. Verify with pure descriptor mapping tests, host-backed operator tests, downstream policy tests, and Fozzy coverage. Leave `STATUS.md` item 29 in place until the full DiskArbitration scope is complete.
 
 ## Security, TCC, And Permission Remaining Work
 
