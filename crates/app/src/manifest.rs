@@ -997,22 +997,26 @@ fn preflight_write_target_volume_checked(
 }
 
 fn manifest_path_exists(path: &Path, label: &str) -> Result<bool> {
-    path.try_exists().map_err(|err| {
-        GfmError::io(
+    match fs::metadata(path) {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(GfmError::io(
             path,
             format!("manifest {label} existence unavailable: {err}"),
-        )
-    })
+        )),
+    }
 }
 
 fn existing_read_probe_path(path: &Path) -> Result<&Path> {
-    if path.try_exists().map_err(|err| {
-        GfmError::io(
-            path,
-            format!("manifest read path existence unavailable: {err}"),
-        )
-    })? {
-        return Ok(path);
+    match fs::metadata(path) {
+        Ok(_) => return Ok(path),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(err) => {
+            return Err(GfmError::io(
+                path,
+                format!("manifest read path existence unavailable: {err}"),
+            ));
+        }
     }
     write_probe_path(path)
 }
@@ -1088,6 +1092,11 @@ fn escape_manifest_tsv_field(value: &str) -> String {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[cfg(unix)]
+    use std::ffi::OsString;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt;
 
     static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -1180,6 +1189,30 @@ mod tests {
         assert_eq!(result.err(), Some(GfmError::Cancelled));
         assert!(calls.load(Ordering::SeqCst) > 4);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn manifest_path_exists_surfaces_unavailable_metadata() {
+        let path = invalid_path("gfm-manifest-path-exists-invalid");
+
+        let err = manifest_path_exists(&path, "promotion journal").unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("manifest promotion journal existence unavailable"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn existing_read_probe_path_surfaces_unavailable_metadata() {
+        let path = invalid_path("gfm-manifest-read-probe-invalid");
+
+        let err = existing_read_probe_path(&path).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("manifest read path existence unavailable"));
     }
 
     #[test]
@@ -1297,5 +1330,15 @@ mod tests {
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(&path).expect("create temp directory");
         path
+    }
+
+    #[cfg(unix)]
+    fn invalid_path(label: &str) -> PathBuf {
+        let mut bytes = std::env::temp_dir().into_os_string().into_vec();
+        bytes.push(b'/');
+        bytes.extend_from_slice(label.as_bytes());
+        bytes.push(0);
+        bytes.extend_from_slice(b"path");
+        PathBuf::from(OsString::from_vec(bytes))
     }
 }

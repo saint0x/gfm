@@ -1666,6 +1666,11 @@ mod tests {
     use gfm_mac::VolumeCapacity;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    #[cfg(unix)]
+    use std::ffi::OsString;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt;
+
     static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
     #[test]
@@ -2320,6 +2325,39 @@ mod tests {
     }
 
     #[test]
+    fn optional_recovery_store_exists_checked_honors_pre_cancelled_control_before_metadata() {
+        let root = unique_temp_dir("gfm-optional-recovery-exists-pre-cancel");
+        let store = root.join("journal.tsv");
+
+        let result = optional_recovery_store_exists_checked(
+            &store,
+            "background content recovery journal",
+            || Err(GfmError::Cancelled),
+        );
+
+        assert_eq!(result, Err(GfmError::Cancelled));
+        assert!(!store.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn optional_recovery_store_exists_checked_reports_missing_as_false() {
+        let root = unique_temp_dir("gfm-optional-recovery-exists-missing");
+        let store = root.join("journal.tsv");
+
+        let exists = optional_recovery_store_exists_checked(
+            &store,
+            "background content recovery journal",
+            || Ok(()),
+        )
+        .unwrap();
+
+        assert!(!exists);
+        assert!(!store.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn optional_recovery_store_exists_checked_can_cancel_after_existence_probe() {
         let root = unique_temp_dir("gfm-optional-recovery-exists-post-probe-cancel");
         let store = root.join("journal.tsv");
@@ -2342,6 +2380,23 @@ mod tests {
         assert_eq!(result, Err(GfmError::Cancelled));
         assert_eq!(checks, 2);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn optional_recovery_store_exists_checked_surfaces_unavailable_metadata() {
+        let store = invalid_path("gfm-optional-recovery-exists-invalid");
+
+        let result = optional_recovery_store_exists_checked(
+            &store,
+            "background content recovery journal",
+            || Ok(()),
+        );
+
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("background content recovery journal existence unavailable"));
     }
 
     #[test]
@@ -2412,6 +2467,16 @@ mod tests {
         ));
         fs::create_dir_all(&path).unwrap();
         path
+    }
+
+    #[cfg(unix)]
+    fn invalid_path(label: &str) -> PathBuf {
+        let mut bytes = std::env::temp_dir().into_os_string().into_vec();
+        bytes.push(b'/');
+        bytes.extend_from_slice(label.as_bytes());
+        bytes.push(0);
+        bytes.extend_from_slice(b"path");
+        PathBuf::from(OsString::from_vec(bytes))
     }
 }
 
@@ -2567,11 +2632,20 @@ fn optional_recovery_store_exists_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<bool> {
     check_control()?;
-    let exists = path
-        .try_exists()
-        .map_err(|err| GfmError::io(path, format!("{worker} existence unavailable: {err}")))?;
-    check_control()?;
-    Ok(exists)
+    match fs::metadata(path) {
+        Ok(_) => {
+            check_control()?;
+            Ok(true)
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            check_control()?;
+            Ok(false)
+        }
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("{worker} existence unavailable: {err}"),
+        )),
+    }
 }
 
 #[derive(Clone)]
