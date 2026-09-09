@@ -68,6 +68,84 @@ fn writes_retained_macrobench_report_from_binary() {
 }
 
 #[test]
+fn verifies_retained_macrobench_report_from_binary() {
+    let root = unique_temp_dir("gfm-cli-macrobench-report-verify");
+    let output_dir = root.join("telemetry");
+
+    let report_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "macrobench-report",
+            output_dir.to_str().unwrap(),
+            root.to_str().unwrap(),
+            "smoke",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        report_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&report_output.stderr)
+    );
+
+    let verify_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "macrobench-report-verify",
+            output_dir.to_str().unwrap(),
+            "201",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        verify_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&verify_output.stderr)
+    );
+    let stdout = String::from_utf8(verify_output.stdout).unwrap();
+    assert!(
+        stdout.contains("macrobench-report-verify\toutput="),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tfiles=201\t"), "{stdout}");
+    assert!(stdout.contains("\tmeasurements=36\t"), "{stdout}");
+    assert!(stdout.contains("\tbudget-violations=0\t"), "{stdout}");
+    assert!(stdout.contains("\tpassed=true"), "{stdout}");
+
+    let too_small = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "macrobench-report-verify",
+            output_dir.to_str().unwrap(),
+            "202",
+        ])
+        .output()
+        .unwrap();
+    assert!(!too_small.status.success());
+    let stderr = String::from_utf8_lossy(&too_small.stderr);
+    assert!(stderr.contains("below required floor 202"), "{stderr}");
+
+    fs::write(
+        output_dir.join("budget-violations.tsv"),
+        "violation\nDirectoryOpen over budget\n",
+    )
+    .unwrap();
+    let corrupt = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "macrobench-report-verify",
+            output_dir.to_str().unwrap(),
+            "201",
+        ])
+        .output()
+        .unwrap();
+    assert!(!corrupt.status.success());
+    let stderr = String::from_utf8_lossy(&corrupt.stderr);
+    assert!(
+        stderr.contains("summary budget violation count 0 does not match"),
+        "{stderr}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn materializes_macrobench_fixture_from_binary() {
     let root = unique_temp_dir("gfm-cli-macrobench-fixture");
 

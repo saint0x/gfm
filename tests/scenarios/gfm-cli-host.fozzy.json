@@ -8151,6 +8151,33 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "macrobench-report-verify",
+        "tmp/gfm-fozzy-macrobench-report",
+        "201"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-macrobench-report/budget-violations.tsv",
+      "data": "violation\nDirectoryOpen over budget\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "macrobench-report-verify",
+        "tmp/gfm-fozzy-macrobench-report",
+        "201"
+      ],
+      "exit_code": 1,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "parity-fixture",
         "tmp/gfm-fozzy-parity",
         "smoke"

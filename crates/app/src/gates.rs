@@ -13,9 +13,9 @@ use gfm_testkit::{
     materialize_macrobench_fixture_report, materialize_parity_fixture, parse_parity_gate_manifest,
     read_governed_mask_file, read_mask_file, run_large_sidecar_gate, run_macrobench,
     run_macrobench_report, run_parity_gate, run_regression_gate, run_search_typing_benchmark,
-    run_search_typing_session_benchmark, write_parity_review_bundle, ColorProfile, DisplayScale,
-    LargeSidecarGateOptions, MacOsParityProfile, MacrobenchOptions, MacrobenchScale,
-    MacrobenchStage, ParityAppearance, ParityCaptureMatrixOptions,
+    run_search_typing_session_benchmark, verify_macrobench_artifacts, write_parity_review_bundle,
+    ColorProfile, DisplayScale, LargeSidecarGateOptions, MacOsParityProfile, MacrobenchOptions,
+    MacrobenchScale, MacrobenchStage, ParityAppearance, ParityCaptureMatrixOptions,
     ParityCapturePairManifestOptions, ParityCaptureTarget, ParityFixtureOptions,
     ParityFixtureScale, ParityFocusState, ParityGateInput, ParityScreenshotCaptureOptions,
     ParitySurface, PixelDiffOptions, PixelDriftThreshold, PixelSize, RegressionGateOptions,
@@ -97,6 +97,40 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             for violation in report.budget_violations {
                 eprintln!("budget-violation\t{violation:?}");
             }
+        }
+        "macrobench-report-verify" => {
+            let output_dir = required_path(
+                args.next(),
+                "macrobench-report-verify requires an output directory",
+            )?;
+            let min_files = parse_usize_arg(
+                args.next(),
+                "macrobench-report-verify requires a minimum materialized file count",
+            )?;
+            let access_reports = macrobench_report_verify_access_reports(&output_dir)?;
+            access_reports.preflight_volumes()?;
+            let volume = access_reports.first_volume();
+            let verification = run_volume_task_cancellable(
+                volume,
+                Priority::Visible,
+                "macrobench report verifier",
+                move |cancellation| {
+                    cancellation.check()?;
+                    let _access = access_reports.access_checked(|| cancellation.check())?;
+                    cancellation.check()?;
+                    verify_macrobench_artifacts(output_dir, min_files)
+                },
+            )?;
+            println!(
+                "macrobench-report-verify\toutput={}\tfiles={}\tmeasurements={}\tscenarios={}\tstages-per-scenario={}\tbudget-violations={}\tpassed={}",
+                verification.output_dir.display(),
+                verification.files_materialized,
+                verification.measurements,
+                verification.scenarios,
+                verification.stages_per_scenario,
+                verification.budget_violations,
+                verification.passed
+            );
         }
         "macrobench-fixture" => {
             let (root, scale) =
@@ -1121,6 +1155,15 @@ fn macrobench_report_access_reports(
         workspace_report,
         output_report,
     ]))
+}
+
+fn macrobench_report_verify_access_reports(output_dir: &Path) -> Result<GateAccessReports> {
+    Ok(GateAccessReports::new(vec![GateAccessReport::new_checked(
+        output_dir.to_path_buf(),
+        AccessIntent::Read,
+        "macrobench report verifier",
+        || Ok(()),
+    )?]))
 }
 
 fn run_workspace_write_task<T>(

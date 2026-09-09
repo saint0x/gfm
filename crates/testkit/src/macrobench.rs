@@ -2,7 +2,7 @@ use gfm_content::Extractor;
 use gfm_index::Indexer;
 use gfm_telemetry::{PerformanceBudgets, ScenarioMetric};
 use gfm_types::{GfmError, Result};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -47,6 +47,21 @@ impl MacrobenchScenario {
             Self::ICloud => "icloud",
             Self::External => "external",
             Self::Network => "network",
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "small" => Some(Self::Small),
+            "medium" => Some(Self::Medium),
+            "huge" => Some(Self::Huge),
+            "developer" => Some(Self::Developer),
+            "documents" => Some(Self::Documents),
+            "media" => Some(Self::Media),
+            "icloud" => Some(Self::ICloud),
+            "external" => Some(Self::External),
+            "network" => Some(Self::Network),
+            _ => None,
         }
     }
 }
@@ -175,6 +190,17 @@ pub struct MacrobenchArtifactReport {
     pub budget_violations_path: PathBuf,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MacrobenchArtifactVerification {
+    pub output_dir: PathBuf,
+    pub files_materialized: usize,
+    pub measurements: usize,
+    pub scenarios: usize,
+    pub stages_per_scenario: usize,
+    pub budget_violations: usize,
+    pub passed: bool,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MacrobenchStage {
     IndexBuild,
@@ -190,6 +216,16 @@ impl MacrobenchStage {
             Self::HotSearch => "hot-search",
             Self::StreamSearch => "stream-search",
             Self::ContentSearch => "content-search",
+        }
+    }
+
+    fn parse(value: &str) -> Option<Self> {
+        match value {
+            "index-build" => Some(Self::IndexBuild),
+            "hot-search" => Some(Self::HotSearch),
+            "stream-search" => Some(Self::StreamSearch),
+            "content-search" => Some(Self::ContentSearch),
+            _ => None,
         }
     }
 }
@@ -349,6 +385,116 @@ pub fn write_macrobench_artifacts(
         summary_path,
         measurements_path,
         budget_violations_path,
+    })
+}
+
+pub fn verify_macrobench_artifacts(
+    output_dir: impl AsRef<Path>,
+    min_files_materialized: usize,
+) -> Result<MacrobenchArtifactVerification> {
+    let output_dir = output_dir.as_ref();
+    let summary = read_summary_tsv(&output_dir.join("summary.tsv"))?;
+    let measurements = read_measurements_tsv(&output_dir.join("measurements.tsv"))?;
+    let budget_violations = read_budget_violations_tsv(&output_dir.join("budget-violations.tsv"))?;
+
+    let files_materialized = required_summary_usize(&summary, "files_materialized")?;
+    let summary_measurements = required_summary_usize(&summary, "measurements")?;
+    let summary_budget_violations = required_summary_usize(&summary, "budget_violations")?;
+    let passed = required_summary_bool(&summary, "passed")?;
+
+    if files_materialized < min_files_materialized {
+        return Err(GfmError::Format(format!(
+            "macrobench report materialized {files_materialized} files below required floor {min_files_materialized}"
+        )));
+    }
+    if summary_measurements != measurements.len() {
+        return Err(GfmError::Format(format!(
+            "macrobench report summary measurement count {summary_measurements} does not match measurements.tsv count {}",
+            measurements.len()
+        )));
+    }
+    if summary_measurements != MacrobenchScenario::ALL.len() * 4 {
+        return Err(GfmError::Format(format!(
+            "macrobench report expected {} measurements, found {summary_measurements}",
+            MacrobenchScenario::ALL.len() * 4
+        )));
+    }
+    if summary_budget_violations != budget_violations {
+        return Err(GfmError::Format(format!(
+            "macrobench report summary budget violation count {summary_budget_violations} does not match budget-violations.tsv count {budget_violations}"
+        )));
+    }
+    if summary_budget_violations != 0 || !passed {
+        return Err(GfmError::Format(format!(
+            "macrobench report retained {summary_budget_violations} budget violations and passed={passed}"
+        )));
+    }
+
+    let mut seen = BTreeSet::new();
+    let mut records_by_scenario: BTreeMap<MacrobenchScenario, usize> = BTreeMap::new();
+    for measurement in &measurements {
+        if !seen.insert((measurement.scenario, measurement.stage)) {
+            return Err(GfmError::Format(format!(
+                "macrobench report contains duplicate measurement for {} {}",
+                measurement.scenario.directory(),
+                measurement.stage.as_str()
+            )));
+        }
+        if measurement.duration.is_zero() {
+            return Err(GfmError::Format(format!(
+                "macrobench report contains zero duration for {} {}",
+                measurement.scenario.directory(),
+                measurement.stage.as_str()
+            )));
+        }
+        if measurement.records == 0 {
+            return Err(GfmError::Format(format!(
+                "macrobench report contains zero records for {} {}",
+                measurement.scenario.directory(),
+                measurement.stage.as_str()
+            )));
+        }
+        records_by_scenario
+            .entry(measurement.scenario)
+            .and_modify(|records| {
+                if *records != measurement.records {
+                    *records = 0;
+                }
+            })
+            .or_insert(measurement.records);
+    }
+
+    for scenario in MacrobenchScenario::ALL {
+        for stage in [
+            MacrobenchStage::IndexBuild,
+            MacrobenchStage::HotSearch,
+            MacrobenchStage::StreamSearch,
+            MacrobenchStage::ContentSearch,
+        ] {
+            if !seen.contains(&(scenario, stage)) {
+                return Err(GfmError::Format(format!(
+                    "macrobench report missing measurement for {} {}",
+                    scenario.directory(),
+                    stage.as_str()
+                )));
+            }
+        }
+        if records_by_scenario.get(&scenario) == Some(&0) {
+            return Err(GfmError::Format(format!(
+                "macrobench report records are inconsistent across stages for {}",
+                scenario.directory()
+            )));
+        }
+    }
+
+    Ok(MacrobenchArtifactVerification {
+        output_dir: output_dir.to_path_buf(),
+        files_materialized,
+        measurements: measurements.len(),
+        scenarios: MacrobenchScenario::ALL.len(),
+        stages_per_scenario: 4,
+        budget_violations,
+        passed,
     })
 }
 
@@ -563,6 +709,156 @@ fn write_macrobench_budget_violations(report: &MacrobenchReport, path: &Path) ->
     Ok(())
 }
 
+fn read_summary_tsv(path: &Path) -> Result<BTreeMap<String, String>> {
+    let content = fs::read_to_string(path).map_err(|err| GfmError::io(path, err))?;
+    let mut lines = content.lines();
+    if lines.next() != Some("key\tvalue") {
+        return Err(GfmError::Format(format!(
+            "{}: invalid macrobench summary header",
+            path.display()
+        )));
+    }
+    let mut summary = BTreeMap::new();
+    for (line_index, line) in lines.enumerate() {
+        let line_number = line_index + 2;
+        let columns = split_tsv_line(path, line_number, line, 2)?;
+        if summary
+            .insert(columns[0].to_string(), columns[1].to_string())
+            .is_some()
+        {
+            return Err(GfmError::Format(format!(
+                "{}:{line_number}: duplicate summary key {}",
+                path.display(),
+                columns[0]
+            )));
+        }
+    }
+    for key in [
+        "fixture_root",
+        "files_materialized",
+        "measurements",
+        "budget_violations",
+        "passed",
+    ] {
+        if !summary.contains_key(key) {
+            return Err(GfmError::Format(format!(
+                "{}: missing summary key {key}",
+                path.display()
+            )));
+        }
+    }
+    Ok(summary)
+}
+
+fn read_measurements_tsv(path: &Path) -> Result<Vec<MacrobenchMeasurement>> {
+    let content = fs::read_to_string(path).map_err(|err| GfmError::io(path, err))?;
+    let mut lines = content.lines();
+    if lines.next() != Some("scenario\tstage\tduration_ns\trecords\thits") {
+        return Err(GfmError::Format(format!(
+            "{}: invalid macrobench measurements header",
+            path.display()
+        )));
+    }
+    let mut measurements = Vec::new();
+    for (line_index, line) in lines.enumerate() {
+        let line_number = line_index + 2;
+        let columns = split_tsv_line(path, line_number, line, 5)?;
+        let scenario = MacrobenchScenario::parse(columns[0]).ok_or_else(|| {
+            GfmError::Format(format!(
+                "{}:{line_number}: unknown macrobench scenario {}",
+                path.display(),
+                columns[0]
+            ))
+        })?;
+        let stage = MacrobenchStage::parse(columns[1]).ok_or_else(|| {
+            GfmError::Format(format!(
+                "{}:{line_number}: unknown macrobench stage {}",
+                path.display(),
+                columns[1]
+            ))
+        })?;
+        let duration = Duration::from_nanos(parse_u64_field(
+            path,
+            line_number,
+            "duration_ns",
+            columns[2],
+        )?);
+        let records = parse_usize_field(path, line_number, "records", columns[3])?;
+        let hits = parse_usize_field(path, line_number, "hits", columns[4])?;
+        measurements.push(MacrobenchMeasurement {
+            scenario,
+            stage,
+            duration,
+            records,
+            hits,
+        });
+    }
+    Ok(measurements)
+}
+
+fn read_budget_violations_tsv(path: &Path) -> Result<usize> {
+    let content = fs::read_to_string(path).map_err(|err| GfmError::io(path, err))?;
+    let mut lines = content.lines();
+    if lines.next() != Some("violation") {
+        return Err(GfmError::Format(format!(
+            "{}: invalid macrobench budget violation header",
+            path.display()
+        )));
+    }
+    Ok(lines.filter(|line| !line.trim().is_empty()).count())
+}
+
+fn required_summary_usize(summary: &BTreeMap<String, String>, key: &str) -> Result<usize> {
+    summary
+        .get(key)
+        .expect("summary keys are prevalidated")
+        .parse::<usize>()
+        .map_err(|err| GfmError::Format(format!("invalid summary {key}: {err}")))
+}
+
+fn required_summary_bool(summary: &BTreeMap<String, String>, key: &str) -> Result<bool> {
+    summary
+        .get(key)
+        .expect("summary keys are prevalidated")
+        .parse::<bool>()
+        .map_err(|err| GfmError::Format(format!("invalid summary {key}: {err}")))
+}
+
+fn split_tsv_line<'a>(
+    path: &Path,
+    line_number: usize,
+    line: &'a str,
+    expected_columns: usize,
+) -> Result<Vec<&'a str>> {
+    let columns: Vec<&str> = line.split('\t').collect();
+    if columns.len() != expected_columns {
+        return Err(GfmError::Format(format!(
+            "{}:{line_number}: expected {expected_columns} TSV columns, found {}",
+            path.display(),
+            columns.len()
+        )));
+    }
+    Ok(columns)
+}
+
+fn parse_u64_field(path: &Path, line_number: usize, field: &str, value: &str) -> Result<u64> {
+    value.parse::<u64>().map_err(|err| {
+        GfmError::Format(format!(
+            "{}:{line_number}: invalid {field} value {value}: {err}",
+            path.display()
+        ))
+    })
+}
+
+fn parse_usize_field(path: &Path, line_number: usize, field: &str, value: &str) -> Result<usize> {
+    value.parse::<usize>().map_err(|err| {
+        GfmError::Format(format!(
+            "{}:{line_number}: invalid {field} value {value}: {err}",
+            path.display()
+        ))
+    })
+}
+
 fn escape_tsv_field(value: &str) -> String {
     value.replace('\\', "\\\\").replace(['\t', '\n', '\r'], " ")
 }
@@ -674,6 +970,70 @@ mod tests {
             "{measurements}"
         );
         assert_eq!(violations.lines().next(), Some("violation"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn verifies_retained_macrobench_telemetry_artifacts() {
+        let root = unique_temp_dir("gfm-testkit-macrobench-verify");
+        let output = root.join("telemetry");
+        run_macrobench_report(&MacrobenchOptions::smoke(&root), &output).unwrap();
+
+        let verification = verify_macrobench_artifacts(&output, 201).unwrap();
+
+        assert_eq!(verification.output_dir, output);
+        assert_eq!(verification.files_materialized, 201);
+        assert_eq!(verification.measurements, MacrobenchScenario::ALL.len() * 4);
+        assert_eq!(verification.scenarios, MacrobenchScenario::ALL.len());
+        assert_eq!(verification.stages_per_scenario, 4);
+        assert_eq!(verification.budget_violations, 0);
+        assert!(verification.passed);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_incomplete_or_failing_macrobench_telemetry_artifacts() {
+        let root = unique_temp_dir("gfm-testkit-macrobench-rejects");
+        let output = root.join("telemetry");
+        run_macrobench_report(&MacrobenchOptions::smoke(&root), &output).unwrap();
+
+        let too_small = verify_macrobench_artifacts(&output, 202).unwrap_err();
+        assert!(
+            too_small.to_string().contains("below required floor 202"),
+            "{too_small}"
+        );
+
+        fs::write(
+            output.join("budget-violations.tsv"),
+            "violation\nDirectoryOpen over budget\n",
+        )
+        .unwrap();
+        let violations = verify_macrobench_artifacts(&output, 201).unwrap_err();
+        assert!(
+            violations
+                .to_string()
+                .contains("summary budget violation count 0 does not match"),
+            "{violations}"
+        );
+
+        fs::write(output.join("budget-violations.tsv"), "violation\n").unwrap();
+        let measurements = fs::read_to_string(output.join("measurements.tsv")).unwrap();
+        let incomplete = measurements
+            .lines()
+            .filter(|line| *line != "network\tcontent-search\t0\t0\t0")
+            .filter(|line| !line.starts_with("network\tcontent-search\t"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(output.join("measurements.tsv"), format!("{incomplete}\n")).unwrap();
+        let missing = verify_macrobench_artifacts(&output, 201).unwrap_err();
+        assert!(
+            missing
+                .to_string()
+                .contains("summary measurement count 36 does not match"),
+            "{missing}"
+        );
 
         fs::remove_dir_all(root).unwrap();
     }
