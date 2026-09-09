@@ -78,19 +78,25 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     .as_ref()
                     .and_then(ForegroundContentIndexAccessReport::volume)
             });
-            let (records_len, inaccessible_len, indexed) =
-                run_retriable_volume_task_cancellable_with_payload_path(
-                    volume,
+            let (records_len, inaccessible_len, indexed) = visible_scheduled_result(
+                run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
                     Priority::Visible,
+                    JobPayloadKind::Indexing,
                     "content index",
+                    current_host_job_scheduling_pressure(),
+                    || Ok(volume),
                     content.clone(),
-                    move |cancellation| {
+                    move |cancellation, runtime| {
                         let root = root.clone();
                         let records = records.clone();
                         let content = content.clone();
                         let retry_probe = retry_probe.clone();
                         let retry_probe_access_report = retry_probe_access_report.clone();
+                        let access_reports = access_reports.clone();
                         cancellation.check()?;
+                        runtime.resize_checked(3, "content-index:preflight", || {
+                            cancellation.check()
+                        })?;
                         if let (Some(retry_probe), Some(retry_probe_access_report)) =
                             (retry_probe.as_ref(), retry_probe_access_report.as_ref())
                         {
@@ -106,20 +112,31 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                             "content index",
                             || cancellation.check(),
                         )?;
-                        cancellation.check()?;
+                        content_runtime_phase(&runtime, 1, "content-index:scan", &cancellation)?;
                         let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
                         let records_len = snapshot.records.len();
                         let inaccessible_len = snapshot.inaccessible.len();
-                        cancellation.check()?;
+                        content_runtime_phase(&runtime, 2, "content-index:write", &cancellation)?;
                         let indexed = snapshot.save_with_content_cancellable(
                             records,
                             content,
                             &Extractor::default(),
                             &cancellation,
                         )?;
+                        content_runtime_phase(
+                            &runtime,
+                            3,
+                            "content-index:complete",
+                            &cancellation,
+                        )?;
+                        runtime.remember_completion_detail(format!(
+                            "completed:{records_len} records:{indexed} indexed"
+                        ))?;
                         Ok((records_len, inaccessible_len, indexed))
                     },
-                )?;
+                )?,
+                "content index",
+            )?;
             eprintln!(
                 "indexed {} records; content-indexed {} files; {} inaccessible",
                 records_len, indexed, inaccessible_len
