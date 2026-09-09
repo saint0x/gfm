@@ -167,12 +167,31 @@ impl MacrobenchReport {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MacrobenchArtifactReport {
+    pub output_dir: PathBuf,
+    pub summary_path: PathBuf,
+    pub measurements_path: PathBuf,
+    pub budget_violations_path: PathBuf,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MacrobenchStage {
     IndexBuild,
     HotSearch,
     StreamSearch,
     ContentSearch,
+}
+
+impl MacrobenchStage {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::IndexBuild => "index-build",
+            Self::HotSearch => "hot-search",
+            Self::StreamSearch => "stream-search",
+            Self::ContentSearch => "content-search",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -301,6 +320,35 @@ pub fn run_macrobench(options: &MacrobenchOptions) -> Result<MacrobenchReport> {
         files_materialized,
         measurements,
         budget_violations,
+    })
+}
+
+pub fn run_macrobench_report(
+    options: &MacrobenchOptions,
+    output_dir: impl AsRef<Path>,
+) -> Result<(MacrobenchReport, MacrobenchArtifactReport)> {
+    let report = run_macrobench(options)?;
+    let artifacts = write_macrobench_artifacts(&report, output_dir)?;
+    Ok((report, artifacts))
+}
+
+pub fn write_macrobench_artifacts(
+    report: &MacrobenchReport,
+    output_dir: impl AsRef<Path>,
+) -> Result<MacrobenchArtifactReport> {
+    let output_dir = output_dir.as_ref().to_path_buf();
+    fs::create_dir_all(&output_dir).map_err(|err| GfmError::io(&output_dir, err))?;
+    let summary_path = output_dir.join("summary.tsv");
+    let measurements_path = output_dir.join("measurements.tsv");
+    let budget_violations_path = output_dir.join("budget-violations.tsv");
+    write_macrobench_summary(report, &summary_path)?;
+    write_macrobench_measurements(report, &measurements_path)?;
+    write_macrobench_budget_violations(report, &budget_violations_path)?;
+    Ok(MacrobenchArtifactReport {
+        output_dir,
+        summary_path,
+        measurements_path,
+        budget_violations_path,
     })
 }
 
@@ -464,6 +512,61 @@ fn materialize_media(root: &Path, count: usize) -> Result<(usize, usize)> {
     Ok((count, directories))
 }
 
+fn write_macrobench_summary(report: &MacrobenchReport, path: &Path) -> Result<()> {
+    let mut file = fs::File::create(path).map_err(|err| GfmError::io(path, err))?;
+    writeln!(file, "key\tvalue").map_err(|err| GfmError::io(path, err))?;
+    writeln!(
+        file,
+        "fixture_root\t{}",
+        escape_tsv_field(&report.fixture_root.display().to_string())
+    )
+    .map_err(|err| GfmError::io(path, err))?;
+    writeln!(file, "files_materialized\t{}", report.files_materialized)
+        .map_err(|err| GfmError::io(path, err))?;
+    writeln!(file, "measurements\t{}", report.measurements.len())
+        .map_err(|err| GfmError::io(path, err))?;
+    writeln!(
+        file,
+        "budget_violations\t{}",
+        report.budget_violations.len()
+    )
+    .map_err(|err| GfmError::io(path, err))?;
+    writeln!(file, "passed\t{}", report.passed()).map_err(|err| GfmError::io(path, err))
+}
+
+fn write_macrobench_measurements(report: &MacrobenchReport, path: &Path) -> Result<()> {
+    let mut file = fs::File::create(path).map_err(|err| GfmError::io(path, err))?;
+    writeln!(file, "scenario\tstage\tduration_ns\trecords\thits")
+        .map_err(|err| GfmError::io(path, err))?;
+    for measurement in &report.measurements {
+        writeln!(
+            file,
+            "{}\t{}\t{}\t{}\t{}",
+            measurement.scenario.directory(),
+            measurement.stage.as_str(),
+            measurement.duration.as_nanos(),
+            measurement.records,
+            measurement.hits
+        )
+        .map_err(|err| GfmError::io(path, err))?;
+    }
+    Ok(())
+}
+
+fn write_macrobench_budget_violations(report: &MacrobenchReport, path: &Path) -> Result<()> {
+    let mut file = fs::File::create(path).map_err(|err| GfmError::io(path, err))?;
+    writeln!(file, "violation").map_err(|err| GfmError::io(path, err))?;
+    for violation in &report.budget_violations {
+        writeln!(file, "{}", escape_tsv_field(&format!("{violation:?}")))
+            .map_err(|err| GfmError::io(path, err))?;
+    }
+    Ok(())
+}
+
+fn escape_tsv_field(value: &str) -> String {
+    value.replace('\\', "\\\\").replace(['\t', '\n', '\r'], " ")
+}
+
 fn write_fixture_manifest(
     path: &Path,
     scenarios: &[MacrobenchFixtureScenarioReport],
@@ -543,6 +646,34 @@ mod tests {
             .measurements
             .iter()
             .any(|measurement| measurement.hits > 0));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn writes_retained_macrobench_telemetry_artifacts() {
+        let root = unique_temp_dir("gfm-testkit-macrobench-artifacts");
+        let output = root.join("telemetry");
+        let (report, artifacts) =
+            run_macrobench_report(&MacrobenchOptions::smoke(&root), &output).unwrap();
+
+        assert_eq!(artifacts.output_dir, output);
+        assert_eq!(report.files_materialized, 201);
+        let summary = fs::read_to_string(&artifacts.summary_path).unwrap();
+        let measurements = fs::read_to_string(&artifacts.measurements_path).unwrap();
+        let violations = fs::read_to_string(&artifacts.budget_violations_path).unwrap();
+        assert!(summary.contains("files_materialized\t201"), "{summary}");
+        assert!(summary.contains("measurements\t36"), "{summary}");
+        assert!(measurements.starts_with("scenario\tstage\tduration_ns\trecords\thits\n"));
+        assert!(
+            measurements.contains("small\tindex-build\t"),
+            "{measurements}"
+        );
+        assert!(
+            measurements.contains("network\tcontent-search\t"),
+            "{measurements}"
+        );
+        assert_eq!(violations.lines().next(), Some("violation"));
 
         fs::remove_dir_all(root).unwrap();
     }

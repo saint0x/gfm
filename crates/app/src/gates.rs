@@ -12,7 +12,7 @@ use gfm_testkit::{
     capture_parity_screenshot_checked, diff_rgba_files, evaluate_pixel_threshold,
     materialize_macrobench_fixture_report, materialize_parity_fixture, parse_parity_gate_manifest,
     read_governed_mask_file, read_mask_file, run_large_sidecar_gate, run_macrobench,
-    run_parity_gate, run_regression_gate, run_search_typing_benchmark,
+    run_macrobench_report, run_parity_gate, run_regression_gate, run_search_typing_benchmark,
     run_search_typing_session_benchmark, write_parity_review_bundle, ColorProfile, DisplayScale,
     LargeSidecarGateOptions, MacOsParityProfile, MacrobenchOptions, MacrobenchScale,
     MacrobenchStage, ParityAppearance, ParityCaptureMatrixOptions,
@@ -57,6 +57,43 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     measurement.hits
                 );
             }
+            for violation in report.budget_violations {
+                eprintln!("budget-violation\t{violation:?}");
+            }
+        }
+        "macrobench-report" => {
+            let output_dir = required_path(
+                args.next(),
+                "macrobench-report requires an output directory",
+            )?;
+            let options = macrobench_options(args.next(), args.next(), "macrobench-report")?;
+            let workspace = options.workspace.clone();
+            let access_reports = macrobench_report_access_reports(&workspace, &output_dir)?;
+            access_reports.preflight_volumes()?;
+            let volume = access_reports.first_volume();
+            let (report, artifacts) = run_volume_task_cancellable(
+                volume,
+                Priority::Visible,
+                "macrobench report workspace",
+                move |cancellation| {
+                    cancellation.check()?;
+                    let _access = access_reports.access_checked(|| cancellation.check())?;
+                    cancellation.check()?;
+                    let report = run_macrobench_report(&options, output_dir)?;
+                    cancellation.check()?;
+                    Ok(report)
+                },
+            )?;
+            println!(
+                "macrobench-report\tfixture={}\tfiles={}\tpassed={}\toutput={}\tsummary={}\tmeasurements={}\tbudget-violations={}",
+                report.fixture_root.display(),
+                report.files_materialized,
+                report.passed(),
+                artifacts.output_dir.display(),
+                artifacts.summary_path.display(),
+                artifacts.measurements_path.display(),
+                artifacts.budget_violations_path.display()
+            );
             for violation in report.budget_violations {
                 eprintln!("budget-violation\t{violation:?}");
             }
@@ -1073,6 +1110,19 @@ fn workspace_write_access_report_checked(
     check_control()?;
     GateAccessReport::new_checked(workspace, AccessIntent::Write, worker, &mut check_control)
 }
+
+fn macrobench_report_access_reports(
+    workspace: &Path,
+    output_dir: &Path,
+) -> Result<GateAccessReports> {
+    let workspace_report = workspace_write_access_report(workspace, "macrobench report workspace")?;
+    let output_report = workspace_write_access_report(output_dir, "macrobench report output")?;
+    Ok(GateAccessReports::new(vec![
+        workspace_report,
+        output_report,
+    ]))
+}
+
 fn run_workspace_write_task<T>(
     workspace: &Path,
     worker: &'static str,
@@ -1182,10 +1232,14 @@ fn macrobench_options(
             options.scale = MacrobenchScale::standard();
             options.limit = 50;
         }
+        Some("million") => {
+            options.scale = MacrobenchScale::million_files();
+            options.limit = 100;
+        }
         Some("smoke") | None => {}
         Some(other) => {
             return Err(GfmError::Format(format!(
-                "{command} scale must be `smoke` or `standard`, got `{other}`"
+                "{command} scale must be `smoke`, `standard`, or `million`, got `{other}`"
             )));
         }
     }

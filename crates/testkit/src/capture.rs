@@ -4,8 +4,9 @@ use crate::{
 };
 use gfm_types::{GfmError, Result};
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, ExitStatus};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParityCaptureTarget {
@@ -168,6 +169,7 @@ pub fn capture_parity_screenshot_checked(
     let prepare_command = prepare_capture_command(options)?;
     let capture_command = screencapture_command(&region, &options.output_png);
 
+    validate_capture_host_paths(options)?;
     run_command(&prepare_command, "parity capture prepare")?;
     check_control()?;
     run_command(&capture_command, "parity screenshot capture")?;
@@ -316,6 +318,41 @@ fn validate_capture_options(options: &ParityScreenshotCaptureOptions) -> Result<
         return Err(GfmError::Format(
             "gfm parity capture requires a GFM app path".to_string(),
         ));
+    }
+    Ok(())
+}
+
+fn validate_capture_host_paths(options: &ParityScreenshotCaptureOptions) -> Result<()> {
+    if let (ParityCaptureTarget::Gfm, Some(app)) = (options.target, options.gfm_app.as_ref()) {
+        match fs::metadata(app) {
+            Ok(metadata) if metadata.is_dir() => {}
+            Ok(_) => {
+                return Err(GfmError::Format(format!(
+                    "gfm parity capture GFM app missing: {} is not an app bundle directory",
+                    app.display()
+                )));
+            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                return Err(GfmError::Format(format!(
+                    "gfm parity capture GFM app missing: {}",
+                    app.display()
+                )));
+            }
+            Err(err) if err.kind() == io::ErrorKind::PermissionDenied => {
+                return Err(GfmError::Format(format!(
+                    "gfm parity capture GFM app denied: {}; {}",
+                    app.display(),
+                    err
+                )));
+            }
+            Err(err) => {
+                return Err(GfmError::Format(format!(
+                    "gfm parity capture GFM app unavailable: {}; {}",
+                    app.display(),
+                    err
+                )));
+            }
+        }
     }
     Ok(())
 }
@@ -784,15 +821,66 @@ fn run_command(command: &[String], label: &str) -> Result<()> {
     let output = Command::new(program)
         .args(args)
         .output()
-        .map_err(|err| GfmError::io(program, err))?;
+        .map_err(|err| GfmError::Format(command_launch_error(label, program, err)))?;
     if !output.status.success() {
-        return Err(GfmError::Format(format!(
-            "{label} failed with status {}; stderr={}",
+        return Err(GfmError::Format(command_status_error(
+            label,
+            program,
             output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
+            String::from_utf8_lossy(&output.stderr).trim(),
         )));
     }
     Ok(())
+}
+
+fn command_launch_error(label: &str, program: &str, err: io::Error) -> String {
+    let state = match err.kind() {
+        io::ErrorKind::NotFound => "missing",
+        io::ErrorKind::PermissionDenied => "denied",
+        _ => "unavailable",
+    };
+    format!("{label} {state}: could not launch `{program}`; {err}")
+}
+
+fn command_status_error(label: &str, program: &str, status: ExitStatus, stderr: &str) -> String {
+    let state = classify_command_failure(stderr);
+    format!("{label} {state}: command `{program}` failed with status {status}; stderr={stderr}")
+}
+
+fn classify_command_failure(stderr: &str) -> &'static str {
+    let lower = stderr.to_ascii_lowercase();
+    if lower.contains("not authorized")
+        || lower.contains("not authorised")
+        || lower.contains("not permitted")
+        || lower.contains("operation not permitted")
+        || lower.contains("screen recording")
+        || lower.contains("privacy")
+        || lower.contains("tcc")
+    {
+        return "denied";
+    }
+    if lower.contains("could not create image from display")
+        || lower.contains("no display")
+        || lower.contains("display is unavailable")
+        || lower.contains("window server")
+        || lower.contains("cannot connect to display")
+    {
+        return "unavailable";
+    }
+    if lower.contains("does not exist")
+        || lower.contains("no such file")
+        || lower.contains("not found")
+        || lower.contains("missing")
+    {
+        return "missing";
+    }
+    if lower.contains("offline") {
+        return "offline";
+    }
+    if lower.contains("unsupported") || lower.contains("not supported") {
+        return "unsupported";
+    }
+    "failed"
 }
 
 fn write_capture_provenance(
@@ -1187,6 +1275,94 @@ mod tests {
         assert!(content.contains("--expires-at 2026-09-27T00:00:00Z"));
         assert!(content.contains("mask-25A354-dark.tsv"));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn actual_gfm_capture_rejects_missing_app_bundle_as_missing() {
+        let root = unique_temp_dir("gfm-parity-capture-missing-app");
+        let mut options = sample_options(
+            ParityCaptureTarget::Gfm,
+            &root,
+            root.join("gfm.png"),
+            root.join("gfm.provenance.tsv"),
+        );
+        options.gfm_app = Some(root.join("Missing.app"));
+
+        let err = capture_parity_screenshot_checked(&options, || Ok(())).unwrap_err();
+
+        let message = err.to_string();
+        assert!(message.contains("GFM app missing"), "{message}");
+        assert!(message.contains("Missing.app"), "{message}");
+        assert!(!root.join("gfm.png").exists());
+        assert!(!root.join("gfm.provenance.tsv").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn capture_command_errors_preserve_host_state() {
+        let display = command_status_error(
+            "parity screenshot capture",
+            "/usr/sbin/screencapture",
+            synthetic_failure_status(),
+            "could not create image from display with rect (40.0, 70.0, 800.0, 500.0)",
+        );
+        assert!(
+            display.contains("parity screenshot capture unavailable"),
+            "{display}"
+        );
+
+        let tcc = command_status_error(
+            "parity capture prepare",
+            "/usr/bin/osascript",
+            synthetic_failure_status(),
+            "Not authorized to send Apple events to Finder.",
+        );
+        assert!(tcc.contains("parity capture prepare denied"), "{tcc}");
+
+        let unsupported = command_status_error(
+            "parity capture prepare",
+            "/usr/bin/osascript",
+            synthetic_failure_status(),
+            "flow view is not supported on this macOS build",
+        );
+        assert!(
+            unsupported.contains("parity capture prepare unsupported"),
+            "{unsupported}"
+        );
+    }
+
+    #[test]
+    fn capture_launch_errors_preserve_host_state() {
+        let missing = command_launch_error(
+            "parity capture prepare",
+            "/missing/osascript",
+            io::Error::from(io::ErrorKind::NotFound),
+        );
+        assert!(
+            missing.contains("parity capture prepare missing"),
+            "{missing}"
+        );
+
+        let denied = command_launch_error(
+            "parity screenshot capture",
+            "/usr/sbin/screencapture",
+            io::Error::from(io::ErrorKind::PermissionDenied),
+        );
+        assert!(
+            denied.contains("parity screenshot capture denied"),
+            "{denied}"
+        );
+    }
+
+    #[cfg(unix)]
+    fn synthetic_failure_status() -> ExitStatus {
+        use std::os::unix::process::ExitStatusExt;
+        ExitStatus::from_raw(256)
+    }
+
+    #[cfg(not(unix))]
+    fn synthetic_failure_status() -> ExitStatus {
+        std::process::Command::new("false").status().unwrap()
     }
 
     fn sample_options(

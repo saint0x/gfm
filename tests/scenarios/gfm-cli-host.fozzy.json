@@ -8139,6 +8139,18 @@
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
+        "macrobench-report",
+        "tmp/gfm-fozzy-macrobench-report",
+        "tmp/gfm-fozzy-macrobench-report-workspace",
+        "smoke"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
         "parity-fixture",
         "tmp/gfm-fozzy-parity",
         "smoke"
@@ -8380,6 +8392,38 @@
       "type": "fs_write",
       "path": "tmp/gfm-capture-root/.keep",
       "data": "capture root marker\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "parity-capture",
+        "gfm",
+        "tmp/gfm-capture-root",
+        "tmp/gfm-capture-missing-app.png",
+        "tmp/gfm-capture-missing-app.provenance.tsv",
+        "text",
+        "list",
+        "25A354",
+        "macbookpro18,3",
+        "studio-display-p3",
+        "0.1.0",
+        "2026-09-09T00:00:00Z",
+        "codex",
+        "codex",
+        "macos-25A354-default",
+        "dark",
+        "2x",
+        "display-p3",
+        "active",
+        "1",
+        "1",
+        "1",
+        "1",
+        "tmp/GFM-Missing.app"
+      ],
+      "exit_code": 1,
+      "times": 1
     },
     {
       "type": "fs_write",

@@ -24,6 +24,7 @@ pub use gates::{
 };
 pub use macrobench::{
     materialize_macrobench_fixture, materialize_macrobench_fixture_report, run_macrobench,
+    run_macrobench_report, write_macrobench_artifacts, MacrobenchArtifactReport,
     MacrobenchFixtureReport, MacrobenchFixtureScenarioReport, MacrobenchMeasurement,
     MacrobenchOptions, MacrobenchReport, MacrobenchScale, MacrobenchScenario, MacrobenchStage,
 };

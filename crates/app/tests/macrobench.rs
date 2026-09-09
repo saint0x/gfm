@@ -27,6 +27,47 @@ fn runs_macrobench_from_binary() {
 }
 
 #[test]
+fn writes_retained_macrobench_report_from_binary() {
+    let root = unique_temp_dir("gfm-cli-macrobench-report");
+    let output_dir = root.join("telemetry");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "macrobench-report",
+            output_dir.to_str().unwrap(),
+            root.to_str().unwrap(),
+            "smoke",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+
+    assert!(stdout.contains("macrobench-report\tfixture="), "{stdout}");
+    assert!(stdout.contains("\tfiles=201\t"), "{stdout}");
+    assert!(stdout.contains("\toutput="), "{stdout}");
+    let summary = fs::read_to_string(output_dir.join("summary.tsv")).unwrap();
+    let measurements = fs::read_to_string(output_dir.join("measurements.tsv")).unwrap();
+    let violations = fs::read_to_string(output_dir.join("budget-violations.tsv")).unwrap();
+    assert!(summary.contains("files_materialized\t201"), "{summary}");
+    assert!(
+        measurements.contains("small\tindex-build\t"),
+        "{measurements}"
+    );
+    assert!(
+        measurements.contains("network\tcontent-search\t"),
+        "{measurements}"
+    );
+    assert_eq!(violations.lines().next(), Some("violation"));
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn materializes_macrobench_fixture_from_binary() {
     let root = unique_temp_dir("gfm-cli-macrobench-fixture");
 
@@ -1133,6 +1174,7 @@ fn gate_routes_report_output_probe_failures_before_manifest_or_fixture_io_from_b
     let manifest = root.join("gate.tsv");
     let review = root.join("parity-review-unavailable".repeat(16));
     let fixture = root.join("macrobench-fixture-unavailable".repeat(16));
+    let report = root.join("macrobench-report-unavailable".repeat(16));
     fs::write(&manifest, "not parsed").unwrap();
 
     let review_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -1190,6 +1232,37 @@ fn gate_routes_report_output_probe_failures_before_manifest_or_fixture_io_from_b
         "{fixture_stderr}"
     );
     assert!(!fixture.exists());
+
+    let report_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "macrobench-report",
+            report.to_str().unwrap(),
+            root.to_str().unwrap(),
+            "smoke",
+        ])
+        .output()
+        .unwrap();
+    assert!(!report_output.status.success());
+    let report_stdout = String::from_utf8_lossy(&report_output.stdout);
+    let report_stderr = String::from_utf8_lossy(&report_output.stderr);
+    assert!(
+        !report_stdout.contains("macrobench-report\t"),
+        "{report_stdout}"
+    );
+    assert!(
+        report_stderr.contains("gate write path metadata unavailable"),
+        "{report_stderr}"
+    );
+    assert!(
+        report_stderr.contains("macrobench-report-unavailable"),
+        "{report_stderr}"
+    );
+    assert!(
+        !report_stderr.contains("security-worker-admission\tworker=macrobench report workspace\t"),
+        "{report_stderr}"
+    );
+    assert!(!report.exists());
+    assert!(!root.join("gfm-macrobench-fixture").exists());
 
     fs::remove_dir_all(root).unwrap();
 }
@@ -1401,6 +1474,57 @@ fn parity_capture_rejects_unresolved_system_appearance_before_native_capture_fro
         stderr.contains("parity capture appearance must be resolved light or dark"),
         "{stderr}"
     );
+    assert!(!output_png.exists());
+    assert!(!provenance.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn parity_capture_reports_missing_gfm_app_before_native_capture_from_binary() {
+    let root = unique_temp_dir("gfm-cli-parity-capture-missing-gfm-app");
+    let fixture = root.join("fixture");
+    fs::create_dir_all(&fixture).unwrap();
+    let output_png = root.join("gfm.png");
+    let provenance = root.join("gfm.provenance.tsv");
+    let missing_app = root.join("Missing.app");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "parity-capture",
+            "gfm",
+            fixture.to_str().unwrap(),
+            output_png.to_str().unwrap(),
+            provenance.to_str().unwrap(),
+            "list",
+            "list",
+            "24D70",
+            "macbookpro18,3",
+            "studio-display-p3",
+            "0.1.0",
+            "2026-09-09T00:00:00Z",
+            "codex",
+            "codex",
+            "macos-24D70-default",
+            "dark",
+            "2x",
+            "display-p3",
+            "active",
+            "40",
+            "70",
+            "1040",
+            "720",
+            missing_app.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("parity-capture\t"), "{stdout}");
+    assert!(stderr.contains("GFM app missing"), "{stderr}");
+    assert!(stderr.contains("Missing.app"), "{stderr}");
     assert!(!output_png.exists());
     assert!(!provenance.exists());
 
