@@ -8,7 +8,9 @@ mod pixel;
 
 pub use capture::{
     capture_parity_screenshot, capture_parity_screenshot_checked, plan_parity_capture_commands,
+    write_parity_capture_matrix_plan, write_parity_capture_matrix_plan_checked,
     write_parity_capture_pair_manifest, write_parity_capture_pair_manifest_checked, CaptureRegion,
+    ParityCaptureMatrixOptions, ParityCaptureMatrixReport, ParityCaptureMatrixRow,
     ParityCapturePairManifestOptions, ParityCaptureTarget, ParityScreenshotCaptureOptions,
     ParityScreenshotCaptureReport,
 };

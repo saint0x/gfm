@@ -15,10 +15,11 @@ use gfm_testkit::{
     run_parity_gate, run_regression_gate, run_search_typing_benchmark,
     run_search_typing_session_benchmark, write_parity_review_bundle, ColorProfile, DisplayScale,
     LargeSidecarGateOptions, MacOsParityProfile, MacrobenchOptions, MacrobenchScale,
-    MacrobenchStage, ParityAppearance, ParityCapturePairManifestOptions, ParityCaptureTarget,
-    ParityFixtureOptions, ParityFixtureScale, ParityFocusState, ParityGateInput,
-    ParityScreenshotCaptureOptions, ParitySurface, PixelDiffOptions, PixelDriftThreshold,
-    PixelSize, RegressionGateOptions, SearchTypingBenchmarkOptions,
+    MacrobenchStage, ParityAppearance, ParityCaptureMatrixOptions,
+    ParityCapturePairManifestOptions, ParityCaptureTarget, ParityFixtureOptions,
+    ParityFixtureScale, ParityFocusState, ParityGateInput, ParityScreenshotCaptureOptions,
+    ParitySurface, PixelDiffOptions, PixelDriftThreshold, PixelSize, RegressionGateOptions,
+    SearchTypingBenchmarkOptions,
 };
 use gfm_types::{GfmError, Result};
 use std::fs;
@@ -151,6 +152,40 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 report.window_region.height,
                 escape_gate_tsv_field(&report.prepare_command.join(" ")),
                 escape_gate_tsv_field(&report.capture_command.join(" "))
+            );
+        }
+        "parity-capture-plan" => {
+            let options = parity_capture_matrix_options(args)?;
+            let access_reports = parity_capture_matrix_access_reports(&options)?;
+            access_reports.preflight_volumes()?;
+            let volume = access_reports.first_volume();
+            let report = run_volume_task_cancellable(
+                volume,
+                Priority::Visible,
+                "parity capture plan",
+                move |cancellation| {
+                    cancellation.check()?;
+                    let _access = access_reports.access_checked(|| cancellation.check())?;
+                    cancellation.check()?;
+                    gfm_testkit::write_parity_capture_matrix_plan_checked(&options, || {
+                        cancellation.check()
+                    })
+                },
+            )?;
+            println!(
+                "parity-capture-plan\tplan={}\trows={}\tfirst-artifact={}\tfirst-surface={}",
+                escape_gate_tsv_path(&report.plan_path),
+                report.rows.len(),
+                report
+                    .rows
+                    .first()
+                    .map(|row| escape_gate_tsv_path(&row.finder_output))
+                    .unwrap_or_else(|| "-".to_string()),
+                report
+                    .rows
+                    .first()
+                    .map(|row| row.surface.as_str())
+                    .unwrap_or("-")
             );
         }
         "parity-capture-manifest" => {
@@ -877,6 +912,31 @@ fn parity_capture_access_reports(
     ]))
 }
 
+fn parity_capture_matrix_access_reports(
+    options: &ParityCaptureMatrixOptions,
+) -> Result<GateAccessReports> {
+    Ok(GateAccessReports::new(vec![
+        GateAccessReport::new_checked(
+            options.fixture_root.clone(),
+            AccessIntent::Read,
+            "parity capture plan fixture",
+            || Ok(()),
+        )?,
+        GateAccessReport::new_checked(
+            options.plan_path.clone(),
+            AccessIntent::Write,
+            "parity capture plan",
+            || Ok(()),
+        )?,
+        GateAccessReport::new_checked(
+            options.artifact_root.clone(),
+            AccessIntent::Write,
+            "parity capture plan artifacts",
+            || Ok(()),
+        )?,
+    ]))
+}
+
 fn parity_capture_manifest_access_reports(
     options: &ParityCapturePairManifestOptions,
 ) -> Result<GateAccessReports> {
@@ -1235,6 +1295,76 @@ fn parity_capture_options(
         provenance_tsv,
         scenario,
         view_mode,
+        macos_build,
+        hardware_profile,
+        display_profile,
+        app_version,
+        captured_at,
+        reviewer,
+        signer,
+        approved_mask_set,
+        appearance,
+        scale,
+        color_profile,
+        focus,
+        window_origin_x,
+        window_origin_y,
+        window_size: PixelSize::new(width, height),
+        gfm_app,
+    })
+}
+
+fn parity_capture_matrix_options(
+    args: &mut impl Iterator<Item = String>,
+) -> Result<ParityCaptureMatrixOptions> {
+    let plan_path = required_path(
+        args.next(),
+        "parity-capture-plan requires a plan output path",
+    )?;
+    let fixture_root = required_path(args.next(), "parity-capture-plan requires a fixture root")?;
+    let artifact_root =
+        required_path(args.next(), "parity-capture-plan requires an artifact root")?;
+    let macos_build = args.next().ok_or_else(|| {
+        GfmError::Format("parity-capture-plan requires a macOS build".to_string())
+    })?;
+    let hardware_profile = args.next().ok_or_else(|| {
+        GfmError::Format("parity-capture-plan requires a hardware profile".to_string())
+    })?;
+    let display_profile = args.next().ok_or_else(|| {
+        GfmError::Format("parity-capture-plan requires a display profile".to_string())
+    })?;
+    let app_version = args.next().ok_or_else(|| {
+        GfmError::Format("parity-capture-plan requires an app version".to_string())
+    })?;
+    let captured_at = args
+        .next()
+        .ok_or_else(|| GfmError::Format("parity-capture-plan requires captured-at".to_string()))?;
+    let reviewer = args
+        .next()
+        .ok_or_else(|| GfmError::Format("parity-capture-plan requires a reviewer".to_string()))?;
+    let signer = args
+        .next()
+        .ok_or_else(|| GfmError::Format("parity-capture-plan requires a signer".to_string()))?;
+    let approved_mask_set = args.next().ok_or_else(|| {
+        GfmError::Format("parity-capture-plan requires an approved mask set".to_string())
+    })?;
+    let appearance = parse_parity_appearance(args.next())?;
+    let scale = parse_display_scale(args.next())?;
+    let color_profile = parse_color_profile(args.next())?;
+    let focus = args
+        .next()
+        .ok_or_else(|| GfmError::Format("parity-capture-plan requires a focus state".to_string()))?
+        .parse::<ParityFocusState>()
+        .map_err(GfmError::Format)?;
+    let window_origin_x = parse_u32_arg(args.next(), "parity-capture-plan requires a window x")?;
+    let window_origin_y = parse_u32_arg(args.next(), "parity-capture-plan requires a window y")?;
+    let width = parse_u32_arg(args.next(), "parity-capture-plan requires a window width")?;
+    let height = parse_u32_arg(args.next(), "parity-capture-plan requires a window height")?;
+    let gfm_app = required_path(args.next(), "parity-capture-plan requires a GFM.app path")?;
+    Ok(ParityCaptureMatrixOptions {
+        plan_path,
+        fixture_root,
+        artifact_root,
         macos_build,
         hardware_profile,
         display_profile,

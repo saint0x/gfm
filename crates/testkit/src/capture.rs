@@ -78,6 +78,51 @@ pub struct ParityCapturePairManifestOptions {
     pub mask_path: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParityCaptureMatrixOptions {
+    pub plan_path: PathBuf,
+    pub fixture_root: PathBuf,
+    pub artifact_root: PathBuf,
+    pub macos_build: String,
+    pub hardware_profile: String,
+    pub display_profile: String,
+    pub app_version: String,
+    pub captured_at: String,
+    pub reviewer: String,
+    pub signer: String,
+    pub approved_mask_set: String,
+    pub appearance: ParityAppearance,
+    pub scale: DisplayScale,
+    pub color_profile: ColorProfile,
+    pub focus: ParityFocusState,
+    pub window_origin_x: u32,
+    pub window_origin_y: u32,
+    pub window_size: PixelSize,
+    pub gfm_app: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParityCaptureMatrixRow {
+    pub surface: ParitySurface,
+    pub scenario: String,
+    pub view_mode: ParityViewMode,
+    pub finder_output: PathBuf,
+    pub finder_provenance: PathBuf,
+    pub gfm_output: PathBuf,
+    pub gfm_provenance: PathBuf,
+    pub mask_path: PathBuf,
+    pub manifest_path: PathBuf,
+    pub finder_command: Vec<String>,
+    pub gfm_command: Vec<String>,
+    pub manifest_command: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParityCaptureMatrixReport {
+    pub plan_path: PathBuf,
+    pub rows: Vec<ParityCaptureMatrixRow>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CaptureRegion {
     pub x: u32,
@@ -183,7 +228,7 @@ pub fn write_parity_capture_pair_manifest_checked(
         escape_tsv_field(&finder.hardware_profile),
         escape_tsv_field(&finder.display_profile),
         escape_tsv_field(&finder.app_version),
-        escape_tsv_field(&finder.fixture_root.join("manifest.tsv").to_string_lossy()),
+        escape_tsv_field(&capture_fixture_manifest_path(&finder.fixture_root).to_string_lossy()),
         escape_tsv_field(&finder.captured_at),
         escape_tsv_field(&format!(
             "finder:screencapture:-x:-R:{},{},{},{};gfm:screencapture:-x:-R:{},{},{},{}",
@@ -216,6 +261,45 @@ pub fn write_parity_capture_pair_manifest_checked(
     );
     fs::write(&options.manifest_path, content)
         .map_err(|err| GfmError::io(&options.manifest_path, err))
+}
+
+fn capture_fixture_manifest_path(fixture_root: &Path) -> PathBuf {
+    let direct = fixture_root.join("manifest.tsv");
+    if direct.is_file() {
+        return direct;
+    }
+    fixture_root
+        .parent()
+        .map(|parent| parent.join("manifest.tsv"))
+        .unwrap_or(direct)
+}
+
+pub fn write_parity_capture_matrix_plan(
+    options: &ParityCaptureMatrixOptions,
+) -> Result<ParityCaptureMatrixReport> {
+    write_parity_capture_matrix_plan_checked(options, || Ok(()))
+}
+
+pub fn write_parity_capture_matrix_plan_checked(
+    options: &ParityCaptureMatrixOptions,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<ParityCaptureMatrixReport> {
+    check_control()?;
+    validate_capture_matrix_options(options)?;
+    check_control()?;
+    if let Some(parent) = options.plan_path.parent() {
+        fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
+    }
+    fs::create_dir_all(&options.artifact_root)
+        .map_err(|err| GfmError::io(&options.artifact_root, err))?;
+    let rows = build_capture_matrix_rows(options)?;
+    check_control()?;
+    fs::write(&options.plan_path, render_capture_matrix_plan(&rows))
+        .map_err(|err| GfmError::io(&options.plan_path, err))?;
+    Ok(ParityCaptureMatrixReport {
+        plan_path: options.plan_path.clone(),
+        rows,
+    })
 }
 
 fn validate_capture_options(options: &ParityScreenshotCaptureOptions) -> Result<()> {
@@ -314,6 +398,281 @@ fn validate_capture_pair_manifest_options(
         ));
     }
     Ok(())
+}
+
+fn validate_capture_matrix_options(options: &ParityCaptureMatrixOptions) -> Result<()> {
+    if !options.fixture_root.is_dir() {
+        return Err(GfmError::Format(format!(
+            "parity capture matrix fixture root must be a directory: {}",
+            options.fixture_root.display()
+        )));
+    }
+    if options.artifact_root.as_os_str().is_empty() || options.plan_path.as_os_str().is_empty() {
+        return Err(GfmError::Format(
+            "parity capture matrix paths cannot be empty".to_string(),
+        ));
+    }
+    if options.gfm_app.as_os_str().is_empty() {
+        return Err(GfmError::Format(
+            "parity capture matrix requires a GFM app path".to_string(),
+        ));
+    }
+    let probe = ParityScreenshotCaptureOptions {
+        target: ParityCaptureTarget::Finder,
+        fixture_root: options.fixture_root.clone(),
+        output_png: options.artifact_root.join("probe.png"),
+        provenance_tsv: options.artifact_root.join("probe.provenance.tsv"),
+        scenario: "probe".to_string(),
+        view_mode: ParityViewMode::Icon,
+        macos_build: options.macos_build.clone(),
+        hardware_profile: options.hardware_profile.clone(),
+        display_profile: options.display_profile.clone(),
+        app_version: options.app_version.clone(),
+        captured_at: options.captured_at.clone(),
+        reviewer: options.reviewer.clone(),
+        signer: options.signer.clone(),
+        approved_mask_set: options.approved_mask_set.clone(),
+        appearance: options.appearance,
+        scale: options.scale,
+        color_profile: options.color_profile,
+        focus: options.focus,
+        window_origin_x: options.window_origin_x,
+        window_origin_y: options.window_origin_y,
+        window_size: options.window_size,
+        gfm_app: None,
+    };
+    validate_capture_metadata(&probe)
+}
+
+fn build_capture_matrix_rows(
+    options: &ParityCaptureMatrixOptions,
+) -> Result<Vec<ParityCaptureMatrixRow>> {
+    let mut rows = Vec::with_capacity(ParitySurface::ALL.len());
+    for surface in ParitySurface::ALL {
+        check_surface_capture_target(surface)?;
+        let (scenario, view_mode) = capture_target_for_surface(surface);
+        let stem = surface.as_str();
+        let surface_root = options.artifact_root.join(stem);
+        let finder_output = surface_root.join("finder.png");
+        let finder_provenance = surface_root.join("finder.provenance.tsv");
+        let gfm_output = surface_root.join("gfm.png");
+        let gfm_provenance = surface_root.join("gfm.provenance.tsv");
+        let mask_path = surface_root.join(format!(
+            "mask-{}-{}.tsv",
+            options.macos_build,
+            options.appearance.as_str()
+        ));
+        let manifest_path = surface_root.join("gate.tsv");
+        let finder = matrix_capture_options(
+            options,
+            ParityCaptureTarget::Finder,
+            scenario,
+            view_mode,
+            finder_output.clone(),
+            finder_provenance.clone(),
+        );
+        let gfm = matrix_capture_options(
+            options,
+            ParityCaptureTarget::Gfm,
+            scenario,
+            view_mode,
+            gfm_output.clone(),
+            gfm_provenance.clone(),
+        );
+        plan_parity_capture_commands(&finder)?;
+        plan_parity_capture_commands(&gfm)?;
+        rows.push(ParityCaptureMatrixRow {
+            surface,
+            scenario: scenario.to_string(),
+            view_mode,
+            finder_output,
+            finder_provenance,
+            gfm_output,
+            gfm_provenance,
+            mask_path: mask_path.clone(),
+            manifest_path: manifest_path.clone(),
+            finder_command: parity_capture_cli_command(&finder),
+            gfm_command: parity_capture_cli_command(&gfm),
+            manifest_command: parity_capture_manifest_cli_command(&MatrixManifestCommandInput {
+                options,
+                surface,
+                scenario,
+                view_mode,
+                manifest_path: &manifest_path,
+                mask_path: &mask_path,
+                finder_output: &finder.output_png,
+                gfm_output: &gfm.output_png,
+            }),
+        });
+    }
+    Ok(rows)
+}
+
+fn check_surface_capture_target(surface: ParitySurface) -> Result<()> {
+    let (scenario, view_mode) = capture_target_for_surface(surface);
+    if scenario.is_empty() {
+        return Err(GfmError::Format(format!(
+            "parity capture matrix missing scenario for {}",
+            surface.as_str()
+        )));
+    }
+    if view_mode.as_str().is_empty() {
+        return Err(GfmError::Format(format!(
+            "parity capture matrix missing view mode for {}",
+            surface.as_str()
+        )));
+    }
+    Ok(())
+}
+
+fn capture_target_for_surface(surface: ParitySurface) -> (&'static str, ParityViewMode) {
+    match surface {
+        ParitySurface::Layout
+        | ParitySurface::Icon
+        | ParitySurface::Focus
+        | ParitySurface::Hover => ("icon", ParityViewMode::Icon),
+        ParitySurface::Text => ("list", ParityViewMode::List),
+        ParitySurface::Sidebar => ("sidebar", ParityViewMode::Column),
+        ParitySurface::Selection => ("selection", ParityViewMode::Icon),
+        ParitySurface::Toolbar => ("toolbar", ParityViewMode::Icon),
+        ParitySurface::Thumbnail | ParitySurface::Preview => ("gallery", ParityViewMode::Gallery),
+        ParitySurface::Sheet => ("sheet", ParityViewMode::Icon),
+        ParitySurface::Menu => ("menu", ParityViewMode::Icon),
+    }
+}
+
+fn matrix_capture_options(
+    options: &ParityCaptureMatrixOptions,
+    target: ParityCaptureTarget,
+    scenario: &str,
+    view_mode: ParityViewMode,
+    output_png: PathBuf,
+    provenance_tsv: PathBuf,
+) -> ParityScreenshotCaptureOptions {
+    ParityScreenshotCaptureOptions {
+        target,
+        fixture_root: options.fixture_root.join(scenario),
+        output_png,
+        provenance_tsv,
+        scenario: scenario.to_string(),
+        view_mode,
+        macos_build: options.macos_build.clone(),
+        hardware_profile: options.hardware_profile.clone(),
+        display_profile: options.display_profile.clone(),
+        app_version: options.app_version.clone(),
+        captured_at: options.captured_at.clone(),
+        reviewer: options.reviewer.clone(),
+        signer: options.signer.clone(),
+        approved_mask_set: options.approved_mask_set.clone(),
+        appearance: options.appearance,
+        scale: options.scale,
+        color_profile: options.color_profile,
+        focus: options.focus,
+        window_origin_x: options.window_origin_x,
+        window_origin_y: options.window_origin_y,
+        window_size: options.window_size,
+        gfm_app: (target == ParityCaptureTarget::Gfm).then(|| options.gfm_app.clone()),
+    }
+}
+
+fn parity_capture_cli_command(options: &ParityScreenshotCaptureOptions) -> Vec<String> {
+    let mut command = vec![
+        "gfm".to_string(),
+        "parity-capture".to_string(),
+        options.target.as_str().to_string(),
+        options.fixture_root.display().to_string(),
+        options.output_png.display().to_string(),
+        options.provenance_tsv.display().to_string(),
+        options.scenario.clone(),
+        options.view_mode.as_str().to_string(),
+        options.macos_build.clone(),
+        options.hardware_profile.clone(),
+        options.display_profile.clone(),
+        options.app_version.clone(),
+        options.captured_at.clone(),
+        options.reviewer.clone(),
+        options.signer.clone(),
+        options.approved_mask_set.clone(),
+        options.appearance.as_str().to_string(),
+        options.scale.as_str().to_string(),
+        options.color_profile.as_str().to_string(),
+        options.focus.as_str().to_string(),
+        options.window_origin_x.to_string(),
+        options.window_origin_y.to_string(),
+        options.window_size.width.to_string(),
+        options.window_size.height.to_string(),
+    ];
+    if let Some(app) = &options.gfm_app {
+        command.push(app.display().to_string());
+    }
+    command
+}
+
+struct MatrixManifestCommandInput<'a> {
+    options: &'a ParityCaptureMatrixOptions,
+    surface: ParitySurface,
+    scenario: &'a str,
+    view_mode: ParityViewMode,
+    manifest_path: &'a Path,
+    mask_path: &'a Path,
+    finder_output: &'a Path,
+    gfm_output: &'a Path,
+}
+
+fn parity_capture_manifest_cli_command(input: &MatrixManifestCommandInput<'_>) -> Vec<String> {
+    let options = input.options;
+    vec![
+        "gfm".to_string(),
+        "parity-capture-manifest".to_string(),
+        input.manifest_path.display().to_string(),
+        input.surface.as_str().to_string(),
+        input.finder_output.display().to_string(),
+        input.gfm_output.display().to_string(),
+        input.mask_path.display().to_string(),
+        options
+            .fixture_root
+            .join(input.scenario)
+            .display()
+            .to_string(),
+        input.scenario.to_string(),
+        input.view_mode.as_str().to_string(),
+        options.macos_build.clone(),
+        options.hardware_profile.clone(),
+        options.display_profile.clone(),
+        options.app_version.clone(),
+        options.captured_at.clone(),
+        options.reviewer.clone(),
+        options.signer.clone(),
+        options.approved_mask_set.clone(),
+        options.appearance.as_str().to_string(),
+        options.scale.as_str().to_string(),
+        options.color_profile.as_str().to_string(),
+        options.focus.as_str().to_string(),
+        options.window_size.width.to_string(),
+        options.window_size.height.to_string(),
+    ]
+}
+
+fn render_capture_matrix_plan(rows: &[ParityCaptureMatrixRow]) -> String {
+    let mut text = "surface\tscenario\tview-mode\tfinder-output\tfinder-provenance\tgfm-output\tgfm-provenance\tmask\tmanifest\tfinder-command\tgfm-command\tmanifest-command\n".to_string();
+    for row in rows {
+        text.push_str(&format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            row.surface.as_str(),
+            escape_tsv_field(&row.scenario),
+            row.view_mode.as_str(),
+            escape_tsv_field(&row.finder_output.to_string_lossy()),
+            escape_tsv_field(&row.finder_provenance.to_string_lossy()),
+            escape_tsv_field(&row.gfm_output.to_string_lossy()),
+            escape_tsv_field(&row.gfm_provenance.to_string_lossy()),
+            escape_tsv_field(&row.mask_path.to_string_lossy()),
+            escape_tsv_field(&row.manifest_path.to_string_lossy()),
+            escape_tsv_field(&row.finder_command.join(" ")),
+            escape_tsv_field(&row.gfm_command.join(" ")),
+            escape_tsv_field(&row.manifest_command.join(" "))
+        ));
+    }
+    text
 }
 
 fn prepare_capture_command(options: &ParityScreenshotCaptureOptions) -> Result<Vec<String>> {
@@ -596,6 +955,71 @@ mod tests {
             .to_string()
             .contains("requires matching Finder and GFM capture metadata"));
         assert!(!root.join("gate.tsv").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn writes_capture_matrix_plan_for_every_surface() {
+        let root = unique_temp_dir("gfm-parity-capture-matrix");
+        let fixture_root = root.join("fixtures");
+        fs::create_dir_all(&fixture_root).unwrap();
+        fs::write(
+            fixture_root.join("manifest.tsv"),
+            "scenario\troot\tfinder-view\tfiles\tdirectories\n",
+        )
+        .unwrap();
+        for surface in ParitySurface::ALL {
+            let (scenario, _) = capture_target_for_surface(surface);
+            fs::create_dir_all(fixture_root.join(scenario)).unwrap();
+        }
+        let report = write_parity_capture_matrix_plan(&ParityCaptureMatrixOptions {
+            plan_path: root.join("capture-plan.tsv"),
+            fixture_root: fixture_root.clone(),
+            artifact_root: root.join("artifacts"),
+            macos_build: "25A354".to_string(),
+            hardware_profile: "macbookpro18,3".to_string(),
+            display_profile: "studio-display-p3".to_string(),
+            app_version: "0.1.0".to_string(),
+            captured_at: "2026-09-09T00:00:00Z".to_string(),
+            reviewer: "codex".to_string(),
+            signer: "codex".to_string(),
+            approved_mask_set: "macos-25A354-default".to_string(),
+            appearance: ParityAppearance::Dark,
+            scale: DisplayScale::Two,
+            color_profile: ColorProfile::DisplayP3,
+            focus: ParityFocusState::Active,
+            window_origin_x: 40,
+            window_origin_y: 70,
+            window_size: PixelSize::new(1040, 720),
+            gfm_app: PathBuf::from("/Applications/GFM.app"),
+        })
+        .unwrap();
+
+        assert_eq!(report.rows.len(), ParitySurface::ALL.len());
+        let toolbar = report
+            .rows
+            .iter()
+            .find(|row| row.surface == ParitySurface::Toolbar)
+            .unwrap();
+        assert_eq!(toolbar.scenario, "toolbar");
+        assert_eq!(toolbar.view_mode, ParityViewMode::Icon);
+        assert!(toolbar
+            .finder_command
+            .iter()
+            .any(|arg| arg == "parity-capture"));
+        assert!(toolbar
+            .gfm_command
+            .iter()
+            .any(|arg| arg == "/Applications/GFM.app"));
+        assert!(toolbar
+            .manifest_command
+            .iter()
+            .any(|arg| arg == "parity-capture-manifest"));
+        let content = fs::read_to_string(report.plan_path).unwrap();
+        assert!(content.starts_with("surface\tscenario\tview-mode\tfinder-output\t"));
+        assert!(content.contains("\ntoolbar\ttoolbar\ticon\t"));
+        assert!(content.contains("display-p3 active 40 70 1040 720"));
+        assert!(content.contains("mask-25A354-dark.tsv"));
         fs::remove_dir_all(root).unwrap();
     }
 

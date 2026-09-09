@@ -93,6 +93,77 @@ fn materializes_parity_fixture_from_binary() {
 }
 
 #[test]
+fn writes_parity_capture_plan_from_binary() {
+    let root = unique_temp_dir("gfm-cli-parity-capture-plan");
+    let fixture_workspace = root.join("fixture-workspace");
+    let fixture_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "parity-fixture",
+            fixture_workspace.to_str().unwrap(),
+            "smoke",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        fixture_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&fixture_output.stderr)
+    );
+
+    let plan = root.join("capture-plan.tsv");
+    let artifacts = root.join("artifacts");
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "parity-capture-plan",
+            plan.to_str().unwrap(),
+            fixture_workspace
+                .join("gfm-parity-fixture")
+                .to_str()
+                .unwrap(),
+            artifacts.to_str().unwrap(),
+            "25A354",
+            "macbookpro18,3",
+            "studio-display-p3",
+            "0.1.0",
+            "2026-09-09T00:00:00Z",
+            "codex",
+            "codex",
+            "macos-25A354-default",
+            "dark",
+            "2x",
+            "display-p3",
+            "active",
+            "40",
+            "70",
+            "1040",
+            "720",
+            "/Applications/GFM.app",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("parity-capture-plan\tplan="), "{stdout}");
+    assert!(stdout.contains("\trows=12\t"), "{stdout}");
+
+    let content = fs::read_to_string(plan).unwrap();
+    assert_eq!(content.lines().count(), 13);
+    assert!(content.contains("\ntoolbar\ttoolbar\ticon\t"));
+    assert!(content.contains("\nsidebar\tsidebar\tcolumn\t"));
+    assert!(content.contains("\tgfm parity-capture finder "));
+    assert!(content.contains("\tgfm parity-capture gfm "));
+    assert!(content.contains("parity-capture-manifest"));
+    assert!(content.contains("active 40 70 1040 720"));
+    assert!(content.contains("mask-25A354-dark.tsv"));
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn benchmark_workspace_routes_refuse_unreachable_volume_before_materializing_from_binary() {
     let offline = unique_temp_dir("gfm-cli-gate-workspace-preflight-offline");
     fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
@@ -101,6 +172,8 @@ fn benchmark_workspace_routes_refuse_unreachable_volume_before_materializing_fro
     let capture_manifest = offline.join("capture-gate.tsv");
     let finder_capture = offline.join("finder.rgba");
     let gfm_capture = offline.join("gfm.rgba");
+    let capture_plan = offline.join("capture-plan.tsv");
+    let capture_artifacts = offline.join("capture-artifacts");
 
     let cases = [
         (
@@ -146,6 +219,33 @@ fn benchmark_workspace_routes_refuse_unreachable_volume_before_materializing_fro
             ],
             "parity capture fixture",
             "parity-capture\t",
+        ),
+        (
+            vec![
+                "parity-capture-plan",
+                capture_plan.to_str().unwrap(),
+                offline.to_str().unwrap(),
+                capture_artifacts.to_str().unwrap(),
+                "25A354",
+                "macbookpro18,3",
+                "studio-display-p3",
+                "0.1.0",
+                "2026-09-09T00:00:00Z",
+                "codex",
+                "codex",
+                "macos-25A354-default",
+                "dark",
+                "2x",
+                "display-p3",
+                "active",
+                "40",
+                "70",
+                "1040",
+                "720",
+                "/Applications/GFM.app",
+            ],
+            "parity capture plan fixture",
+            "parity-capture-plan\t",
         ),
         (
             vec![
@@ -233,6 +333,8 @@ fn benchmark_workspace_routes_refuse_unreachable_volume_before_materializing_fro
     assert!(!offline.join("gfm-parity-fixture").exists());
     assert!(!offline.join("finder.png").exists());
     assert!(!offline.join("finder.provenance.tsv").exists());
+    assert!(!offline.join("capture-plan.tsv").exists());
+    assert!(!offline.join("capture-artifacts").exists());
     assert!(!offline.join("capture-gate.tsv").exists());
     assert!(!offline.join("gfm-large-sidecar-gate").exists());
     assert!(!offline.join("gfm-search-typing-benchmark").exists());
