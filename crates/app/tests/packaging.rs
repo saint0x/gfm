@@ -75,6 +75,71 @@ fn bundles_unsigned_app_from_binary() {
 }
 
 #[test]
+fn packaging_jobs_persist_runtime_progress_from_binary() {
+    let root = unique_temp_dir("gfm-cli-packaging-runtime");
+    let executable = root.join("gfm");
+    let icon = root.join("GFM.icns");
+    let dist = root.join("dist");
+    let app = dist.join("GFM.app");
+    let catalog = root.join("runtime.gfmjobs");
+    let progress = root.join("runtime.gfmprogress");
+    fs::write(&executable, b"#!/bin/sh\n").unwrap();
+    fs::write(&icon, b"icns-test").unwrap();
+
+    let bundle = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "bundle-app",
+            executable.to_str().unwrap(),
+            icon.to_str().unwrap(),
+            dist.to_str().unwrap(),
+            "--unsigned",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        bundle.status.success(),
+        "{}",
+        String::from_utf8_lossy(&bundle.stderr)
+    );
+
+    let validate = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "release-validate",
+            app.to_str().unwrap(),
+            "--allow-unsigned",
+            "--skip-notarization",
+            "--skip-gatekeeper",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        validate.status.success(),
+        "{}",
+        String::from_utf8_lossy(&validate.stderr)
+    );
+
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert_runtime_payload(&catalog_text, 1, "bundle app", &dist);
+    assert_runtime_payload(&catalog_text, 2, "release validate app", &app);
+
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert_runtime_progress(&progress_text, 1, "bundle app", 3, "completed:signed:false");
+    assert_runtime_progress(
+        &progress_text,
+        2,
+        "release validate app",
+        3,
+        "completed:signature:not-required notarization:not-required gatekeeper:not-required",
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn packaging_routes_refuse_unreachable_paths_before_toolchain_or_bundle_io_from_binary() {
     let root = unique_temp_dir("gfm-cli-packaging-preflight-root");
     let offline = unique_temp_dir("gfm-cli-packaging-preflight-offline");
@@ -348,6 +413,40 @@ fn assert_worker_admitted(stderr: &str, worker: &str, path: &Path) {
                 && line.split('\t').any(|field| field == expected_path)
         }),
         "{stderr}"
+    );
+}
+
+fn assert_runtime_payload(catalog_text: &str, id: u64, label: &str, payload_path: &Path) {
+    assert!(
+        catalog_text.lines().any(|line| {
+            let prefix = format!(
+                "payload\t{id}\toperation\t{label}\t{}\t",
+                payload_path.display()
+            );
+            line.starts_with(&prefix)
+                && line
+                    .strip_prefix(&prefix)
+                    .and_then(|fields| fields.split('\t').next())
+                    .is_some_and(|volume| !volume.is_empty() && volume != "-")
+                && line.contains(&format!("\tvisible:{label}:adaptive"))
+        }),
+        "{catalog_text}"
+    );
+}
+
+fn assert_runtime_progress(
+    progress_text: &str,
+    id: u64,
+    label: &str,
+    total_units: u64,
+    detail: &str,
+) {
+    assert!(
+        progress_text.lines().any(|line| line
+            .starts_with(&format!("progress\t{id}\tvisible\tvisible\t{label}\t"))
+            && line.contains(&format!("\tcompleted\t{total_units}\t{total_units}\t"))
+            && line.contains(detail)),
+        "{progress_text}"
     );
 }
 

@@ -2,8 +2,12 @@ use crate::access::{
     preflight_access_scope_checked_with_volume_report, preflight_volume_access_scope_with_report,
     ScopedAccessGuard,
 };
-use crate::runtime::run_volume_task_cancellable;
-use gfm_jobs::Priority;
+use crate::platform::current_host_job_scheduling_pressure;
+use crate::runtime::{
+    run_scheduled_volume_task_cancellable_with_runtime_and_payload_path, RuntimeJobHandle,
+    ScheduledTaskOutcome,
+};
+use gfm_jobs::{Cancellation, JobPayloadKind, JobProgressState, Priority};
 use gfm_mac::{AccessIntent, VolumeDiscoveryReport};
 use gfm_packaging::{
     build_app_bundle, notarize_app_bundle, register_launch_services, require_codesign_toolchain,
@@ -149,15 +153,37 @@ fn run_release_validate(spec: ReleaseArtifactSpec) -> Result<ReleaseArtifactRepo
     )?;
     access_report.preflight_volume()?;
     let volume = access_report.volume();
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _access = access_report.access_checked(|| cancellation.check())?;
-        cancellation.check()?;
-        if spec.require_signed || spec.require_notarized || spec.assess_gatekeeper {
-            require_release_xcode_toolchain()?;
-        }
-        validate_release_artifact(&spec)
-    })
+    visible_scheduled_packaging_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Operation,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            spec.app_path.clone(),
+            move |cancellation, runtime| {
+                let spec = spec.clone();
+                cancellation.check()?;
+                runtime.resize_checked(3, "release-validate:preflight", || cancellation.check())?;
+                let _access = access_report.access_checked(|| cancellation.check())?;
+                packaging_runtime_phase(&runtime, 1, "release-validate:toolchain", &cancellation)?;
+                if spec.require_signed || spec.require_notarized || spec.assess_gatekeeper {
+                    require_release_xcode_toolchain()?;
+                }
+                let report = validate_release_artifact(&spec)?;
+                packaging_runtime_phase(&runtime, 2, "release-validate:complete", &cancellation)?;
+                runtime.remember_completion_detail(format!(
+                    "completed:signature:{} notarization:{} gatekeeper:{}",
+                    report.signature.as_str(),
+                    report.notarization.as_str(),
+                    report.gatekeeper.as_str()
+                ))?;
+                packaging_runtime_phase(&runtime, 3, "release-validate:reported", &cancellation)?;
+                Ok(report)
+            },
+        )?,
+        WORKER,
+    )
 }
 
 fn run_bundle_app(spec: AppBundleSpec) -> Result<AppBundle> {
@@ -165,15 +191,36 @@ fn run_bundle_app(spec: AppBundleSpec) -> Result<AppBundle> {
     let access_reports = PackagingAccessReports::bundle(&spec)?;
     access_reports.preflight_volumes()?;
     let volume = access_reports.first_volume();
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _access = access_reports.access_checked(|| cancellation.check())?;
-        cancellation.check()?;
-        if spec.signing_identity != SigningIdentity::Unsigned {
-            require_codesign_toolchain()?;
-        }
-        build_app_bundle(&spec)
-    })
+    visible_scheduled_packaging_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Operation,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            spec.output_dir.clone(),
+            move |cancellation, runtime| {
+                let spec = spec.clone();
+                cancellation.check()?;
+                runtime.resize_checked(3, "bundle-app:preflight", || cancellation.check())?;
+                let _access = access_reports.access_checked(|| cancellation.check())?;
+                packaging_runtime_phase(&runtime, 1, "bundle-app:toolchain", &cancellation)?;
+                if spec.signing_identity != SigningIdentity::Unsigned {
+                    require_codesign_toolchain()?;
+                }
+                let bundle = build_app_bundle(&spec)?;
+                packaging_runtime_phase(&runtime, 2, "bundle-app:complete", &cancellation)?;
+                runtime.remember_completion_detail(format!(
+                    "completed:signed:{} bytes-path:{}",
+                    bundle.signed,
+                    bundle.executable_path.display()
+                ))?;
+                packaging_runtime_phase(&runtime, 3, "bundle-app:reported", &cancellation)?;
+                Ok(bundle)
+            },
+        )?,
+        WORKER,
+    )
 }
 
 fn run_register_app(app_path: PathBuf) -> Result<()> {
@@ -186,12 +233,28 @@ fn run_register_app(app_path: PathBuf) -> Result<()> {
     )?;
     access_report.preflight_volume()?;
     let volume = access_report.volume();
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _access = access_report.access_checked(|| cancellation.check())?;
-        cancellation.check()?;
-        register_launch_services(&app_path)
-    })
+    visible_scheduled_packaging_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Operation,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            app_path.clone(),
+            move |cancellation, runtime| {
+                let app_path = app_path.clone();
+                cancellation.check()?;
+                runtime.resize_checked(2, "register-app:preflight", || cancellation.check())?;
+                let _access = access_report.access_checked(|| cancellation.check())?;
+                packaging_runtime_phase(&runtime, 1, "register-app:register", &cancellation)?;
+                register_launch_services(&app_path)?;
+                runtime.remember_completion_detail("completed:registered".to_string())?;
+                packaging_runtime_phase(&runtime, 2, "register-app:reported", &cancellation)?;
+                Ok(())
+            },
+        )?,
+        WORKER,
+    )
 }
 
 fn run_notarize_app(spec: NotarizationSpec) -> Result<NotarizationTicket> {
@@ -199,13 +262,53 @@ fn run_notarize_app(spec: NotarizationSpec) -> Result<NotarizationTicket> {
     let access_reports = PackagingAccessReports::notarize(&spec)?;
     access_reports.preflight_volumes()?;
     let volume = access_reports.first_volume();
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _access = access_reports.access_checked(|| cancellation.check())?;
-        cancellation.check()?;
-        require_release_xcode_toolchain()?;
-        notarize_app_bundle(&spec)
+    visible_scheduled_packaging_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Operation,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            spec.app_path.clone(),
+            move |cancellation, runtime| {
+                let spec = spec.clone();
+                cancellation.check()?;
+                runtime.resize_checked(3, "notarize-app:preflight", || cancellation.check())?;
+                let _access = access_reports.access_checked(|| cancellation.check())?;
+                packaging_runtime_phase(&runtime, 1, "notarize-app:toolchain", &cancellation)?;
+                require_release_xcode_toolchain()?;
+                let ticket = notarize_app_bundle(&spec)?;
+                packaging_runtime_phase(&runtime, 2, "notarize-app:complete", &cancellation)?;
+                runtime.remember_completion_detail(format!(
+                    "completed:status:{:?} stapled:{}",
+                    ticket.status, ticket.stapled
+                ))?;
+                packaging_runtime_phase(&runtime, 3, "notarize-app:reported", &cancellation)?;
+                Ok(ticket)
+            },
+        )?,
+        WORKER,
+    )
+}
+
+fn packaging_runtime_phase(
+    runtime: &RuntimeJobHandle,
+    completed_units: u64,
+    detail: &'static str,
+    cancellation: &Cancellation,
+) -> Result<()> {
+    runtime.progress_checked(JobProgressState::Running, completed_units, detail, || {
+        cancellation.check()
     })
+}
+
+fn visible_scheduled_packaging_result<T>(
+    outcome: ScheduledTaskOutcome<T>,
+    label: &'static str,
+) -> Result<T> {
+    outcome
+        .result
+        .ok_or_else(|| GfmError::Format(format!("{label} deferred before visible run")))
 }
 
 #[derive(Clone)]
