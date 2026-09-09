@@ -18598,6 +18598,79 @@ fn runs_background_content_indexer_from_binary() {
 }
 
 #[test]
+fn background_content_indexer_restores_runtime_job_id_floor_from_binary() {
+    let root = unique_temp_dir("gfm-cli-background-content-runtime-root");
+    let segments = unique_temp_dir("gfm-cli-background-content-runtime-segments");
+    let records = unique_temp_path("gfm-cli-background-runtime-records", "gfmidx");
+    let content = unique_temp_path("gfm-cli-background-runtime-content", "gfmcontent");
+    let journal = unique_temp_path("gfm-cli-background-runtime-jobs", "journal");
+    let spec = unique_temp_path("gfm-cli-background-runtime-content", "job");
+    let catalog = unique_temp_path("gfm-cli-background-runtime-content", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-background-runtime-content", "gfmprogress");
+    fs::write(root.join("worker.md"), "the body contains runtimefloor").unwrap();
+    fs::write(
+        &catalog,
+        format!(
+            "gfm-job-payload-catalog-v1\npayload\t43\tindexing\told content\t{}\t-\told\n",
+            spec.display()
+        ),
+    )
+    .unwrap();
+    fs::write(
+        &progress,
+        "gfm-job-progress-v1\nprogress\t44\tbackground\tbackground\told content\t-\trunning\t0\t1\told\t123\n",
+    )
+    .unwrap();
+
+    let index_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &journal)
+        .env("GFM_CONTENT_JOB", &spec)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args([
+            "index-content-background",
+            root.to_str().unwrap(),
+            segments.to_str().unwrap(),
+            records.to_str().unwrap(),
+            content.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        index_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&index_output.stderr)
+    );
+
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(
+        catalog_text.contains(&format!(
+            "payload\t45\tindexing\tbackground content index\t{}\t",
+            spec.display()
+        )),
+        "{catalog_text}"
+    );
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("progress\t45\tbackground\tbackground\tbackground content index"),
+        "{progress_text}"
+    );
+    assert!(
+        progress_text.contains("\tcompleted\t2\t2\tcompleted\t"),
+        "{progress_text}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(segments).unwrap();
+    fs::remove_file(records).unwrap();
+    fs::remove_file(content).unwrap();
+    fs::remove_file(journal).unwrap();
+    fs::remove_file(spec).unwrap();
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
+}
+
+#[test]
 fn background_content_indexer_refuses_unreachable_outputs_before_job_state_from_binary() {
     let root = unique_temp_dir("gfm-cli-background-content-access-root");
     let output_root = unique_temp_dir("gfm-cli-background-content-access-output");

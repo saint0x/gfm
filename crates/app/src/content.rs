@@ -1379,6 +1379,10 @@ fn load_resumable_content_job_spec(
 ) -> Result<Option<(RecoverableContentJobs, ContentIndexJobSpec)>> {
     const WORKER: &str = "resume background content recovery";
     let access_reports = BackgroundContentRecoveryAccessReports::for_paths(&spec_path, journal)?;
+    if cancel_before_recovery_probe {
+        return Err(GfmError::Cancelled);
+    }
+    access_reports.preflight_recovery_stores_checked(|| Ok(()))?;
     let volume = access_reports.first_volume();
     let journal = JobJournal::new(journal.path().to_path_buf());
     visible_scheduled_result(
@@ -1393,9 +1397,6 @@ fn load_resumable_content_job_spec(
                 let access_reports = access_reports.clone();
                 let journal = journal.clone();
                 let spec_path = spec_path.clone();
-                if cancel_before_recovery_probe {
-                    cancellation.cancel();
-                }
                 runtime.resize_checked(
                     3,
                     "resume-background-content-recovery:preflight",
@@ -3479,6 +3480,21 @@ pub(crate) struct ContentJobOutcome {
     pub(crate) deferred: bool,
 }
 
+fn begin_background_content_runtime(
+    job: &gfm_jobs::Job,
+    spec: &ContentIndexJobSpec,
+    spec_path: &Path,
+) -> Result<RuntimeJobHandle> {
+    RuntimeJobHandle::begin_with_payload_path(
+        job,
+        JobPayloadKind::Indexing,
+        "background content index",
+        spec_path,
+        1,
+        format!("index:{}", spec.root.display()),
+    )
+}
+
 pub(crate) fn run_content_job(
     spec: &ContentIndexJobSpec,
     journal: &JobJournal,
@@ -3500,14 +3516,7 @@ pub(crate) fn run_content_job(
         } else {
             scheduler.schedule_payload(Priority::Background, JobPayloadKind::Indexing, label)
         };
-        let runtime = RuntimeJobHandle::begin_with_payload_path(
-            &job,
-            JobPayloadKind::Indexing,
-            label,
-            spec_path,
-            1,
-            format!("index:{}", spec.root.display()),
-        )?;
+        let runtime = begin_background_content_runtime(&job, spec, spec_path)?;
         runtime.deferred(scheduling.action)?;
         return Ok(ContentJobOutcome {
             report: None,
@@ -3536,14 +3545,7 @@ pub(crate) fn run_content_job(
         label,
         volume,
     );
-    let runtime = RuntimeJobHandle::begin_with_payload_path(
-        &job,
-        JobPayloadKind::Indexing,
-        label,
-        spec_path,
-        1,
-        format!("index:{}", spec.root.display()),
-    )?;
+    let runtime = begin_background_content_runtime(&job, spec, spec_path)?;
     let plan = scheduler.drain_fair_ready(JobFairnessPolicy::default(), []);
     if let Some(blocked) = plan.blocked.first() {
         let missing = blocked
