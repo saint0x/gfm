@@ -3730,9 +3730,13 @@ fn reports_scan_progress_from_binary() {
     let root = unique_temp_dir("gfm-cli-scan-progress-root");
     let records = unique_temp_path("gfm-cli-scan-progress-records", "gfmidx");
     let progress = unique_temp_path("gfm-cli-scan-progress", "gfmprogress");
+    let catalog = unique_temp_path("gfm-cli-scan-progress-runtime", "gfmjobs");
+    let runtime_progress = unique_temp_path("gfm-cli-scan-progress-runtime", "gfmprogress");
     fs::write(root.join("Progress.md"), "alpha").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &runtime_progress)
         .args([
             "scan-progress",
             root.to_str().unwrap(),
@@ -3751,6 +3755,21 @@ fn reports_scan_progress_from_binary() {
     assert_index_security_preflight(&output.stderr);
     assert!(stdout.starts_with("scan-progress\t"), "{stdout}");
     assert!(stdout.contains("\tcompleted=true"), "{stdout}");
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(
+        catalog_text.contains(&format!(
+            "payload\t1\tindexing\tindex\t{}\t",
+            records.display()
+        )) && catalog_text.contains("\tvisible:index:adaptive"),
+        "{catalog_text}"
+    );
+    let runtime_progress_text = fs::read_to_string(&runtime_progress).unwrap();
+    assert!(
+        runtime_progress_text.contains("progress\t1\tvisible\tvisible\tindex\t")
+            && runtime_progress_text
+                .contains("\tcompleted\t3\t3\tcompleted:2 scanned:0 inaccessible\t"),
+        "{runtime_progress_text}"
+    );
 
     let inspect = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["scan-progress-inspect", progress.to_str().unwrap()])
@@ -3772,6 +3791,8 @@ fn reports_scan_progress_from_binary() {
     fs::remove_dir_all(root).unwrap();
     fs::remove_file(records).unwrap();
     fs::remove_file(progress).unwrap();
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(runtime_progress).unwrap();
 }
 
 #[test]

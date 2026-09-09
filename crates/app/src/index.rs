@@ -309,24 +309,44 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             access_reports.preflight_volumes()?;
             let _write_accesses = access_reports.write_accesses_checked(|| Ok(()))?;
             let volume = access_reports.first_volume();
-            let checkpoint = run_volume_task_cancellable(
-                volume,
-                Priority::Visible,
+            let checkpoint = visible_scheduled_result(
+                run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+                    Priority::Visible,
+                    JobPayloadKind::Indexing,
+                    "index",
+                    current_host_job_scheduling_pressure(),
+                    || Ok(volume),
+                    records.clone(),
+                    move |cancellation, runtime| {
+                        let root = root.clone();
+                        let records = records.clone();
+                        let progress = progress.clone();
+                        let access_reports = access_reports.clone();
+                        cancellation.check()?;
+                        runtime.resize_checked(3, "scan-progress:preflight", || {
+                            cancellation.check()
+                        })?;
+                        let _root_access =
+                            access_reports.root_access_checked(|| cancellation.check())?;
+                        index_runtime_phase(&runtime, 1, "scan-progress:writes", &cancellation)?;
+                        let _write_accesses =
+                            access_reports.write_accesses_checked(|| cancellation.check())?;
+                        index_runtime_phase(&runtime, 2, "scan-progress:build", &cancellation)?;
+                        let checkpoint = Indexer::default().build_with_progress_cancellable(
+                            root,
+                            records,
+                            progress,
+                            &cancellation,
+                        )?;
+                        index_runtime_phase(&runtime, 3, "scan-progress:complete", &cancellation)?;
+                        runtime.remember_completion_detail(format!(
+                            "completed:{} scanned:{} inaccessible",
+                            checkpoint.scanned_records, checkpoint.inaccessible_records
+                        ))?;
+                        Ok(checkpoint)
+                    },
+                )?,
                 "index",
-                move |cancellation| {
-                    let _root_access =
-                        access_reports.root_access_checked(|| cancellation.check())?;
-                    cancellation.check()?;
-                    let _write_accesses =
-                        access_reports.write_accesses_checked(|| cancellation.check())?;
-                    cancellation.check()?;
-                    Indexer::default().build_with_progress_cancellable(
-                        root,
-                        records,
-                        progress,
-                        &cancellation,
-                    )
-                },
             )?;
             println!("{}", checkpoint.as_tsv());
         }
