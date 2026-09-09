@@ -771,11 +771,9 @@ fn prepare_capture_command(options: &ParityScreenshotCaptureOptions) -> Result<V
                 GfmError::Format("gfm parity capture requires a GFM app path".to_string())
             })?;
             Ok(vec![
-                "/usr/bin/open".to_string(),
-                "-a".to_string(),
-                app.display().to_string(),
-                "--args".to_string(),
-                options.fixture_root.display().to_string(),
+                "/usr/bin/osascript".to_string(),
+                "-e".to_string(),
+                gfm_prepare_script(app, &options.fixture_root),
             ])
         }
     }
@@ -802,6 +800,20 @@ fn finder_view_mode_script(view_mode: ParityViewMode) -> &'static str {
         ParityViewMode::Column => "column view",
         ParityViewMode::Gallery => "flow view",
     }
+}
+
+fn gfm_prepare_script(app: &Path, fixture_root: &Path) -> String {
+    let app_name = app
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or("GFM");
+    format!(
+        "do shell script \"open -a \" & quoted form of \"{}\" & \" --args \" & quoted form of \"{}\"\ntry\n  tell application \"{}\" to activate\nend try\ndelay 0.35",
+        applescript_string(app),
+        applescript_string(fixture_root),
+        applescript_string_value(app_name)
+    )
 }
 
 fn screencapture_command(region: &CaptureRegion, output_png: &Path) -> Vec<String> {
@@ -864,6 +876,8 @@ fn classify_command_failure(stderr: &str) -> &'static str {
         || lower.contains("display is unavailable")
         || lower.contains("window server")
         || lower.contains("cannot connect to display")
+        || lower.contains("can't get application")
+        || lower.contains("can’t get application")
     {
         return "unavailable";
     }
@@ -926,6 +940,10 @@ fn applescript_string(path: &Path) -> String {
     path.to_string_lossy()
         .replace('\\', "\\\\")
         .replace('"', "\\\"")
+}
+
+fn applescript_string_value(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 fn escape_tsv_field(value: &str) -> String {
@@ -1055,16 +1073,13 @@ mod tests {
 
         let (prepare, capture) = plan_parity_capture_commands(&options).unwrap();
 
-        assert_eq!(
-            prepare,
-            vec![
-                "/usr/bin/open",
-                "-a",
-                "/Applications/GFM.app",
-                "--args",
-                root.to_str().unwrap()
-            ]
-        );
+        assert_eq!(prepare[0], "/usr/bin/osascript");
+        assert!(prepare[2].contains("open -a"));
+        assert!(prepare[2].contains("/Applications/GFM.app"));
+        assert!(prepare[2].contains(root.to_str().unwrap()));
+        assert!(prepare[2].contains("try"));
+        assert!(prepare[2].contains("tell application \"GFM\" to activate"));
+        assert!(prepare[2].contains("delay 0.35"));
         assert_eq!(capture[0], "/usr/sbin/screencapture");
         assert_eq!(capture[3], "40,70,1040,720");
         fs::remove_dir_all(root).unwrap();
@@ -1328,6 +1343,17 @@ mod tests {
         assert!(
             unsupported.contains("parity capture prepare unsupported"),
             "{unsupported}"
+        );
+
+        let unscriptable = command_status_error(
+            "parity capture prepare",
+            "/usr/bin/osascript",
+            synthetic_failure_status(),
+            "execution error: Can’t get application \"GFM\". (-1728)",
+        );
+        assert!(
+            unscriptable.contains("parity capture prepare unavailable"),
+            "{unscriptable}"
         );
     }
 
