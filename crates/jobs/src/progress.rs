@@ -9,12 +9,14 @@ const MAGIC: &str = "gfm-job-progress-v1";
 static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 fn progress_path_exists(path: &Path) -> Result<bool> {
-    path.try_exists().map_err(|err| {
-        GfmError::io(
+    match fs::metadata(path) {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(GfmError::io(
             path,
             format!("job progress store existence unavailable: {err}"),
-        )
-    })
+        )),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

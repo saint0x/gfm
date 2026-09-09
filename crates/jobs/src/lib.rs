@@ -29,8 +29,14 @@ pub use schedule::{
 };
 
 fn path_exists(path: &Path, context: &str) -> Result<bool> {
-    path.try_exists()
-        .map_err(|err| GfmError::io(path, format!("{context} existence unavailable: {err}")))
+    match fs::metadata(path) {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("{context} existence unavailable: {err}"),
+        )),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
