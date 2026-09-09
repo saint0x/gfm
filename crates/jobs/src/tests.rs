@@ -113,8 +113,10 @@ fn fairness_planner_honors_dependencies_and_reports_blocked_jobs() {
     assert_eq!(plan.blocked.len(), 2);
     assert_eq!(plan.blocked[0].label, "repair search sidecars");
     assert_eq!(plan.blocked[0].missing_dependencies, [metadata.id]);
+    assert!(plan.blocked[0].failed_dependencies.is_empty());
     assert_eq!(plan.blocked[1].label, "repair missing thumbnail");
     assert_eq!(plan.blocked[1].missing_dependencies, [JobId::from_raw(99)]);
+    assert!(plan.blocked[1].failed_dependencies.is_empty());
 }
 
 #[test]
@@ -135,6 +137,30 @@ fn fairness_planner_does_not_head_of_line_block_class_ready_jobs() {
     assert_eq!(plan.blocked.len(), 1);
     assert_eq!(plan.blocked[0].id, blocked.id);
     assert_eq!(plan.blocked[0].missing_dependencies, [missing]);
+    assert!(plan.blocked[0].failed_dependencies.is_empty());
+}
+
+#[test]
+fn fairness_planner_reports_failed_dependencies_separately() {
+    let mut scheduler = Scheduler::new();
+    let failed = JobId::from_raw(88);
+    let missing = JobId::from_raw(99);
+    let blocked = scheduler.schedule_in_class_with_dependencies(
+        Priority::Visible,
+        JobClass::Repair,
+        "repair failed and missing sidecars",
+        [failed, missing],
+    );
+
+    let plan = JobFairnessPlanner::new(JobFairnessPolicy::default())
+        .with_failed([failed])
+        .plan(scheduler.drain_ready());
+
+    assert!(plan.ready.is_empty());
+    assert_eq!(plan.blocked.len(), 1);
+    assert_eq!(plan.blocked[0].id, blocked.id);
+    assert_eq!(plan.blocked[0].missing_dependencies, [missing]);
+    assert_eq!(plan.blocked[0].failed_dependencies, [failed]);
 }
 
 #[test]
@@ -163,13 +189,16 @@ fn scheduler_fair_drain_retains_blocked_jobs_until_dependencies_complete() {
     assert_eq!(first.labels(), ["rebuild metadata"]);
     assert_eq!(first.blocked.len(), 2);
     assert_eq!(first.blocked[0].missing_dependencies, [metadata.id]);
+    assert!(first.blocked[0].failed_dependencies.is_empty());
     assert_eq!(first.blocked[1].id, thumbnail.id);
     assert_eq!(first.blocked[1].missing_dependencies, [JobId::from_raw(99)]);
+    assert!(first.blocked[1].failed_dependencies.is_empty());
 
     let still_blocked = scheduler.drain_fair_ready(JobFairnessPolicy::default(), []);
     assert!(still_blocked.ready.is_empty());
     assert_eq!(still_blocked.blocked.len(), 2);
     assert_eq!(still_blocked.blocked[0].missing_dependencies, [metadata.id]);
+    assert!(still_blocked.blocked[0].failed_dependencies.is_empty());
     assert_eq!(still_blocked.blocked[1].id, thumbnail.id);
 
     let sidecar_released = scheduler.drain_fair_ready(JobFairnessPolicy::default(), [metadata.id]);
@@ -438,11 +467,10 @@ fn scheduler_worker_report_cancelled_and_failed_do_not_release_dependencies() {
         blocked.blocked[0].missing_dependencies,
         [cancelled_metadata.id]
     );
+    assert!(blocked.blocked[0].failed_dependencies.is_empty());
     assert_eq!(blocked.blocked[1].id, repair_failed.id);
-    assert_eq!(
-        blocked.blocked[1].missing_dependencies,
-        [failed_metadata.id]
-    );
+    assert!(blocked.blocked[1].missing_dependencies.is_empty());
+    assert_eq!(blocked.blocked[1].failed_dependencies, [failed_metadata.id]);
 }
 
 #[test]

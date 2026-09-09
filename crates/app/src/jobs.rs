@@ -719,22 +719,31 @@ fn format_fairness_plan(pass: &str, plan: gfm_jobs::JobFairnessPlan) -> Vec<Stri
         ));
     }
     for job in plan.blocked {
-        let missing = job
-            .missing_dependencies
-            .iter()
-            .map(|dependency| dependency.value().to_string())
-            .collect::<Vec<_>>()
-            .join(",");
+        let missing = format_job_id_list(job.missing_dependencies.iter().copied());
+        let failed = format_job_id_list(job.failed_dependencies.iter().copied());
         lines.push(format!(
-            "blocked\t{}\t{}\t{}\t{}\t{}",
+            "blocked\t{}\t{}\t{}\tmissing={}\tfailed={}\t{}",
             pass,
             job.id.value(),
             job.class.as_str(),
             missing,
+            failed,
             job.label
         ));
     }
     lines
+}
+
+fn format_job_id_list(ids: impl IntoIterator<Item = gfm_jobs::JobId>) -> String {
+    let values = ids
+        .into_iter()
+        .map(|dependency| dependency.value().to_string())
+        .collect::<Vec<_>>();
+    if values.is_empty() {
+        "-".to_string()
+    } else {
+        values.join(",")
+    }
 }
 
 fn sample_volume_cancellation_report(

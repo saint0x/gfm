@@ -19980,7 +19980,7 @@ fn reports_job_fairness_plan_from_binary() {
         "{stdout}"
     );
     assert!(
-        stdout.contains("blocked\tfirst\t5\trepair\t4\trepair derived sidecar"),
+        stdout.contains("blocked\tfirst\t5\trepair\tmissing=4\tfailed=-\trepair derived sidecar"),
         "{stdout}"
     );
     assert!(
@@ -19992,7 +19992,9 @@ fn reports_job_fairness_plan_from_binary() {
         "{stdout}"
     );
     assert!(
-        stdout.contains("blocked\tafter-completion\t6\trepair\t999\trepair missing thumbnail"),
+        stdout.contains(
+            "blocked\tafter-completion\t6\trepair\tmissing=999\tfailed=-\trepair missing thumbnail"
+        ),
         "{stdout}"
     );
 }

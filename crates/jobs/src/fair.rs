@@ -44,6 +44,7 @@ pub struct BlockedJob {
     pub label: String,
     pub class: JobClass,
     pub missing_dependencies: Vec<JobId>,
+    pub failed_dependencies: Vec<JobId>,
 }
 
 #[derive(Debug, Clone)]
@@ -62,6 +63,7 @@ impl JobFairnessPlan {
 pub struct JobFairnessPlanner {
     policy: JobFairnessPolicy,
     completed: HashSet<JobId>,
+    failed: HashSet<JobId>,
 }
 
 impl JobFairnessPlanner {
@@ -69,11 +71,17 @@ impl JobFairnessPlanner {
         Self {
             policy,
             completed: HashSet::new(),
+            failed: HashSet::new(),
         }
     }
 
     pub fn with_completed(mut self, completed: impl IntoIterator<Item = JobId>) -> Self {
         self.completed.extend(completed);
+        self
+    }
+
+    pub fn with_failed(mut self, failed: impl IntoIterator<Item = JobId>) -> Self {
+        self.failed.extend(failed);
         self
     }
 
@@ -124,15 +132,24 @@ impl JobFairnessPlanner {
         let mut blocked = Vec::new();
         for (_, job) in blocked_with_order {
             check_control()?;
+            let mut missing_dependencies = Vec::new();
+            let mut failed_dependencies = Vec::new();
+            for dependency in job.dependencies {
+                if self.completed.contains(&dependency) {
+                    continue;
+                }
+                if self.failed.contains(&dependency) {
+                    failed_dependencies.push(dependency);
+                } else {
+                    missing_dependencies.push(dependency);
+                }
+            }
             blocked.push(BlockedJob {
                 id: job.id,
                 label: job.label,
                 class: job.class,
-                missing_dependencies: job
-                    .dependencies
-                    .into_iter()
-                    .filter(|dependency| !self.completed.contains(dependency))
-                    .collect(),
+                missing_dependencies,
+                failed_dependencies,
             });
             check_control()?;
         }

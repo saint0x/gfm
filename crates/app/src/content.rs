@@ -3417,9 +3417,29 @@ pub(crate) fn run_content_job(
     )?;
     let plan = scheduler.drain_fair_ready(JobFairnessPolicy::default(), []);
     if let Some(blocked) = plan.blocked.first() {
+        let missing = blocked
+            .missing_dependencies
+            .iter()
+            .map(|id| id.value().to_string())
+            .collect::<Vec<_>>();
+        let failed = blocked
+            .failed_dependencies
+            .iter()
+            .map(|id| id.value().to_string())
+            .collect::<Vec<_>>();
+        let missing = if missing.is_empty() {
+            "-".to_string()
+        } else {
+            missing.join(",")
+        };
+        let failed = if failed.is_empty() {
+            "-".to_string()
+        } else {
+            failed.join(",")
+        };
         return Err(GfmError::Format(format!(
-            "background content index job {} is blocked by missing dependencies",
-            blocked.label
+            "background content index job {} is blocked by dependencies missing={} failed={}",
+            blocked.label, missing, failed
         )));
     }
     let tasks: Vec<_> = plan

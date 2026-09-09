@@ -150,6 +150,8 @@ pub struct Scheduler {
     cancelled: HashSet<JobId>,
     completed: HashSet<JobId>,
     completed_order: VecDeque<JobId>,
+    failed: HashSet<JobId>,
+    failed_order: VecDeque<JobId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -471,6 +473,8 @@ impl Scheduler {
         let mut staged_cancelled = self.cancelled.clone();
         let mut staged_completed = self.completed.clone();
         let mut staged_completed_order = self.completed_order.clone();
+        let mut staged_failed = self.failed.clone();
+        let mut staged_failed_order = self.failed_order.clone();
         let mut seen = HashSet::new();
         let mut completed = Vec::new();
         let mut cancelled = Vec::new();
@@ -491,6 +495,8 @@ impl Scheduler {
                 TaskStatus::Started => {}
                 TaskStatus::Completed => {
                     staged_cancelled.remove(&outcome.id);
+                    staged_failed.remove(&outcome.id);
+                    staged_failed_order.retain(|id| *id != outcome.id);
                     if staged_completed.insert(outcome.id) {
                         staged_completed_order.push_back(outcome.id);
                     }
@@ -499,12 +505,18 @@ impl Scheduler {
                 TaskStatus::Cancelled => {
                     staged_completed.remove(&outcome.id);
                     staged_completed_order.retain(|id| *id != outcome.id);
+                    staged_failed.remove(&outcome.id);
+                    staged_failed_order.retain(|id| *id != outcome.id);
                     staged_cancelled.insert(outcome.id);
                     cancelled.push(outcome.id);
                 }
                 TaskStatus::Failed(_) => {
+                    staged_cancelled.remove(&outcome.id);
                     staged_completed.remove(&outcome.id);
                     staged_completed_order.retain(|id| *id != outcome.id);
+                    if staged_failed.insert(outcome.id) {
+                        staged_failed_order.push_back(outcome.id);
+                    }
                     failed.push(outcome.id);
                 }
             }
@@ -516,6 +528,7 @@ impl Scheduler {
             &mut staged_completed,
             &mut staged_completed_order,
         );
+        prune_completed_ledger_parts(&self.queue, &mut staged_failed, &mut staged_failed_order);
         completed.sort_by_key(|id| id.value());
         cancelled.sort_by_key(|id| id.value());
         failed.sort_by_key(|id| id.value());
@@ -528,6 +541,8 @@ impl Scheduler {
         self.cancelled = staged_cancelled;
         self.completed = staged_completed;
         self.completed_order = staged_completed_order;
+        self.failed = staged_failed;
+        self.failed_order = staged_failed_order;
         Ok(ingestion)
     }
 
@@ -676,6 +691,7 @@ impl Scheduler {
         check_control()?;
         let plan = JobFairnessPlanner::new(policy)
             .with_completed(self.completed.iter().copied().chain(completed))
+            .with_failed(self.failed.iter().copied())
             .plan_checked(staged.ready.clone(), &mut check_control)?;
         let blocked_ids = plan
             .blocked
@@ -689,6 +705,7 @@ impl Scheduler {
         self.queue.clear();
         self.cancelled = staged.cancelled;
         self.completed.retain(|id| !self.cancelled.contains(id));
+        self.failed.retain(|id| !self.cancelled.contains(id));
         for job in staged
             .ready
             .into_iter()
@@ -703,6 +720,7 @@ impl Scheduler {
 
     fn prune_completed_ledger(&mut self) {
         prune_completed_ledger_parts(&self.queue, &mut self.completed, &mut self.completed_order);
+        prune_completed_ledger_parts(&self.queue, &mut self.failed, &mut self.failed_order);
     }
 
     fn stage_ready_drain_checked(

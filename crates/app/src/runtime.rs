@@ -472,15 +472,29 @@ where
 fn drain_single_runtime_job(scheduler: &mut Scheduler, job: Job, label: &str) -> Result<Job> {
     let plan = scheduler.drain_fair_ready(JobFairnessPolicy::default(), []);
     if let Some(blocked) = plan.blocked.first() {
+        let missing = format_runtime_dependency_ids(blocked.missing_dependencies.iter().copied());
+        let failed = format_runtime_dependency_ids(blocked.failed_dependencies.iter().copied());
         return Err(GfmError::Format(format!(
-            "{label} job {} is blocked by missing dependencies",
-            blocked.label
+            "{label} job {} is blocked by dependencies missing={} failed={}",
+            blocked.label, missing, failed
         )));
     }
     plan.ready
         .into_iter()
         .find(|candidate| candidate.id == job.id)
         .ok_or_else(|| GfmError::Format(format!("{label} job did not become ready")))
+}
+
+fn format_runtime_dependency_ids(ids: impl IntoIterator<Item = gfm_jobs::JobId>) -> String {
+    let values = ids
+        .into_iter()
+        .map(|id| id.value().to_string())
+        .collect::<Vec<_>>();
+    if values.is_empty() {
+        "-".to_string()
+    } else {
+        values.join(",")
+    }
 }
 
 fn runtime_progress_lock_error() -> GfmError {
