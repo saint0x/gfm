@@ -6530,6 +6530,20 @@ fn searches_persisted_tags_from_binary() {
         budget_retry_journal_text.contains("1\t2\tcompleted\tsidecar budget"),
         "{budget_retry_journal_text}"
     );
+    let budget_retry_catalog_text = fs::read_to_string(&budget_retry_catalog).unwrap();
+    assert!(
+        budget_retry_catalog_text.contains(&format!(
+            "payload\t1\tindexing\tsidecar budget\t{}\t",
+            index.display()
+        )) && budget_retry_catalog_text.contains("\tvisible:sidecar budget:adaptive"),
+        "{budget_retry_catalog_text}"
+    );
+    let budget_retry_progress_text = fs::read_to_string(&budget_retry_progress).unwrap();
+    assert!(
+        budget_retry_progress_text.contains("progress\t1\tvisible\tvisible\tsidecar budget\t")
+            && budget_retry_progress_text.contains("\tcompleted\t3\t3\tcompleted\t"),
+        "{budget_retry_progress_text}"
+    );
 
     let sidecar_content_search = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
@@ -6896,6 +6910,20 @@ fn searches_persisted_tags_from_binary() {
     assert!(
         scope_retry_journal_text.contains("1\t2\tcompleted\tsidecar volume scope"),
         "{scope_retry_journal_text}"
+    );
+    let scope_retry_catalog_text = fs::read_to_string(&scope_retry_catalog).unwrap();
+    assert!(
+        scope_retry_catalog_text.contains(&format!(
+            "payload\t1\tindexing\tsidecar volume scope\t{}\t",
+            index.display()
+        )) && scope_retry_catalog_text.contains("\tvisible:sidecar volume scope:adaptive"),
+        "{scope_retry_catalog_text}"
+    );
+    let scope_retry_progress_text = fs::read_to_string(&scope_retry_progress).unwrap();
+    assert!(
+        scope_retry_progress_text.contains("progress\t1\tvisible\tvisible\tsidecar volume scope\t")
+            && scope_retry_progress_text.contains("\tcompleted\t3\t3\tcompleted\t"),
+        "{scope_retry_progress_text}"
     );
 
     let sidecar_empty_scope = Command::new(env!("CARGO_BIN_EXE_gfm"))
