@@ -417,6 +417,20 @@ fn search_index_retries_transient_archive_read_failure_from_binary() {
         journal_text.contains("1\t2\tcompleted\tsearch index"),
         "{journal_text}"
     );
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(
+        catalog_text.contains(&format!(
+            "payload\t1\tindexing\tsearch index\t{}\t",
+            index.display()
+        )) && catalog_text.contains("\tvisible:search index:adaptive"),
+        "{catalog_text}"
+    );
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("progress\t1\tvisible\tvisible\tsearch index\t")
+            && progress_text.contains("\tcompleted\t2\t2\tcompleted\t"),
+        "{progress_text}"
+    );
 
     fs::remove_dir_all(root).unwrap();
     fs::remove_file(index).unwrap();
@@ -527,6 +541,20 @@ fn search_index_mmap_retries_transient_archive_read_failure_from_binary() {
     assert!(
         journal_text.contains("1\t2\tcompleted\tsearch index mmap"),
         "{journal_text}"
+    );
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(
+        catalog_text.contains(&format!(
+            "payload\t1\tindexing\tsearch index mmap\t{}\t",
+            index.display()
+        )) && catalog_text.contains("\tvisible:search index mmap:adaptive"),
+        "{catalog_text}"
+    );
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("progress\t1\tvisible\tvisible\tsearch index mmap\t")
+            && progress_text.contains("\tcompleted\t2\t2\tcompleted\t"),
+        "{progress_text}"
     );
 
     fs::remove_dir_all(root).unwrap();

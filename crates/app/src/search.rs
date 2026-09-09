@@ -1757,32 +1757,42 @@ where
             .as_ref()
             .and_then(SearchWriteAccessReport::volume)
     });
-    run_retriable_volume_task_cancellable_with_payload_path(
-        volume,
-        Priority::Visible,
+    scheduled_search_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Indexing,
+            worker,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            path.clone(),
+            move |cancellation, runtime| {
+                let path = path.clone();
+                let retry_probe = retry_probe.clone();
+                let retry_access = retry_access.clone();
+                let read = read.clone();
+                let volume_reports = volume_reports.clone();
+                cancellation.check()?;
+                runtime.resize_checked(2, "archive-search:preflight", || cancellation.check())?;
+                if let (Some(retry_probe), Some(retry_access)) =
+                    (retry_probe.as_ref(), retry_access.as_ref())
+                {
+                    fail_first_search_retry_probe_attempt(
+                        retry_probe,
+                        retry_access,
+                        worker,
+                        &cancellation,
+                    )?;
+                }
+                let _access =
+                    volume_reports.preflight_access_checked(worker, || cancellation.check())?;
+                search_phase(&runtime, 1, "archive-search:read", &cancellation)?;
+                let result = read(path, &cancellation)?;
+                search_phase(&runtime, 2, "archive-search:complete", &cancellation)?;
+                runtime.remember_completion_detail("completed")?;
+                Ok(result)
+            },
+        )?,
         worker,
-        path.clone(),
-        move |cancellation| {
-            let path = path.clone();
-            let retry_probe = retry_probe.clone();
-            let retry_access = retry_access.clone();
-            let read = read.clone();
-            cancellation.check()?;
-            if let (Some(retry_probe), Some(retry_access)) =
-                (retry_probe.as_ref(), retry_access.as_ref())
-            {
-                fail_first_search_retry_probe_attempt(
-                    retry_probe,
-                    retry_access,
-                    worker,
-                    &cancellation,
-                )?;
-            }
-            let _access =
-                volume_reports.preflight_access_checked(worker, || cancellation.check())?;
-            cancellation.check()?;
-            read(path, &cancellation)
-        },
     )
 }
 
@@ -1896,7 +1906,7 @@ where
 fn run_search_archive_read_cancellable<T>(
     path: PathBuf,
     worker: &'static str,
-    read: impl Fn(PathBuf, &Cancellation) -> Result<T> + Send + Sync + 'static,
+    read: impl Fn(PathBuf, &Cancellation) -> Result<T> + Clone + Send + Sync + 'static,
 ) -> Result<T>
 where
     T: Send + 'static,
@@ -1908,7 +1918,7 @@ fn run_search_archive_read_cancellable_with_retry_probe<T>(
     path: PathBuf,
     worker: &'static str,
     retry_probe: Option<PathBuf>,
-    read: impl Fn(PathBuf, &Cancellation) -> Result<T> + Send + Sync + 'static,
+    read: impl Fn(PathBuf, &Cancellation) -> Result<T> + Clone + Send + Sync + 'static,
 ) -> Result<T>
 where
     T: Send + 'static,
@@ -1925,31 +1935,42 @@ where
             .as_ref()
             .and_then(SearchWriteAccessReport::volume)
     });
-    run_retriable_volume_task_cancellable_with_payload_path(
-        volume,
-        Priority::Visible,
+    scheduled_search_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Indexing,
+            worker,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            path.clone(),
+            move |cancellation, runtime| {
+                let path = path.clone();
+                let retry_probe = retry_probe.clone();
+                let retry_access = retry_access.clone();
+                let read = read.clone();
+                let volume_reports = volume_reports.clone();
+                cancellation.check()?;
+                runtime.resize_checked(2, "search-archive:preflight", || cancellation.check())?;
+                if let (Some(retry_probe), Some(retry_access)) =
+                    (retry_probe.as_ref(), retry_access.as_ref())
+                {
+                    fail_first_search_retry_probe_attempt(
+                        retry_probe,
+                        retry_access,
+                        worker,
+                        &cancellation,
+                    )?;
+                }
+                let _access =
+                    volume_reports.preflight_access_checked(worker, || cancellation.check())?;
+                search_phase(&runtime, 1, "search-archive:read", &cancellation)?;
+                let result = read(path, &cancellation)?;
+                search_phase(&runtime, 2, "search-archive:complete", &cancellation)?;
+                runtime.remember_completion_detail("completed")?;
+                Ok(result)
+            },
+        )?,
         worker,
-        path.clone(),
-        move |cancellation| {
-            let path = path.clone();
-            let retry_probe = retry_probe.clone();
-            let retry_access = retry_access.clone();
-            cancellation.check()?;
-            if let (Some(retry_probe), Some(retry_access)) =
-                (retry_probe.as_ref(), retry_access.as_ref())
-            {
-                fail_first_search_retry_probe_attempt(
-                    retry_probe,
-                    retry_access,
-                    worker,
-                    &cancellation,
-                )?;
-            }
-            let _access =
-                volume_reports.preflight_access_checked(worker, || cancellation.check())?;
-            cancellation.check()?;
-            read(path, &cancellation)
-        },
     )
 }
 
