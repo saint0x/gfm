@@ -1,4 +1,7 @@
-use crate::{Job, RetriableTask, Task, TaskOutcome, TaskStatus, VolumeConcurrencyPolicy};
+use crate::{
+    Job, JobClass, JobFairnessPolicy, RetriableTask, Task, TaskOutcome, TaskStatus,
+    VolumeConcurrencyPolicy,
+};
 use gfm_types::VolumeId;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Condvar, Mutex};
@@ -6,7 +9,8 @@ use std::sync::{Arc, Condvar, Mutex};
 pub(crate) struct IsolatedTaskQueue {
     state: Mutex<IsolatedTaskQueueState>,
     wake: Condvar,
-    policy: VolumeConcurrencyPolicy,
+    volume_policy: VolumeConcurrencyPolicy,
+    admission_order: Vec<JobClass>,
 }
 
 impl IsolatedTaskQueue {
@@ -18,16 +22,20 @@ impl IsolatedTaskQueue {
                 active: HashSet::new(),
                 completed: HashSet::new(),
                 failed: HashSet::new(),
+                next_admission_class: 0,
             }),
             wake: Condvar::new(),
-            policy,
+            volume_policy: policy,
+            admission_order: JobFairnessPolicy::default().admission_order(),
         }
     }
 
     pub(crate) fn next(self: &Arc<Self>) -> Option<TaskLeaseResult> {
         let mut state = self.state.lock().expect("isolated task queue poisoned");
         loop {
-            if let Some((index, volume)) = state.next_admissible(&self.policy) {
+            if let Some((index, volume)) =
+                state.next_admissible(&self.admission_order, &self.volume_policy)
+            {
                 let task = state
                     .pending
                     .remove(index)
@@ -90,33 +98,33 @@ struct IsolatedTaskQueueState {
     active: HashSet<crate::JobId>,
     completed: HashSet<crate::JobId>,
     failed: HashSet<crate::JobId>,
+    next_admission_class: usize,
 }
 
 impl IsolatedTaskQueueState {
     fn next_admissible(
-        &self,
-        policy: &VolumeConcurrencyPolicy,
+        &mut self,
+        admission_order: &[JobClass],
+        volume_policy: &VolumeConcurrencyPolicy,
     ) -> Option<(usize, Option<VolumeId>)> {
-        self.pending.iter().enumerate().find_map(|(index, task)| {
-            if !task
-                .job
-                .dependencies
-                .iter()
-                .all(|dependency| self.completed.contains(dependency))
-            {
-                return None;
-            }
-            match task.job.volume {
-                Some(volume)
-                    if self.active_by_volume.get(&volume).copied().unwrap_or(0)
-                        < policy.limit_for(volume) =>
-                {
-                    Some((index, Some(volume)))
+        if admission_order.is_empty() {
+            return None;
+        }
+        for offset in 0..admission_order.len() {
+            let cursor = (self.next_admission_class + offset) % admission_order.len();
+            let class = admission_order[cursor];
+            if let Some(admission) = self.pending.iter().enumerate().find_map(|(index, task)| {
+                if task.job.class != class || !self.dependencies_completed(&task.job) {
+                    return None;
                 }
-                Some(_) => None,
-                None => Some((index, None)),
+                self.admissible_volume(&task.job, volume_policy)
+                    .map(|volume| (index, volume))
+            }) {
+                self.next_admission_class = (cursor + 1) % admission_order.len();
+                return Some(admission);
             }
-        })
+        }
+        None
     }
 
     fn remove_dependency_blocked(&mut self) -> Option<TaskOutcome> {
@@ -159,6 +167,29 @@ impl IsolatedTaskQueueState {
             )),
         })
     }
+
+    fn dependencies_completed(&self, job: &Job) -> bool {
+        job.dependencies
+            .iter()
+            .all(|dependency| self.completed.contains(dependency))
+    }
+
+    fn admissible_volume(
+        &self,
+        job: &Job,
+        policy: &VolumeConcurrencyPolicy,
+    ) -> Option<Option<VolumeId>> {
+        match job.volume {
+            Some(volume)
+                if self.active_by_volume.get(&volume).copied().unwrap_or(0)
+                    < policy.limit_for(volume) =>
+            {
+                Some(Some(volume))
+            }
+            Some(_) => None,
+            None => Some(None),
+        }
+    }
 }
 
 pub(crate) enum TaskLeaseResult {
@@ -197,7 +228,8 @@ impl Drop for TaskLease {
 pub(crate) struct IsolatedRetriableTaskQueue {
     state: Mutex<IsolatedRetriableTaskQueueState>,
     wake: Condvar,
-    policy: VolumeConcurrencyPolicy,
+    volume_policy: VolumeConcurrencyPolicy,
+    admission_order: Vec<JobClass>,
 }
 
 impl IsolatedRetriableTaskQueue {
@@ -209,9 +241,11 @@ impl IsolatedRetriableTaskQueue {
                 active: HashSet::new(),
                 completed: HashSet::new(),
                 failed: HashSet::new(),
+                next_admission_class: 0,
             }),
             wake: Condvar::new(),
-            policy,
+            volume_policy: policy,
+            admission_order: JobFairnessPolicy::default().admission_order(),
         }
     }
 
@@ -221,7 +255,9 @@ impl IsolatedRetriableTaskQueue {
             .lock()
             .expect("isolated retriable task queue poisoned");
         loop {
-            if let Some((index, volume)) = state.next_admissible(&self.policy) {
+            if let Some((index, volume)) =
+                state.next_admissible(&self.admission_order, &self.volume_policy)
+            {
                 let task = state
                     .pending
                     .remove(index)
@@ -287,33 +323,33 @@ struct IsolatedRetriableTaskQueueState {
     active: HashSet<crate::JobId>,
     completed: HashSet<crate::JobId>,
     failed: HashSet<crate::JobId>,
+    next_admission_class: usize,
 }
 
 impl IsolatedRetriableTaskQueueState {
     fn next_admissible(
-        &self,
-        policy: &VolumeConcurrencyPolicy,
+        &mut self,
+        admission_order: &[JobClass],
+        volume_policy: &VolumeConcurrencyPolicy,
     ) -> Option<(usize, Option<VolumeId>)> {
-        self.pending.iter().enumerate().find_map(|(index, task)| {
-            if !task
-                .job
-                .dependencies
-                .iter()
-                .all(|dependency| self.completed.contains(dependency))
-            {
-                return None;
-            }
-            match task.job.volume {
-                Some(volume)
-                    if self.active_by_volume.get(&volume).copied().unwrap_or(0)
-                        < policy.limit_for(volume) =>
-                {
-                    Some((index, Some(volume)))
+        if admission_order.is_empty() {
+            return None;
+        }
+        for offset in 0..admission_order.len() {
+            let cursor = (self.next_admission_class + offset) % admission_order.len();
+            let class = admission_order[cursor];
+            if let Some(admission) = self.pending.iter().enumerate().find_map(|(index, task)| {
+                if task.job.class != class || !self.dependencies_completed(&task.job) {
+                    return None;
                 }
-                Some(_) => None,
-                None => Some((index, None)),
+                self.admissible_volume(&task.job, volume_policy)
+                    .map(|volume| (index, volume))
+            }) {
+                self.next_admission_class = (cursor + 1) % admission_order.len();
+                return Some(admission);
             }
-        })
+        }
+        None
     }
 
     fn remove_dependency_blocked(&mut self) -> Option<TaskOutcome> {
@@ -355,6 +391,29 @@ impl IsolatedRetriableTaskQueueState {
                 format_dependency_ids(&failed)
             )),
         })
+    }
+
+    fn dependencies_completed(&self, job: &Job) -> bool {
+        job.dependencies
+            .iter()
+            .all(|dependency| self.completed.contains(dependency))
+    }
+
+    fn admissible_volume(
+        &self,
+        job: &Job,
+        policy: &VolumeConcurrencyPolicy,
+    ) -> Option<Option<VolumeId>> {
+        match job.volume {
+            Some(volume)
+                if self.active_by_volume.get(&volume).copied().unwrap_or(0)
+                    < policy.limit_for(volume) =>
+            {
+                Some(Some(volume))
+            }
+            Some(_) => None,
+            None => Some(None),
+        }
     }
 }
 

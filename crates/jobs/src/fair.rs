@@ -27,8 +27,15 @@ impl JobFairnessPolicy {
         self
     }
 
-    fn quota(&self, class: JobClass) -> usize {
+    pub(crate) fn quota(&self, class: JobClass) -> usize {
         self.quotas.get(&class).copied().unwrap_or(1).max(1)
+    }
+
+    pub(crate) fn admission_order(&self) -> Vec<JobClass> {
+        JOB_CLASS_ORDER
+            .into_iter()
+            .flat_map(|class| std::iter::repeat_n(class, self.quota(class)))
+            .collect()
     }
 }
 
@@ -158,7 +165,7 @@ impl JobFairnessPlanner {
     }
 }
 
-const JOB_CLASS_ORDER: [JobClass; 5] = [
+pub(crate) const JOB_CLASS_ORDER: [JobClass; 5] = [
     JobClass::Foreground,
     JobClass::Visible,
     JobClass::Background,

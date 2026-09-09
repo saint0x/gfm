@@ -1371,6 +1371,102 @@ fn worker_pool_releases_same_batch_dependency_after_completion() {
 }
 
 #[test]
+fn worker_pool_admits_ready_jobs_by_fair_class_before_insertion_order() {
+    let mut scheduler = Scheduler::new();
+    let repair = scheduler.schedule_in_class(Priority::Background, JobClass::Repair, "repair");
+    let maintenance =
+        scheduler.schedule_in_class(Priority::Background, JobClass::Maintenance, "maintenance");
+    let background =
+        scheduler.schedule_in_class(Priority::Background, JobClass::Background, "background");
+    let visible = scheduler.schedule_in_class(Priority::Visible, JobClass::Visible, "visible");
+    let foreground =
+        scheduler.schedule_in_class(Priority::Interactive, JobClass::Foreground, "foreground");
+    let order = Arc::new(Mutex::new(Vec::new()));
+
+    let report = WorkerPool::new(1).run(
+        [repair, maintenance, background, visible, foreground]
+            .into_iter()
+            .map(|job| {
+                let order = Arc::clone(&order);
+                let label = job.label.clone();
+                Task::new(job, move |_| {
+                    order.lock().unwrap().push(label);
+                    Ok(())
+                })
+            })
+            .collect(),
+    );
+
+    assert_eq!(report.completed(), 5);
+    assert_eq!(
+        &*order.lock().unwrap(),
+        &[
+            "foreground",
+            "visible",
+            "background",
+            "maintenance",
+            "repair"
+        ]
+    );
+}
+
+#[test]
+fn worker_pool_rotates_ready_admission_by_default_class_quotas() {
+    let mut scheduler = Scheduler::new();
+    let foreground = (0..4)
+        .map(|index| {
+            scheduler.schedule_in_class(
+                Priority::Interactive,
+                JobClass::Foreground,
+                format!("foreground-{index}"),
+            )
+        })
+        .collect::<Vec<_>>();
+    let visible = (0..3)
+        .map(|index| {
+            scheduler.schedule_in_class(
+                Priority::Visible,
+                JobClass::Visible,
+                format!("visible-{index}"),
+            )
+        })
+        .collect::<Vec<_>>();
+    let background =
+        scheduler.schedule_in_class(Priority::Background, JobClass::Background, "background");
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let tasks = foreground
+        .into_iter()
+        .chain(visible)
+        .chain([background])
+        .map(|job| {
+            let order = Arc::clone(&order);
+            let label = job.label.clone();
+            Task::new(job, move |_| {
+                order.lock().unwrap().push(label);
+                Ok(())
+            })
+        })
+        .collect();
+
+    let report = WorkerPool::new(1).run(tasks);
+
+    assert_eq!(report.completed(), 8);
+    assert_eq!(
+        &*order.lock().unwrap(),
+        &[
+            "foreground-0",
+            "foreground-1",
+            "foreground-2",
+            "visible-0",
+            "visible-1",
+            "visible-2",
+            "background",
+            "foreground-3",
+        ]
+    );
+}
+
+#[test]
 fn isolated_worker_pool_does_not_execute_pre_cancelled_tasks() {
     let mut scheduler = Scheduler::new();
     let job =
@@ -1752,6 +1848,53 @@ fn retriable_worker_releases_same_batch_dependency_after_completion() {
     assert_eq!(report.completed(), 2);
     assert_eq!(&*order.lock().unwrap(), &["producer", "dependent"]);
     assert_eq!(journal.read().unwrap().len(), 4);
+
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn retriable_worker_admits_ready_jobs_by_fair_class_before_insertion_order() {
+    let path = temp_path("gfm-retriable-fair-admission-journal", "journal");
+    let journal = JobJournal::new(&path);
+    let mut scheduler = Scheduler::new();
+    let repair = scheduler.schedule_in_class(Priority::Background, JobClass::Repair, "repair");
+    let maintenance =
+        scheduler.schedule_in_class(Priority::Background, JobClass::Maintenance, "maintenance");
+    let background =
+        scheduler.schedule_in_class(Priority::Background, JobClass::Background, "background");
+    let visible = scheduler.schedule_in_class(Priority::Visible, JobClass::Visible, "visible");
+    let foreground =
+        scheduler.schedule_in_class(Priority::Interactive, JobClass::Foreground, "foreground");
+    let order = Arc::new(Mutex::new(Vec::new()));
+
+    let report = WorkerPool::new(1).run_retriable(
+        [repair, maintenance, background, visible, foreground]
+            .into_iter()
+            .map(|job| {
+                let order = Arc::clone(&order);
+                let label = job.label.clone();
+                RetriableTask::new(job, move |_| {
+                    order.lock().unwrap().push(label.clone());
+                    Ok(())
+                })
+            })
+            .collect(),
+        &journal,
+        RetryPolicy { max_attempts: 2 },
+    );
+
+    assert_eq!(report.completed(), 5);
+    assert_eq!(
+        &*order.lock().unwrap(),
+        &[
+            "foreground",
+            "visible",
+            "background",
+            "maintenance",
+            "repair"
+        ]
+    );
+    assert_eq!(journal.read().unwrap().len(), 10);
 
     std::fs::remove_file(path).unwrap();
 }
