@@ -266,6 +266,14 @@ pub struct NativeVolumeResourceValues {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeVolumeNodeCapacity {
+    pub status: NativeVolumeStatus,
+    pub total_nodes: u64,
+    pub available_nodes: u64,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NativeVolumeMountTableEntry {
     pub status: NativeVolumeStatus,
     pub mount_point: Option<PathBuf>,
@@ -542,6 +550,35 @@ impl NativeVolumeStatus {
             Self::Missing => "missing",
             Self::Unavailable => "unavailable",
         }
+    }
+}
+
+pub fn copy_volume_node_capacity(path: impl AsRef<Path>) -> NativeVolumeNodeCapacity {
+    let path = path.as_ref();
+    let Ok(c_path) = CString::new(path.as_os_str().as_bytes()) else {
+        return unavailable_node_capacity(format!(
+            "volume node capacity path contains an interior NUL: {}",
+            path.display()
+        ));
+    };
+    let mut stats = std::mem::MaybeUninit::<libc::statfs>::uninit();
+    // SAFETY: statfs initializes the provided buffer when it returns 0.
+    // The C string is NUL-terminated and the output pointer is valid for writes.
+    let status = unsafe { statfs(c_path.as_ptr(), stats.as_mut_ptr()) };
+    if status != 0 {
+        return unavailable_node_capacity(format!(
+            "volume node capacity unavailable for {}: {}",
+            path.display(),
+            std::io::Error::last_os_error()
+        ));
+    }
+    // SAFETY: status == 0 proves statfs initialized the statfs value.
+    let stats = unsafe { stats.assume_init() };
+    NativeVolumeNodeCapacity {
+        status: NativeVolumeStatus::Available,
+        total_nodes: stats.f_files,
+        available_nodes: stats.f_ffree,
+        reason: None,
     }
 }
 
@@ -1574,6 +1611,15 @@ fn unavailable_resource_values(
         supports_hard_links: None,
         supports_sparse_files: None,
         volume_uuid: None,
+        reason: Some(reason.into()),
+    }
+}
+
+fn unavailable_node_capacity(reason: impl Into<String>) -> NativeVolumeNodeCapacity {
+    NativeVolumeNodeCapacity {
+        status: NativeVolumeStatus::Unavailable,
+        total_nodes: 0,
+        available_nodes: 0,
         reason: Some(reason.into()),
     }
 }

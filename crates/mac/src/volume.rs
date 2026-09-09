@@ -121,6 +121,12 @@ pub struct VolumeCapacity {
     pub available_bytes: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VolumeNodeCapacity {
+    pub total_nodes: u64,
+    pub available_nodes: u64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum VolumeCapacityMode {
     Read,
@@ -143,6 +149,20 @@ impl VolumeCapacity {
             available_bytes: 0,
         }
     }
+}
+
+pub fn read_volume_node_capacity(path: impl AsRef<Path>) -> Result<VolumeNodeCapacity> {
+    let path = path.as_ref();
+    let native = gfm_mac_sys::copy_volume_node_capacity(path);
+    if native.status != NativeVolumeStatus::Available {
+        return Err(GfmError::Format(native.reason.unwrap_or_else(|| {
+            format!("volume node capacity unavailable for {}", path.display())
+        })));
+    }
+    Ok(VolumeNodeCapacity {
+        total_nodes: native.total_nodes,
+        available_nodes: native.available_nodes,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -4707,6 +4727,17 @@ mod tests {
         assert!(descriptor.as_tsv().contains("\tdevice-path="));
         assert!(descriptor.source.contains("mount-table=available"));
         assert!(descriptor.source.contains("url-resource=available"));
+    }
+
+    #[test]
+    fn reads_volume_node_capacity_for_fixture_preflight() {
+        let root = unique_temp_dir("gfm-volume-node-capacity");
+        let capacity = read_volume_node_capacity(&root).unwrap();
+
+        assert!(capacity.total_nodes > 0, "{capacity:?}");
+        assert!(capacity.available_nodes > 0, "{capacity:?}");
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

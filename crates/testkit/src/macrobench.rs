@@ -1,7 +1,8 @@
 use gfm_content::Extractor;
 use gfm_index::Indexer;
 use gfm_mac::{
-    current_host_profile, current_process_memory, CpuArchitecture, MacOsVersion, VolumeDescriptor,
+    current_host_profile, current_process_memory, read_volume_node_capacity, CpuArchitecture,
+    MacOsVersion, VolumeDescriptor,
 };
 use gfm_telemetry::{PerformanceBudgets, ScenarioMetric};
 use gfm_types::{GfmError, Result};
@@ -15,6 +16,7 @@ const FIXTURE_ROOT: &str = "gfm-macrobench-fixture";
 const ESTIMATED_FILE_STORAGE_BYTES: u64 = 4 * 1024;
 const ESTIMATED_DIRECTORY_STORAGE_BYTES: u64 = 1024;
 const MIN_WORKSPACE_RESERVE_BYTES: u64 = 512 * 1024 * 1024;
+const MIN_WORKSPACE_RESERVE_NODES: u64 = 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MacrobenchScenario {
@@ -170,9 +172,14 @@ impl MacrobenchScale {
             .saturating_mul(ESTIMATED_FILE_STORAGE_BYTES)
             .saturating_add((directories as u64).saturating_mul(ESTIMATED_DIRECTORY_STORAGE_BYTES));
         let reserve_bytes = MIN_WORKSPACE_RESERVE_BYTES.max(estimated_fixture_bytes / 5);
+        let required_nodes = (files as u64).saturating_add(directories as u64);
+        let reserve_nodes = MIN_WORKSPACE_RESERVE_NODES.max(required_nodes / 20);
         MacrobenchFixtureCapacityEstimate {
             files,
             directories,
+            required_nodes,
+            reserve_nodes,
+            required_available_nodes: required_nodes.saturating_add(reserve_nodes),
             estimated_fixture_bytes,
             reserve_bytes,
             required_available_bytes: estimated_fixture_bytes.saturating_add(reserve_bytes),
@@ -254,6 +261,9 @@ pub struct MacrobenchArtifactVerification {
 pub struct MacrobenchFixtureCapacityEstimate {
     pub files: usize,
     pub directories: usize,
+    pub required_nodes: u64,
+    pub reserve_nodes: u64,
+    pub required_available_nodes: u64,
     pub estimated_fixture_bytes: u64,
     pub reserve_bytes: u64,
     pub required_available_bytes: u64,
@@ -459,9 +469,17 @@ pub fn preflight_macrobench_workspace_capacity(
     let estimate = scale.capacity_estimate();
     let volume = VolumeDescriptor::for_path_checked(workspace, || Ok(()))?;
     let available = volume.capacity.available_bytes;
+    let node_capacity = read_volume_node_capacity(workspace)?;
+    let available_nodes = node_capacity.available_nodes;
     if available == 0 {
         return Err(GfmError::Format(format!(
             "macrobench workspace capacity unavailable for {}",
+            workspace.display()
+        )));
+    }
+    if available_nodes == 0 {
+        return Err(GfmError::Format(format!(
+            "macrobench workspace node capacity unavailable for {}",
             workspace.display()
         )));
     }
@@ -473,6 +491,18 @@ pub fn preflight_macrobench_workspace_capacity(
             estimate.required_available_bytes,
             estimate.estimated_fixture_bytes,
             estimate.reserve_bytes,
+            estimate.files,
+            estimate.directories
+        )));
+    }
+    if available_nodes < estimate.required_available_nodes {
+        return Err(GfmError::Format(format!(
+            "macrobench workspace node capacity insufficient for {}: available-nodes={} required-nodes={} fixture-nodes={} reserve-nodes={} files={} directories={}",
+            workspace.display(),
+            available_nodes,
+            estimate.required_available_nodes,
+            estimate.required_nodes,
+            estimate.reserve_nodes,
             estimate.files,
             estimate.directories
         )));
@@ -1112,6 +1142,18 @@ mod tests {
 
         assert_eq!(estimate.files, 1_000_000);
         assert!(estimate.directories > 100_000);
+        assert_eq!(
+            estimate.required_nodes,
+            estimate.files as u64 + estimate.directories as u64
+        );
+        assert!(
+            estimate.reserve_nodes >= MIN_WORKSPACE_RESERVE_NODES,
+            "{estimate:?}"
+        );
+        assert_eq!(
+            estimate.required_available_nodes,
+            estimate.required_nodes + estimate.reserve_nodes
+        );
         assert!(
             estimate.estimated_fixture_bytes >= 1_000_000 * ESTIMATED_FILE_STORAGE_BYTES,
             "{estimate:?}"
