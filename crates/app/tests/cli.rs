@@ -13428,6 +13428,20 @@ fn search_content_index_retries_transient_archive_read_failure_from_binary() {
         journal_text.contains("1\t2\tcompleted\tcontent index search"),
         "{journal_text}"
     );
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(
+        catalog_text.contains(&format!(
+            "payload\t1\tindexing\tcontent index search\t{}\t",
+            records.display()
+        )) && catalog_text.contains("\tvisible:content index search:adaptive"),
+        "{catalog_text}"
+    );
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("progress\t1\tvisible\tvisible\tcontent index search\t")
+            && progress_text.contains("\tcompleted\t3\t3\tcompleted\t"),
+        "{progress_text}"
+    );
 
     fs::remove_dir_all(root).unwrap();
     fs::remove_file(records).unwrap();

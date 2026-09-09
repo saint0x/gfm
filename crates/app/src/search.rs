@@ -2329,41 +2329,48 @@ fn run_content_index_search_with_volume_reports(
             .as_ref()
             .and_then(SearchWriteAccessReport::volume)
     });
-    run_retriable_volume_task_cancellable_with_payload_path(
-        volume,
-        Priority::Visible,
-        worker,
-        records.clone(),
-        move |cancellation| {
-            let records = records.clone();
-            let content = content.clone();
-            let query = query.clone();
-            let extractor = extractor.clone();
-            let retry_probe = retry_probe.clone();
-            let retry_access = retry_access.clone();
-            cancellation.check()?;
-            if let (Some(retry_probe), Some(retry_access)) =
-                (retry_probe.as_ref(), retry_access.as_ref())
-            {
-                fail_first_search_retry_probe_attempt(
-                    retry_probe,
-                    retry_access,
-                    worker,
-                    &cancellation,
-                )?;
-            }
-            let _access =
-                preflight_content_index_search_access_checked(&volume_reports, worker, || {
-                    cancellation.check()
-                })?;
-            cancellation.check()?;
-            let (live, report) = Indexer::default().load_live_with_content_for_query_cancellable(
-                records,
-                content,
-                &query,
-                &cancellation,
-            )?;
-            let diagnostics = format!(
+    scheduled_search_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Indexing,
+            worker,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            records.clone(),
+            move |cancellation, runtime| {
+                let records = records.clone();
+                let content = content.clone();
+                let query = query.clone();
+                let extractor = extractor.clone();
+                let retry_probe = retry_probe.clone();
+                let retry_access = retry_access.clone();
+                let volume_reports = volume_reports.clone();
+                cancellation.check()?;
+                runtime
+                    .resize_checked(3, "content-index-search:preflight", || cancellation.check())?;
+                if let (Some(retry_probe), Some(retry_access)) =
+                    (retry_probe.as_ref(), retry_access.as_ref())
+                {
+                    fail_first_search_retry_probe_attempt(
+                        retry_probe,
+                        retry_access,
+                        worker,
+                        &cancellation,
+                    )?;
+                }
+                let _access =
+                    preflight_content_index_search_access_checked(&volume_reports, worker, || {
+                        cancellation.check()
+                    })?;
+                search_phase(&runtime, 1, "content-index-search:load", &cancellation)?;
+                let (live, report) = Indexer::default()
+                    .load_live_with_content_for_query_cancellable(
+                        records,
+                        content,
+                        &query,
+                        &cancellation,
+                    )?;
+                let diagnostics = format!(
             "content-keys {} records-loaded {} records-missing {} candidate-ids {} full-hydration {}",
             report.content_keys,
             report.records_loaded,
@@ -2371,11 +2378,21 @@ fn run_content_index_search_with_volume_reports(
             report.candidate_ids,
             report.full_hydration
         );
-            cancellation.check()?;
-            let hits =
-                live.search_with_snippets_cancellable(&query, 50, &extractor, 96, &cancellation)?;
-            Ok(ContentIndexSearchOutput { diagnostics, hits })
-        },
+                cancellation.check()?;
+                let hits = live.search_with_snippets_cancellable(
+                    &query,
+                    50,
+                    &extractor,
+                    96,
+                    &cancellation,
+                )?;
+                search_phase(&runtime, 2, "content-index-search:snippets", &cancellation)?;
+                search_phase(&runtime, 3, "content-index-search:complete", &cancellation)?;
+                runtime.remember_completion_detail("completed")?;
+                Ok(ContentIndexSearchOutput { diagnostics, hits })
+            },
+        )?,
+        worker,
     )
 }
 
