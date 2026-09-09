@@ -14,6 +14,7 @@ use crate::platform::{current_host_job_scheduling_pressure, scheduling_pressure_
 use crate::runtime::{
     default_content_job_path, default_extraction_quarantine_path, default_job_journal_path,
     run_retriable_volume_task_cancellable_with_payload_path, run_scheduled_volume_task_cancellable,
+    run_scheduled_volume_task_cancellable_with_runtime_and_payload_path,
     run_scheduled_volume_task_cancellable_with_volume,
     run_scheduled_volume_task_cancellable_with_volume_and_payload_path,
     run_volume_task_cancellable, run_volume_task_cancellable_without_progress,
@@ -33,9 +34,9 @@ use gfm_index::{
     Indexer, QuarantineContentIndexRequest,
 };
 use gfm_jobs::{
-    Cancellation, FailureClass, JobFairnessPolicy, JobJournal, JobPayloadKind, Priority,
-    RecoveryReason, RetriableTask, RetryPolicy, Scheduler, SchedulingAction, SchedulingPressure,
-    TaskStatus, WorkerPool,
+    Cancellation, FailureClass, JobFairnessPolicy, JobJournal, JobPayloadKind, JobProgressState,
+    Priority, RecoveryReason, RetriableTask, RetryPolicy, Scheduler, SchedulingAction,
+    SchedulingPressure, TaskStatus, WorkerPool,
 };
 use gfm_mac::{AccessIntent, VolumeDiscoveryReport};
 use gfm_store::{atomic_write_checked, read_records_checked, ContentArchiveManifest};
@@ -952,12 +953,20 @@ pub(crate) fn run_content_search_with_volume_report(
         )
     );
     let volume = volume_report.volume_for_path(&root).map(|volume| volume.id);
-    run_volume_task_cancellable(
-        volume,
+    let outcome = run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
         Priority::Visible,
+        JobPayloadKind::Indexing,
         "content extraction search",
-        move |cancellation| {
+        current_host_job_scheduling_pressure(),
+        || Ok(volume),
+        root.clone(),
+        move |cancellation, runtime| {
+            let root = root.clone();
+            let query = query.clone();
+            let extractor = extractor.clone();
+            let volume_report = volume_report.clone();
             cancellation.check()?;
+            runtime.resize_checked(4, "content-search:preflight", || cancellation.check())?;
             let _access = preflight_access_scope_checked_with_volume_report(
                 &root,
                 AccessIntent::Index,
@@ -965,15 +974,35 @@ pub(crate) fn run_content_search_with_volume_report(
                 &volume_report,
                 || cancellation.check(),
             )?;
-            cancellation.check()?;
+            content_search_phase(&runtime, 1, "content-search:scan", &cancellation)?;
             let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
             let mut live = snapshot.into_live();
+            content_search_phase(&runtime, 2, "content-search:extract", &cancellation)?;
             let indexed = live.index_content_cancellable(&extractor, &cancellation)?;
+            content_search_phase(&runtime, 3, "content-search:query", &cancellation)?;
             let hits =
                 live.search_with_snippets_cancellable(&query, 50, &extractor, 96, &cancellation)?;
+            runtime.remember_completion_detail(format!(
+                "completed:{indexed} indexed:{} hits",
+                hits.len()
+            ))?;
             Ok((indexed, hits))
         },
-    )
+    )?;
+    outcome.result.ok_or_else(|| {
+        GfmError::Format("content extraction search deferred before visible search".to_string())
+    })
+}
+
+fn content_search_phase(
+    runtime: &RuntimeJobHandle,
+    completed_units: u64,
+    detail: &'static str,
+    cancellation: &Cancellation,
+) -> Result<()> {
+    runtime.progress_checked(JobProgressState::Running, completed_units, detail, || {
+        cancellation.check()
+    })
 }
 
 fn content_volume_access_tsv(

@@ -10708,9 +10708,13 @@ fn retries_failed_operation_from_binary_when_policy_allows_it() {
 #[test]
 fn searches_text_content_from_binary() {
     let root = unique_temp_dir("gfm-cli-content-root");
+    let catalog = unique_temp_path("gfm-cli-content-search", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-content-search", "gfmprogress");
     fs::write(root.join("journal.md"), "the body contains superneedle").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
         .args(["search-content", root.to_str().unwrap(), "superneedle"])
         .output()
         .unwrap();
@@ -10734,7 +10738,23 @@ fn searches_text_content_from_binary() {
             && stderr.contains("\treason=cached-volume-report"),
         "{stderr}"
     );
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(
+        catalog_text.contains(&format!(
+            "payload\t1\tindexing\tcontent extraction search\t{}\t",
+            root.display()
+        )) && catalog_text.contains("\tvisible:content extraction search:adaptive"),
+        "{catalog_text}"
+    );
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("progress\t1\tvisible\tvisible\tcontent extraction search\t")
+            && progress_text.contains("\tcompleted\t4\t4\tcompleted:1 indexed:1 hits\t"),
+        "{progress_text}"
+    );
     fs::remove_dir_all(root).unwrap();
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
 }
 
 #[test]
