@@ -5,7 +5,7 @@ use gfm_fs::{
 };
 use gfm_index::Indexer;
 use gfm_jobs::{
-    JobId, JobPayloadCatalog, JobPayloadKind, JobPayloadRecord, JobProgressSnapshot,
+    JobClass, JobId, JobPayloadCatalog, JobPayloadKind, JobPayloadRecord, JobProgressSnapshot,
     JobProgressState, JobProgressStore, Priority,
 };
 use gfm_mac::{
@@ -1864,7 +1864,9 @@ fn app_launch_spec_checked(
             .map(|catalog| read_optional_ui_payload_records(catalog.path()))
             .transpose()?
             .unwrap_or_default();
-        let progress_surfaces = read_ui_restorable_progress_snapshots(store.path())?
+        let mut snapshots = read_ui_restorable_progress_snapshots(store.path())?;
+        snapshots.sort_by_key(progress_surface_sort_key);
+        let progress_surfaces = snapshots
             .iter()
             .filter(|snapshot| snapshot.label != "ui progress store")
             .map(|snapshot| operation_progress_contract(snapshot, payloads.get(&snapshot.id)))
@@ -2377,6 +2379,33 @@ fn operation_progress_contract(
         );
     }
     OperationProgressContract::from_input(input)
+}
+
+fn progress_surface_sort_key(snapshot: &JobProgressSnapshot) -> (u8, u8, u64) {
+    (
+        progress_surface_class_rank(snapshot.class),
+        progress_surface_priority_rank(snapshot.priority),
+        snapshot.id.value(),
+    )
+}
+
+fn progress_surface_class_rank(class: JobClass) -> u8 {
+    match class {
+        JobClass::Foreground => 0,
+        JobClass::Visible => 1,
+        JobClass::Background => 2,
+        JobClass::Maintenance => 3,
+        JobClass::Repair => 4,
+    }
+}
+
+fn progress_surface_priority_rank(priority: Priority) -> u8 {
+    match priority {
+        Priority::Interactive => 0,
+        Priority::Visible => 1,
+        Priority::Normal => 2,
+        Priority::Background => 3,
+    }
 }
 
 fn operation_progress_state(state: JobProgressState) -> OperationProgressState {

@@ -1255,6 +1255,54 @@ fn reports_restorable_progress_surfaces_without_optional_payload_catalog_from_bi
 }
 
 #[test]
+fn orders_restored_progress_surfaces_by_runtime_priority_from_binary() {
+    let progress = std::env::temp_dir().join(format!(
+        "gfm-ui-lifecycle-progress-priority-{}.gfmprogress",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_file(&progress);
+    std::fs::write(
+        &progress,
+        "gfm-job-progress-v1\n\
+progress\t30\trepair\tbackground\trepair catalog\t-\tpaused\t1\t10\tpressure:repair\t1000\n\
+progress\t20\tbackground\tbackground\tbackground index\t-\trunning\t2\t10\tindexing\t1001\n\
+progress\t10\tvisible\tvisible\tvisible thumbnails\t-\trunning\t3\t10\tthumbnailing\t1002\n\
+progress\t40\tforeground\tinteractive\tcopy selected files\t-\trunning\t4\t10\tcopying\t1003\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args(["ui-contract", "/tmp/gfm"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let foreground = stdout
+        .find("operation-progress\tjob=40\tlabel=copy selected files")
+        .expect("foreground progress surface");
+    let visible = stdout
+        .find("operation-progress\tjob=10\tlabel=visible thumbnails")
+        .expect("visible progress surface");
+    let background = stdout
+        .find("operation-progress\tjob=20\tlabel=background index")
+        .expect("background progress surface");
+    let repair = stdout
+        .find("operation-progress\tjob=30\tlabel=repair catalog")
+        .expect("repair progress surface");
+
+    assert!(foreground < visible, "{stdout}");
+    assert!(visible < background, "{stdout}");
+    assert!(background < repair, "{stdout}");
+
+    let _ = std::fs::remove_file(progress);
+}
+
+#[test]
 fn copy_operation_publishes_runtime_progress_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-copy-operation-runtime-progress-{}",
