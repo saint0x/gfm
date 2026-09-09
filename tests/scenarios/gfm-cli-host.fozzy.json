@@ -8168,13 +8168,23 @@
     },
     {
       "type": "fs_write",
+      "path": "tmp/gfm-pixel-expected.provenance.tsv",
+      "data": "target\tfinder\nfixture-root\ttmp/gfm-fozzy-parity/gfm-parity-fixture/toolbar\noutput\ttmp/gfm-pixel-expected.rgba\nscenario\ttoolbar\nview-mode\ticon\nmacos-build\t25A354\nhardware-profile\tmacbookpro18,3\ndisplay-profile\tstudio-display-p3\napp-version\t0.1.0\ncaptured-at\t2026-08-27T00:00:00Z\ncapture-command\tscreencapture:-x:-R:40,70,1040,720\nreviewer\tcodex\nsigner\tcodex\napproved-mask-set\tmacos-25A354-default\nappearance\tdark\nscale\t2x\ncolor-profile\tdisplay-p3\nfocus\tactive\nwindow-region\t40,70,1040,720\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-pixel-actual.provenance.tsv",
+      "data": "target\tgfm\nfixture-root\ttmp/gfm-fozzy-parity/gfm-parity-fixture/toolbar\noutput\ttmp/gfm-pixel-actual.rgba\nscenario\ttoolbar\nview-mode\ticon\nmacos-build\t25A354\nhardware-profile\tmacbookpro18,3\ndisplay-profile\tstudio-display-p3\napp-version\t0.1.0\ncaptured-at\t2026-08-27T00:00:00Z\ncapture-command\tscreencapture:-x:-R:40,70,1040,720\nreviewer\tcodex\nsigner\tcodex\napproved-mask-set\tmacos-25A354-default\nappearance\tdark\nscale\t2x\ncolor-profile\tdisplay-p3\nfocus\tactive\nwindow-region\t40,70,1040,720\n"
+    },
+    {
+      "type": "fs_write",
       "path": "tmp/gfm-pixel-mask.tsv",
       "data": "1\t0\t1\t1\n"
     },
     {
       "type": "fs_write",
       "path": "tmp/gfm-pixel-governed-mask.tsv",
-      "data": "1\t0\t1\t1\tOS-owned toolbar repaint\n"
+      "data": "# approved-mask-set=macos-25A354-default\n1\t0\t1\t1\tOS-owned toolbar repaint\n"
     },
     {
       "type": "fs_write",
@@ -8190,6 +8200,16 @@
       "type": "fs_write",
       "path": "tmp/gfm-pixel-overlap-governed-mask.tsv",
       "data": "1\t0\t1\t1\tOS-owned toolbar repaint\n0\t0\t2\t1\tOS-owned hover repaint\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/fixtures/manifest.tsv",
+      "data": "scenario\troot\tfinder-view\tfiles\tdirectories\ntoolbar\t../gfm-parity-fixture/toolbar\ticon\t1\t0\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-parity-fixture/toolbar/.keep",
+      "data": "toolbar fixture marker\n"
     },
     {
       "type": "proc_when",
@@ -8309,7 +8329,17 @@
     {
       "type": "fs_write",
       "path": "tmp/gfm-parity-gate.tsv",
-      "data": "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\tgfm-pixel-expected.rgba\tgfm-pixel-actual.rgba\t3\t1\tgfm-pixel-governed-mask.tsv\t1040\t720\tactive\ticon\tgfm-parity-fixture/toolbar\n"
+      "data": "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=gfm-fozzy-parity/gfm-parity-fixture/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\tgfm-pixel-expected.rgba\tgfm-pixel-actual.rgba\t3\t1\tgfm-pixel-governed-mask.tsv\t1040\t720\tactive\ticon\tgfm-fozzy-parity/gfm-parity-fixture/toolbar\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-pixel-expected.provenance.tsv",
+      "data": "target\tfinder\nfixture-root\ttmp/gfm-parity-fixture/toolbar\noutput\ttmp/gfm-pixel-expected.rgba\nscenario\ttoolbar\nview-mode\ticon\nmacos-build\t25A354\nhardware-profile\tmacbookpro18,3\ndisplay-profile\tstudio-display-p3\napp-version\t0.1.0\ncaptured-at\t2026-08-27T00:00:00Z\ncapture-command\tscreencapture:-x:-R:40,70,1040,720\nreviewer\tcodex\nsigner\tcodex\napproved-mask-set\tmacos-25A354-default\nappearance\tdark\nscale\t2x\ncolor-profile\tdisplay-p3\nfocus\tactive\nwindow-region\t40,70,1040,720\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-pixel-actual.provenance.tsv",
+      "data": "target\tgfm\nfixture-root\ttmp/gfm-parity-fixture/toolbar\noutput\ttmp/gfm-pixel-actual.rgba\nscenario\ttoolbar\nview-mode\ticon\nmacos-build\t25A354\nhardware-profile\tmacbookpro18,3\ndisplay-profile\tstudio-display-p3\napp-version\t0.1.0\ncaptured-at\t2026-08-27T00:00:00Z\ncapture-command\tscreencapture:-x:-R:40,70,1040,720\nreviewer\tcodex\nsigner\tcodex\napproved-mask-set\tmacos-25A354-default\nappearance\tdark\nscale\t2x\ncolor-profile\tdisplay-p3\nfocus\tactive\nwindow-region\t40,70,1040,720\n"
     },
     {
       "type": "proc_when",
@@ -8332,8 +8362,79 @@
     },
     {
       "type": "fs_write",
+      "path": "tmp/gfm-capture-root/manifest.tsv",
+      "data": "scenario\troot\tfinder-view\tfiles\tdirectories\ntext\t.\tlist\t1\t0\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-capture-root/.keep",
+      "data": "capture root marker\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-capture-finder.rgba",
+      "data": "abcd"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-capture-gfm.rgba",
+      "data": "abcd"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-capture-finder.provenance.tsv",
+      "data": "target\tfinder\nfixture-root\ttmp/gfm-capture-root\noutput\ttmp/gfm-capture-finder.rgba\nscenario\ttext\nview-mode\tlist\nmacos-build\t25A354\nhardware-profile\tmacbookpro18,3\ndisplay-profile\tstudio-display-p3\napp-version\t0.1.0\ncaptured-at\t2026-09-09T00:00:00Z\ncapture-command\tscreencapture:-x:-R:0,0,1,1\nreviewer\tcodex\nsigner\tcodex\napproved-mask-set\tmacos-25A354-default\nappearance\tdark\nscale\t2x\ncolor-profile\tdisplay-p3\nfocus\tactive\nwindow-region\t0,0,1,1\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-capture-gfm.provenance.tsv",
+      "data": "target\tgfm\nfixture-root\ttmp/gfm-capture-root\noutput\ttmp/gfm-capture-gfm.rgba\nscenario\ttext\nview-mode\tlist\nmacos-build\t25A354\nhardware-profile\tmacbookpro18,3\ndisplay-profile\tstudio-display-p3\napp-version\t0.1.0\ncaptured-at\t2026-09-09T00:00:00Z\ncapture-command\tscreencapture:-x:-R:0,0,1,1\nreviewer\tcodex\nsigner\tcodex\napproved-mask-set\tmacos-25A354-default\nappearance\tdark\nscale\t2x\ncolor-profile\tdisplay-p3\nfocus\tactive\nwindow-region\t0,0,1,1\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "parity-capture-manifest",
+        "tmp/gfm-capture-gate.tsv",
+        "text",
+        "tmp/gfm-capture-finder.rgba",
+        "tmp/gfm-capture-gfm.rgba",
+        "-",
+        "tmp/gfm-capture-root",
+        "text",
+        "list",
+        "25A354",
+        "macbookpro18,3",
+        "studio-display-p3",
+        "0.1.0",
+        "2026-09-09T00:00:00Z",
+        "codex",
+        "codex",
+        "macos-25A354-default",
+        "dark",
+        "2x",
+        "display-p3",
+        "active",
+        "1",
+        "1"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "args": [
+        "parity-gate",
+        "tmp/gfm-capture-gate.tsv"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "fs_write",
       "path": "tmp/gfm-parity-gate-identical-artifacts.tsv",
-      "data": "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\tgfm-pixel-expected.rgba\tgfm-pixel-expected.rgba\t3\t1\t\t1040\t720\tactive\ticon\tgfm-parity-fixture/toolbar\n"
+      "data": "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=gfm-fozzy-parity/gfm-parity-fixture/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\tgfm-pixel-expected.rgba\tgfm-pixel-expected.rgba\t3\t1\t\t1040\t720\tactive\ticon\tgfm-fozzy-parity/gfm-parity-fixture/toolbar\n"
     },
     {
       "type": "proc_when",
@@ -8348,7 +8449,7 @@
     {
       "type": "fs_write",
       "path": "tmp/gfm-parity-gate-duplicate-profile-key.tsv",
-      "data": "manifest-version\t1\nprofile\tmacos-build=25A354\tmacos-build=25A999\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\tgfm-pixel-expected.rgba\tgfm-pixel-actual.rgba\t3\t1\tgfm-pixel-governed-mask.tsv\t1040\t720\tactive\ticon\tgfm-parity-fixture/toolbar\n"
+      "data": "manifest-version\t1\nprofile\tmacos-build=25A354\tmacos-build=25A999\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=gfm-fozzy-parity/gfm-parity-fixture/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\tgfm-pixel-expected.rgba\tgfm-pixel-actual.rgba\t3\t1\tgfm-pixel-governed-mask.tsv\t1040\t720\tactive\ticon\tgfm-fozzy-parity/gfm-parity-fixture/toolbar\n"
     },
     {
       "type": "proc_when",
@@ -8363,7 +8464,7 @@
     {
       "type": "fs_write",
       "path": "tmp/gfm-parity-gate-invalid-captured-at.tsv",
-      "data": "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=not-a-timestamp\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\tgfm-pixel-expected.rgba\tgfm-pixel-actual.rgba\t3\t1\tgfm-pixel-governed-mask.tsv\t1040\t720\tactive\ticon\tgfm-parity-fixture/toolbar\n"
+      "data": "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=gfm-fozzy-parity/gfm-parity-fixture/manifest.tsv\tcaptured-at=not-a-timestamp\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\tgfm-pixel-expected.rgba\tgfm-pixel-actual.rgba\t3\t1\tgfm-pixel-governed-mask.tsv\t1040\t720\tactive\ticon\tgfm-fozzy-parity/gfm-parity-fixture/toolbar\n"
     },
     {
       "type": "proc_when",
@@ -8378,7 +8479,7 @@
     {
       "type": "fs_write",
       "path": "tmp/gfm-parity-gate-duplicate-profile-row.tsv",
-      "data": "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\tgfm-pixel-expected.rgba\tgfm-pixel-actual.rgba\t3\t1\tgfm-pixel-governed-mask.tsv\t1040\t720\tactive\ticon\tgfm-parity-fixture/toolbar\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttext\tgfm-pixel-expected.rgba\tgfm-pixel-actual.rgba\t3\t1\tgfm-pixel-governed-mask.tsv\t1040\t720\tactive\tlist\tgfm-parity-fixture/text\n"
+      "data": "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=gfm-fozzy-parity/gfm-parity-fixture/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\tgfm-pixel-expected.rgba\tgfm-pixel-actual.rgba\t3\t1\tgfm-pixel-governed-mask.tsv\t1040\t720\tactive\ticon\tgfm-fozzy-parity/gfm-parity-fixture/toolbar\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=gfm-fozzy-parity/gfm-parity-fixture/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttext\tgfm-pixel-expected.rgba\tgfm-pixel-actual.rgba\t3\t1\tgfm-pixel-governed-mask.tsv\t1040\t720\tactive\tlist\tgfm-fozzy-parity/gfm-parity-fixture/text\n"
     },
     {
       "type": "proc_when",
