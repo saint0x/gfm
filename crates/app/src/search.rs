@@ -1820,32 +1820,43 @@ where
             .and_then(SearchWriteAccessReport::volume)
     });
     let payload_path = paths.first().cloned().unwrap_or_else(|| PathBuf::from("."));
-    run_retriable_volume_task_cancellable_with_payload_path(
-        volume,
-        Priority::Visible,
+    scheduled_search_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Indexing,
+            worker,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            payload_path,
+            move |cancellation, runtime| {
+                let paths = paths.clone();
+                let retry_probe = retry_probe.clone();
+                let retry_access = retry_access.clone();
+                let read = read.clone();
+                let volume_reports = volume_reports.clone();
+                cancellation.check()?;
+                runtime
+                    .resize_checked(2, "archive-set-search:preflight", || cancellation.check())?;
+                if let (Some(retry_probe), Some(retry_access)) =
+                    (retry_probe.as_ref(), retry_access.as_ref())
+                {
+                    fail_first_search_retry_probe_attempt(
+                        retry_probe,
+                        retry_access,
+                        worker,
+                        &cancellation,
+                    )?;
+                }
+                let _access =
+                    volume_reports.preflight_access_checked(worker, || cancellation.check())?;
+                search_phase(&runtime, 1, "archive-set-search:read", &cancellation)?;
+                let result = read(paths, &cancellation)?;
+                search_phase(&runtime, 2, "archive-set-search:complete", &cancellation)?;
+                runtime.remember_completion_detail("completed")?;
+                Ok(result)
+            },
+        )?,
         worker,
-        payload_path,
-        move |cancellation| {
-            let paths = paths.clone();
-            let retry_probe = retry_probe.clone();
-            let retry_access = retry_access.clone();
-            let read = read.clone();
-            cancellation.check()?;
-            if let (Some(retry_probe), Some(retry_access)) =
-                (retry_probe.as_ref(), retry_access.as_ref())
-            {
-                fail_first_search_retry_probe_attempt(
-                    retry_probe,
-                    retry_access,
-                    worker,
-                    &cancellation,
-                )?;
-            }
-            let _access =
-                volume_reports.preflight_access_checked(worker, || cancellation.check())?;
-            cancellation.check()?;
-            read(paths, &cancellation)
-        },
     )
 }
 

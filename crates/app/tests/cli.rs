@@ -15017,6 +15017,21 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
         set_ids_retry_journal_text.contains("1\t2\tcompleted\tcontent ids mmap set"),
         "{set_ids_retry_journal_text}"
     );
+    let set_ids_retry_catalog_text = fs::read_to_string(&set_ids_retry_catalog).unwrap();
+    assert!(
+        set_ids_retry_catalog_text.contains(&format!(
+            "payload\t1\tindexing\tcontent ids mmap set\t{}\t",
+            first_content.display()
+        )) && set_ids_retry_catalog_text.contains("\tvisible:content ids mmap set:adaptive"),
+        "{set_ids_retry_catalog_text}"
+    );
+    let set_ids_retry_progress_text = fs::read_to_string(&set_ids_retry_progress).unwrap();
+    assert!(
+        set_ids_retry_progress_text
+            .contains("progress\t1\tvisible\tvisible\tcontent ids mmap set\t")
+            && set_ids_retry_progress_text.contains("\tcompleted\t2\t2\tcompleted\t"),
+        "{set_ids_retry_progress_text}"
+    );
 
     let manifest_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
