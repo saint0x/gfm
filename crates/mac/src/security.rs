@@ -399,6 +399,11 @@ fn decide(
             "access probe failed because the host filesystem or permission API was unavailable"
                 .to_string(),
         ),
+        AccessProbeState::Unknown if write_intent(intent) => (
+            SecurityAccessMode::Denied,
+            SecurityDecisionAction::Deny,
+            "access probe was inconclusive; mutating workers must fail closed".to_string(),
+        ),
         AccessProbeState::Unknown => (
             SecurityAccessMode::DegradedMetadataOnly,
             SecurityDecisionAction::Degrade,
@@ -857,6 +862,64 @@ mod tests {
         assert!(report.as_tsv().contains("\tprobe=unavailable\t"));
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unknown_probe_degrades_only_non_mutating_preview_and_index_workers() {
+        for intent in [AccessIntent::Preview, AccessIntent::Index] {
+            let (mode, action, reason) = decide(
+                ProtectedScope::None,
+                AccessProbeState::Unknown,
+                intent,
+                false,
+            );
+
+            assert_eq!(mode, SecurityAccessMode::DegradedMetadataOnly);
+            assert_eq!(action, SecurityDecisionAction::Degrade);
+            assert_eq!(
+                reason,
+                "access probe was inconclusive; avoid blocking UI and retry through a scoped worker"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_probe_denies_mutating_workers_without_metadata_fallback() {
+        for intent in [AccessIntent::Write, AccessIntent::Operate] {
+            let (mode, action, reason) = decide(
+                ProtectedScope::None,
+                AccessProbeState::Unknown,
+                intent,
+                false,
+            );
+            let report = SecurityScopedAccessReport {
+                path: PathBuf::from("/Users/me/Documents/Plan.md"),
+                intent,
+                scope: ProtectedScope::Documents,
+                probe: AccessProbeState::Unknown,
+                mode,
+                action,
+                bookmark_required: false,
+                can_read: false,
+                can_write: false,
+                least_privilege: least_privilege(mode, intent),
+                reason: reason.clone(),
+            };
+            let admission = report.worker_admission("operation worker");
+
+            assert_eq!(mode, SecurityAccessMode::Denied);
+            assert_eq!(action, SecurityDecisionAction::Deny);
+            assert_eq!(
+                reason,
+                "access probe was inconclusive; mutating workers must fail closed"
+            );
+            assert!(report.least_privilege);
+            assert_eq!(admission.worker_action, SecurityWorkerAction::Deny);
+            assert!(!admission.can_touch_filesystem);
+            assert!(!admission.needs_bookmark_access);
+            assert!(admission.refresh_on_permission_change);
+            assert!(!admission.as_tsv().contains("worker-action=metadata-only"));
+        }
     }
 
     #[test]
