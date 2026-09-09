@@ -519,7 +519,7 @@ fn runs_parity_gate_from_binary_manifest() {
     write_capture_provenance_artifacts(&root, "fixtures/toolbar");
     fs::write(
         root.join("mask.tsv"),
-        "1\t0\t1\t1\tOS-owned toolbar repaint\n",
+        "# approved-mask-set=macos-25A354-default\n1\t0\t1\t1\tOS-owned toolbar repaint\n",
     )
     .unwrap();
     fs::write(

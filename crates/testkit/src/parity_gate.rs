@@ -300,6 +300,7 @@ fn validate_capture_provenance_artifacts(input: &ParityGateInput) -> Result<()> 
         return Ok(());
     };
     provenance.validate()?;
+    validate_mask_file_approval(input, provenance)?;
     let fixture_manifest = Path::new(&provenance.fixture_manifest);
     let missing_fixture_manifest = || {
         GfmError::Format(format!(
@@ -339,6 +340,63 @@ fn validate_capture_provenance_artifacts(input: &ParityGateInput) -> Result<()> 
         return Err(missing_fixture_root());
     }
     Ok(())
+}
+
+fn validate_mask_file_approval(
+    input: &ParityGateInput,
+    provenance: &ParityCaptureProvenance,
+) -> Result<()> {
+    let Some(mask_path) = &input.mask_path else {
+        return Ok(());
+    };
+    let content = fs::read_to_string(mask_path).map_err(|err| GfmError::io(mask_path, err))?;
+    let approved_mask_set = governed_mask_file_approved_set(&content, mask_path)?;
+    if approved_mask_set != provenance.approved_mask_set {
+        return Err(GfmError::Format(format!(
+            "parity gate entry for {} uses governed mask file {} approved for `{}` but manifest approved-mask-set is `{}`",
+            input.surface.as_str(),
+            mask_path.display(),
+            approved_mask_set,
+            provenance.approved_mask_set
+        )));
+    }
+    Ok(())
+}
+
+fn governed_mask_file_approved_set(content: &str, mask_path: &Path) -> Result<String> {
+    let mut approved_mask_set = None;
+    for (line_index, line) in content.lines().enumerate() {
+        let line = line.trim();
+        if !line.starts_with('#') {
+            continue;
+        }
+        let directive = line.trim_start_matches('#').trim();
+        let Some(value) = directive.strip_prefix("approved-mask-set=") else {
+            continue;
+        };
+        if approved_mask_set.is_some() {
+            return Err(GfmError::Format(format!(
+                "governed mask file {} line {} duplicates approved-mask-set",
+                mask_path.display(),
+                line_index + 1
+            )));
+        }
+        let value = value.trim();
+        if value.is_empty() {
+            return Err(GfmError::Format(format!(
+                "governed mask file {} line {} has empty approved-mask-set",
+                mask_path.display(),
+                line_index + 1
+            )));
+        }
+        approved_mask_set = Some(value.to_string());
+    }
+    approved_mask_set.ok_or_else(|| {
+        GfmError::Format(format!(
+            "parity gate requires governed mask file {} to declare # approved-mask-set=<id>",
+            mask_path.display()
+        ))
+    })
 }
 
 fn validate_fixture_manifest_contains_capture(
@@ -1496,6 +1554,56 @@ mod tests {
             .to_string()
             .contains("requires captured fixture manifest"));
         assert!(err.to_string().contains("to reference fixture root"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn parity_gate_rejects_provenance_mask_without_approved_set() {
+        let root = unique_temp_dir("gfm-parity-gate-mask-missing-approval");
+        fs::write(root.join("expected.rgba"), [1, 2, 3, 255]).unwrap();
+        fs::write(root.join("actual.rgba"), [1, 2, 2, 255]).unwrap();
+        fs::write(
+            root.join("mask.tsv"),
+            "0\t0\t1\t1\tOS-owned toolbar repaint\n",
+        )
+        .unwrap();
+        write_capture_provenance_artifacts(&root, "fixtures/toolbar");
+        fs::write(
+            root.join("gate.tsv"),
+            "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=light\tscale=2x\tcolor-profile=srgb\nentry\ttoolbar\texpected.rgba\tactual.rgba\t1\t1\tmask.tsv\t1040\t720\tactive\ticon\tfixtures/toolbar\n",
+        )
+        .unwrap();
+
+        let err = run_parity_gate_manifest(root.join("gate.tsv")).unwrap_err();
+
+        assert!(err.to_string().contains("requires governed mask file"));
+        assert!(err.to_string().contains("approved-mask-set"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn parity_gate_rejects_provenance_mask_approved_for_different_set() {
+        let root = unique_temp_dir("gfm-parity-gate-mask-wrong-approval");
+        fs::write(root.join("expected.rgba"), [1, 2, 3, 255]).unwrap();
+        fs::write(root.join("actual.rgba"), [1, 2, 2, 255]).unwrap();
+        fs::write(
+            root.join("mask.tsv"),
+            "# approved-mask-set=macos-25B999-default\n0\t0\t1\t1\tOS-owned toolbar repaint\n",
+        )
+        .unwrap();
+        write_capture_provenance_artifacts(&root, "fixtures/toolbar");
+        fs::write(
+            root.join("gate.tsv"),
+            "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=light\tscale=2x\tcolor-profile=srgb\nentry\ttoolbar\texpected.rgba\tactual.rgba\t1\t1\tmask.tsv\t1040\t720\tactive\ticon\tfixtures/toolbar\n",
+        )
+        .unwrap();
+
+        let err = run_parity_gate_manifest(root.join("gate.tsv")).unwrap_err();
+
+        assert!(err.to_string().contains("macos-25B999-default"));
+        assert!(err.to_string().contains("macos-25A354-default"));
 
         fs::remove_dir_all(root).unwrap();
     }

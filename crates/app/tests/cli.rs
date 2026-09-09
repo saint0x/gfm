@@ -1954,7 +1954,11 @@ fn parity_gate_and_review_use_governed_masks_from_binary() {
     let review = root.join("review");
     fs::write(&expected, [0, 0, 0, 255, 10, 10, 10, 255]).unwrap();
     fs::write(&actual, [0, 0, 0, 255, 9, 10, 10, 255]).unwrap();
-    fs::write(&mask, "1\t0\t1\t1\tOS-owned sidebar clock repaint\n").unwrap();
+    fs::write(
+        &mask,
+        "# approved-mask-set=macos-25A354-default\n1\t0\t1\t1\tOS-owned sidebar clock repaint\n",
+    )
+    .unwrap();
     write_capture_provenance_artifacts(&root, "fixtures/toolbar");
     fs::write(
         &manifest,
