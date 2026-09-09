@@ -960,12 +960,7 @@ fn existing_dropped_root_reports_checked(
         check_control()?;
         root.preflight_volume()?;
         check_control()?;
-        if !root.path.try_exists().map_err(|err| {
-            GfmError::io(
-                &root.path,
-                format!("fsevents repair dropped root existence unavailable: {err}"),
-            )
-        })? {
+        if !dropped_root_exists_checked(&root.path, &mut check_control)? {
             continue;
         }
         check_control()?;
@@ -973,6 +968,21 @@ fn existing_dropped_root_reports_checked(
     }
     check_control()?;
     Ok(existing)
+}
+
+fn dropped_root_exists_checked(
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<bool> {
+    check_control()?;
+    match fs::metadata(path) {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("fsevents repair dropped root existence unavailable: {err}"),
+        )),
+    }
 }
 
 fn run_index_read_task<T>(
@@ -1554,6 +1564,11 @@ mod tests {
     use super::*;
     use gfm_mac::VolumeCapacity;
 
+    #[cfg(unix)]
+    use std::ffi::OsString;
+    #[cfg(unix)]
+    use std::os::unix::ffi::OsStringExt;
+
     #[test]
     fn index_read_task_passes_runtime_token_to_reader() {
         let path = std::env::temp_dir().join(format!(
@@ -1930,5 +1945,37 @@ mod tests {
 
         assert_eq!(result.err(), Some(GfmError::Cancelled));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dropped_root_exists_checked_honors_pre_cancelled_control_before_metadata() {
+        let path = invalid_path("gfm-dropped-root-pre-cancel");
+
+        let err = dropped_root_exists_checked(&path, || Err(GfmError::Cancelled)).unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dropped_root_exists_checked_surfaces_unavailable_metadata() {
+        let path = invalid_path("gfm-dropped-root-invalid");
+
+        let err = dropped_root_exists_checked(&path, || Ok(())).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("fsevents repair dropped root existence unavailable"));
+    }
+
+    #[cfg(unix)]
+    fn invalid_path(label: &str) -> PathBuf {
+        let mut bytes = std::env::temp_dir().into_os_string().into_vec();
+        bytes.push(b'/');
+        bytes.extend_from_slice(label.as_bytes());
+        bytes.push(0);
+        bytes.extend_from_slice(b"path");
+        PathBuf::from(OsString::from_vec(bytes))
     }
 }
