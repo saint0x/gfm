@@ -64,14 +64,14 @@ pub(crate) fn resolve_volume_event_path(
         });
     }
 
-    match path.try_exists() {
-        Ok(false) => Ok(VolumeEventPathResolution {
+    match path.metadata() {
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(VolumeEventPathResolution {
             path: Some(path),
             descriptor: None,
             native_status: NativeVolumeStatus::Missing,
             native_reason: None,
         }),
-        Ok(true) => {
+        Ok(_) => {
             let descriptor = VolumeDescriptor::for_path_policy_checked(&path, || Ok(()))?;
             let native_status = native_status_for_event_descriptor(&descriptor);
             let native_reason = native_reason_for_event_descriptor(&descriptor);

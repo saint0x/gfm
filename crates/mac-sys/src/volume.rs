@@ -546,12 +546,12 @@ impl NativeVolumeStatus {
 }
 
 pub fn copy_volume_description_for_path(path: &Path) -> NativeVolumeDescription {
-    match path.try_exists() {
+    match volume_path_exists(path) {
         Ok(true) => {}
         Ok(false) => return missing(format!("volume path does not exist: {}", path.display())),
         Err(err) => {
             return unavailable(format!(
-                "volume path existence unavailable: {}: {err}",
+                "volume path metadata unavailable: {}: {err}",
                 path.display()
             ));
         }
@@ -722,7 +722,7 @@ pub fn submit_volume_operation(
     path: &Path,
     operation: NativeVolumeOperation,
 ) -> NativeVolumeOperationResult {
-    match path.try_exists() {
+    match volume_path_exists(path) {
         Ok(true) => {}
         Ok(false) => {
             return NativeVolumeOperationResult {
@@ -738,7 +738,7 @@ pub fn submit_volume_operation(
                 status: NativeVolumeOperationStatus::Unavailable,
                 dissenter_status: None,
                 reason: Some(format!(
-                    "volume path existence unavailable: {}: {err}",
+                    "volume path metadata unavailable: {}: {err}",
                     path.display()
                 )),
             };
@@ -1205,7 +1205,7 @@ pub fn copy_volume_resource_values(path: &Path) -> NativeVolumeResourceValues {
 }
 
 pub fn copy_volume_mount_table_entry(path: &Path) -> NativeVolumeMountTableEntry {
-    match path.try_exists() {
+    match volume_path_exists(path) {
         Ok(true) => {}
         Ok(false) => {
             return unavailable_mount_table_entry(
@@ -1217,7 +1217,7 @@ pub fn copy_volume_mount_table_entry(path: &Path) -> NativeVolumeMountTableEntry
             return unavailable_mount_table_entry(
                 NativeVolumeStatus::Unavailable,
                 format!(
-                    "volume path existence unavailable: {}: {err}",
+                    "volume path metadata unavailable: {}: {err}",
                     path.display()
                 ),
             );
@@ -1267,7 +1267,7 @@ pub fn copy_volume_mount_table() -> NativeVolumeMountTable {
 }
 
 fn create_disk_for_volume_path(path: &Path) -> Option<(DASessionRef, DADiskRef)> {
-    if !(path.try_exists().ok()?) {
+    if !volume_path_exists(path).ok()? {
         return None;
     }
     let url = CFURL::from_path(path, true)?;
@@ -1285,6 +1285,14 @@ fn create_disk_for_volume_path(path: &Path) -> Option<(DASessionRef, DADiskRef)>
         return None;
     }
     Some((session, disk))
+}
+
+fn volume_path_exists(path: &Path) -> std::io::Result<bool> {
+    match std::fs::metadata(path) {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err),
+    }
 }
 
 fn string_value(
@@ -1629,7 +1637,7 @@ mod tests {
             .reason
             .as_deref()
             .unwrap_or_default()
-            .contains("path existence unavailable"));
+            .contains("path metadata unavailable"));
     }
 
     #[test]
@@ -1701,7 +1709,7 @@ mod tests {
             .reason
             .as_deref()
             .unwrap_or_default()
-            .contains("path existence unavailable"));
+            .contains("path metadata unavailable"));
     }
 
     #[test]
@@ -1902,7 +1910,7 @@ mod tests {
             .reason
             .as_deref()
             .unwrap_or_default()
-            .contains("path existence unavailable"));
+            .contains("path metadata unavailable"));
     }
 
     #[test]
