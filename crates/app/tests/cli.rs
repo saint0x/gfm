@@ -590,6 +590,20 @@ fn live_search_routes_retry_transient_scan_failure_from_binary() {
         search_journal_text.contains("1\t2\tcompleted\tsearch"),
         "{search_journal_text}"
     );
+    let search_catalog_text = fs::read_to_string(&search_catalog).unwrap();
+    assert!(
+        search_catalog_text.contains(&format!(
+            "payload\t1\tindexing\tsearch\t{}\t",
+            root.display()
+        )) && search_catalog_text.contains("\tvisible:search:adaptive"),
+        "{search_catalog_text}"
+    );
+    let search_progress_text = fs::read_to_string(&search_progress).unwrap();
+    assert!(
+        search_progress_text.contains("progress\t1\tvisible\tvisible\tsearch\t")
+            && search_progress_text.contains("\tcompleted\t3\t3\tcompleted:1 hits\t"),
+        "{search_progress_text}"
+    );
 
     let stream_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .env("GFM_JOB_JOURNAL", &stream_journal)
@@ -640,6 +654,21 @@ fn live_search_routes_retry_transient_scan_failure_from_binary() {
     assert!(
         stream_journal_text.contains("1\t2\tcompleted\tsearch stream"),
         "{stream_journal_text}"
+    );
+    let stream_catalog_text = fs::read_to_string(&stream_catalog).unwrap();
+    assert!(
+        stream_catalog_text.contains(&format!(
+            "payload\t1\tindexing\tsearch stream\t{}\t",
+            root.display()
+        )) && stream_catalog_text.contains("\tvisible:search stream:adaptive"),
+        "{stream_catalog_text}"
+    );
+    let stream_progress_text = fs::read_to_string(&stream_progress).unwrap();
+    assert!(
+        stream_progress_text.contains("progress\t1\tvisible\tvisible\tsearch stream\t")
+            && stream_progress_text.contains("\tcompleted\t3\t3\tcompleted:")
+            && stream_progress_text.contains(" batches:1 hits\t"),
+        "{stream_progress_text}"
     );
 
     fs::remove_dir_all(root).unwrap();

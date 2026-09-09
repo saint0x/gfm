@@ -4,7 +4,12 @@ use crate::access::{
 };
 use crate::content::{run_content_search, run_content_search_with_volume_report};
 use crate::extract::extraction_budget_profile_from_volume_report;
-use crate::runtime::run_retriable_volume_task_cancellable_with_payload_path;
+use crate::platform::current_host_job_scheduling_pressure;
+use crate::runtime::{
+    run_retriable_volume_task_cancellable_with_payload_path,
+    run_scheduled_volume_task_cancellable_with_runtime_and_payload_path, RuntimeJobHandle,
+    ScheduledTaskOutcome,
+};
 use crate::{parse_required_scheduling_pressure, parse_usize_arg, required_path, required_string};
 use gfm_content::Extractor;
 use gfm_index::{
@@ -13,8 +18,7 @@ use gfm_index::{
     SearchStreamStage, SearchVolumeScope, SidecarIndexQuerySession, SidecarQueryImport,
     SidecarQuerySessionReport,
 };
-use gfm_jobs::Cancellation;
-use gfm_jobs::Priority;
+use gfm_jobs::{Cancellation, JobPayloadKind, JobProgressState, Priority};
 use gfm_mac::{AccessIntent, VolumeDiscoveryReport};
 use gfm_store::{
     atomic_write_checked, ContentArchive, ContentArchiveManifest, MetadataField,
@@ -61,39 +65,52 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     .as_ref()
                     .and_then(SearchWriteAccessReport::volume)
             });
-            let hits = run_retriable_volume_task_cancellable_with_payload_path(
-                volume,
-                Priority::Visible,
-                "search",
-                root.clone(),
-                move |cancellation| {
-                    let root = root.clone();
-                    let query = query.clone();
-                    let retry_probe = retry_probe.clone();
-                    let retry_access = retry_access.clone();
-                    let root_access = root_access.clone();
-                    cancellation.check()?;
-                    if let (Some(retry_probe), Some(retry_access)) =
-                        (retry_probe.as_ref(), retry_access.as_ref())
-                    {
-                        fail_first_search_retry_probe_attempt(
-                            retry_probe,
-                            retry_access,
-                            "search",
+            let hits = scheduled_search_result(
+                run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+                    Priority::Visible,
+                    JobPayloadKind::Indexing,
+                    "search",
+                    current_host_job_scheduling_pressure(),
+                    || Ok(volume),
+                    root.clone(),
+                    move |cancellation, runtime| {
+                        let root = root.clone();
+                        let query = query.clone();
+                        let retry_probe = retry_probe.clone();
+                        let retry_access = retry_access.clone();
+                        let root_access = root_access.clone();
+                        cancellation.check()?;
+                        runtime.resize_checked(3, "search:preflight", || cancellation.check())?;
+                        if let (Some(retry_probe), Some(retry_access)) =
+                            (retry_probe.as_ref(), retry_access.as_ref())
+                        {
+                            fail_first_search_retry_probe_attempt(
+                                retry_probe,
+                                retry_access,
+                                "search",
+                                &cancellation,
+                            )?;
+                        }
+                        let _access =
+                            root_access.access_checked("search", || cancellation.check())?;
+                        search_phase(&runtime, 1, "search:parse", &cancellation)?;
+                        let parsed = SearchQuery::parse_cancellable(&query, &cancellation)?;
+                        search_phase(&runtime, 2, "search:scan", &cancellation)?;
+                        let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
+                        let session = snapshot.query_session();
+                        search_phase(&runtime, 3, "search:query", &cancellation)?;
+                        let hits = session.search_structured_with_volume_scope_cancellable(
+                            &parsed,
+                            50,
+                            &SearchVolumeScope::All,
                             &cancellation,
                         )?;
-                    }
-                    let _access = root_access.access_checked("search", || cancellation.check())?;
-                    let parsed = SearchQuery::parse_cancellable(&query, &cancellation)?;
-                    let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
-                    let session = snapshot.query_session();
-                    session.search_structured_with_volume_scope_cancellable(
-                        &parsed,
-                        50,
-                        &SearchVolumeScope::All,
-                        &cancellation,
-                    )
-                },
+                        runtime
+                            .remember_completion_detail(format!("completed:{} hits", hits.len()))?;
+                        Ok(hits)
+                    },
+                )?,
+                "search",
             )?;
             for hit in hits {
                 print_hit(&hit);
@@ -129,35 +146,57 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     .as_ref()
                     .and_then(SearchWriteAccessReport::volume)
             });
-            let batches = run_retriable_volume_task_cancellable_with_payload_path(
-                volume,
-                Priority::Visible,
-                "search stream",
-                root.clone(),
-                move |cancellation| {
-                    let root = root.clone();
-                    let query = query.clone();
-                    let retry_probe = retry_probe.clone();
-                    let retry_access = retry_access.clone();
-                    let root_access = root_access.clone();
-                    cancellation.check()?;
-                    if let (Some(retry_probe), Some(retry_access)) =
-                        (retry_probe.as_ref(), retry_access.as_ref())
-                    {
-                        fail_first_search_retry_probe_attempt(
-                            retry_probe,
-                            retry_access,
-                            "search stream",
+            let batches = scheduled_search_result(
+                run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+                    Priority::Visible,
+                    JobPayloadKind::Indexing,
+                    "search stream",
+                    current_host_job_scheduling_pressure(),
+                    || Ok(volume),
+                    root.clone(),
+                    move |cancellation, runtime| {
+                        let root = root.clone();
+                        let query = query.clone();
+                        let retry_probe = retry_probe.clone();
+                        let retry_access = retry_access.clone();
+                        let root_access = root_access.clone();
+                        cancellation.check()?;
+                        runtime.resize_checked(3, "search-stream:preflight", || {
+                            cancellation.check()
+                        })?;
+                        if let (Some(retry_probe), Some(retry_access)) =
+                            (retry_probe.as_ref(), retry_access.as_ref())
+                        {
+                            fail_first_search_retry_probe_attempt(
+                                retry_probe,
+                                retry_access,
+                                "search stream",
+                                &cancellation,
+                            )?;
+                        }
+                        let _access =
+                            root_access.access_checked("search stream", || cancellation.check())?;
+                        search_phase(&runtime, 1, "search-stream:parse", &cancellation)?;
+                        let parsed = SearchQuery::parse_cancellable(&query, &cancellation)?;
+                        search_phase(&runtime, 2, "search-stream:scan", &cancellation)?;
+                        let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
+                        let session = snapshot.query_session();
+                        search_phase(&runtime, 3, "search-stream:query", &cancellation)?;
+                        let batches = session.stream_structured_search_cancellable(
+                            &parsed,
+                            50,
                             &cancellation,
                         )?;
-                    }
-                    let _access =
-                        root_access.access_checked("search stream", || cancellation.check())?;
-                    let parsed = SearchQuery::parse_cancellable(&query, &cancellation)?;
-                    let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
-                    let session = snapshot.query_session();
-                    session.stream_structured_search_cancellable(&parsed, 50, &cancellation)
-                },
+                        let hits = batches.iter().map(|batch| batch.hits.len()).sum::<usize>();
+                        runtime.remember_completion_detail(format!(
+                            "completed:{} batches:{} hits",
+                            batches.len(),
+                            hits
+                        ))?;
+                        Ok(batches)
+                    },
+                )?,
+                "search stream",
             )?;
             for batch in batches {
                 println!("batch\t{}", stream_stage(batch.stage));
@@ -3799,6 +3838,23 @@ fn marker(kind: FileKind) -> &'static str {
         FileKind::Symlink => "link",
         FileKind::Other => "other",
     }
+}
+
+fn scheduled_search_result<T>(outcome: ScheduledTaskOutcome<T>, label: &'static str) -> Result<T> {
+    outcome
+        .result
+        .ok_or_else(|| GfmError::Format(format!("{label} job deferred before visible search")))
+}
+
+fn search_phase(
+    runtime: &RuntimeJobHandle,
+    completed_units: u64,
+    detail: &'static str,
+    cancellation: &Cancellation,
+) -> Result<()> {
+    runtime.progress_checked(JobProgressState::Running, completed_units, detail, || {
+        cancellation.check()
+    })
 }
 
 fn print_hit(hit: &SearchHit) {
