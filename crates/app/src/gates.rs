@@ -87,11 +87,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 },
             )?;
             println!(
-                "macrobench-report\tfixture={}\tfiles={}\tpassed={}\toutput={}\tsummary={}\tmeasurements={}\tbudget-violations={}",
+                "macrobench-report\tfixture={}\tfiles={}\tpassed={}\toutput={}\tcapacity={}\tsummary={}\tmeasurements={}\tbudget-violations={}",
                 report.fixture_root.display(),
                 report.files_materialized,
                 report.passed(),
                 artifacts.output_dir.display(),
+                artifacts.capacity_path.display(),
                 artifacts.summary_path.display(),
                 artifacts.measurements_path.display(),
                 artifacts.budget_violations_path.display()
@@ -124,7 +125,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 },
             )?;
             println!(
-                "macrobench-report-verify\toutput={}\tmacos={}.{}.{}\tbuild={}\tarch={}\thost-memory-bytes={}\tlogical-cpus={}\tfiles={}\tmeasurements={}\tscenarios={}\tstages-per-scenario={}\tmax-peak-resident-bytes={}\tbudget-violations={}\tpassed={}",
+                "macrobench-report-verify\toutput={}\tmacos={}.{}.{}\tbuild={}\tarch={}\thost-memory-bytes={}\tlogical-cpus={}\tcapacity-files={}\tcapacity-required-available-bytes={}\tcapacity-available-bytes={}\tcapacity-required-available-nodes={}\tcapacity-available-nodes={}\tfiles={}\tmeasurements={}\tscenarios={}\tstages-per-scenario={}\tmax-peak-resident-bytes={}\tbudget-violations={}\tpassed={}",
                 verification.output_dir.display(),
                 verification.macos_version.major,
                 verification.macos_version.minor,
@@ -133,6 +134,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 verification.cpu_architecture.as_str(),
                 verification.host_memory_bytes,
                 verification.logical_cpus,
+                verification.capacity_files,
+                verification.capacity_required_available_bytes,
+                verification.capacity_available_bytes,
+                verification.capacity_required_available_nodes,
+                verification.capacity_available_nodes,
                 verification.files_materialized,
                 verification.measurements,
                 verification.scenarios,

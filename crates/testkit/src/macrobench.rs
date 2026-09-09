@@ -220,6 +220,7 @@ impl MacrobenchOptions {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MacrobenchReport {
+    pub workspace_capacity: MacrobenchWorkspaceCapacityReport,
     pub fixture_root: PathBuf,
     pub files_materialized: usize,
     pub measurements: Vec<MacrobenchMeasurement>,
@@ -235,6 +236,7 @@ impl MacrobenchReport {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MacrobenchArtifactReport {
     pub output_dir: PathBuf,
+    pub capacity_path: PathBuf,
     pub summary_path: PathBuf,
     pub measurements_path: PathBuf,
     pub budget_violations_path: PathBuf,
@@ -248,6 +250,11 @@ pub struct MacrobenchArtifactVerification {
     pub cpu_architecture: CpuArchitecture,
     pub host_memory_bytes: u64,
     pub logical_cpus: u16,
+    pub capacity_files: usize,
+    pub capacity_required_available_bytes: u64,
+    pub capacity_available_bytes: u64,
+    pub capacity_required_available_nodes: u64,
+    pub capacity_available_nodes: u64,
     pub files_materialized: usize,
     pub measurements: usize,
     pub scenarios: usize,
@@ -350,6 +357,11 @@ pub struct MacrobenchFixtureScenarioReport {
 }
 
 pub fn run_macrobench(options: &MacrobenchOptions) -> Result<MacrobenchReport> {
+    let workspace_capacity =
+        inspect_macrobench_workspace_capacity(&options.workspace, options.scale)?;
+    if let Some(reason) = workspace_capacity.reason.clone() {
+        return Err(GfmError::Format(reason));
+    }
     let fixture = materialize_macrobench_fixture_report(&options.workspace, options.scale)?;
     let files_materialized = fixture.files_materialized();
     let fixture_root = fixture.fixture_root;
@@ -438,6 +450,7 @@ pub fn run_macrobench(options: &MacrobenchOptions) -> Result<MacrobenchReport> {
         .violations;
 
     Ok(MacrobenchReport {
+        workspace_capacity,
         fixture_root,
         files_materialized,
         measurements,
@@ -460,14 +473,17 @@ pub fn write_macrobench_artifacts(
 ) -> Result<MacrobenchArtifactReport> {
     let output_dir = output_dir.as_ref().to_path_buf();
     fs::create_dir_all(&output_dir).map_err(|err| GfmError::io(&output_dir, err))?;
+    let capacity_path = output_dir.join("capacity.tsv");
     let summary_path = output_dir.join("summary.tsv");
     let measurements_path = output_dir.join("measurements.tsv");
     let budget_violations_path = output_dir.join("budget-violations.tsv");
+    write_macrobench_capacity(&report.workspace_capacity, &capacity_path)?;
     write_macrobench_summary(report, &summary_path)?;
     write_macrobench_measurements(report, &measurements_path)?;
     write_macrobench_budget_violations(report, &budget_violations_path)?;
     Ok(MacrobenchArtifactReport {
         output_dir,
+        capacity_path,
         summary_path,
         measurements_path,
         budget_violations_path,
@@ -580,10 +596,20 @@ pub fn verify_macrobench_artifacts(
     min_files_materialized: usize,
 ) -> Result<MacrobenchArtifactVerification> {
     let output_dir = output_dir.as_ref();
+    let capacity = read_capacity_tsv(&output_dir.join("capacity.tsv"))?;
     let summary = read_summary_tsv(&output_dir.join("summary.tsv"))?;
     let measurements = read_measurements_tsv(&output_dir.join("measurements.tsv"))?;
     let budget_violations = read_budget_violations_tsv(&output_dir.join("budget-violations.tsv"))?;
 
+    let capacity_files = required_summary_usize(&capacity, "files")?;
+    let capacity_required_available_bytes =
+        required_summary_u64(&capacity, "required_available_bytes")?;
+    let capacity_available_bytes = required_summary_u64(&capacity, "available_bytes")?;
+    let capacity_required_available_nodes =
+        required_summary_u64(&capacity, "required_available_nodes")?;
+    let capacity_available_nodes = required_summary_u64(&capacity, "available_nodes")?;
+    let capacity_ready = required_summary_bool(&capacity, "ready")?;
+    let capacity_reason = required_summary_field(&capacity, "reason")?;
     let files_materialized = required_summary_usize(&summary, "files_materialized")?;
     let summary_measurements = required_summary_usize(&summary, "measurements")?;
     let summary_budget_violations = required_summary_usize(&summary, "budget_violations")?;
@@ -610,9 +636,29 @@ pub fn verify_macrobench_artifacts(
             "macrobench report missing usable host hardware provenance".to_string(),
         ));
     }
+    if !capacity_ready || !capacity_reason.is_empty() {
+        return Err(GfmError::Format(format!(
+            "macrobench report retained unready workspace capacity: ready={capacity_ready} reason={capacity_reason}"
+        )));
+    }
+    if capacity_available_bytes < capacity_required_available_bytes {
+        return Err(GfmError::Format(format!(
+            "macrobench report capacity bytes below requirement: available={capacity_available_bytes} required={capacity_required_available_bytes}"
+        )));
+    }
+    if capacity_available_nodes < capacity_required_available_nodes {
+        return Err(GfmError::Format(format!(
+            "macrobench report capacity nodes below requirement: available={capacity_available_nodes} required={capacity_required_available_nodes}"
+        )));
+    }
     if files_materialized < min_files_materialized {
         return Err(GfmError::Format(format!(
             "macrobench report materialized {files_materialized} files below required floor {min_files_materialized}"
+        )));
+    }
+    if files_materialized != capacity_files {
+        return Err(GfmError::Format(format!(
+            "macrobench report materialized {files_materialized} files but capacity artifact estimated {capacity_files}"
         )));
     }
     if summary_measurements != measurements.len() {
@@ -711,6 +757,11 @@ pub fn verify_macrobench_artifacts(
         cpu_architecture,
         host_memory_bytes,
         logical_cpus,
+        capacity_files,
+        capacity_required_available_bytes,
+        capacity_available_bytes,
+        capacity_required_available_nodes,
+        capacity_available_nodes,
         files_materialized,
         measurements: measurements.len(),
         scenarios: MacrobenchScenario::ALL.len(),
@@ -923,6 +974,66 @@ fn write_macrobench_summary(report: &MacrobenchReport, path: &Path) -> Result<()
     writeln!(file, "passed\t{}", report.passed()).map_err(|err| GfmError::io(path, err))
 }
 
+fn write_macrobench_capacity(
+    report: &MacrobenchWorkspaceCapacityReport,
+    path: &Path,
+) -> Result<()> {
+    let mut file = fs::File::create(path).map_err(|err| GfmError::io(path, err))?;
+    writeln!(file, "key\tvalue").map_err(|err| GfmError::io(path, err))?;
+    writeln!(
+        file,
+        "workspace\t{}",
+        escape_tsv_field(&report.workspace.display().to_string())
+    )
+    .map_err(|err| GfmError::io(path, err))?;
+    writeln!(
+        file,
+        "probe_path\t{}",
+        escape_tsv_field(&report.probe_path.display().to_string())
+    )
+    .map_err(|err| GfmError::io(path, err))?;
+    writeln!(file, "files\t{}", report.estimate.files).map_err(|err| GfmError::io(path, err))?;
+    writeln!(file, "directories\t{}", report.estimate.directories)
+        .map_err(|err| GfmError::io(path, err))?;
+    writeln!(
+        file,
+        "estimated_fixture_bytes\t{}",
+        report.estimate.estimated_fixture_bytes
+    )
+    .map_err(|err| GfmError::io(path, err))?;
+    writeln!(file, "reserve_bytes\t{}", report.estimate.reserve_bytes)
+        .map_err(|err| GfmError::io(path, err))?;
+    writeln!(
+        file,
+        "required_available_bytes\t{}",
+        report.estimate.required_available_bytes
+    )
+    .map_err(|err| GfmError::io(path, err))?;
+    writeln!(file, "available_bytes\t{}", report.available_bytes)
+        .map_err(|err| GfmError::io(path, err))?;
+    writeln!(file, "total_bytes\t{}", report.total_bytes).map_err(|err| GfmError::io(path, err))?;
+    writeln!(file, "required_nodes\t{}", report.estimate.required_nodes)
+        .map_err(|err| GfmError::io(path, err))?;
+    writeln!(file, "reserve_nodes\t{}", report.estimate.reserve_nodes)
+        .map_err(|err| GfmError::io(path, err))?;
+    writeln!(
+        file,
+        "required_available_nodes\t{}",
+        report.estimate.required_available_nodes
+    )
+    .map_err(|err| GfmError::io(path, err))?;
+    writeln!(file, "available_nodes\t{}", report.available_nodes)
+        .map_err(|err| GfmError::io(path, err))?;
+    writeln!(file, "total_nodes\t{}", report.total_nodes).map_err(|err| GfmError::io(path, err))?;
+    writeln!(file, "ready\t{}", report.ready).map_err(|err| GfmError::io(path, err))?;
+    writeln!(
+        file,
+        "reason\t{}",
+        escape_tsv_field(report.reason.as_deref().unwrap_or(""))
+    )
+    .map_err(|err| GfmError::io(path, err))
+}
+
 fn write_macrobench_measurements(report: &MacrobenchReport, path: &Path) -> Result<()> {
     let mut file = fs::File::create(path).map_err(|err| GfmError::io(path, err))?;
     writeln!(
@@ -1000,6 +1111,63 @@ fn read_summary_tsv(path: &Path) -> Result<BTreeMap<String, String>> {
         }
     }
     Ok(summary)
+}
+
+fn read_capacity_tsv(path: &Path) -> Result<BTreeMap<String, String>> {
+    let capacity = read_key_value_tsv(path, "macrobench capacity")?;
+    for key in [
+        "workspace",
+        "probe_path",
+        "files",
+        "directories",
+        "estimated_fixture_bytes",
+        "reserve_bytes",
+        "required_available_bytes",
+        "available_bytes",
+        "total_bytes",
+        "required_nodes",
+        "reserve_nodes",
+        "required_available_nodes",
+        "available_nodes",
+        "total_nodes",
+        "ready",
+        "reason",
+    ] {
+        if !capacity.contains_key(key) {
+            return Err(GfmError::Format(format!(
+                "{}: missing capacity key {key}",
+                path.display()
+            )));
+        }
+    }
+    Ok(capacity)
+}
+
+fn read_key_value_tsv(path: &Path, label: &str) -> Result<BTreeMap<String, String>> {
+    let content = fs::read_to_string(path).map_err(|err| GfmError::io(path, err))?;
+    let mut lines = content.lines();
+    if lines.next() != Some("key\tvalue") {
+        return Err(GfmError::Format(format!(
+            "{}: invalid {label} header",
+            path.display()
+        )));
+    }
+    let mut values = BTreeMap::new();
+    for (line_index, line) in lines.enumerate() {
+        let line_number = line_index + 2;
+        let columns = split_tsv_line(path, line_number, line, 2)?;
+        if values
+            .insert(columns[0].to_string(), columns[1].to_string())
+            .is_some()
+        {
+            return Err(GfmError::Format(format!(
+                "{}:{line_number}: duplicate {label} key {}",
+                path.display(),
+                columns[0]
+            )));
+        }
+    }
+    Ok(values)
 }
 
 fn read_measurements_tsv(path: &Path) -> Result<Vec<MacrobenchMeasurement>> {
@@ -1356,9 +1524,24 @@ mod tests {
 
         assert_eq!(artifacts.output_dir, output);
         assert_eq!(report.files_materialized, 201);
+        assert!(report.workspace_capacity.ready);
         let summary = fs::read_to_string(&artifacts.summary_path).unwrap();
+        let capacity = fs::read_to_string(&artifacts.capacity_path).unwrap();
         let measurements = fs::read_to_string(&artifacts.measurements_path).unwrap();
         let violations = fs::read_to_string(&artifacts.budget_violations_path).unwrap();
+        assert!(capacity.contains("files\t201"), "{capacity}");
+        assert!(
+            capacity.contains("required_available_bytes\t"),
+            "{capacity}"
+        );
+        assert!(capacity.contains("available_bytes\t"), "{capacity}");
+        assert!(
+            capacity.contains("required_available_nodes\t"),
+            "{capacity}"
+        );
+        assert!(capacity.contains("available_nodes\t"), "{capacity}");
+        assert!(capacity.contains("ready\ttrue"), "{capacity}");
+        assert!(capacity.contains("reason\t"), "{capacity}");
         assert!(summary.contains("macos_version\t"), "{summary}");
         assert!(summary.contains("macos_build\t"), "{summary}");
         assert!(summary.contains("cpu_architecture\t"), "{summary}");
@@ -1393,6 +1576,13 @@ mod tests {
         assert!(!verification.macos_build.is_empty());
         assert!(verification.host_memory_bytes > 0);
         assert!(verification.logical_cpus > 0);
+        assert_eq!(verification.capacity_files, 201);
+        assert!(
+            verification.capacity_available_bytes >= verification.capacity_required_available_bytes
+        );
+        assert!(
+            verification.capacity_available_nodes >= verification.capacity_required_available_nodes
+        );
         assert_eq!(verification.files_materialized, 201);
         assert_eq!(verification.measurements, MacrobenchScenario::ALL.len() * 4);
         assert_eq!(verification.scenarios, MacrobenchScenario::ALL.len());
@@ -1449,6 +1639,18 @@ mod tests {
                 .to_string()
                 .contains("missing summary key macos_version"),
             "{missing_provenance}"
+        );
+
+        run_macrobench_report(&MacrobenchOptions::smoke(&root), &output).unwrap();
+        let capacity = fs::read_to_string(output.join("capacity.tsv")).unwrap();
+        let unready_capacity = capacity.replace("ready\ttrue", "ready\tfalse");
+        fs::write(output.join("capacity.tsv"), unready_capacity).unwrap();
+        let unready = verify_macrobench_artifacts(&output, 201).unwrap_err();
+        assert!(
+            unready
+                .to_string()
+                .contains("retained unready workspace capacity"),
+            "{unready}"
         );
 
         run_macrobench_report(&MacrobenchOptions::smoke(&root), &output).unwrap();

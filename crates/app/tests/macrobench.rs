@@ -50,9 +50,23 @@ fn writes_retained_macrobench_report_from_binary() {
     assert!(stdout.contains("macrobench-report\tfixture="), "{stdout}");
     assert!(stdout.contains("\tfiles=201\t"), "{stdout}");
     assert!(stdout.contains("\toutput="), "{stdout}");
+    assert!(stdout.contains("\tcapacity="), "{stdout}");
+    let capacity = fs::read_to_string(output_dir.join("capacity.tsv")).unwrap();
     let summary = fs::read_to_string(output_dir.join("summary.tsv")).unwrap();
     let measurements = fs::read_to_string(output_dir.join("measurements.tsv")).unwrap();
     let violations = fs::read_to_string(output_dir.join("budget-violations.tsv")).unwrap();
+    assert!(capacity.contains("files\t201"), "{capacity}");
+    assert!(
+        capacity.contains("required_available_bytes\t"),
+        "{capacity}"
+    );
+    assert!(capacity.contains("available_bytes\t"), "{capacity}");
+    assert!(
+        capacity.contains("required_available_nodes\t"),
+        "{capacity}"
+    );
+    assert!(capacity.contains("available_nodes\t"), "{capacity}");
+    assert!(capacity.contains("ready\ttrue"), "{capacity}");
     assert!(summary.contains("macos_version\t"), "{summary}");
     assert!(summary.contains("macos_build\t"), "{summary}");
     assert!(summary.contains("cpu_architecture\t"), "{summary}");
@@ -115,6 +129,17 @@ fn verifies_retained_macrobench_report_from_binary() {
     assert!(stdout.contains("\tarch="), "{stdout}");
     assert!(stdout.contains("\thost-memory-bytes="), "{stdout}");
     assert!(stdout.contains("\tlogical-cpus="), "{stdout}");
+    assert!(stdout.contains("\tcapacity-files=201\t"), "{stdout}");
+    assert!(
+        stdout.contains("\tcapacity-required-available-bytes="),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tcapacity-available-bytes="), "{stdout}");
+    assert!(
+        stdout.contains("\tcapacity-required-available-nodes="),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tcapacity-available-nodes="), "{stdout}");
     assert!(stdout.contains("\tfiles=201\t"), "{stdout}");
     assert!(stdout.contains("\tmeasurements=36\t"), "{stdout}");
     assert!(stdout.contains("\tmax-peak-resident-bytes="), "{stdout}");

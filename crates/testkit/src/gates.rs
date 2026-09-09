@@ -1416,7 +1416,10 @@ fn realistic_record_shape(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{MacrobenchMeasurement, MacrobenchScenario, MacrobenchStage};
+    use crate::{
+        MacrobenchFixtureCapacityEstimate, MacrobenchMeasurement, MacrobenchScenario,
+        MacrobenchStage, MacrobenchWorkspaceCapacityReport,
+    };
     use gfm_telemetry::{
         BudgetViolation, FrameTiming, MemorySample, PerformanceBudgets, ScenarioMetric, Telemetry,
     };
@@ -1844,7 +1847,28 @@ mod tests {
         budget_violations: Vec<BudgetViolation>,
         records: usize,
     ) -> MacrobenchReport {
+        let records_u64 = records as u64;
         MacrobenchReport {
+            workspace_capacity: MacrobenchWorkspaceCapacityReport {
+                workspace: PathBuf::from("/tmp/gfm-test"),
+                probe_path: PathBuf::from("/tmp"),
+                estimate: MacrobenchFixtureCapacityEstimate {
+                    files: records,
+                    directories: 1,
+                    required_nodes: records_u64.saturating_add(1),
+                    reserve_nodes: 1,
+                    required_available_nodes: records_u64.saturating_add(2),
+                    estimated_fixture_bytes: records_u64.saturating_mul(4096),
+                    reserve_bytes: 4096,
+                    required_available_bytes: records_u64.saturating_add(1).saturating_mul(4096),
+                },
+                total_bytes: u64::MAX,
+                available_bytes: u64::MAX / 2,
+                total_nodes: u64::MAX,
+                available_nodes: u64::MAX / 2,
+                ready: true,
+                reason: None,
+            },
             fixture_root: PathBuf::from("/tmp/gfm-test"),
             files_materialized: records,
             measurements: vec![MacrobenchMeasurement {
