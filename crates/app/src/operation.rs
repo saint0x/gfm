@@ -6,15 +6,20 @@ use crate::permission_refresh::{refresh_permission_state, PermissionRefreshAudie
 use crate::required_path;
 use crate::runtime::{
     default_journal_path, default_security_bookmarks_path, default_trash_metadata_path,
-    run_volume_task_cancellable, run_volume_task_cancellable_with_runtime,
+    run_scheduled_volume_task_cancellable_with_runtime, run_volume_task_cancellable,
     runtime_operation_conflict_store, OperationConflictStore, RuntimeJobHandle,
     RuntimeOperationConflict,
 };
-use gfm_jobs::{JobProgressState, Priority};
+use gfm_jobs::{
+    JobBatteryState, JobIoPressure, JobProgressState, JobThermalState, JobUserActivity, Priority,
+    SchedulingPressure,
+};
 use gfm_mac::{
-    AccessIntent, MountState, SecurityDecisionAction, SecurityScopedAccessReport,
-    SecurityScopedBookmarkAccess, SecurityScopedBookmarkStatus, SecurityScopedBookmarkStore,
-    SecurityWorkerAction, SecurityWorkerAdmissionReport, VolumeDiscoveryReport, VolumeKind,
+    current_host_scheduling_pressure, AccessIntent, HostBatteryState, HostIoPressure,
+    HostThermalState, HostUserActivity, MountState, SecurityDecisionAction,
+    SecurityScopedAccessReport, SecurityScopedBookmarkAccess, SecurityScopedBookmarkStatus,
+    SecurityScopedBookmarkStore, SecurityWorkerAction, SecurityWorkerAdmissionReport,
+    VolumeDiscoveryReport, VolumeKind,
 };
 use gfm_ops::{
     read_trash_metadata, ConflictPolicy, Operation, OperationAccessDecision, OperationAccessGate,
@@ -549,14 +554,19 @@ fn execute_operation_inner(
     if let Some(report) = &retry_probe_access_report {
         report.preflight_volume("operation retry probe")?;
     }
-    let entry = run_volume_task_cancellable_with_runtime(
+    let outcome = run_scheduled_volume_task_cancellable_with_runtime(
         volume,
         Priority::Interactive,
         label,
+        current_operation_scheduling_pressure(),
         move |cancellation, runtime| {
             cancellation.check()?;
+            let operation_for_attempt = operation.clone();
+            let journal_for_attempt = journal.clone();
+            let trash_metadata_for_attempt = trash_metadata.clone();
+            let volume_copy_policy_for_attempt = volume_copy_policy.clone();
             let access_preflight =
-                operation_access_preflight_checked(&operation, &volume_report, || {
+                operation_access_preflight_checked(&operation_for_attempt, &volume_report, || {
                     cancellation.check()
                 })?;
             cancellation.check()?;
@@ -567,59 +577,100 @@ fn execute_operation_inner(
                 })
                 .transpose()?;
             cancellation.check()?;
-            preflight_operation_target_probe(&operation, &volume_report, || cancellation.check())?;
+            preflight_operation_target_probe(&operation_for_attempt, &volume_report, || {
+                cancellation.check()
+            })?;
             cancellation.check()?;
             let _journal_access =
-                preflight_operation_journal_write_checked(&journal, || cancellation.check())?;
+                preflight_operation_journal_write_checked(&journal_for_attempt, || {
+                    cancellation.check()
+                })?;
             cancellation.check()?;
             let _trash_metadata_access = retain_operation_trash_metadata_access_checked(
-                &operation,
-                &trash_metadata,
+                &operation_for_attempt,
+                &trash_metadata_for_attempt,
                 || cancellation.check(),
             )?;
             cancellation.check()?;
-            if access_preflight.gate.check(&operation).is_ok() {
+            if access_preflight.gate.check(&operation_for_attempt).is_ok() {
                 let _security_scope = operation_security_accesses_from_probes_checked(
                     &access_preflight.probes,
                     &SecurityScopedBookmarkStore::new(default_security_bookmarks_path()),
                     || cancellation.check(),
                 )?;
-                let conflict_report = OperationConflictReport::evaluate(&operation, conflict)?;
+                let conflict_report =
+                    OperationConflictReport::evaluate(&operation_for_attempt, conflict)?;
                 if conflict_report.blocks_operation {
                     if let Some(store) = runtime_operation_conflict_store() {
                         store.append_checked(&conflict_report, || cancellation.check())?;
                     }
                 }
-                let mut context = OperationContext::new(journal)
+                let mut context = OperationContext::new(journal_for_attempt)
                     .with_conflict(conflict)
-                    .with_trash_metadata_path(trash_metadata)
+                    .with_trash_metadata_path(trash_metadata_for_attempt)
                     .with_access_gate(access_preflight.gate)
-                    .with_volume_copy_policy(volume_copy_policy);
+                    .with_volume_copy_policy(volume_copy_policy_for_attempt);
                 if let Some(retry_probe) = retry_probe.clone() {
                     context = context.with_retry_probe_path(retry_probe);
                 }
                 let operator = Operator::new(context);
                 return execute_with_runtime_progress_and_retry(
                     operator,
-                    operation,
+                    operation_for_attempt,
                     runtime,
                     &cancellation,
                 );
             }
-            let mut context = OperationContext::new(journal)
+            let mut context = OperationContext::new(journal_for_attempt)
                 .with_conflict(conflict)
-                .with_trash_metadata_path(trash_metadata)
+                .with_trash_metadata_path(trash_metadata_for_attempt)
                 .with_access_gate(access_preflight.gate)
-                .with_volume_copy_policy(volume_copy_policy);
-            if let Some(retry_probe) = retry_probe {
+                .with_volume_copy_policy(volume_copy_policy_for_attempt);
+            if let Some(retry_probe) = retry_probe.clone() {
                 context = context.with_retry_probe_path(retry_probe);
             }
             let operator = Operator::new(context);
-            execute_with_runtime_progress_and_retry(operator, operation, runtime, &cancellation)
+            execute_with_runtime_progress_and_retry(
+                operator,
+                operation_for_attempt,
+                runtime,
+                &cancellation,
+            )
         },
     )?;
+    let entry = outcome.result.ok_or_else(|| {
+        GfmError::Format(format!(
+            "{label} interactive operation was unexpectedly deferred by adaptive scheduling"
+        ))
+    })?;
     println!("{}\t{}", entry.id, operation_status(entry.status));
     Ok(())
+}
+
+fn current_operation_scheduling_pressure() -> SchedulingPressure {
+    let report = current_host_scheduling_pressure();
+    SchedulingPressure {
+        io: match report.io_state {
+            HostIoPressure::Nominal => JobIoPressure::Nominal,
+            HostIoPressure::Elevated => JobIoPressure::Elevated,
+            HostIoPressure::Saturated => JobIoPressure::Saturated,
+        },
+        thermal: match report.thermal_state {
+            HostThermalState::Nominal => JobThermalState::Nominal,
+            HostThermalState::Fair => JobThermalState::Fair,
+            HostThermalState::Serious => JobThermalState::Serious,
+            HostThermalState::Critical => JobThermalState::Critical,
+        },
+        battery: match report.battery_state {
+            HostBatteryState::AcPower => JobBatteryState::AcPower,
+            HostBatteryState::Battery => JobBatteryState::Battery,
+            HostBatteryState::LowPower => JobBatteryState::LowPower,
+        },
+        user_activity: match report.user_activity {
+            HostUserActivity::Idle => JobUserActivity::Idle,
+            HostUserActivity::Active => JobUserActivity::Active,
+        },
+    }
 }
 
 fn execute_with_runtime_progress_and_retry(

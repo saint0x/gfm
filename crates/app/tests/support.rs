@@ -1265,11 +1265,13 @@ fn copy_operation_publishes_runtime_progress_from_binary() {
     let source = root.join("source.txt");
     let destination = root.join("destination.txt");
     let progress = root.join("runtime.gfmprogress");
+    let catalog = root.join("runtime.gfmjobs");
     let journal = root.join("ops.journal");
     std::fs::write(&source, "hello world").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
         .env("GFM_OPS_JOURNAL", &journal)
         .arg("copy")
         .arg(&source)
@@ -1284,6 +1286,16 @@ fn copy_operation_publishes_runtime_progress_from_binary() {
     assert_eq!(
         std::fs::read_to_string(&destination).unwrap(),
         "hello world"
+    );
+
+    let raw_catalog = std::fs::read_to_string(&catalog).unwrap();
+    assert!(
+        raw_catalog.contains("\npayload\t1\toperation\tcopy\t"),
+        "{raw_catalog}"
+    );
+    assert!(
+        raw_catalog.contains("\tinteractive:copy:adaptive\n"),
+        "{raw_catalog}"
     );
 
     let raw_progress = std::fs::read_to_string(&progress).unwrap();
