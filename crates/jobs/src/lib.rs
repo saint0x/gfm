@@ -20,7 +20,9 @@ mod retry;
 mod schedule;
 pub use cancel::Cancellation;
 pub use fair::{BlockedJob, JobFairnessPlan, JobFairnessPlanner, JobFairnessPolicy};
-use isolated::{IsolatedRetriableTaskQueue, IsolatedTaskQueue};
+use isolated::{
+    IsolatedRetriableTaskQueue, IsolatedTaskQueue, RetriableTaskLeaseResult, TaskLeaseResult,
+};
 pub use progress::{JobProgressCommand, JobProgressSnapshot, JobProgressState, JobProgressStore};
 pub use retry::{FailureClass, RetryDecision, RetryPolicy};
 pub use schedule::{
@@ -1438,8 +1440,18 @@ impl WorkerPool {
                 let queue = Arc::clone(&queue);
                 let outcomes = Arc::clone(&outcomes);
                 scope.spawn(move || loop {
-                    let Some(mut lease) = queue.next() else {
+                    let Some(lease_result) = queue.next() else {
                         break;
+                    };
+                    let mut lease = match lease_result {
+                        TaskLeaseResult::Run(lease) => lease,
+                        TaskLeaseResult::Blocked(outcome) => {
+                            outcomes
+                                .lock()
+                                .expect("worker outcome list poisoned")
+                                .push(outcome);
+                            continue;
+                        }
                     };
                     let cancellation = lease.task.job.cancellation();
                     let result = cancellation.check().and_then(|()| {
@@ -1450,7 +1462,7 @@ impl WorkerPool {
                         Err(GfmError::Cancelled) => TaskStatus::Cancelled,
                         Err(err) => TaskStatus::Failed(err.to_string()),
                     };
-                    let job = lease.finish();
+                    let job = lease.finish(&status);
                     outcomes
                         .lock()
                         .expect("worker outcome list poisoned")
@@ -1548,11 +1560,21 @@ impl WorkerPool {
                 let outcomes = Arc::clone(&outcomes);
                 let journal = journal.clone();
                 scope.spawn(move || loop {
-                    let Some(lease) = queue.next() else {
+                    let Some(lease_result) = queue.next() else {
                         break;
                     };
+                    let lease = match lease_result {
+                        RetriableTaskLeaseResult::Run(lease) => lease,
+                        RetriableTaskLeaseResult::Blocked(outcome) => {
+                            outcomes
+                                .lock()
+                                .expect("worker outcome list poisoned")
+                                .push(outcome);
+                            continue;
+                        }
+                    };
                     let final_status = execute_retriable_task(&lease.task, &journal, retry_policy);
-                    let job = lease.finish();
+                    let job = lease.finish(&final_status);
                     outcomes
                         .lock()
                         .expect("worker outcome list poisoned")

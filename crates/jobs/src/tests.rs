@@ -1460,6 +1460,153 @@ fn worker_pool_runs_independent_volumes_concurrently() {
 }
 
 #[test]
+fn isolated_worker_releases_same_batch_dependency_after_completion() {
+    let mut scheduler = Scheduler::new();
+    let producer =
+        scheduler.schedule_in_class(Priority::Background, JobClass::Maintenance, "build sidecar");
+    let dependent = scheduler.schedule_in_class_with_dependencies(
+        Priority::Visible,
+        JobClass::Repair,
+        "repair view",
+        [producer.id],
+    );
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let producer_order = Arc::clone(&order);
+    let dependent_order = Arc::clone(&order);
+
+    let report = WorkerPool::new(2).run_isolated(
+        vec![
+            Task::new(dependent, move |_| {
+                dependent_order.lock().unwrap().push("dependent");
+                Ok(())
+            }),
+            Task::new(producer, move |_| {
+                producer_order.lock().unwrap().push("producer");
+                Ok(())
+            }),
+        ],
+        VolumeConcurrencyPolicy::new(2),
+    );
+
+    assert_eq!(report.completed(), 2);
+    assert_eq!(&*order.lock().unwrap(), &["producer", "dependent"]);
+}
+
+#[test]
+fn isolated_worker_blocks_dependent_after_failed_dependency() {
+    let mut scheduler = Scheduler::new();
+    let producer =
+        scheduler.schedule_in_class(Priority::Background, JobClass::Maintenance, "build sidecar");
+    let producer_id = producer.id;
+    let dependent = scheduler.schedule_in_class_with_dependencies(
+        Priority::Visible,
+        JobClass::Repair,
+        "repair view",
+        [producer_id],
+    );
+    let dependent_id = dependent.id;
+    let ran_dependent = Arc::new(AtomicUsize::new(0));
+    let dependent_ran = Arc::clone(&ran_dependent);
+
+    let report = WorkerPool::new(2).run_isolated(
+        vec![
+            Task::new(producer, |_| {
+                Err(GfmError::Format("sidecar corruption".to_string()))
+            }),
+            Task::new(dependent, move |_| {
+                dependent_ran.fetch_add(1, AtomicOrdering::SeqCst);
+                Ok(())
+            }),
+        ],
+        VolumeConcurrencyPolicy::new(2),
+    );
+
+    assert_eq!(report.completed(), 0);
+    assert_eq!(report.failed(), 2);
+    assert_eq!(ran_dependent.load(AtomicOrdering::SeqCst), 0);
+    let blocked = report
+        .outcomes
+        .iter()
+        .find(|outcome| outcome.label == "repair view")
+        .unwrap();
+    assert_eq!(blocked.id, dependent_id);
+    assert_eq!(
+        blocked.status,
+        TaskStatus::Failed(format!(
+            "job dependencies were not satisfied missing=- failed={}",
+            producer_id.value()
+        ))
+    );
+}
+
+#[test]
+fn isolated_worker_reports_missing_dependency_without_hanging() {
+    let mut scheduler = Scheduler::new();
+    let missing = JobId::from_raw(404);
+    let dependent = scheduler.schedule_in_class_with_dependencies(
+        Priority::Visible,
+        JobClass::Repair,
+        "repair missing prerequisite",
+        [missing],
+    );
+    let ran = Arc::new(AtomicUsize::new(0));
+    let ran_task = Arc::clone(&ran);
+
+    let report = WorkerPool::new(1).run_isolated(
+        vec![Task::new(dependent, move |_| {
+            ran_task.fetch_add(1, AtomicOrdering::SeqCst);
+            Ok(())
+        })],
+        VolumeConcurrencyPolicy::new(1),
+    );
+
+    assert_eq!(report.completed(), 0);
+    assert_eq!(report.failed(), 1);
+    assert_eq!(ran.load(AtomicOrdering::SeqCst), 0);
+    assert_eq!(
+        report.outcomes[0].status,
+        TaskStatus::Failed("job dependencies were not satisfied missing=404 failed=-".to_string())
+    );
+}
+
+#[test]
+fn isolated_worker_reports_dependency_cycle_without_hanging() {
+    let mut scheduler = Scheduler::new();
+    let first = scheduler.schedule_in_class_with_dependencies(
+        Priority::Visible,
+        JobClass::Repair,
+        "repair cycle first",
+        [JobId::from_raw(2)],
+    );
+    let second = scheduler.schedule_in_class_with_dependencies(
+        Priority::Visible,
+        JobClass::Repair,
+        "repair cycle second",
+        [first.id],
+    );
+    assert_eq!(first.id.value(), 1);
+    assert_eq!(second.id.value(), 2);
+
+    let report = WorkerPool::new(2).run_isolated(
+        vec![Task::new(first, |_| Ok(())), Task::new(second, |_| Ok(()))],
+        VolumeConcurrencyPolicy::new(1),
+    );
+
+    assert_eq!(report.completed(), 0);
+    assert_eq!(report.failed(), 2);
+    assert!(matches!(
+        report.outcomes[0].status,
+        TaskStatus::Failed(ref message)
+            if message == "job dependencies were not satisfied missing=2 failed=-"
+    ));
+    assert!(matches!(
+        report.outcomes[1].status,
+        TaskStatus::Failed(ref message)
+            if message == "job dependencies were not satisfied missing=- failed=1"
+    ));
+}
+
+#[test]
 fn isolated_retriable_worker_enforces_per_volume_limit() {
     let path = temp_path("gfm-isolated-job-journal", "journal");
     let journal = JobJournal::new(&path);
@@ -1496,6 +1643,46 @@ fn isolated_retriable_worker_enforces_per_volume_limit() {
     assert_eq!(report.completed(), 3);
     assert_eq!(peak.load(AtomicOrdering::SeqCst), 1);
     assert_eq!(journal.read().unwrap().len(), 6);
+
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn isolated_retriable_worker_releases_same_batch_dependency_after_completion() {
+    let path = temp_path("gfm-isolated-retriable-dependency-journal", "journal");
+    let journal = JobJournal::new(&path);
+    let mut scheduler = Scheduler::new();
+    let producer =
+        scheduler.schedule_in_class(Priority::Background, JobClass::Maintenance, "build sidecar");
+    let dependent = scheduler.schedule_in_class_with_dependencies(
+        Priority::Visible,
+        JobClass::Repair,
+        "repair view",
+        [producer.id],
+    );
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let producer_order = Arc::clone(&order);
+    let dependent_order = Arc::clone(&order);
+
+    let report = WorkerPool::new(2).run_retriable_isolated(
+        vec![
+            RetriableTask::new(dependent, move |_| {
+                dependent_order.lock().unwrap().push("dependent");
+                Ok(())
+            }),
+            RetriableTask::new(producer, move |_| {
+                producer_order.lock().unwrap().push("producer");
+                Ok(())
+            }),
+        ],
+        &journal,
+        RetryPolicy { max_attempts: 2 },
+        VolumeConcurrencyPolicy::new(2),
+    );
+
+    assert_eq!(report.completed(), 2);
+    assert_eq!(&*order.lock().unwrap(), &["producer", "dependent"]);
+    assert_eq!(journal.read().unwrap().len(), 4);
 
     std::fs::remove_file(path).unwrap();
 }

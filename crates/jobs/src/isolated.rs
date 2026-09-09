@@ -1,6 +1,6 @@
-use crate::{Job, RetriableTask, Task, VolumeConcurrencyPolicy};
+use crate::{Job, RetriableTask, Task, TaskOutcome, TaskStatus, VolumeConcurrencyPolicy};
 use gfm_types::VolumeId;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Condvar, Mutex};
 
 pub(crate) struct IsolatedTaskQueue {
@@ -15,13 +15,16 @@ impl IsolatedTaskQueue {
             state: Mutex::new(IsolatedTaskQueueState {
                 pending: VecDeque::from(tasks),
                 active_by_volume: HashMap::new(),
+                active: HashSet::new(),
+                completed: HashSet::new(),
+                failed: HashSet::new(),
             }),
             wake: Condvar::new(),
             policy,
         }
     }
 
-    pub(crate) fn next(self: &Arc<Self>) -> Option<TaskLease> {
+    pub(crate) fn next(self: &Arc<Self>) -> Option<TaskLeaseResult> {
         let mut state = self.state.lock().expect("isolated task queue poisoned");
         loop {
             if let Some((index, volume)) = state.next_admissible(&self.policy) {
@@ -29,15 +32,19 @@ impl IsolatedTaskQueue {
                     .pending
                     .remove(index)
                     .expect("admissible task vanished");
+                state.active.insert(task.job.id);
                 if let Some(volume) = volume {
                     *state.active_by_volume.entry(volume).or_insert(0) += 1;
                 }
-                return Some(TaskLease {
+                return Some(TaskLeaseResult::Run(TaskLease {
                     queue: Arc::clone(self),
                     task,
                     volume,
                     finished: false,
-                });
+                }));
+            }
+            if let Some(outcome) = state.remove_dependency_blocked() {
+                return Some(TaskLeaseResult::Blocked(outcome));
             }
             if state.pending.is_empty() {
                 return None;
@@ -49,8 +56,20 @@ impl IsolatedTaskQueue {
         }
     }
 
-    fn release(&self, volume: Option<VolumeId>) {
+    fn release(&self, job: Job, volume: Option<VolumeId>, status: &TaskStatus) {
         let mut state = self.state.lock().expect("isolated task queue poisoned");
+        state.active.remove(&job.id);
+        match status {
+            TaskStatus::Completed => {
+                state.failed.remove(&job.id);
+                state.completed.insert(job.id);
+            }
+            TaskStatus::Started => {}
+            TaskStatus::Cancelled | TaskStatus::Failed(_) => {
+                state.completed.remove(&job.id);
+                state.failed.insert(job.id);
+            }
+        }
         if let Some(volume) = volume {
             let active = state
                 .active_by_volume
@@ -68,6 +87,9 @@ impl IsolatedTaskQueue {
 struct IsolatedTaskQueueState {
     pending: VecDeque<Task>,
     active_by_volume: HashMap<VolumeId, usize>,
+    active: HashSet<crate::JobId>,
+    completed: HashSet<crate::JobId>,
+    failed: HashSet<crate::JobId>,
 }
 
 impl IsolatedTaskQueueState {
@@ -75,10 +97,16 @@ impl IsolatedTaskQueueState {
         &self,
         policy: &VolumeConcurrencyPolicy,
     ) -> Option<(usize, Option<VolumeId>)> {
-        self.pending
-            .iter()
-            .enumerate()
-            .find_map(|(index, task)| match task.job.volume {
+        self.pending.iter().enumerate().find_map(|(index, task)| {
+            if !task
+                .job
+                .dependencies
+                .iter()
+                .all(|dependency| self.completed.contains(dependency))
+            {
+                return None;
+            }
+            match task.job.volume {
                 Some(volume)
                     if self.active_by_volume.get(&volume).copied().unwrap_or(0)
                         < policy.limit_for(volume) =>
@@ -87,8 +115,55 @@ impl IsolatedTaskQueueState {
                 }
                 Some(_) => None,
                 None => Some((index, None)),
-            })
+            }
+        })
     }
+
+    fn remove_dependency_blocked(&mut self) -> Option<TaskOutcome> {
+        let known_pending = self
+            .pending
+            .iter()
+            .map(|task| task.job.id)
+            .chain(self.active.iter().copied())
+            .chain(self.completed.iter().copied())
+            .chain(self.failed.iter().copied())
+            .collect::<HashSet<_>>();
+        let index = self.pending.iter().position(|task| {
+            task.job.dependencies.iter().any(|dependency| {
+                self.failed.contains(dependency) || !known_pending.contains(dependency)
+            })
+        });
+        let index = match index {
+            Some(index) => index,
+            None if self.active.is_empty() => self.pending.iter().position(|task| {
+                task.job
+                    .dependencies
+                    .iter()
+                    .any(|dependency| !self.completed.contains(dependency))
+            })?,
+            None => return None,
+        };
+        let task = self
+            .pending
+            .remove(index)
+            .expect("dependency-blocked task vanished");
+        self.failed.insert(task.job.id);
+        let (missing, failed) = dependency_block_detail(&task.job, &self.completed, &self.failed);
+        Some(TaskOutcome {
+            id: task.job.id,
+            label: task.job.label,
+            status: TaskStatus::Failed(format!(
+                "job dependencies were not satisfied missing={} failed={}",
+                format_dependency_ids(&missing),
+                format_dependency_ids(&failed)
+            )),
+        })
+    }
+}
+
+pub(crate) enum TaskLeaseResult {
+    Run(TaskLease),
+    Blocked(TaskOutcome),
 }
 
 pub(crate) struct TaskLease {
@@ -99,17 +174,22 @@ pub(crate) struct TaskLease {
 }
 
 impl TaskLease {
-    pub(crate) fn finish(mut self) -> Job {
+    pub(crate) fn finish(mut self, status: &TaskStatus) -> Job {
         self.finished = true;
-        self.queue.release(self.volume);
-        self.task.job.clone()
+        let job = self.task.job.clone();
+        self.queue.release(job.clone(), self.volume, status);
+        job
     }
 }
 
 impl Drop for TaskLease {
     fn drop(&mut self) {
         if !self.finished {
-            self.queue.release(self.volume);
+            self.queue.release(
+                self.task.job.clone(),
+                self.volume,
+                &TaskStatus::Failed("worker lease dropped before finish".to_string()),
+            );
         }
     }
 }
@@ -126,13 +206,16 @@ impl IsolatedRetriableTaskQueue {
             state: Mutex::new(IsolatedRetriableTaskQueueState {
                 pending: VecDeque::from(tasks),
                 active_by_volume: HashMap::new(),
+                active: HashSet::new(),
+                completed: HashSet::new(),
+                failed: HashSet::new(),
             }),
             wake: Condvar::new(),
             policy,
         }
     }
 
-    pub(crate) fn next(self: &Arc<Self>) -> Option<RetriableTaskLease> {
+    pub(crate) fn next(self: &Arc<Self>) -> Option<RetriableTaskLeaseResult> {
         let mut state = self
             .state
             .lock()
@@ -143,15 +226,19 @@ impl IsolatedRetriableTaskQueue {
                     .pending
                     .remove(index)
                     .expect("admissible retriable task vanished");
+                state.active.insert(task.job.id);
                 if let Some(volume) = volume {
                     *state.active_by_volume.entry(volume).or_insert(0) += 1;
                 }
-                return Some(RetriableTaskLease {
+                return Some(RetriableTaskLeaseResult::Run(RetriableTaskLease {
                     queue: Arc::clone(self),
                     task,
                     volume,
                     finished: false,
-                });
+                }));
+            }
+            if let Some(outcome) = state.remove_dependency_blocked() {
+                return Some(RetriableTaskLeaseResult::Blocked(outcome));
             }
             if state.pending.is_empty() {
                 return None;
@@ -163,11 +250,23 @@ impl IsolatedRetriableTaskQueue {
         }
     }
 
-    fn release(&self, volume: Option<VolumeId>) {
+    fn release(&self, job: Job, volume: Option<VolumeId>, status: &TaskStatus) {
         let mut state = self
             .state
             .lock()
             .expect("isolated retriable task queue poisoned");
+        state.active.remove(&job.id);
+        match status {
+            TaskStatus::Completed => {
+                state.failed.remove(&job.id);
+                state.completed.insert(job.id);
+            }
+            TaskStatus::Started => {}
+            TaskStatus::Cancelled | TaskStatus::Failed(_) => {
+                state.completed.remove(&job.id);
+                state.failed.insert(job.id);
+            }
+        }
         if let Some(volume) = volume {
             let active = state
                 .active_by_volume
@@ -185,6 +284,9 @@ impl IsolatedRetriableTaskQueue {
 struct IsolatedRetriableTaskQueueState {
     pending: VecDeque<RetriableTask>,
     active_by_volume: HashMap<VolumeId, usize>,
+    active: HashSet<crate::JobId>,
+    completed: HashSet<crate::JobId>,
+    failed: HashSet<crate::JobId>,
 }
 
 impl IsolatedRetriableTaskQueueState {
@@ -192,10 +294,16 @@ impl IsolatedRetriableTaskQueueState {
         &self,
         policy: &VolumeConcurrencyPolicy,
     ) -> Option<(usize, Option<VolumeId>)> {
-        self.pending
-            .iter()
-            .enumerate()
-            .find_map(|(index, task)| match task.job.volume {
+        self.pending.iter().enumerate().find_map(|(index, task)| {
+            if !task
+                .job
+                .dependencies
+                .iter()
+                .all(|dependency| self.completed.contains(dependency))
+            {
+                return None;
+            }
+            match task.job.volume {
                 Some(volume)
                     if self.active_by_volume.get(&volume).copied().unwrap_or(0)
                         < policy.limit_for(volume) =>
@@ -204,8 +312,55 @@ impl IsolatedRetriableTaskQueueState {
                 }
                 Some(_) => None,
                 None => Some((index, None)),
-            })
+            }
+        })
     }
+
+    fn remove_dependency_blocked(&mut self) -> Option<TaskOutcome> {
+        let known_pending = self
+            .pending
+            .iter()
+            .map(|task| task.job.id)
+            .chain(self.active.iter().copied())
+            .chain(self.completed.iter().copied())
+            .chain(self.failed.iter().copied())
+            .collect::<HashSet<_>>();
+        let index = self.pending.iter().position(|task| {
+            task.job.dependencies.iter().any(|dependency| {
+                self.failed.contains(dependency) || !known_pending.contains(dependency)
+            })
+        });
+        let index = match index {
+            Some(index) => index,
+            None if self.active.is_empty() => self.pending.iter().position(|task| {
+                task.job
+                    .dependencies
+                    .iter()
+                    .any(|dependency| !self.completed.contains(dependency))
+            })?,
+            None => return None,
+        };
+        let task = self
+            .pending
+            .remove(index)
+            .expect("dependency-blocked retriable task vanished");
+        self.failed.insert(task.job.id);
+        let (missing, failed) = dependency_block_detail(&task.job, &self.completed, &self.failed);
+        Some(TaskOutcome {
+            id: task.job.id,
+            label: task.job.label,
+            status: TaskStatus::Failed(format!(
+                "job dependencies were not satisfied missing={} failed={}",
+                format_dependency_ids(&missing),
+                format_dependency_ids(&failed)
+            )),
+        })
+    }
+}
+
+pub(crate) enum RetriableTaskLeaseResult {
+    Run(RetriableTaskLease),
+    Blocked(TaskOutcome),
 }
 
 pub(crate) struct RetriableTaskLease {
@@ -216,17 +371,54 @@ pub(crate) struct RetriableTaskLease {
 }
 
 impl RetriableTaskLease {
-    pub(crate) fn finish(mut self) -> Job {
+    pub(crate) fn finish(mut self, status: &TaskStatus) -> Job {
         self.finished = true;
-        self.queue.release(self.volume);
-        self.task.job.clone()
+        let job = self.task.job.clone();
+        self.queue.release(job.clone(), self.volume, status);
+        job
     }
 }
 
 impl Drop for RetriableTaskLease {
     fn drop(&mut self) {
         if !self.finished {
-            self.queue.release(self.volume);
+            self.queue.release(
+                self.task.job.clone(),
+                self.volume,
+                &TaskStatus::Failed("worker lease dropped before finish".to_string()),
+            );
         }
     }
+}
+
+fn dependency_block_detail(
+    job: &Job,
+    completed: &HashSet<crate::JobId>,
+    failed: &HashSet<crate::JobId>,
+) -> (Vec<crate::JobId>, Vec<crate::JobId>) {
+    let mut missing = Vec::new();
+    let mut failed_ids = Vec::new();
+    for dependency in &job.dependencies {
+        if completed.contains(dependency) {
+            continue;
+        }
+        if failed.contains(dependency) {
+            failed_ids.push(*dependency);
+        } else {
+            missing.push(*dependency);
+        }
+    }
+    missing.sort_by_key(|id| id.value());
+    failed_ids.sort_by_key(|id| id.value());
+    (missing, failed_ids)
+}
+
+fn format_dependency_ids(ids: &[crate::JobId]) -> String {
+    if ids.is_empty() {
+        return "-".to_string();
+    }
+    ids.iter()
+        .map(|id| id.value().to_string())
+        .collect::<Vec<_>>()
+        .join(",")
 }
