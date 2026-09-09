@@ -28,10 +28,9 @@ GFM is macOS-only. It is a native Rust + GPUI Finder-parity file manager with GF
 
 ## Security, TCC, And Permission Remaining Work
 
-1. Ensure index workers, preview workers, thumbnail workers, extraction workers, and file operations all enforce the same typed permission contract before touching protected paths.
-2. Add a durable permission-state invalidation path so UI, workers, and operation preflight update when access is granted, denied, revoked, stale, repaired, or unavailable.
-3. Add Finder-parity captured baselines for first-run permission guidance, protected-path denial, bookmark acquisition, operation permission sheets, and Full Disk Access guidance.
-4. Verify with deterministic security-policy tests, binary/operator tests that do not trigger unwanted prompts, operation preflight tests, worker admission tests, GPUI contract tests, and Fozzy coverage. Leave `STATUS.md` items 30, 41, and 50 in place until the full UI and worker-enforcement scope is complete.
+1. Add a durable permission-state invalidation path so UI, workers, and operation preflight update when access is granted, denied, revoked, stale, repaired, or unavailable.
+2. Add Finder-parity captured baselines for first-run permission guidance, protected-path denial, bookmark acquisition, operation permission sheets, and Full Disk Access guidance.
+3. Verify with deterministic security-policy tests, binary/operator tests that do not trigger unwanted prompts, operation preflight tests, worker admission tests, GPUI contract tests, and Fozzy coverage. Leave `STATUS.md` items 30, 41, and 50 in place until the full UI and worker-enforcement scope is complete.
 
 ## Finder Pixel-Parity Harness Remaining Work
 
