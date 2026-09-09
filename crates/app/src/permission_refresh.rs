@@ -91,7 +91,12 @@ pub(crate) fn refresh_permission_state_at_path_with_report_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<PermissionStateInvalidationReport> {
     check_control()?;
-    preflight_permission_state_volume_with_report(path, probe_path, report)?;
+    preflight_permission_state_volume_with_report_checked(
+        path,
+        probe_path,
+        report,
+        &mut check_control,
+    )?;
     check_control()?;
     let previous = if permission_state_is_file_checked(path, &mut check_control)? {
         Some(PermissionStateSnapshot::read_checked(
@@ -130,10 +135,20 @@ fn publish_permission_state_snapshot_checked(
     Ok(())
 }
 
+#[cfg(test)]
 fn preflight_permission_state_volume_with_report(
     path: &Path,
     probe_path: &Path,
     report: &VolumeDiscoveryReport,
+) -> Result<()> {
+    preflight_permission_state_volume_with_report_checked(path, probe_path, report, || Ok(()))
+}
+
+fn preflight_permission_state_volume_with_report_checked(
+    path: &Path,
+    probe_path: &Path,
+    report: &VolumeDiscoveryReport,
+    mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<()> {
     let Some(volume) = report.volume_for_path(probe_path) else {
         return Ok(());
@@ -200,14 +215,6 @@ fn preflight_permission_state_volume_with_report(
     })
 }
 
-fn read_only_root_allows_permission_state_write(
-    volume: &gfm_mac::VolumeDescriptor,
-    probe_path: &Path,
-) -> bool {
-    read_only_root_allows_permission_state_write_checked(volume, probe_path, || Ok(()))
-        .unwrap_or(false)
-}
-
 fn read_only_root_allows_permission_state_write_checked(
     volume: &gfm_mac::VolumeDescriptor,
     probe_path: &Path,
@@ -217,12 +224,10 @@ fn read_only_root_allows_permission_state_write_checked(
         return Ok(false);
     }
     check_control()?;
-    Ok(
-        && matches!(
-            SecurityScopedAccessReport::evaluate(probe_path, AccessIntent::Write).action,
-            SecurityDecisionAction::Allow
-        ),
-    )
+    Ok(matches!(
+        SecurityScopedAccessReport::evaluate(probe_path, AccessIntent::Write).action,
+        SecurityDecisionAction::Allow
+    ))
 }
 
 fn permission_state_is_file_checked(
@@ -302,7 +307,7 @@ fn preflight_permission_state_write_target_volume_checked(
     let report =
         VolumeDiscoveryReport::for_containing_path_policy_checked(volume_path, &mut check_control)?;
     check_control()?;
-    preflight_permission_state_volume_with_report(path, volume_path, &report)
+    preflight_permission_state_volume_with_report_checked(path, volume_path, &report, check_control)
 }
 
 fn escape_field(value: &str) -> String {
@@ -913,6 +918,38 @@ mod tests {
     }
 
     #[test]
+    fn read_only_root_permission_write_check_honors_pre_cancelled_control() {
+        let mut volume = VolumeDescriptor::for_path("/").unwrap();
+        volume.read_only = true;
+        volume.writable = false;
+
+        let err = read_only_root_allows_permission_state_write_checked(
+            &volume,
+            Path::new("/System"),
+            || Err(GfmError::Cancelled),
+        )
+        .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+    }
+
+    #[test]
+    fn read_only_non_root_permission_write_check_skips_security_probe() {
+        let root = unique_temp_dir("gfm-permission-refresh-read-only-non-root");
+        let mut volume = VolumeDescriptor::for_path(&root).unwrap();
+        volume.read_only = true;
+        volume.writable = false;
+
+        let allowed = read_only_root_allows_permission_state_write_checked(&volume, &root, || {
+            Err(GfmError::Cancelled)
+        })
+        .unwrap();
+
+        assert!(!allowed);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn refresh_state_refuses_read_only_system_root_when_probe_is_denied() {
         let state = PathBuf::from("/System/gfm-permission-state.tsv");
         let mut volume = VolumeDescriptor::for_path("/").unwrap();
@@ -930,6 +967,36 @@ mod tests {
         assert!(err
             .to_string()
             .contains("permission state volume access blocked: read-only volume system"));
+    }
+
+    #[test]
+    fn read_only_system_root_permission_exception_can_cancel_before_security_probe() {
+        let state = PathBuf::from("/tmp/gfm-permission-state.tsv");
+        let mut volume = VolumeDescriptor::for_path("/").unwrap();
+        volume.read_only = true;
+        volume.writable = false;
+        let report = VolumeDiscoveryReport {
+            volumes: vec![volume],
+        };
+        let mut checks = 0usize;
+
+        let err = refresh_permission_state_at_path_with_report_checked(
+            &state,
+            Path::new("/tmp"),
+            &report,
+            || {
+                checks += 1;
+                if checks >= 2 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert_eq!(checks, 2);
     }
 
     fn unique_temp_dir(prefix: &str) -> PathBuf {
