@@ -1838,6 +1838,53 @@ fn thumbnail_preflight_retains_security_scoped_bookmark_from_binary() {
 }
 
 #[test]
+fn volume_operation_blocks_protected_path_before_native_probe_from_binary() {
+    let root = unique_temp_dir("gfm-cli-volume-operation-protected");
+    let home = root.join("home");
+    let documents = home.join("Documents");
+    let protected = documents.join("Archive.dmg");
+    let bookmarks = root.join("bookmarks.tsv");
+    fs::create_dir_all(&documents).unwrap();
+    fs::write(&protected, b"protected disk image").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("HOME", &home)
+        .env("GFM_SECURITY_BOOKMARKS", &bookmarks)
+        .args(["volume-operation", "eject", protected.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("volume-operation\t"), "{stdout}");
+    assert!(stderr.contains("security-scope\t"), "{stderr}");
+    assert!(stderr.contains("\tintent=operate\t"), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "security-worker-admission\tworker=volume operation\tpath={}",
+            protected.display()
+        )),
+        "{stderr}"
+    );
+    assert!(stderr.contains("\tworker-action=start\t"), "{stderr}");
+    assert!(stderr.contains("security-scope-access\t"), "{stderr}");
+    assert!(stderr.contains("\tstatus=missing\t"), "{stderr}");
+    assert!(
+        stderr.contains("retained security-scoped bookmark required before touching filesystem"),
+        "{stderr}"
+    );
+    assert!(
+        !stderr.contains("native-volume-operation-requires-volume-root"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("volume-path-missing"), "{stderr}");
+    assert!(!bookmarks.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn preview_cache_invalidation_refuses_unreachable_cache_root_before_disk_touch_from_binary() {
     let root = unique_temp_dir("gfm-cli-preview-cache-root");
     let offline = unique_temp_dir("gfm-cli-preview-cache-unreachable");
