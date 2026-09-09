@@ -7,8 +7,8 @@ use crate::{
     platform::current_host_job_scheduling_pressure,
     required_path, required_string,
     runtime::{
-        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path,
-        run_volume_task_cancellable, RuntimeJobHandle, ScheduledTaskOutcome,
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path, RuntimeJobHandle,
+        ScheduledTaskOutcome,
     },
 };
 use gfm_fs::read_directory_checked;
@@ -51,21 +51,44 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 )
             );
             let volume = volume_report.volume_for_path(&path).map(|volume| volume.id);
-            let page = run_volume_task_cancellable(
-                volume,
-                Priority::Visible,
+            let page = visible_scheduled_result(
+                run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+                    Priority::Visible,
+                    JobPayloadKind::Indexing,
+                    "directory listing",
+                    current_host_job_scheduling_pressure(),
+                    || Ok(volume),
+                    path.clone(),
+                    move |cancellation, runtime| {
+                        let path = path.clone();
+                        let volume_report = volume_report.clone();
+                        cancellation.check()?;
+                        runtime.resize_checked(2, "directory-listing:preflight", || {
+                            cancellation.check()
+                        })?;
+                        let _access = preflight_index_read_checked_with_volume_report(
+                            &path,
+                            "directory listing",
+                            &volume_report,
+                            || cancellation.check(),
+                        )?;
+                        index_runtime_phase(&runtime, 1, "directory-listing:read", &cancellation)?;
+                        let page = read_directory_checked(path, || cancellation.check())?;
+                        runtime.remember_completion_detail(format!(
+                            "completed:entries:{} inaccessible:{}",
+                            page.entries.len(),
+                            page.inaccessible.len()
+                        ))?;
+                        index_runtime_phase(
+                            &runtime,
+                            2,
+                            "directory-listing:complete",
+                            &cancellation,
+                        )?;
+                        Ok(page)
+                    },
+                )?,
                 "directory listing",
-                move |cancellation| {
-                    cancellation.check()?;
-                    let _access = preflight_index_read_checked_with_volume_report(
-                        &path,
-                        "directory listing",
-                        &volume_report,
-                        || cancellation.check(),
-                    )?;
-                    cancellation.check()?;
-                    read_directory_checked(path, || cancellation.check())
-                },
             )?;
             for record in page.entries {
                 println!(

@@ -825,10 +825,14 @@ fn index_preflight_skips_default_permission_snapshot_refresh_from_binary() {
 #[test]
 fn lists_directory_entries_through_visible_worker_from_binary() {
     let root = unique_temp_dir("gfm-cli-list-visible-worker");
+    let catalog = unique_temp_path("gfm-cli-list-runtime", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-list-runtime", "gfmprogress");
     fs::create_dir_all(root.join("Folder")).unwrap();
     fs::write(root.join("Visible.txt"), "listed").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
         .arg("list")
         .arg(&root)
         .output()
@@ -858,7 +862,23 @@ fn lists_directory_entries_through_visible_worker_from_binary() {
         &root,
         "read",
     );
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(
+        catalog_text.contains(&format!(
+            "payload\t1\tindexing\tdirectory listing\t{}\t",
+            root.display()
+        )) && catalog_text.contains("\tvisible:directory listing:adaptive"),
+        "{catalog_text}"
+    );
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("progress\t1\tvisible\tvisible\tdirectory listing\t")
+            && progress_text.contains("\tcompleted\t2\t2\tcompleted:entries:2 inaccessible:0\t"),
+        "{progress_text}"
+    );
 
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
     fs::remove_dir_all(root).unwrap();
 }
 
