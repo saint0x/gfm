@@ -254,6 +254,7 @@ pub struct ParityReviewBundle {
     pub first_mismatch_path: PathBuf,
     pub region_summary_path: PathBuf,
     pub mask_justification_path: PathBuf,
+    pub provenance_path: PathBuf,
     pub visual_diff_dir: PathBuf,
     pub source_artifact_dir: PathBuf,
     pub bundle_manifest_path: PathBuf,
@@ -528,6 +529,7 @@ pub fn write_parity_review_bundle(
     let first_mismatch_path = output_dir.join("first-unmasked.tsv");
     let region_summary_path = output_dir.join("regions.tsv");
     let mask_justification_path = output_dir.join("mask-justifications.tsv");
+    let provenance_path = output_dir.join("provenance.tsv");
     let visual_diff_dir = output_dir.join("visual-diffs");
     let source_artifact_dir = output_dir.join("source-artifacts");
     let bundle_manifest_path = output_dir.join("bundle.tsv");
@@ -547,6 +549,7 @@ pub fn write_parity_review_bundle(
         &mask_justification_path,
         &render_mask_justifications_tsv(&report),
     )?;
+    write_text(&provenance_path, &render_provenance_tsv(&report))?;
     let manifest_context = BundleManifestContext {
         review_path: &review_path,
         entries_path: &entries_path,
@@ -554,6 +557,7 @@ pub fn write_parity_review_bundle(
         first_mismatch_path: &first_mismatch_path,
         region_summary_path: &region_summary_path,
         mask_justification_path: &mask_justification_path,
+        provenance_path: &provenance_path,
         visual_diff_dir: &visual_diff_dir,
         source_artifact_dir: &source_artifact_dir,
         artifact_rows: &artifact_rows,
@@ -571,6 +575,7 @@ pub fn write_parity_review_bundle(
         first_mismatch_path,
         region_summary_path,
         mask_justification_path,
+        provenance_path,
         visual_diff_dir,
         source_artifact_dir,
         bundle_manifest_path,
@@ -1227,6 +1232,39 @@ fn render_mask_justifications_tsv(report: &ParityGateReport) -> String {
     text
 }
 
+fn render_provenance_tsv(report: &ParityGateReport) -> String {
+    let mut text =
+        "surface\tmacos-build\thardware-profile\tdisplay-profile\tapp-version\tfixture-manifest\tcaptured-at\tcapture-command\treviewer\tsigner\tapproved-mask-set\tappearance\tscale\tcolor-profile\twindow-width\twindow-height\tfocus\tview-mode\tfixture-root\n"
+            .to_string();
+    for entry in &report.entries {
+        if let Some(provenance) = &entry.input.provenance {
+            text.push_str(&format!(
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                entry.input.surface.as_str(),
+                escape_tsv_field(&provenance.macos_build),
+                escape_tsv_field(&provenance.hardware_profile),
+                escape_tsv_field(&provenance.display_profile),
+                escape_tsv_field(&provenance.app_version),
+                escape_tsv_field(&provenance.fixture_manifest),
+                escape_tsv_field(&provenance.captured_at),
+                escape_tsv_field(&provenance.capture_command),
+                escape_tsv_field(&provenance.reviewer),
+                escape_tsv_field(&provenance.signer),
+                escape_tsv_field(&provenance.approved_mask_set),
+                provenance.appearance.as_str(),
+                provenance.scale.as_str(),
+                provenance.color_profile.as_str(),
+                provenance.window_size.width,
+                provenance.window_size.height,
+                provenance.focus.as_str(),
+                provenance.view_mode.as_str(),
+                escape_tsv_path(&provenance.fixture_root)
+            ));
+        }
+    }
+    text
+}
+
 struct BundleManifestContext<'a> {
     review_path: &'a Path,
     entries_path: &'a Path,
@@ -1234,28 +1272,51 @@ struct BundleManifestContext<'a> {
     first_mismatch_path: &'a Path,
     region_summary_path: &'a Path,
     mask_justification_path: &'a Path,
+    provenance_path: &'a Path,
     visual_diff_dir: &'a Path,
     source_artifact_dir: &'a Path,
     artifact_rows: &'a [String],
 }
 
 fn render_bundle_manifest(context: &BundleManifestContext<'_>) -> String {
-    let mut text = format!(
-        "kind\tpath\nreview\t{}\nentries\t{}\nviolations\t{}\nfirst-unmasked\t{}\nregions\t{}\nmask-justifications\t{}\nvisual-diffs\t{}\nsource-artifacts\t{}\n",
-        escape_tsv_path(context.review_path),
-        escape_tsv_path(context.entries_path),
-        escape_tsv_path(context.violations_path),
-        escape_tsv_path(context.first_mismatch_path),
-        escape_tsv_path(context.region_summary_path),
-        escape_tsv_path(context.mask_justification_path),
-        escape_tsv_path(context.visual_diff_dir),
-        escape_tsv_path(context.source_artifact_dir)
-    );
-    for row in context.artifact_rows {
-        text.push_str(row);
-        text.push('\n');
+    let mut text = "kind\tpath\tbytes\tfnv1a64\n".to_string();
+    for (kind, path) in [
+        ("review", context.review_path),
+        ("entries", context.entries_path),
+        ("violations", context.violations_path),
+        ("first-unmasked", context.first_mismatch_path),
+        ("regions", context.region_summary_path),
+        ("mask-justifications", context.mask_justification_path),
+        ("provenance", context.provenance_path),
+        ("visual-diffs", context.visual_diff_dir),
+        ("source-artifacts", context.source_artifact_dir),
+    ] {
+        text.push_str(&render_bundle_manifest_row(kind, path));
     }
+    text.push_str(&context.artifact_rows.join(""));
     text
+}
+
+fn render_bundle_manifest_row(kind: &str, path: &Path) -> String {
+    let (bytes, hash) = match fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() => {
+            let bytes = metadata.len();
+            let hash = fs::read(path)
+                .map(|content| format!("{:016x}", fnv1a64(&content)))
+                .unwrap_or_else(|_| "-".to_string());
+            (bytes.to_string(), hash)
+        }
+        _ => ("-".to_string(), "-".to_string()),
+    };
+    format!("{}\t{}\t{}\t{}\n", kind, escape_tsv_path(path), bytes, hash)
+}
+
+fn fnv1a64(bytes: &[u8]) -> u64 {
+    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const PRIME: u64 = 0x0000_0100_0000_01b3;
+    bytes.iter().fold(OFFSET, |hash, byte| {
+        (hash ^ u64::from(*byte)).wrapping_mul(PRIME)
+    })
 }
 
 fn pixel_hex(pixel: [u8; 4]) -> String {
@@ -1282,7 +1343,7 @@ fn write_review_image_artifacts(
         let stem = format!("{index:03}-{}", entry.input.surface.as_str());
         let diff_path = visual_diff_dir.join(format!("{stem}-diff.png"));
         write_visual_diff_png(&diff_path, &expected, &actual, &entry.diff)?;
-        rows.push(format!("visual-diff\t{}", escape_tsv_path(&diff_path)));
+        rows.push(render_bundle_manifest_row("visual-diff", &diff_path));
 
         let expected_copy = source_artifact_dir.join(format!(
             "{stem}-finder{}",
@@ -1294,11 +1355,8 @@ fn write_review_image_artifacts(
         ));
         copy_artifact(&entry.input.expected_path, &expected_copy)?;
         copy_artifact(&entry.input.actual_path, &actual_copy)?;
-        rows.push(format!(
-            "finder-source\t{}",
-            escape_tsv_path(&expected_copy)
-        ));
-        rows.push(format!("gfm-source\t{}", escape_tsv_path(&actual_copy)));
+        rows.push(render_bundle_manifest_row("finder-source", &expected_copy));
+        rows.push(render_bundle_manifest_row("gfm-source", &actual_copy));
     }
     Ok(rows)
 }
@@ -1952,6 +2010,7 @@ mod tests {
         assert!(bundle.first_mismatch_path.exists());
         assert!(bundle.region_summary_path.exists());
         assert!(bundle.mask_justification_path.exists());
+        assert!(bundle.provenance_path.exists());
         assert!(bundle.visual_diff_dir.join("000-text-diff.png").exists());
         assert!(bundle
             .source_artifact_dir
@@ -1970,6 +2029,29 @@ mod tests {
         assert!(fs::read_to_string(&bundle.first_mismatch_path)
             .unwrap()
             .contains("090a0aff"));
+        let provenance = fs::read_to_string(&bundle.provenance_path).unwrap();
+        assert!(provenance.contains("surface\tmacos-build\thardware-profile"));
+        assert!(provenance.contains("text\t25A354\tmacbookpro18,3"));
+        assert!(provenance.contains("fixtures/text"), "{provenance}");
+        let bundle_manifest = fs::read_to_string(&bundle.bundle_manifest_path).unwrap();
+        assert!(
+            bundle_manifest.starts_with("kind\tpath\tbytes\tfnv1a64\n"),
+            "{bundle_manifest}"
+        );
+        assert!(
+            bundle_manifest
+                .lines()
+                .any(|line| line.starts_with("finder-source\t")
+                    && line.contains("000-text-finder.rgba\t8\t")
+                    && line.split('\t').nth(3).is_some_and(|hash| hash.len() == 16)),
+            "{bundle_manifest}"
+        );
+        assert!(
+            bundle_manifest
+                .lines()
+                .any(|line| line.starts_with("visual-diffs\t") && line.ends_with("\t-\t-")),
+            "{bundle_manifest}"
+        );
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -2023,6 +2105,7 @@ mod tests {
         let bundle = write_parity_review_bundle(report, &output).unwrap();
         let review_markdown = fs::read_to_string(&bundle.review_path).unwrap();
         let entries = fs::read_to_string(&bundle.entries_path).unwrap();
+        let provenance = fs::read_to_string(&bundle.provenance_path).unwrap();
         let bundle_manifest = fs::read_to_string(&bundle.bundle_manifest_path).unwrap();
 
         assert!(entries.contains("finder capture.rgba"), "{entries}");
@@ -2051,6 +2134,14 @@ mod tests {
             review_markdown.contains("macos-25A354-default\\|reviewed"),
             "{review_markdown}"
         );
+        assert!(provenance.contains("studio display"), "{provenance}");
+        assert!(provenance.contains("fixtures manifest.tsv"), "{provenance}");
+        assert!(provenance.contains("fixtures|root line"), "{provenance}");
+        assert!(!provenance.contains("studio\tdisplay"), "{provenance}");
+        assert!(
+            !provenance.contains("fixtures\nmanifest.tsv"),
+            "{provenance}"
+        );
         assert!(
             review_markdown.contains("gate manifest.tsv"),
             "{review_markdown}"
@@ -2061,6 +2152,21 @@ mod tests {
         );
         assert!(
             bundle_manifest.contains("review bundle/review.md"),
+            "{bundle_manifest}"
+        );
+        assert!(
+            bundle_manifest.contains("review bundle/review.md\t"),
+            "{bundle_manifest}"
+        );
+        assert!(
+            bundle_manifest.contains("review bundle/provenance.tsv"),
+            "{bundle_manifest}"
+        );
+        assert!(
+            bundle_manifest
+                .lines()
+                .filter(|line| !line.is_empty())
+                .all(|line| line.split('\t').count() == 4),
             "{bundle_manifest}"
         );
         assert!(

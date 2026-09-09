@@ -976,6 +976,7 @@ fn writes_parity_review_bundle_from_binary_manifest() {
     assert!(review.join("entries.tsv").exists());
     assert!(review.join("violations.tsv").exists());
     assert!(review.join("first-unmasked.tsv").exists());
+    assert!(review.join("provenance.tsv").exists());
     let review_markdown = fs::read_to_string(review.join("review.md")).unwrap();
     assert!(
         review_markdown.contains("## Capture Provenance"),
@@ -992,6 +993,15 @@ fn writes_parity_review_bundle_from_binary_manifest() {
     assert!(fs::read_to_string(review.join("violations.tsv"))
         .unwrap()
         .contains("unmasked-mismatch-budget"));
+    let provenance = fs::read_to_string(review.join("provenance.tsv")).unwrap();
+    assert!(provenance.contains("text\t25A354\tmacbookpro18,3"));
+    assert!(provenance.contains("fixtures/text"), "{provenance}");
+    let bundle = fs::read_to_string(review.join("bundle.tsv")).unwrap();
+    assert!(
+        bundle.starts_with("kind\tpath\tbytes\tfnv1a64\n"),
+        "{bundle}"
+    );
+    assert!(bundle.contains("000-text-finder.rgba\t8\t"), "{bundle}");
 
     fs::remove_dir_all(root).unwrap();
 }
