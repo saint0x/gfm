@@ -332,6 +332,37 @@ impl MmapRecordArchive {
             .is_ok()
     }
 
+    pub fn records_for_volume(&self, volume: VolumeId) -> Result<Vec<FileRecord>> {
+        self.records_for_volume_checked(volume, || Ok(()))
+    }
+
+    pub fn records_for_volume_checked(
+        &self,
+        volume: VolumeId,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<FileRecord>> {
+        check_control()?;
+        let start = self
+            .directory
+            .partition_point(|entry| entry.id.volume < volume);
+        let end = self
+            .directory
+            .partition_point(|entry| entry.id.volume <= volume);
+        if start == end {
+            return Ok(Vec::new());
+        }
+
+        let mut entries = self.directory[start..end].to_vec();
+        entries.sort_by_key(|entry| entry.index);
+        let mut records = Vec::with_capacity(entries.len());
+        for entry in entries {
+            check_control()?;
+            records.push(self.record_checked(entry.index, &mut check_control)?);
+        }
+        check_control()?;
+        Ok(records)
+    }
+
     pub fn record(&self, index: usize) -> Result<FileRecord> {
         self.record_checked(index, || Ok(()))
     }

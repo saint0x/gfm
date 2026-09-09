@@ -513,6 +513,56 @@ fn mmap_record_archive_batch_hydrates_sorted_ids_in_one_directory_pass() {
 }
 
 #[test]
+fn mmap_record_archive_reads_one_volume_from_directory_span() {
+    let path = temp_path("gfm-store-mmap-volume-records", "idx");
+    let records = vec![
+        FileRecord {
+            id: FileId::new(VolumeId(5), 50),
+            parent: None,
+            path: PathBuf::from("/Volumes/two/beta.txt"),
+            name: "beta.txt".to_string(),
+            ..sample_file_record(50, "beta.txt")
+        },
+        FileRecord {
+            id: FileId::new(VolumeId(4), 20),
+            parent: None,
+            path: PathBuf::from("/Volumes/one/alpha.txt"),
+            name: "alpha.txt".to_string(),
+            ..sample_file_record(20, "alpha.txt")
+        },
+        FileRecord {
+            id: FileId::new(VolumeId(5), 10),
+            parent: None,
+            path: PathBuf::from("/Volumes/two/alpha.txt"),
+            name: "alpha.txt".to_string(),
+            ..sample_file_record(10, "alpha.txt")
+        },
+    ];
+    write_records(&path, &records).unwrap();
+    let archive = MmapRecordArchive::open(&path).unwrap();
+
+    let volume_two = archive.records_for_volume(VolumeId(5)).unwrap();
+    let missing = archive.records_for_volume(VolumeId(9)).unwrap();
+
+    assert_eq!(volume_two, vec![records[0].clone(), records[2].clone()]);
+    assert!(missing.is_empty());
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn mmap_record_archive_checked_volume_records_honors_pre_cancelled_control() {
+    let path = temp_path("gfm-store-mmap-volume-records-cancel", "idx");
+    let records = vec![sample_file_record(10, "alpha.txt")];
+    write_records(&path, &records).unwrap();
+    let archive = MmapRecordArchive::open(&path).unwrap();
+
+    let result = archive.records_for_volume_checked(VolumeId(4), || Err(GfmError::Cancelled));
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn mmap_record_archive_checked_batch_hydration_honors_pre_cancelled_control() {
     let path = temp_path("gfm-store-mmap-batch-cancel", "idx");
     let records = vec![FileRecord {

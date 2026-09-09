@@ -333,7 +333,8 @@ impl ContentIndexQuerySession {
         cancellation.check()?;
         let cache_hits_before = self.record_cache_hits.load(Ordering::Relaxed);
         let cache_misses_before = self.record_cache_misses.load(Ordering::Relaxed);
-        let (live, load) = self.live_from_postings(postings, has_content_terms, cancellation)?;
+        let (live, load) =
+            self.live_from_postings(postings, has_content_terms, scope, cancellation)?;
         let hits = live.search_structured_with_volume_scope_cancellable(
             parsed,
             limit,
@@ -547,6 +548,7 @@ impl ContentIndexQuerySession {
         &self,
         postings: Vec<ContentPosting>,
         has_content_terms: bool,
+        scope: &SearchVolumeScope,
         cancellation: &Cancellation,
     ) -> Result<(LiveIndex, ContentQueryLoadReport)> {
         cancellation.check()?;
@@ -556,7 +558,7 @@ impl ContentIndexQuerySession {
             !has_content_terms || (has_content_postings && candidate_ids.is_empty());
         let candidate_count = candidate_ids.len();
         let (records, missing) = if full_hydration {
-            self.hydrate_all_records(cancellation)?
+            self.hydrate_records_in_scope(scope, cancellation)?
         } else {
             self.hydrate_record_ids(candidate_ids, cancellation)?
         };
@@ -583,6 +585,28 @@ impl ContentIndexQuerySession {
                 full_hydration,
             },
         ))
+    }
+
+    fn hydrate_records_in_scope(
+        &self,
+        scope: &SearchVolumeScope,
+        cancellation: &Cancellation,
+    ) -> Result<(Vec<FileRecord>, usize)> {
+        match scope {
+            SearchVolumeScope::All => self.hydrate_all_records(cancellation),
+            SearchVolumeScope::Only(volumes) => {
+                let mut records = Vec::new();
+                for volume in volumes {
+                    cancellation.check()?;
+                    records.extend(
+                        self.records
+                            .records_for_volume_checked(*volume, || cancellation.check())?,
+                    );
+                }
+                cancellation.check()?;
+                Ok((records, 0))
+            }
+        }
     }
 
     fn hydrate_all_records(&self, cancellation: &Cancellation) -> Result<(Vec<FileRecord>, usize)> {
@@ -1050,6 +1074,55 @@ mod tests {
         assert_eq!(empty.search.hits.len(), 0);
         assert_eq!(empty.posting_cache_misses, 0);
         assert_eq!(empty.record_cache_misses, 0);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn content_session_metadata_only_volume_scope_hydrates_only_admitted_records() {
+        let root = temp_dir("gfm-content-session-metadata-volume-scope");
+        let records = root.join("records.gfmidx");
+        let content = root.join("content.gfmcontent");
+        let volume_one = VolumeId(1);
+        let volume_two = VolumeId(2);
+        let first_id = FileId::new(volume_one, 100);
+        let second_id = FileId::new(volume_two, 200);
+        write_records(
+            &records,
+            &[
+                FileRecord {
+                    id: first_id,
+                    path: root.join("one.md"),
+                    name: "one.md".to_string(),
+                    ..record(first_id)
+                },
+                FileRecord {
+                    id: second_id,
+                    path: root.join("two.md"),
+                    name: "two.md".to_string(),
+                    ..record(second_id)
+                },
+            ],
+        )
+        .unwrap();
+        write_content_postings(&content, &[]).unwrap();
+        let session = ContentIndexQuerySession::open_content(&records, &content).unwrap();
+
+        let scoped = session
+            .search_with_volume_scope("kind:file", 10, &SearchVolumeScope::only([volume_two]))
+            .unwrap();
+
+        assert_eq!(scoped.search.hits.len(), 1);
+        assert_eq!(scoped.search.hits[0].record.id, second_id);
+        assert_eq!(scoped.load.content_keys, 0);
+        assert_eq!(scoped.load.candidate_ids, 0);
+        assert_eq!(scoped.load.records_loaded, 1);
+        assert_eq!(scoped.load.records_missing, 0);
+        assert!(scoped.load.full_hydration);
+        assert_eq!(scoped.posting_cache_hits, 0);
+        assert_eq!(scoped.posting_cache_misses, 0);
+        assert_eq!(scoped.record_cache_hits, 0);
+        assert_eq!(scoped.record_cache_misses, 0);
 
         fs::remove_dir_all(root).unwrap();
     }
