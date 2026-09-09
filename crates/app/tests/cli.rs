@@ -2070,6 +2070,37 @@ fn parity_gate_rejects_unprovenanced_manifest_from_binary() {
 }
 
 #[test]
+fn parity_gate_rejects_stale_baseline_manifest_from_binary() {
+    let root = unique_temp_dir("gfm-cli-parity-gate-stale-baseline");
+    let expected = root.join("finder.rgba");
+    let actual = root.join("gfm.rgba");
+    let manifest = root.join("gate.tsv");
+    fs::write(&expected, [0, 0, 0, 255]).unwrap();
+    fs::write(&actual, [0, 0, 0, 255]).unwrap();
+    fs::write(
+        &manifest,
+        format!(
+            "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2000-01-01T00:00:00Z\texpires-at=2000-01-02T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\t{}\t{}\t1\t1\t\t1040\t720\tactive\ticon\tfixtures/toolbar\n",
+            expected.display(),
+            actual.display()
+        ),
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["parity-gate", manifest.to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("expired Finder baseline"), "{stderr}");
+    assert!(stderr.contains("expires-at"), "{stderr}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn parity_gate_refuses_unreachable_capture_before_pixel_read_from_binary() {
     let root = unique_temp_dir("gfm-cli-parity-gate-artifact-root");
     let offline = unique_temp_dir("gfm-cli-parity-gate-artifact-offline");

@@ -9,6 +9,7 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParityGateInput {
@@ -56,6 +57,7 @@ pub struct ParityCaptureProvenance {
     pub app_version: String,
     pub fixture_manifest: String,
     pub captured_at: String,
+    pub expires_at: Option<String>,
     pub capture_command: String,
     pub reviewer: String,
     pub signer: String,
@@ -106,6 +108,21 @@ impl ParityCaptureProvenance {
                 "parity manifest capture timestamp must use UTC second precision: {}",
                 self.captured_at
             )));
+        }
+        if let Some(expires_at) = &self.expires_at {
+            if !is_valid_utc_capture_timestamp(expires_at) {
+                return Err(GfmError::Format(format!(
+                    "parity manifest expiry timestamp must use UTC second precision: {expires_at}"
+                )));
+            }
+            if utc_capture_timestamp_epoch_seconds(&self.captured_at)?
+                > utc_capture_timestamp_epoch_seconds(expires_at)?
+            {
+                return Err(GfmError::Format(format!(
+                    "parity manifest captured-at `{}` cannot be after expires-at `{}`",
+                    self.captured_at, expires_at
+                )));
+            }
         }
         if self.capture_command.trim().is_empty() {
             return Err(GfmError::Format(
@@ -272,9 +289,17 @@ pub fn run_parity_gate_manifest(path: impl AsRef<Path>) -> Result<ParityGateRepo
 }
 
 pub fn run_parity_gate(inputs: Vec<ParityGateInput>) -> Result<ParityGateReport> {
+    run_parity_gate_at(inputs, current_utc_epoch_seconds()?)
+}
+
+fn run_parity_gate_at(
+    inputs: Vec<ParityGateInput>,
+    now_epoch_seconds: i64,
+) -> Result<ParityGateReport> {
     let mut entries = Vec::with_capacity(inputs.len());
     for input in inputs {
         validate_distinct_capture_artifacts(&input)?;
+        validate_baseline_not_expired(&input, now_epoch_seconds)?;
         validate_capture_provenance_artifacts(&input)?;
         let masks = input
             .mask_path
@@ -300,6 +325,25 @@ pub fn run_parity_gate(inputs: Vec<ParityGateInput>) -> Result<ParityGateReport>
         manifest_path: None,
         entries,
     })
+}
+
+fn validate_baseline_not_expired(input: &ParityGateInput, now_epoch_seconds: i64) -> Result<()> {
+    let Some(provenance) = &input.provenance else {
+        return Ok(());
+    };
+    let Some(expires_at) = &provenance.expires_at else {
+        return Ok(());
+    };
+    let expires_epoch_seconds = utc_capture_timestamp_epoch_seconds(expires_at)?;
+    if now_epoch_seconds > expires_epoch_seconds {
+        return Err(GfmError::Format(format!(
+            "parity gate entry for {} uses expired Finder baseline: expires-at `{}` is before gate time `{}`",
+            input.surface.as_str(),
+            expires_at,
+            utc_capture_timestamp_from_epoch_seconds(now_epoch_seconds)
+        )));
+    }
+    Ok(())
 }
 
 fn validate_capture_provenance_artifacts(input: &ParityGateInput) -> Result<()> {
@@ -1254,6 +1298,7 @@ fn parse_versioned_entry(
             .display()
             .to_string(),
         captured_at: profile.captured_at.clone(),
+        expires_at: profile.expires_at.clone(),
         capture_command: profile.capture_command.clone(),
         reviewer: profile.reviewer.clone(),
         signer: profile.signer.clone(),
@@ -1288,6 +1333,7 @@ struct ManifestProfile {
     app_version: String,
     fixture_manifest: String,
     captured_at: String,
+    expires_at: Option<String>,
     capture_command: String,
     reviewer: String,
     signer: String,
@@ -1304,6 +1350,7 @@ fn parse_manifest_profile(line_index: usize, fields: &[&str]) -> Result<Manifest
     let mut app_version = None;
     let mut fixture_manifest = None;
     let mut captured_at = None;
+    let mut expires_at = None;
     let mut capture_command = None;
     let mut reviewer = None;
     let mut signer = None;
@@ -1332,6 +1379,7 @@ fn parse_manifest_profile(line_index: usize, fields: &[&str]) -> Result<Manifest
             "app-version" => app_version = Some(value.to_string()),
             "fixture-manifest" => fixture_manifest = Some(value.to_string()),
             "captured-at" => captured_at = Some(value.to_string()),
+            "expires-at" => expires_at = Some(value.to_string()),
             "capture-command" => capture_command = Some(value.to_string()),
             "reviewer" => reviewer = Some(value.to_string()),
             "signer" => signer = Some(value.to_string()),
@@ -1392,6 +1440,7 @@ fn parse_manifest_profile(line_index: usize, fields: &[&str]) -> Result<Manifest
                 line_index + 1
             ))
         })?,
+        expires_at,
         capture_command: capture_command.ok_or_else(|| {
             GfmError::Format(format!(
                 "parity gate manifest line {} missing capture-command",
@@ -1478,6 +1527,25 @@ fn parse_manifest_profile(line_index: usize, fields: &[&str]) -> Result<Manifest
             profile.captured_at
         )));
     }
+    if let Some(expires_at) = &profile.expires_at {
+        if !is_valid_utc_capture_timestamp(expires_at) {
+            return Err(GfmError::Format(format!(
+                "parity gate manifest line {} has invalid expires-at `{}`; expected UTC second precision like 2026-09-27T00:00:00Z",
+                line_index + 1,
+                expires_at
+            )));
+        }
+        if utc_capture_timestamp_epoch_seconds(&profile.captured_at)?
+            > utc_capture_timestamp_epoch_seconds(expires_at)?
+        {
+            return Err(GfmError::Format(format!(
+                "parity gate manifest line {} has stale baseline captured-at `{}` after expires-at `{}`",
+                line_index + 1,
+                profile.captured_at,
+                expires_at
+            )));
+        }
+    }
     if profile.capture_command.trim().is_empty() {
         return Err(GfmError::Format(format!(
             "parity gate manifest line {} has empty capture-command",
@@ -1551,6 +1619,71 @@ fn is_valid_utc_capture_timestamp(value: &str) -> bool {
     (1..=max_day).contains(&day)
 }
 
+fn utc_capture_timestamp_epoch_seconds(value: &str) -> Result<i64> {
+    if !is_valid_utc_capture_timestamp(value) {
+        return Err(GfmError::Format(format!(
+            "invalid UTC capture timestamp `{value}`"
+        )));
+    }
+    let bytes = value.as_bytes();
+    let year = i64::from(parse_fixed_u32(bytes, 0, 4));
+    let month = i64::from(parse_fixed_u32(bytes, 5, 7));
+    let day = i64::from(parse_fixed_u32(bytes, 8, 10));
+    let hour = i64::from(parse_fixed_u32(bytes, 11, 13));
+    let minute = i64::from(parse_fixed_u32(bytes, 14, 16));
+    let second = i64::from(parse_fixed_u32(bytes, 17, 19));
+    let days = days_from_civil(year, month, day);
+    Ok(days * 86_400 + hour * 3_600 + minute * 60 + second)
+}
+
+fn current_utc_epoch_seconds() -> Result<i64> {
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|err| {
+            GfmError::Format(format!(
+            "system clock is before the Unix epoch; cannot validate parity baseline expiry: {err}"
+        ))
+        })?;
+    i64::try_from(duration.as_secs()).map_err(|_| {
+        GfmError::Format("system clock value is too large for parity baseline expiry".to_string())
+    })
+}
+
+fn utc_capture_timestamp_from_epoch_seconds(seconds: i64) -> String {
+    let days = seconds.div_euclid(86_400);
+    let second_of_day = seconds.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    let hour = second_of_day / 3_600;
+    let minute = (second_of_day % 3_600) / 60;
+    let second = second_of_day % 60;
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+}
+
+fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+    let year = year - i64::from(month <= 2);
+    let era = year.div_euclid(400);
+    let year_of_era = year - era * 400;
+    let month_prime = month + if month > 2 { -3 } else { 9 };
+    let day_of_year = (153 * month_prime + 2) / 5 + day - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
+fn civil_from_days(days: i64) -> (i64, i64, i64) {
+    let days = days + 719_468;
+    let era = days.div_euclid(146_097);
+    let day_of_era = days - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let mut year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_prime = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+    let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+    year += i64::from(month <= 2);
+    (year, month, day)
+}
+
 fn parse_fixed_u32(bytes: &[u8], start: usize, end: usize) -> u32 {
     bytes[start..end]
         .iter()
@@ -1589,14 +1722,14 @@ fn render_review_markdown(report: &ParityGateReport) -> String {
         .any(|entry| entry.input.provenance.is_some())
     {
         text.push_str("## Capture Provenance\n\n");
-        text.push_str("| Surface | macOS Build | Appearance | Scale | Color Profile | Window | Focus | View Mode | Fixture Root | Reviewer | Signer | Approved Masks |\n");
+        text.push_str("| Surface | macOS Build | Appearance | Scale | Color Profile | Window | Focus | View Mode | Fixture Root | Captured | Expires | Reviewer | Signer | Approved Masks |\n");
         text.push_str(
-            "| --- | --- | --- | --- | --- | ---: | --- | --- | --- | --- | --- | --- |\n",
+            "| --- | --- | --- | --- | --- | ---: | --- | --- | --- | --- | --- | --- | --- | --- |\n",
         );
         for entry in &report.entries {
             if let Some(provenance) = &entry.input.provenance {
                 text.push_str(&format!(
-                    "| {} | {} | {} | {} | {} | {}x{} | {} | {} | {} | {} | {} | {} |\n",
+                    "| {} | {} | {} | {} | {} | {}x{} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
                     entry.input.surface.as_str(),
                     escape_markdown_table_cell(&provenance.macos_build),
                     provenance.appearance.as_str(),
@@ -1607,6 +1740,8 @@ fn render_review_markdown(report: &ParityGateReport) -> String {
                     provenance.focus.as_str(),
                     provenance.view_mode.as_str(),
                     escape_markdown_table_cell(&provenance.fixture_root.display().to_string()),
+                    escape_markdown_table_cell(&provenance.captured_at),
+                    escape_markdown_table_cell(provenance.expires_at.as_deref().unwrap_or("")),
                     escape_markdown_table_cell(&provenance.reviewer),
                     escape_markdown_table_cell(&provenance.signer),
                     escape_markdown_table_cell(&provenance.approved_mask_set)
@@ -1642,12 +1777,12 @@ fn render_review_markdown(report: &ParityGateReport) -> String {
 
 fn render_entries_tsv(report: &ParityGateReport) -> String {
     let mut text =
-        "surface\twidth\theight\texpected\tactual\tmask\tmacos-build\thardware-profile\tdisplay-profile\tapp-version\tfixture-manifest\tcaptured-at\tcapture-command\treviewer\tsigner\tapproved-mask-set\tappearance\tscale\tcolor-profile\twindow-width\twindow-height\tfocus\tview-mode\tfixture-root\tmismatched\tunmasked\tmasked\tmax-channel-delta\tpassed\n"
+        "surface\twidth\theight\texpected\tactual\tmask\tmacos-build\thardware-profile\tdisplay-profile\tapp-version\tfixture-manifest\tcaptured-at\texpires-at\tcapture-command\treviewer\tsigner\tapproved-mask-set\tappearance\tscale\tcolor-profile\twindow-width\twindow-height\tfocus\tview-mode\tfixture-root\tmismatched\tunmasked\tmasked\tmax-channel-delta\tpassed\n"
             .to_string();
     for entry in &report.entries {
         let provenance = entry.input.provenance.as_ref();
         text.push_str(&format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
             entry.input.surface.as_str(),
             entry.diff.size.width,
             entry.diff.size.height,
@@ -1681,6 +1816,10 @@ fn render_entries_tsv(report: &ParityGateReport) -> String {
                 .unwrap_or_default(),
             provenance
                 .map(|value| value.captured_at.as_str())
+                .map(escape_tsv_field)
+                .unwrap_or_default(),
+            provenance
+                .and_then(|value| value.expires_at.as_deref())
                 .map(escape_tsv_field)
                 .unwrap_or_default(),
             provenance
@@ -1806,12 +1945,12 @@ fn render_mask_justifications_tsv(report: &ParityGateReport) -> String {
 
 fn render_provenance_tsv(report: &ParityGateReport) -> String {
     let mut text =
-        "surface\tmacos-build\thardware-profile\tdisplay-profile\tapp-version\tfixture-manifest\tcaptured-at\tcapture-command\treviewer\tsigner\tapproved-mask-set\tappearance\tscale\tcolor-profile\twindow-width\twindow-height\tfocus\tview-mode\tfixture-root\n"
+        "surface\tmacos-build\thardware-profile\tdisplay-profile\tapp-version\tfixture-manifest\tcaptured-at\texpires-at\tcapture-command\treviewer\tsigner\tapproved-mask-set\tappearance\tscale\tcolor-profile\twindow-width\twindow-height\tfocus\tview-mode\tfixture-root\n"
             .to_string();
     for entry in &report.entries {
         if let Some(provenance) = &entry.input.provenance {
             text.push_str(&format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                 entry.input.surface.as_str(),
                 escape_tsv_field(&provenance.macos_build),
                 escape_tsv_field(&provenance.hardware_profile),
@@ -1819,6 +1958,11 @@ fn render_provenance_tsv(report: &ParityGateReport) -> String {
                 escape_tsv_field(&provenance.app_version),
                 escape_tsv_field(&provenance.fixture_manifest),
                 escape_tsv_field(&provenance.captured_at),
+                provenance
+                    .expires_at
+                    .as_deref()
+                    .map(escape_tsv_field)
+                    .unwrap_or_default(),
                 escape_tsv_field(&provenance.capture_command),
                 escape_tsv_field(&provenance.reviewer),
                 escape_tsv_field(&provenance.signer),
@@ -2416,6 +2560,7 @@ mod tests {
             .fixture_manifest
             .ends_with("fixtures/manifest.tsv"));
         assert_eq!(provenance.captured_at, "2026-08-27T00:00:00Z");
+        assert_eq!(provenance.expires_at, None);
         assert_eq!(provenance.capture_command, "screencapture:-x");
         assert_eq!(provenance.reviewer, "codex");
         assert_eq!(provenance.signer, "codex");
@@ -2429,6 +2574,120 @@ mod tests {
         assert!(provenance.fixture_root.ends_with("fixtures/icon"));
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn versioned_parity_manifest_rejects_invalid_expiry_timestamp() {
+        let root = unique_temp_dir("gfm-parity-gate-invalid-expiry");
+        let err = parse_parity_gate_manifest(
+            "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\texpires-at=next-week\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\tfinder.png\tgfm.png\t1\t1\t\t1440\t900\tactive\ticon\tfixtures/icon\n",
+            &root,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("invalid expires-at"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn versioned_parity_manifest_rejects_stale_expired_capture_profile() {
+        let root = unique_temp_dir("gfm-parity-gate-stale-profile");
+        let err = parse_parity_gate_manifest(
+            "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-09-10T00:00:00Z\texpires-at=2026-09-09T23:59:59Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\tfinder.png\tgfm.png\t1\t1\t\t1440\t900\tactive\ticon\tfixtures/icon\n",
+            &root,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("stale baseline"));
+        assert!(err.to_string().contains("expires-at"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn parity_gate_rejects_expired_baseline_before_provenance_io() {
+        let root = unique_temp_dir("gfm-parity-gate-expired-before-provenance");
+        let expected = root.join("finder.rgba");
+        let actual = root.join("gfm.rgba");
+        fs::write(&expected, [0, 0, 0, 255]).unwrap();
+        fs::write(&actual, [0, 0, 0, 255]).unwrap();
+        let input = ParityGateInput::new(
+            ParitySurface::Toolbar,
+            &expected,
+            &actual,
+            PixelSize::new(1, 1),
+        )
+        .with_provenance(ParityCaptureProvenance {
+            macos_build: "25A354".to_string(),
+            hardware_profile: "macbookpro18,3".to_string(),
+            display_profile: "studio-display-p3".to_string(),
+            app_version: "0.1.0".to_string(),
+            fixture_manifest: "fixtures/manifest.tsv".to_string(),
+            captured_at: "2026-08-27T00:00:00Z".to_string(),
+            expires_at: Some("2026-09-09T23:59:59Z".to_string()),
+            capture_command: "screencapture:-x".to_string(),
+            reviewer: "codex".to_string(),
+            signer: "codex".to_string(),
+            approved_mask_set: "macos-25A354-default".to_string(),
+            appearance: ParityAppearance::Dark,
+            scale: DisplayScale::Two,
+            color_profile: ColorProfile::DisplayP3,
+            window_size: PixelSize::new(1440, 900),
+            focus: ParityFocusState::Active,
+            view_mode: ParityViewMode::Icon,
+            fixture_root: PathBuf::from("fixtures/icon"),
+        });
+
+        let err = run_parity_gate_at(
+            vec![input],
+            utc_capture_timestamp_epoch_seconds("2026-09-10T00:00:00Z").unwrap(),
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("expired Finder baseline"));
+        assert!(err
+            .to_string()
+            .contains("expires-at `2026-09-09T23:59:59Z`"));
+        assert!(!err.to_string().contains("requires expected Finder capture"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn parity_baseline_expiry_accepts_exact_expiry_second() {
+        let input = ParityGateInput::new(
+            ParitySurface::Toolbar,
+            "finder.rgba",
+            "gfm.rgba",
+            PixelSize::new(1, 1),
+        )
+        .with_provenance(ParityCaptureProvenance {
+            macos_build: "25A354".to_string(),
+            hardware_profile: "macbookpro18,3".to_string(),
+            display_profile: "studio-display-p3".to_string(),
+            app_version: "0.1.0".to_string(),
+            fixture_manifest: "fixtures/manifest.tsv".to_string(),
+            captured_at: "2026-08-27T00:00:00Z".to_string(),
+            expires_at: Some("2026-09-09T23:59:59Z".to_string()),
+            capture_command: "screencapture:-x".to_string(),
+            reviewer: "codex".to_string(),
+            signer: "codex".to_string(),
+            approved_mask_set: "macos-25A354-default".to_string(),
+            appearance: ParityAppearance::Dark,
+            scale: DisplayScale::Two,
+            color_profile: ColorProfile::DisplayP3,
+            window_size: PixelSize::new(1440, 900),
+            focus: ParityFocusState::Active,
+            view_mode: ParityViewMode::Icon,
+            fixture_root: PathBuf::from("fixtures/icon"),
+        });
+
+        validate_baseline_not_expired(
+            &input,
+            utc_capture_timestamp_epoch_seconds("2026-09-09T23:59:59Z").unwrap(),
+        )
+        .unwrap();
     }
 
     #[test]
@@ -2502,6 +2761,7 @@ mod tests {
             app_version: "0.1.0".to_string(),
             fixture_manifest: "fixtures/manifest.tsv".to_string(),
             captured_at: "2026-08-27T00:00:00Z".to_string(),
+            expires_at: None,
             capture_command: "screencapture:-x".to_string(),
             reviewer: "codex".to_string(),
             signer: "codex".to_string(),
@@ -2532,6 +2792,7 @@ mod tests {
             app_version: "0.1.0".to_string(),
             fixture_manifest: "fixtures/manifest.tsv".to_string(),
             captured_at: "2026-08-27T00:00:00Z".to_string(),
+            expires_at: None,
             capture_command: "screencapture:-x".to_string(),
             reviewer: "codex".to_string(),
             signer: "codex".to_string(),
@@ -2781,6 +3042,7 @@ mod tests {
                     app_version: "0.1.0".to_string(),
                     fixture_manifest: "fixtures\nmanifest.tsv".to_string(),
                     captured_at: "2026-08-27T00:00:00Z".to_string(),
+                    expires_at: Some("2026-09-27T00:00:00Z".to_string()),
                     capture_command: "screencapture\t-x".to_string(),
                     reviewer: "reviewer|name\nline".to_string(),
                     signer: "signer|name\rline".to_string(),
@@ -2900,6 +3162,7 @@ mod tests {
                     app_version: "0.1.0".to_string(),
                     fixture_manifest: "fixtures/manifest.tsv".to_string(),
                     captured_at: "2026-08-27T00:00:00Z".to_string(),
+                    expires_at: None,
                     capture_command: "screencapture:-x".to_string(),
                     reviewer: "codex".to_string(),
                     signer: "codex".to_string(),
