@@ -89,20 +89,25 @@ where
     T: Send + 'static,
 {
     let (result_tx, result_rx) = mpsc::sync_channel(1);
-    let mut scheduler = Scheduler::new();
+    let stores = RuntimeJobBeginStores::from_environment();
+    let mut scheduler = Scheduler::new_starting_after(stores.max_job_id_checked(label)?);
     let job = if let Some(volume) = volume {
         scheduler.schedule_on_volume_payload(priority, payload_kind, label, volume)
     } else {
         scheduler.schedule_payload(priority, payload_kind, label)
     };
     let job = drain_single_runtime_job(&mut scheduler, job, label)?;
-    let runtime = RuntimeJobHandle::begin_with_payload_path(
+    let runtime = RuntimeJobHandle::begin_with_explicit_stores_checked(
         &job,
-        payload_kind,
-        label,
-        payload_path,
-        1,
-        format!("{}:{label}", priority.as_str()),
+        RuntimeJobBeginRequest::new(
+            payload_kind,
+            label,
+            payload_path,
+            1,
+            format!("{}:{label}", priority.as_str()),
+        ),
+        stores,
+        || Ok(()),
     )?;
     let runtime_task = runtime.clone();
     let task = Task::new(job.clone(), move |cancellation| {
