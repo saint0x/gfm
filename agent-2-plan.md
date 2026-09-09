@@ -18,10 +18,8 @@ GFM is macOS-only. It is a native Rust + GPUI Finder-parity file manager with GF
 
 ## FileProvider And iCloud Remaining Work
 
-1. Complete materialized-placeholder detection beyond filename and xattr heuristics. Keep the default UI state read low-latency; use native URL resource values first, use `NSFileProviderManager` identity only from explicit domain/cached paths, and return typed unknown/unsupported results when the host cannot prove materialization state.
-2. Replace the current FileProvider state-transition report with a live invalidation source that is driven by native provider callbacks or an explicitly owned background observer, then feed those events into icon, preview memory cache, preview disk cache, sidebar rows, and search metadata.
-3. Add captured Finder pixel baselines for FileProvider/iCloud icon badges, sidebar rows, progress states, conflict states, and unavailable/offline states.
-4. Verify FileProvider work with focused `gfm-mac-sys`, `gfm-mac`, `gfm-preview`, `gfm-ui`, `gfm`, and Fozzy coverage. Leave `STATUS.md` item 28 in place until every FileProvider sub-capability in that item is complete.
+1. Add captured Finder pixel baselines for FileProvider/iCloud icon badges, sidebar rows, progress states, conflict states, and unavailable/offline states.
+2. Verify FileProvider work with focused `gfm-mac-sys`, `gfm-mac`, `gfm-preview`, `gfm-ui`, `gfm`, and Fozzy coverage. Leave `STATUS.md` item 28 in place until every FileProvider sub-capability in that item is complete.
 
 ## DiskArbitration And Volume Remaining Work
 
