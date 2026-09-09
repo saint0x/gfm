@@ -9755,6 +9755,8 @@ fn operation_conflict_apply_executes_resolved_copy_from_binary() {
     let root = unique_temp_dir("gfm-cli-operation-conflict-apply-root");
     let journal = root.join("ops.journal");
     let conflicts = root.join("operation-conflicts.tsv");
+    let catalog = unique_temp_path("gfm-cli-operation-conflict-apply-runtime", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-operation-conflict-apply-runtime", "gfmprogress");
     let source = root.join("report.md");
     let destination = root.join("destination.md");
     let copied = root.join("destination copy.md");
@@ -9784,6 +9786,8 @@ fn operation_conflict_apply_executes_resolved_copy_from_binary() {
 
     let apply = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .env("GFM_OPS_JOURNAL", &journal)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
         .args([
             "operation-conflict-apply",
             conflicts.to_str().unwrap(),
@@ -9829,7 +9833,31 @@ fn operation_conflict_apply_executes_resolved_copy_from_binary() {
         "{journal_text}"
     );
     assert!(journal_text.contains("\tcompleted\t"), "{journal_text}");
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(
+        catalog_text.contains(&format!(
+            "payload\t1\toperation\toperation conflict store\t{}\t",
+            conflicts.display()
+        )) && catalog_text.contains(&format!(
+            "payload\t3\toperation\toperation conflict store\t{}\t",
+            conflicts.display()
+        )),
+        "{catalog_text}"
+    );
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("progress\t1\tvisible\tvisible\toperation conflict store\t")
+            && progress_text.contains("\tcompleted\t2\t2\tcompleted:read:1\t"),
+        "{progress_text}"
+    );
+    assert!(
+        progress_text.contains("progress\t3\tvisible\tvisible\toperation conflict store\t")
+            && progress_text.contains("\tcompleted\t2\t2\tcompleted:resolved:1\t"),
+        "{progress_text}"
+    );
 
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -10573,6 +10601,8 @@ fn copy_merge_from_binary_combines_directories_without_overwrite() {
 fn recovers_interrupted_operation_from_binary() {
     let root = unique_temp_dir("gfm-cli-ops-recover-root");
     let journal = root.join("ops.journal");
+    let catalog = unique_temp_path("gfm-cli-ops-recover-runtime", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-ops-recover-runtime", "gfmprogress");
     let source = root.join("source.txt");
     let destination = root.join("destination.txt");
     fs::write(&source, "recoverable bytes").unwrap();
@@ -10588,6 +10618,8 @@ fn recovers_interrupted_operation_from_binary() {
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .env("GFM_OPS_JOURNAL", &journal)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
         .args(["ops-recover", journal.to_str().unwrap()])
         .output()
         .unwrap();
@@ -10605,7 +10637,23 @@ fn recovers_interrupted_operation_from_binary() {
     let journal_text = fs::read_to_string(&journal).unwrap();
     assert!(journal_text.contains("987\tstarted"));
     assert!(journal_text.contains("987\tcompleted"));
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(
+        catalog_text.contains(&format!(
+            "payload\t1\toperation\toperation journal\t{}\t",
+            journal.display()
+        )) && catalog_text.contains("\tvisible:operation journal:adaptive"),
+        "{catalog_text}"
+    );
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("progress\t1\tvisible\tvisible\toperation journal\t")
+            && progress_text.contains("\tcompleted\t2\t2\tcompleted:outcomes:1\t"),
+        "{progress_text}"
+    );
 
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
     fs::remove_dir_all(root).unwrap();
 }
 

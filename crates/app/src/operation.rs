@@ -6,13 +6,14 @@ use crate::permission_refresh::{refresh_permission_state, PermissionRefreshAudie
 use crate::required_path;
 use crate::runtime::{
     default_journal_path, default_security_bookmarks_path, default_trash_metadata_path,
-    run_scheduled_volume_task_cancellable_with_runtime, run_volume_task_cancellable,
+    run_scheduled_volume_task_cancellable_with_runtime,
+    run_scheduled_volume_task_cancellable_with_runtime_and_payload_path,
     runtime_operation_conflict_store, OperationConflictStore, RuntimeJobHandle,
     RuntimeOperationConflict,
 };
 use gfm_jobs::{
-    JobBatteryState, JobIoPressure, JobProgressState, JobThermalState, JobUserActivity, Priority,
-    SchedulingPressure,
+    JobBatteryState, JobIoPressure, JobPayloadKind, JobProgressState, JobThermalState,
+    JobUserActivity, Priority, SchedulingPressure,
 };
 use gfm_mac::{
     current_host_scheduling_pressure, AccessIntent, HostBatteryState, HostIoPressure,
@@ -344,11 +345,42 @@ fn recover_operations_from_journal(
         OperationPathAccessReport::new_checked(journal_probe, AccessIntent::Write, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _journal_access = access_report.access_checked(WORKER, || cancellation.check())?;
-        cancellation.check()?;
-        Operator::new(OperationContext::new(journal)).recover_with_policy(policy)
+    let outcome = run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+        Priority::Visible,
+        JobPayloadKind::Operation,
+        WORKER,
+        current_operation_scheduling_pressure(),
+        || Ok(volume),
+        journal.clone(),
+        move |cancellation, runtime| {
+            let journal = journal.clone();
+            let access_report = access_report.clone();
+            cancellation.check()?;
+            runtime.resize_checked(2, "operation-journal:preflight", || cancellation.check())?;
+            let _journal_access = access_report.access_checked(WORKER, || cancellation.check())?;
+            runtime.progress_checked(
+                JobProgressState::Running,
+                1,
+                "operation-journal:recover",
+                || cancellation.check(),
+            )?;
+            let report =
+                Operator::new(OperationContext::new(journal)).recover_with_policy(policy)?;
+            runtime.remember_completion_detail(format!(
+                "completed:outcomes:{}",
+                report.outcomes.len()
+            ))?;
+            runtime.progress_checked(
+                JobProgressState::Running,
+                2,
+                "operation-journal:complete",
+                || cancellation.check(),
+            )?;
+            Ok(report)
+        },
+    )?;
+    outcome.result.ok_or_else(|| {
+        GfmError::Format("operation journal deferred before visible recovery".to_string())
     })
 }
 
@@ -377,12 +409,41 @@ fn read_operation_conflicts(
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
     let path = store.path().to_path_buf();
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _access = access_report.access_checked(WORKER, || cancellation.check())?;
-        cancellation.check()?;
-        let store = OperationConflictStore::new(path);
-        store.read_checked(|| cancellation.check())
+    let outcome = run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+        Priority::Visible,
+        JobPayloadKind::Operation,
+        WORKER,
+        current_operation_scheduling_pressure(),
+        || Ok(volume),
+        path.clone(),
+        move |cancellation, runtime| {
+            let path = path.clone();
+            let access_report = access_report.clone();
+            cancellation.check()?;
+            runtime.resize_checked(2, "operation-conflict-store:preflight", || {
+                cancellation.check()
+            })?;
+            let _access = access_report.access_checked(WORKER, || cancellation.check())?;
+            runtime.progress_checked(
+                JobProgressState::Running,
+                1,
+                "operation-conflict-store:read",
+                || cancellation.check(),
+            )?;
+            let store = OperationConflictStore::new(path);
+            let conflicts = store.read_checked(|| cancellation.check())?;
+            runtime.remember_completion_detail(format!("completed:read:{}", conflicts.len()))?;
+            runtime.progress_checked(
+                JobProgressState::Running,
+                2,
+                "operation-conflict-store:complete",
+                || cancellation.check(),
+            )?;
+            Ok(conflicts)
+        },
+    )?;
+    outcome.result.ok_or_else(|| {
+        GfmError::Format("operation conflict store deferred before visible read".to_string())
     })
 }
 
@@ -411,12 +472,43 @@ fn resolve_operation_conflicts(
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
     let path = store.path().to_path_buf();
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _access = access_report.access_checked(WORKER, || cancellation.check())?;
-        cancellation.check()?;
-        let store = OperationConflictStore::new(path);
-        store.resolve_targets_checked(&targets, conflict.as_str(), || cancellation.check())
+    let outcome = run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+        Priority::Visible,
+        JobPayloadKind::Operation,
+        WORKER,
+        current_operation_scheduling_pressure(),
+        || Ok(volume),
+        path.clone(),
+        move |cancellation, runtime| {
+            let path = path.clone();
+            let targets = targets.clone();
+            let access_report = access_report.clone();
+            cancellation.check()?;
+            runtime.resize_checked(2, "operation-conflict-store:preflight", || {
+                cancellation.check()
+            })?;
+            let _access = access_report.access_checked(WORKER, || cancellation.check())?;
+            runtime.progress_checked(
+                JobProgressState::Running,
+                1,
+                "operation-conflict-store:resolve",
+                || cancellation.check(),
+            )?;
+            let store = OperationConflictStore::new(path);
+            let resolved = store
+                .resolve_targets_checked(&targets, conflict.as_str(), || cancellation.check())?;
+            runtime.remember_completion_detail(format!("completed:resolved:{}", resolved.len()))?;
+            runtime.progress_checked(
+                JobProgressState::Running,
+                2,
+                "operation-conflict-store:complete",
+                || cancellation.check(),
+            )?;
+            Ok(resolved)
+        },
+    )?;
+    outcome.result.ok_or_else(|| {
+        GfmError::Format("operation conflict store deferred before visible resolve".to_string())
     })
 }
 
