@@ -2376,41 +2376,48 @@ fn run_content_index_set_search(
             .as_ref()
             .and_then(SearchWriteAccessReport::volume)
     });
-    run_retriable_volume_task_cancellable_with_payload_path(
-        volume,
-        Priority::Visible,
-        WORKER,
-        records.clone(),
-        move |cancellation| {
-            let records = records.clone();
-            let content_paths = content_paths.clone();
-            let query = query.clone();
-            let retry_probe = retry_probe.clone();
-            let retry_access = retry_access.clone();
-            cancellation.check()?;
-            if let (Some(retry_probe), Some(retry_access)) =
-                (retry_probe.as_ref(), retry_access.as_ref())
-            {
-                fail_first_search_retry_probe_attempt(
-                    retry_probe,
-                    retry_access,
+    scheduled_search_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Indexing,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            records.clone(),
+            move |cancellation, runtime| {
+                let records = records.clone();
+                let content_paths = content_paths.clone();
+                let query = query.clone();
+                let retry_probe = retry_probe.clone();
+                let retry_access = retry_access.clone();
+                let volume_reports = volume_reports.clone();
+                cancellation.check()?;
+                runtime
+                    .resize_checked(3, "content-set-search:preflight", || cancellation.check())?;
+                if let (Some(retry_probe), Some(retry_access)) =
+                    (retry_probe.as_ref(), retry_access.as_ref())
+                {
+                    fail_first_search_retry_probe_attempt(
+                        retry_probe,
+                        retry_access,
+                        WORKER,
+                        &cancellation,
+                    )?;
+                }
+                let _access = preflight_content_index_set_search_access_checked(
+                    &volume_reports,
                     WORKER,
+                    || cancellation.check(),
+                )?;
+                search_phase(&runtime, 1, "content-set-search:load", &cancellation)?;
+                let archive_count = unique_search_paths(&content_paths).len();
+                let (live, report) = Indexer::default().load_live_with_content_set_cancellable(
+                    records,
+                    &content_paths,
+                    &query,
                     &cancellation,
                 )?;
-            }
-            let _access =
-                preflight_content_index_set_search_access_checked(&volume_reports, WORKER, || {
-                    cancellation.check()
-                })?;
-            cancellation.check()?;
-            let archive_count = unique_search_paths(&content_paths).len();
-            let (live, report) = Indexer::default().load_live_with_content_set_cancellable(
-                records,
-                &content_paths,
-                &query,
-                &cancellation,
-            )?;
-            let diagnostics = format!(
+                let diagnostics = format!(
             "content-archives {} content-keys {} records-loaded {} records-missing {} candidate-ids {} full-hydration {}",
             archive_count,
             report.content_keys,
@@ -2419,18 +2426,21 @@ fn run_content_index_set_search(
             report.candidate_ids,
             report.full_hydration
         );
-            cancellation.check()?;
-            let parsed = SearchQuery::parse_cancellable(&query, &cancellation)?;
-            Ok(ContentIndexSetSearchOutput {
-                diagnostics,
-                hits: live.search_structured_with_volume_scope_cancellable(
+                cancellation.check()?;
+                let parsed = SearchQuery::parse_cancellable(&query, &cancellation)?;
+                let hits = live.search_structured_with_volume_scope_cancellable(
                     &parsed,
                     50,
                     &SearchVolumeScope::All,
                     &cancellation,
-                )?,
-            })
-        },
+                )?;
+                search_phase(&runtime, 2, "content-set-search:rank", &cancellation)?;
+                search_phase(&runtime, 3, "content-set-search:complete", &cancellation)?;
+                runtime.remember_completion_detail("completed")?;
+                Ok(ContentIndexSetSearchOutput { diagnostics, hits })
+            },
+        )?,
+        WORKER,
     )
 }
 
@@ -2452,67 +2462,78 @@ fn run_content_index_set_session(
             .as_ref()
             .and_then(SearchWriteAccessReport::volume)
     });
-    run_retriable_volume_task_cancellable_with_payload_path(
-        volume,
-        Priority::Visible,
-        WORKER,
-        records.clone(),
-        move |cancellation| {
-            let records = records.clone();
-            let content_paths = content_paths.clone();
-            let query = query.clone();
-            let retry_probe = retry_probe.clone();
-            let retry_access = retry_access.clone();
-            cancellation.check()?;
-            if let (Some(retry_probe), Some(retry_access)) =
-                (retry_probe.as_ref(), retry_access.as_ref())
-            {
-                fail_first_search_retry_probe_attempt(
-                    retry_probe,
-                    retry_access,
+    scheduled_search_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Indexing,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            records.clone(),
+            move |cancellation, runtime| {
+                let records = records.clone();
+                let content_paths = content_paths.clone();
+                let query = query.clone();
+                let retry_probe = retry_probe.clone();
+                let retry_access = retry_access.clone();
+                let volume_reports = volume_reports.clone();
+                cancellation.check()?;
+                runtime
+                    .resize_checked(3, "content-set-session:preflight", || cancellation.check())?;
+                if let (Some(retry_probe), Some(retry_access)) =
+                    (retry_probe.as_ref(), retry_access.as_ref())
+                {
+                    fail_first_search_retry_probe_attempt(
+                        retry_probe,
+                        retry_access,
+                        WORKER,
+                        &cancellation,
+                    )?;
+                }
+                let _access = preflight_content_index_set_search_access_checked(
+                    &volume_reports,
                     WORKER,
+                    || cancellation.check(),
+                )?;
+                search_phase(&runtime, 1, "content-set-session:load", &cancellation)?;
+                let session = Indexer::default().load_content_set_query_session_cancellable(
+                    &records,
+                    &content_paths,
                     &cancellation,
                 )?;
-            }
-            let _access =
-                preflight_content_index_set_search_access_checked(&volume_reports, WORKER, || {
-                    cancellation.check()
-                })?;
-            cancellation.check()?;
-            let session = Indexer::default().load_content_set_query_session_cancellable(
-                &records,
-                &content_paths,
-                &cancellation,
-            )?;
-            let archive_count = session.archive_count();
-            let parsed = SearchQuery::parse_cancellable(&query, &cancellation)?;
-            let first = session.search_structured_with_budget_cancellable(
-                &parsed,
-                50,
-                SearchLookupBudget::default(),
-                &cancellation,
-            )?;
-            let mut diagnostics = vec![format_content_session_report(
-                "content-session-first",
-                archive_count,
-                &first,
-            )];
-            let mut hits = first.search.hits;
-            cancellation.check()?;
-            let second = session.search_structured_with_budget_cancellable(
-                &parsed,
-                50,
-                SearchLookupBudget::default(),
-                &cancellation,
-            )?;
-            diagnostics.push(format_content_session_report(
-                "content-session-second",
-                archive_count,
-                &second,
-            ));
-            hits.extend(second.search.hits);
-            Ok(ContentIndexSessionOutput { diagnostics, hits })
-        },
+                let archive_count = session.archive_count();
+                let parsed = SearchQuery::parse_cancellable(&query, &cancellation)?;
+                let first = session.search_structured_with_budget_cancellable(
+                    &parsed,
+                    50,
+                    SearchLookupBudget::default(),
+                    &cancellation,
+                )?;
+                let mut diagnostics = vec![format_content_session_report(
+                    "content-session-first",
+                    archive_count,
+                    &first,
+                )];
+                let mut hits = first.search.hits;
+                search_phase(&runtime, 2, "content-set-session:reuse", &cancellation)?;
+                let second = session.search_structured_with_budget_cancellable(
+                    &parsed,
+                    50,
+                    SearchLookupBudget::default(),
+                    &cancellation,
+                )?;
+                diagnostics.push(format_content_session_report(
+                    "content-session-second",
+                    archive_count,
+                    &second,
+                ));
+                hits.extend(second.search.hits);
+                search_phase(&runtime, 3, "content-set-session:complete", &cancellation)?;
+                runtime.remember_completion_detail("completed")?;
+                Ok(ContentIndexSessionOutput { diagnostics, hits })
+            },
+        )?,
+        WORKER,
     )
 }
 
