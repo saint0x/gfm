@@ -3517,13 +3517,10 @@ fn run_volume_operation(
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
         let path = access_report.path.clone();
-        match path.try_exists() {
-            Ok(true) => {}
-            Ok(false) | Err(_) => {
-                return VolumeOperationReport::execute_checked(path, operation, || {
-                    cancellation.check()
-                })
-            }
+        if std::fs::metadata(&path).is_err() {
+            return VolumeOperationReport::execute_checked(path, operation, || {
+                cancellation.check()
+            });
         }
         access_report.preflight_volume(WORKER)?;
         let _access = access_report.access_checked(WORKER, || cancellation.check())?;
@@ -5150,15 +5147,15 @@ fn normalized_existing_ancestor_path(path: &Path) -> Option<PathBuf> {
     let mut candidate = path;
     let mut missing = Vec::new();
     loop {
-        match candidate.try_exists() {
-            Ok(true) => {
+        match std::fs::metadata(candidate) {
+            Ok(_) => {
                 let mut normalized = candidate.canonicalize().ok()?;
                 for component in missing.iter().rev() {
                     normalized.push(component);
                 }
                 return Some(normalized);
             }
-            Ok(false) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
             Err(_) => return None,
         }
         missing.push(candidate.file_name()?.to_os_string());
@@ -5187,9 +5184,9 @@ fn write_probe_existing_ancestor(path: &Path, worker: &str) -> Result<PathBuf> {
     preflight_write_target_volume(path, worker)?;
     let mut candidate = write_probe_path(path)?.to_path_buf();
     loop {
-        match candidate.try_exists() {
-            Ok(true) => return Ok(candidate),
-            Ok(false) => {
+        match std::fs::metadata(&candidate) {
+            Ok(_) => return Ok(candidate),
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
                 let Some(parent) = candidate.parent() else {
                     return Ok(candidate);
                 };
@@ -5201,7 +5198,7 @@ fn write_probe_existing_ancestor(path: &Path, worker: &str) -> Result<PathBuf> {
             Err(err) => {
                 return Err(GfmError::io(
                     &candidate,
-                    format!("{worker} write path ancestor unavailable: {err}"),
+                    format!("{worker} write path ancestor metadata unavailable: {err}"),
                 ))
             }
         }
