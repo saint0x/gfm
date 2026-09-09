@@ -130,7 +130,7 @@ fn plan_persistent_index_recovery_checked(
     let state_path = state_path.as_ref().to_path_buf();
 
     check_control()?;
-    let records_exist = match records_path.try_exists() {
+    let records_exist = match path_exists(&records_path) {
         Ok(exists) => exists,
         Err(err) => {
             return Ok(PersistentIndexPlan {
@@ -192,7 +192,7 @@ fn plan_persistent_index_recovery_checked(
     let record_count = Some(records.len());
 
     check_control()?;
-    let state_exists = match state_path.try_exists() {
+    let state_exists = match path_exists(&state_path) {
         Ok(exists) => exists,
         Err(err) => {
             return Ok(PersistentIndexPlan {
@@ -335,8 +335,9 @@ fn suspended_admission_plan(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<Option<PersistentIndexPlan>> {
     check_control()?;
-    if !matches!(state_path.try_exists(), Ok(true)) {
-        return Ok(None);
+    match path_exists(state_path) {
+        Ok(true) => {}
+        Ok(false) | Err(_) => return Ok(None),
     }
     check_control()?;
     let Ok(state) = IndexVolumeState::read_checked(state_path, &mut check_control) else {
@@ -499,6 +500,14 @@ fn quarantine_records(records_path: &Path, quarantine_dir: &Path) -> Result<Path
         quarantine_dir.join(format!("{name}.corrupt.{}.{}", std::process::id(), nanos));
     fs::rename(records_path, &quarantine_path).map_err(|err| GfmError::io(records_path, err))?;
     Ok(quarantine_path)
+}
+
+fn path_exists(path: &Path) -> std::io::Result<bool> {
+    match fs::metadata(path) {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err),
+    }
 }
 
 fn read_state_schema_version_checked(

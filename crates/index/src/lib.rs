@@ -21,6 +21,7 @@ pub use gfm_store::{
 use gfm_types::{
     ContentSegment, DirectoryPage, FileId, FileRecord, GfmError, Result, ScanIssue, SearchHit,
 };
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use gfm_store::{write_content_segment, write_content_segment_checked};
@@ -92,6 +93,17 @@ pub use volume::{
     VolumeIndexAction, VolumeIndexDecision, VolumeIndexPlan, VolumeIndexPolicy,
     VolumeIndexThrottle, VolumeInvalidationReport, VolumeThrottleClass,
 };
+
+fn path_exists(path: &Path, context: &str) -> Result<bool> {
+    match fs::metadata(path) {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("{context} existence unavailable: {err}"),
+        )),
+    }
+}
 
 pub fn content_query_terms(query: &str) -> Vec<String> {
     SearchQuery::parse(query).content_candidate_terms()
@@ -551,12 +563,7 @@ impl Indexer {
         let records_path = records_path.as_ref();
         let state_path = state_path.as_ref();
         cancellation.check()?;
-        let previous = if state_path.try_exists().map_err(|err| {
-            GfmError::io(
-                state_path,
-                format!("index state existence unavailable: {err}"),
-            )
-        })? {
+        let previous = if path_exists(state_path, "index state")? {
             Some(IndexVolumeState::read_checked(state_path, || {
                 cancellation.check()
             })?)
@@ -597,12 +604,7 @@ impl Indexer {
         let records_path = records_path.as_ref();
         let state_path = state_path.as_ref();
         cancellation.check()?;
-        let previous = if state_path.try_exists().map_err(|err| {
-            GfmError::io(
-                state_path,
-                format!("index state existence unavailable: {err}"),
-            )
-        })? {
+        let previous = if path_exists(state_path, "index state")? {
             Some(IndexVolumeState::read_checked(state_path, || {
                 cancellation.check()
             })?)

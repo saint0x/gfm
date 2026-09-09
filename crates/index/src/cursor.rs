@@ -250,12 +250,7 @@ impl FseventsResumePlan {
     ) -> Result<Self> {
         let cursor_path = cursor_path.as_ref();
         check_control()?;
-        let cursor = if cursor_path.try_exists().map_err(|err| {
-            GfmError::io(
-                cursor_path,
-                format!("fsevents cursor existence unavailable: {err}"),
-            )
-        })? {
+        let cursor = if cursor_path_exists(cursor_path)? {
             check_control()?;
             Some(FseventsCursor::read_checked(
                 cursor_path,
@@ -285,6 +280,17 @@ impl FseventsResumePlan {
             from_event_id: None,
             reason: reason.to_string(),
         }
+    }
+}
+
+fn cursor_path_exists(path: &Path) -> Result<bool> {
+    match fs::metadata(path) {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("fsevents cursor existence unavailable: {err}"),
+        )),
     }
 }
 
