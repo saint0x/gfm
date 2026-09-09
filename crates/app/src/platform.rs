@@ -13,7 +13,7 @@ use crate::{
     runtime::{
         default_job_journal_path, preflight_runtime_job_state,
         run_scheduled_volume_task_cancellable_with_runtime_and_payload_path,
-        run_volume_task_cancellable, RuntimeJobHandle,
+        run_volume_task_cancellable, runtime_job_id_floor_checked, RuntimeJobHandle,
     },
 };
 use gfm_fs::record_for_path_checked;
@@ -1623,22 +1623,16 @@ fn volume_event_description_api_status() -> Result<VolumeEventInvalidationReport
 
 fn publish_fileprovider_progress_job(
     path: PathBuf,
-    volume: Option<VolumeId>,
+    job: &gfm_jobs::Job,
     retry_probe: Option<&FileProviderProgressRetryProbe>,
     cancellation: &Cancellation,
 ) -> Result<FileProviderProgressReport> {
     maybe_fail_fileprovider_progress_retry_probe(retry_probe, cancellation)?;
     let report = FileProviderProgressReport::read_path_checked(&path, || cancellation.check())?;
-    let mut scheduler = Scheduler::new();
     let label = fileprovider_progress_label(report.state.progress.direction);
-    let job = if let Some(volume) = volume {
-        scheduler.schedule_on_volume_in_class(Priority::Visible, JobClass::Visible, label, volume)
-    } else {
-        scheduler.schedule_in_class(Priority::Visible, JobClass::Visible, label)
-    };
     let detail = fileprovider_progress_detail(&report);
     let runtime = RuntimeJobHandle::begin_with_payload_path(
-        &job,
+        job,
         JobPayloadKind::Operation,
         label,
         path.clone(),
@@ -3525,7 +3519,7 @@ fn run_fileprovider_progress_job(
             .preflight_volume(retry_probe.worker)?;
     }
     let volume = access_report.volume();
-    run_fileprovider_worker_without_runtime_progress(volume, WORKER, move |cancellation| {
+    run_fileprovider_worker_without_runtime_progress(volume, WORKER, move |job, cancellation| {
         let path = access_report.path.clone();
         cancellation.check()?;
         let _access = access_report.access_checked(WORKER, || cancellation.check())?;
@@ -3533,7 +3527,7 @@ fn run_fileprovider_progress_job(
         if cancel_after_access {
             cancellation.cancel();
         }
-        publish_fileprovider_progress_job(path, volume, retry_probe.as_ref(), &cancellation)
+        publish_fileprovider_progress_job(path, &job, retry_probe.as_ref(), &cancellation)
     })
 }
 
@@ -4646,20 +4640,21 @@ fn fileprovider_raw_event_paths(event: &FileEvent) -> Vec<PathBuf> {
 fn run_fileprovider_worker_without_runtime_progress<T>(
     volume: Option<VolumeId>,
     worker: &'static str,
-    work: impl Fn(Cancellation) -> Result<T> + Send + Sync + 'static,
+    work: impl Fn(gfm_jobs::Job, Cancellation) -> Result<T> + Send + Sync + 'static,
 ) -> Result<T>
 where
     T: Send + 'static,
 {
     let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
-    let mut scheduler = Scheduler::new();
+    let mut scheduler = Scheduler::new_starting_after(runtime_job_id_floor_checked(worker)?);
     let job = if let Some(volume) = volume {
         scheduler.schedule_on_volume_in_class(Priority::Visible, JobClass::Visible, worker, volume)
     } else {
         scheduler.schedule_in_class(Priority::Visible, JobClass::Visible, worker)
     };
+    let worker_job = job.clone();
     let task = RetriableTask::new(job.clone(), move |cancellation| {
-        let result = work(cancellation)?;
+        let result = work(worker_job.clone(), cancellation)?;
         result_tx
             .send(result)
             .map_err(|_| GfmError::Format(format!("{worker} result receiver dropped")))?;

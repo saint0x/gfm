@@ -3229,6 +3229,65 @@ fn publishes_fileprovider_progress_to_runtime_job_store_from_binary() {
 }
 
 #[test]
+fn fileprovider_progress_job_seeds_id_from_existing_runtime_stores_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-fileprovider-progress-job-id-floor-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let downloading = root.join("Downloading.icloud-downloading.md");
+    let progress = root.join("progress.gfmprogress");
+    let catalog = root.join("payloads.gfmjobs");
+    std::fs::write(&downloading, "downloading").unwrap();
+    std::fs::write(
+        &progress,
+        "gfm-job-progress-v1\nprogress\t44\tvisible\tvisible\texisting preview\t-\trunning\t1\t4\texisting\t1000\n",
+    )
+    .unwrap();
+    std::fs::write(
+        &catalog,
+        "gfm-job-payload-catalog-v1\npayload\t43\tpreview\texisting payload\t/tmp/existing\t-\tvisible:existing\n",
+    )
+    .unwrap();
+    xattr::set(&downloading, "com.apple.fileprovider.state", b"downloading").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .arg("fileprovider-progress-job")
+        .arg(&downloading)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let progress_text = std::fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("progress\t44\tvisible\tvisible\texisting preview"),
+        "{progress_text}"
+    );
+    assert!(
+        progress_text.contains("progress\t45\tvisible\tvisible\tfileprovider download"),
+        "{progress_text}"
+    );
+    let catalog_text = std::fs::read_to_string(&catalog).unwrap();
+    assert!(
+        catalog_text.contains("payload\t43\tpreview\texisting payload"),
+        "{catalog_text}"
+    );
+    assert!(
+        catalog_text.contains("payload\t45\toperation\tfileprovider download"),
+        "{catalog_text}"
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn fileprovider_progress_job_retries_transient_provider_publish_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-fileprovider-progress-job-retry-{}",
