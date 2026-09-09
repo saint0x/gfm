@@ -3517,10 +3517,18 @@ fn run_volume_operation(
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
         cancellation.check()?;
         let path = access_report.path.clone();
-        if std::fs::metadata(&path).is_err() {
-            return VolumeOperationReport::execute_checked(path, operation, || {
-                cancellation.check()
-            });
+        match std::fs::metadata(&path) {
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                return VolumeOperationReport::execute_checked(path, operation, || {
+                    cancellation.check()
+                });
+            }
+            Err(_) => {
+                return VolumeOperationReport::execute_checked(path, operation, || {
+                    cancellation.check()
+                });
+            }
         }
         access_report.preflight_volume(WORKER)?;
         let _access = access_report.access_checked(WORKER, || cancellation.check())?;
