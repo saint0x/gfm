@@ -3591,6 +3591,17 @@ fn run_volume_operation(
         return Err(GfmError::Cancelled);
     }
     let access_report = PlatformAccessReport::new_checked(path, AccessIntent::Operate, || Ok(()))?;
+    match std::fs::metadata(&access_report.path) {
+        Ok(_) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => {
+            return VolumeOperationReport::execute_checked(
+                access_report.path,
+                operation,
+                || Ok(()),
+            );
+        }
+    }
     access_report.preflight_mounted_reachable(WORKER)?;
     let volume = access_report.volume();
     run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
