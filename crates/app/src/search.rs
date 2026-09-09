@@ -2143,65 +2143,75 @@ fn run_search_index_columns(
             .as_ref()
             .and_then(SearchWriteAccessReport::volume)
     });
-    run_retriable_volume_task_cancellable_with_payload_path(
-        volume,
-        Priority::Visible,
-        WORKER,
-        records.clone(),
-        move |cancellation| {
-            let records = records.clone();
-            let columns = columns.clone();
-            let query = query.clone();
-            let retry_probe = retry_probe.clone();
-            let retry_access = retry_access.clone();
-            cancellation.check()?;
-            if let (Some(retry_probe), Some(retry_access)) =
-                (retry_probe.as_ref(), retry_access.as_ref())
-            {
-                fail_first_search_retry_probe_attempt(
-                    retry_probe,
-                    retry_access,
-                    WORKER,
-                    &cancellation,
-                )?;
-            }
-            let _access = preflight_search_index_columns_access_checked(&volume_reports, || {
-                cancellation.check()
-            })?;
-            cancellation.check()?;
-            let records = MmapRecordArchive::open_checked(records, || cancellation.check())?;
-            cancellation.check()?;
-            let columns = MmapRecordColumns::open_checked(columns, || cancellation.check())?;
-            cancellation.check()?;
-            let mut search_columns = Vec::with_capacity(columns.len());
-            for index in 0..columns.len() {
+    scheduled_search_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Indexing,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            records.clone(),
+            move |cancellation, runtime| {
+                let records = records.clone();
+                let columns = columns.clone();
+                let query = query.clone();
+                let retry_probe = retry_probe.clone();
+                let retry_access = retry_access.clone();
+                let volume_reports = volume_reports.clone();
                 cancellation.check()?;
-                let column = columns.column(index)?;
-                search_columns.push(SearchRecordColumns {
-                    id: column.id,
-                    name: column.name,
-                    path: column.path,
-                    extension: column.extension,
-                    tags: column.tags,
-                    comment: column.comment,
-                });
-            }
-            let (live, columns_applied) = LiveIndex::from_records_with_columns(
-                records.records_checked(|| cancellation.check())?,
-                search_columns,
-            );
-            cancellation.check()?;
-            let parsed = SearchQuery::parse_cancellable(&query, &cancellation)?;
-            Ok(SearchIndexColumnsOutput {
-                columns_applied,
-                hits: live.search_structured_with_volume_scope_cancellable(
+                runtime.resize_checked(3, "columns-search:preflight", || cancellation.check())?;
+                if let (Some(retry_probe), Some(retry_access)) =
+                    (retry_probe.as_ref(), retry_access.as_ref())
+                {
+                    fail_first_search_retry_probe_attempt(
+                        retry_probe,
+                        retry_access,
+                        WORKER,
+                        &cancellation,
+                    )?;
+                }
+                let _access =
+                    preflight_search_index_columns_access_checked(&volume_reports, || {
+                        cancellation.check()
+                    })?;
+                search_phase(&runtime, 1, "columns-search:load", &cancellation)?;
+                let records = MmapRecordArchive::open_checked(records, || cancellation.check())?;
+                let columns = MmapRecordColumns::open_checked(columns, || cancellation.check())?;
+                let mut search_columns = Vec::with_capacity(columns.len());
+                for index in 0..columns.len() {
+                    cancellation.check()?;
+                    let column = columns.column(index)?;
+                    search_columns.push(SearchRecordColumns {
+                        id: column.id,
+                        name: column.name,
+                        path: column.path,
+                        extension: column.extension,
+                        tags: column.tags,
+                        comment: column.comment,
+                    });
+                }
+                let (live, columns_applied) = LiveIndex::from_records_with_columns(
+                    records.records_checked(|| cancellation.check())?,
+                    search_columns,
+                );
+                cancellation.check()?;
+                let parsed = SearchQuery::parse_cancellable(&query, &cancellation)?;
+                let hits = live.search_structured_with_volume_scope_cancellable(
                     &parsed,
                     50,
                     &SearchVolumeScope::All,
                     &cancellation,
-                )?,
-            })
-        },
+                )?;
+                search_phase(&runtime, 2, "columns-search:rank", &cancellation)?;
+                search_phase(&runtime, 3, "columns-search:complete", &cancellation)?;
+                runtime.remember_completion_detail("completed")?;
+                Ok(SearchIndexColumnsOutput {
+                    columns_applied,
+                    hits,
+                })
+            },
+        )?,
+        WORKER,
     )
 }
 

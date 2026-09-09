@@ -6301,6 +6301,21 @@ fn searches_persisted_tags_from_binary() {
         column_retry_journal_text.contains("1\t2\tcompleted\tsearch index columns"),
         "{column_retry_journal_text}"
     );
+    let column_retry_catalog_text = fs::read_to_string(&column_retry_catalog).unwrap();
+    assert!(
+        column_retry_catalog_text.contains(&format!(
+            "payload\t1\tindexing\tsearch index columns\t{}\t",
+            index.display()
+        )) && column_retry_catalog_text.contains("\tvisible:search index columns:adaptive"),
+        "{column_retry_catalog_text}"
+    );
+    let column_retry_progress_text = fs::read_to_string(&column_retry_progress).unwrap();
+    assert!(
+        column_retry_progress_text
+            .contains("progress\t1\tvisible\tvisible\tsearch index columns\t")
+            && column_retry_progress_text.contains("\tcompleted\t3\t3\tcompleted\t"),
+        "{column_retry_progress_text}"
+    );
 
     let sidecar_search = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([
