@@ -898,6 +898,39 @@ fn diagnostics_parity_baseline_rejects_missing_manifest_from_binary() {
 }
 
 #[test]
+fn diagnostics_parity_baseline_rejects_missing_fixture_manifest_from_binary() {
+    let root = unique_temp_dir("gfm-cli-diagnostics-parity-missing-fixture-manifest");
+    let config = root.join("config.toml");
+    let baseline = root.join("baselines");
+    fs::create_dir_all(&baseline).unwrap();
+    fs::write(
+        baseline.join("manifest.tsv"),
+        "profile\tmacos-build=25A354\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "diagnostics-parity-baseline",
+            config.to_str().unwrap(),
+            baseline.to_str().unwrap(),
+            "25A354",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("25A354"), "{stdout}");
+    assert!(stderr.contains("fixture-manifest unavailable"), "{stderr}");
+    assert!(stderr.contains("fixtures/manifest.tsv"), "{stderr}");
+    assert!(!config.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn diagnostics_parity_baseline_refuses_unreachable_paths_before_config_write_from_binary() {
     let root = unique_temp_dir("gfm-cli-diagnostics-parity-preflight-root");
     let offline = unique_temp_dir("gfm-cli-diagnostics-parity-preflight-offline");
@@ -1045,6 +1078,12 @@ fn assert_worker_admitted(stderr: &str, worker: &str, path: &Path) {
 
 fn write_parity_baseline_manifest(root: &Path, macos_build: &str) {
     fs::create_dir_all(root).unwrap();
+    fs::create_dir_all(root.join("fixtures")).unwrap();
+    fs::write(
+        root.join("fixtures/manifest.tsv"),
+        "scenario\troot\tfinder-view\tfiles\tdirectories\ntoolbar\tfixtures/toolbar\ticon\t1\t0\n",
+    )
+    .unwrap();
     fs::write(
         root.join("manifest.tsv"),
         format!(

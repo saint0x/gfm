@@ -14,6 +14,11 @@
     },
     {
       "type": "fs_write",
+      "path": "tmp/baselines/fixtures/manifest.tsv",
+      "data": "scenario\troot\tfinder-view\tfiles\tdirectories\ntoolbar\tfixtures/toolbar\ticon\t1\t0\n"
+    },
+    {
+      "type": "fs_write",
       "path": "tmp/baselines/manifest.tsv",
       "data": "profile\tmacos-build=25A354\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\n"
     },

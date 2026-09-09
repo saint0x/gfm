@@ -266,6 +266,7 @@ fn validate_parity_baseline_manifest(baseline_root: &Path, macos_build: &str) ->
         if profile.macos_build == macos_build {
             saw_matching_profile = true;
             profile.validate(line_index)?;
+            validate_baseline_fixture_manifest(baseline_root, &profile, line_index)?;
             break;
         }
     }
@@ -276,6 +277,40 @@ fn validate_parity_baseline_manifest(baseline_root: &Path, macos_build: &str) ->
         )));
     }
     Ok(manifest_path)
+}
+
+fn validate_baseline_fixture_manifest(
+    baseline_root: &Path,
+    profile: &BaselineManifestProfile,
+    line_index: usize,
+) -> Result<()> {
+    let fixture_manifest = resolve_baseline_manifest_path(baseline_root, &profile.fixture_manifest);
+    let metadata = fs::metadata(&fixture_manifest).map_err(|err| {
+        GfmError::io(
+            &fixture_manifest,
+            format!(
+                "parity baseline manifest line {} fixture-manifest unavailable: {err}",
+                line_index + 1
+            ),
+        )
+    })?;
+    if !metadata.is_file() {
+        return Err(GfmError::Format(format!(
+            "parity baseline manifest line {} fixture-manifest is not a file: {}",
+            line_index + 1,
+            fixture_manifest.display()
+        )));
+    }
+    Ok(())
+}
+
+fn resolve_baseline_manifest_path(base: &Path, value: &str) -> PathBuf {
+    let path = PathBuf::from(value);
+    if path.is_absolute() {
+        path
+    } else {
+        base.join(path)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -782,6 +817,25 @@ mod tests {
     }
 
     #[test]
+    fn parity_baseline_selection_rejects_missing_fixture_manifest() {
+        let root = unique_temp_dir("gfm-diagnostics-parity-missing-fixture-manifest");
+        let store = ConfigStore::new(root.join("config.toml"));
+        fs::create_dir_all(root.join("baselines")).unwrap();
+        fs::write(
+            root.join("baselines/manifest.tsv"),
+            "profile\tmacos-build=25A354\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\n",
+        )
+        .unwrap();
+
+        let err = select_parity_baseline(&store, root.join("baselines"), "25A354").unwrap_err();
+
+        assert!(err.to_string().contains("fixture-manifest unavailable"));
+        assert!(err.to_string().contains("fixtures/manifest.tsv"));
+        assert!(!store.path().exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn cancellable_storage_inspection_honors_pre_cancelled_control() {
         let root = unique_temp_dir("gfm-diagnostics-storage-pre-cancel");
         let records = root.join("records.gfmidx");
@@ -836,6 +890,12 @@ mod tests {
 
     fn write_parity_baseline_manifest(root: &Path, macos_build: &str) {
         fs::create_dir_all(root).unwrap();
+        fs::create_dir_all(root.join("fixtures")).unwrap();
+        fs::write(
+            root.join("fixtures/manifest.tsv"),
+            "scenario\troot\tfinder-view\tfiles\tdirectories\ntoolbar\tfixtures/toolbar\ticon\t1\t0\n",
+        )
+        .unwrap();
         fs::write(
             root.join("manifest.tsv"),
             format!(
