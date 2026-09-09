@@ -363,10 +363,7 @@ fn inspect_archive_schema_result_checked(
     check_control: &mut impl FnMut() -> Result<()>,
 ) -> Result<ArchiveSchemaReport> {
     check_control()?;
-    if !path
-        .try_exists()
-        .map_err(|err| GfmError::io(path, format!("archive schema existence unavailable: {err}")))?
-    {
+    if !archive_path_exists(path)? {
         return Ok(report(kind, path, ArchiveSchemaStatus::Missing, None, None));
     }
     check_control()?;
@@ -802,6 +799,17 @@ fn inspect_content_schema_checked(
         None,
         Some("unsupported archive header".to_string()),
     ))
+}
+
+fn archive_path_exists(path: &Path) -> Result<bool> {
+    match fs::metadata(path) {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("archive schema existence unavailable: {err}"),
+        )),
+    }
 }
 
 fn inspect_line_schema_checked(

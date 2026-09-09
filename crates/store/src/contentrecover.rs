@@ -110,7 +110,7 @@ pub fn plan_content_manifest_recovery_checked(
 ) -> Result<ContentManifestRecoveryPlan> {
     let manifest_path = manifest_path.as_ref().to_path_buf();
     check_control()?;
-    let manifest_exists = match manifest_path.try_exists() {
+    let manifest_exists = match manifest_path_exists(&manifest_path) {
         Ok(exists) => exists,
         Err(err) => {
             return Ok(ContentManifestRecoveryPlan {
@@ -202,6 +202,14 @@ pub fn plan_content_manifest_recovery_checked(
         invalid_archives,
         detail: Some("no valid content archives are available for recovery".to_string()),
     })
+}
+
+fn manifest_path_exists(path: &Path) -> std::io::Result<bool> {
+    match fs::metadata(path) {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err),
+    }
 }
 
 pub fn recover_content_manifest(

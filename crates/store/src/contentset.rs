@@ -3,6 +3,7 @@ use crate::contentmerge::ContentMergeTier;
 use crate::durable;
 use gfm_types::{GfmError, Result};
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
@@ -730,7 +731,7 @@ pub fn plan_content_manifest_promotion_recovery_checked(
     let manifest_path = manifest_path.as_ref().to_path_buf();
     let journal_path = content_manifest_promotion_journal_path(&manifest_path);
     check_control()?;
-    let journal_exists = match journal_path.try_exists() {
+    let journal_exists = match promotion_journal_path_exists(&journal_path) {
         Ok(exists) => exists,
         Err(err) => {
             return Ok(ContentManifestPromotionRecoveryPlan {
@@ -812,6 +813,14 @@ pub fn plan_content_manifest_promotion_recovery_checked(
         journal_path,
         detail: current.err().map(|err| err.to_string()),
     })
+}
+
+fn promotion_journal_path_exists(path: &Path) -> std::io::Result<bool> {
+    match fs::metadata(path) {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err),
+    }
 }
 
 pub fn recover_content_manifest_promotion(

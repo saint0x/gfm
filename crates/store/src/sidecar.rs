@@ -238,12 +238,7 @@ pub fn recover_sidecars_checked(
         check_control()?;
         for health in &before.invalid_sidecars {
             check_control()?;
-            if health.path.try_exists().map_err(|err| {
-                GfmError::io(
-                    &health.path,
-                    format!("sidecar archive existence unavailable: {err}"),
-                )
-            })? {
+            if sidecar_path_exists(&health.path)? {
                 quarantined_sidecars.push(quarantine_sidecar(&health.path, quarantine_dir)?);
                 check_control()?;
             }
@@ -271,7 +266,7 @@ fn classify_sidecars_checked(
     let mut invalid = Vec::new();
     for (kind, path) in sidecars.iter() {
         check_control()?;
-        let detail = match path.try_exists() {
+        let detail = match sidecar_path_exists(path) {
             Ok(true) => match open_sidecar_checked(kind, path, &mut check_control) {
                 Ok(()) => None,
                 Err(GfmError::Cancelled) => return Err(GfmError::Cancelled),
@@ -295,6 +290,17 @@ fn classify_sidecars_checked(
         }
     }
     Ok((valid, invalid))
+}
+
+fn sidecar_path_exists(path: &Path) -> Result<bool> {
+    match fs::metadata(path) {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("sidecar archive existence unavailable: {err}"),
+        )),
+    }
 }
 
 fn open_sidecar_checked(

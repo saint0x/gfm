@@ -10,6 +10,7 @@ use crate::{
     RecordArchiveMigrationAction, SidecarKind,
 };
 use gfm_types::{FileRecord, GfmError, Result};
+use std::fs;
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -399,12 +400,7 @@ pub fn rebuild_derived_sidecar_checked(
     let records = MmapRecordArchive::open_checked(records_path, &mut check_control)?
         .records_checked(&mut check_control)?;
     check_control()?;
-    let backup_path = if sidecar_path.try_exists().map_err(|err| {
-        GfmError::io(
-            sidecar_path,
-            format!("derived sidecar existence unavailable: {err}"),
-        )
-    })? {
+    let backup_path = if derived_sidecar_path_exists(sidecar_path)? {
         let label = match before.sidecar.status {
             ArchiveSchemaStatus::Legacy => "legacy",
             ArchiveSchemaStatus::Unsupported => "unsupported",
@@ -637,6 +633,17 @@ fn archive_kind_for_sidecar(kind: SidecarKind) -> ArchiveSchemaKind {
         SidecarKind::Substrings => ArchiveSchemaKind::Substrings,
         SidecarKind::Fuzzy => ArchiveSchemaKind::Fuzzy,
         SidecarKind::Dictionary => ArchiveSchemaKind::Dictionary,
+    }
+}
+
+fn derived_sidecar_path_exists(path: &Path) -> Result<bool> {
+    match fs::metadata(path) {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("derived sidecar existence unavailable: {err}"),
+        )),
     }
 }
 
