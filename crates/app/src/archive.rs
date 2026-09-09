@@ -5,8 +5,8 @@ use crate::access::{
 use crate::platform::current_host_job_scheduling_pressure;
 use crate::runtime::{
     run_scheduled_volume_task_cancellable_with_runtime_and_payload_path,
-    run_scheduled_volume_task_cancellable_with_volume_and_payload_path,
-    run_volume_task_cancellable, RuntimeJobHandle, ScheduledTaskOutcome,
+    run_scheduled_volume_task_cancellable_with_volume_and_payload_path, RuntimeJobHandle,
+    ScheduledTaskOutcome,
 };
 use crate::{optional_path_arg, parse_required_scheduling_pressure, parse_u64_arg, required_path};
 use gfm_index::{ContentArchiveManifestEntry, ContentMergeTier};
@@ -689,7 +689,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
 fn run_archive_read_cancellable<T>(
     path: PathBuf,
     worker: &'static str,
-    read: impl FnOnce(PathBuf, &Cancellation) -> Result<T> + Send + 'static,
+    read: impl Fn(PathBuf, &Cancellation) -> Result<T> + Send + Sync + 'static,
 ) -> Result<T>
 where
     T: Send + 'static,
@@ -698,12 +698,29 @@ where
         ArchiveAccessReport::new_checked(path.clone(), AccessIntent::Read, || Ok(()))?;
     access_report.preflight_volume(worker)?;
     let volume = access_report.volume();
-    run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
-        cancellation.check()?;
-        let _access = access_report.access_checked(worker, || cancellation.check())?;
-        cancellation.check()?;
-        read(path, &cancellation)
-    })
+    visible_scheduled_archive_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Indexing,
+            worker,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            path.clone(),
+            move |cancellation, runtime| {
+                let path = path.clone();
+                cancellation.check()?;
+                runtime.resize_checked(3, "archive-read:preflight", || cancellation.check())?;
+                let _access = access_report.access_checked(worker, || cancellation.check())?;
+                archive_runtime_phase(&runtime, 1, "archive-read:map", &cancellation)?;
+                let result = read(path, &cancellation)?;
+                archive_runtime_phase(&runtime, 2, "archive-read:complete", &cancellation)?;
+                runtime.remember_completion_detail("completed:archive-read".to_string())?;
+                archive_runtime_phase(&runtime, 3, "archive-read:reported", &cancellation)?;
+                Ok(result)
+            },
+        )?,
+        worker,
+    )
 }
 
 fn archive_runtime_phase(
@@ -968,19 +985,37 @@ fn run_archive_rebuild_plan(inputs: ArchiveRebuildInputs) -> Result<Vec<String>>
     let access_reports = archive_rebuild_plan_access_reports(&inputs)?;
     access_reports.preflight_volumes()?;
     let volume = access_reports.first_volume();
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _access = access_reports.access_checked(|| cancellation.check())?;
-        cancellation.check()?;
-        Ok(plan_archive_rebuilds(&inputs).as_tsv_lines())
-    })
+    visible_scheduled_archive_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Repair,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            inputs.records_path.clone(),
+            move |cancellation, runtime| {
+                let inputs = inputs.clone();
+                cancellation.check()?;
+                runtime
+                    .resize_checked(3, "archive-rebuild-plan:preflight", || cancellation.check())?;
+                let _access = access_reports.access_checked(|| cancellation.check())?;
+                archive_runtime_phase(&runtime, 1, "archive-rebuild-plan:plan", &cancellation)?;
+                let lines = plan_archive_rebuilds(&inputs).as_tsv_lines();
+                archive_runtime_phase(&runtime, 2, "archive-rebuild-plan:complete", &cancellation)?;
+                runtime.remember_completion_detail(format!("completed:entries:{}", lines.len()))?;
+                archive_runtime_phase(&runtime, 3, "archive-rebuild-plan:reported", &cancellation)?;
+                Ok(lines)
+            },
+        )?,
+        WORKER,
+    )
 }
 
 fn run_archive_migration<T>(
     archive: PathBuf,
     backup_dir: PathBuf,
     worker: &'static str,
-    migrate: impl FnOnce(PathBuf, PathBuf, &Cancellation) -> Result<T> + Send + 'static,
+    migrate: impl Fn(PathBuf, PathBuf, &Cancellation) -> Result<T> + Send + Sync + 'static,
 ) -> Result<T>
 where
     T: Send + 'static,
@@ -988,12 +1023,31 @@ where
     let access_reports = archive_migration_access_reports(&archive, &backup_dir, worker)?;
     access_reports.preflight_volumes()?;
     let volume = access_reports.first_volume();
-    run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
-        cancellation.check()?;
-        let _access = access_reports.access_checked(|| cancellation.check())?;
-        cancellation.check()?;
-        migrate(archive, backup_dir, &cancellation)
-    })
+    visible_scheduled_archive_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Repair,
+            worker,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            archive.clone(),
+            move |cancellation, runtime| {
+                let archive = archive.clone();
+                let backup_dir = backup_dir.clone();
+                cancellation.check()?;
+                runtime
+                    .resize_checked(3, "archive-migration:preflight", || cancellation.check())?;
+                let _access = access_reports.access_checked(|| cancellation.check())?;
+                archive_runtime_phase(&runtime, 1, "archive-migration:migrate", &cancellation)?;
+                let result = migrate(archive, backup_dir, &cancellation)?;
+                archive_runtime_phase(&runtime, 2, "archive-migration:complete", &cancellation)?;
+                runtime.remember_completion_detail("completed:archive-migration".to_string())?;
+                archive_runtime_phase(&runtime, 3, "archive-migration:reported", &cancellation)?;
+                Ok(result)
+            },
+        )?,
+        worker,
+    )
 }
 
 fn run_columns_rebuild_plan(records: PathBuf, columns: PathBuf) -> Result<String> {
@@ -1001,12 +1055,31 @@ fn run_columns_rebuild_plan(records: PathBuf, columns: PathBuf) -> Result<String
     let access_reports = columns_rebuild_plan_access_reports(&records, &columns)?;
     access_reports.preflight_volumes()?;
     let volume = access_reports.first_volume();
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _access = access_reports.access_checked(|| cancellation.check())?;
-        cancellation.check()?;
-        Ok(plan_columns_archive_rebuild(records, columns).as_tsv())
-    })
+    visible_scheduled_archive_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Indexing,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            columns.clone(),
+            move |cancellation, runtime| {
+                let records = records.clone();
+                let columns = columns.clone();
+                cancellation.check()?;
+                runtime
+                    .resize_checked(3, "columns-rebuild-plan:preflight", || cancellation.check())?;
+                let _access = access_reports.access_checked(|| cancellation.check())?;
+                archive_runtime_phase(&runtime, 1, "columns-rebuild-plan:plan", &cancellation)?;
+                let report = plan_columns_archive_rebuild(records, columns).as_tsv();
+                archive_runtime_phase(&runtime, 2, "columns-rebuild-plan:complete", &cancellation)?;
+                runtime.remember_completion_detail("completed:columns-rebuild-plan".to_string())?;
+                archive_runtime_phase(&runtime, 3, "columns-rebuild-plan:reported", &cancellation)?;
+                Ok(report)
+            },
+        )?,
+        WORKER,
+    )
 }
 
 fn run_columns_rebuild(
@@ -1018,12 +1091,34 @@ fn run_columns_rebuild(
     let access_reports = columns_rebuild_access_reports(&records, &columns, &backup_dir)?;
     access_reports.preflight_volumes()?;
     let volume = access_reports.first_volume();
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _access = access_reports.access_checked(|| cancellation.check())?;
-        cancellation.check()?;
-        rebuild_columns_archive(records, columns, backup_dir)
-    })
+    visible_scheduled_archive_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Indexing,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            columns.clone(),
+            move |cancellation, runtime| {
+                let records = records.clone();
+                let columns = columns.clone();
+                let backup_dir = backup_dir.clone();
+                cancellation.check()?;
+                runtime.resize_checked(3, "columns-rebuild:preflight", || cancellation.check())?;
+                let _access = access_reports.access_checked(|| cancellation.check())?;
+                archive_runtime_phase(&runtime, 1, "columns-rebuild:rebuild", &cancellation)?;
+                let rebuild = rebuild_columns_archive(records, columns, backup_dir)?;
+                archive_runtime_phase(&runtime, 2, "columns-rebuild:complete", &cancellation)?;
+                runtime.remember_completion_detail(format!(
+                    "completed:records:{}",
+                    rebuild.rebuilt_records
+                ))?;
+                archive_runtime_phase(&runtime, 3, "columns-rebuild:reported", &cancellation)?;
+                Ok(rebuild)
+            },
+        )?,
+        WORKER,
+    )
 }
 
 fn run_derived_sidecar_rebuild_plan(
@@ -1035,12 +1130,50 @@ fn run_derived_sidecar_rebuild_plan(
     let access_reports = derived_sidecar_rebuild_plan_access_reports(&records, &sidecar)?;
     access_reports.preflight_volumes()?;
     let volume = access_reports.first_volume();
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _access = access_reports.access_checked(|| cancellation.check())?;
-        cancellation.check()?;
-        Ok(plan_derived_sidecar_rebuild(records, kind, sidecar).as_tsv())
-    })
+    visible_scheduled_archive_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Indexing,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            sidecar.clone(),
+            move |cancellation, runtime| {
+                let records = records.clone();
+                let sidecar = sidecar.clone();
+                cancellation.check()?;
+                runtime.resize_checked(3, "derived-sidecar-rebuild-plan:preflight", || {
+                    cancellation.check()
+                })?;
+                let _access = access_reports.access_checked(|| cancellation.check())?;
+                archive_runtime_phase(
+                    &runtime,
+                    1,
+                    "derived-sidecar-rebuild-plan:plan",
+                    &cancellation,
+                )?;
+                let report = plan_derived_sidecar_rebuild(records, kind, sidecar).as_tsv();
+                archive_runtime_phase(
+                    &runtime,
+                    2,
+                    "derived-sidecar-rebuild-plan:complete",
+                    &cancellation,
+                )?;
+                runtime.remember_completion_detail(format!(
+                    "completed:{}-rebuild-plan",
+                    sidecar_kind_name(kind)
+                ))?;
+                archive_runtime_phase(
+                    &runtime,
+                    3,
+                    "derived-sidecar-rebuild-plan:reported",
+                    &cancellation,
+                )?;
+                Ok(report)
+            },
+        )?,
+        WORKER,
+    )
 }
 
 fn run_sidecar_recovery_plan(
@@ -1051,19 +1184,43 @@ fn run_sidecar_recovery_plan(
     let access_reports = sidecar_recovery_plan_access_reports(&records, &sidecars)?;
     access_reports.preflight_volumes()?;
     let volume = access_reports.first_volume();
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _access = access_reports.access_checked(|| cancellation.check())?;
-        cancellation.check()?;
-        plan_sidecar_recovery_checked(&records, &sidecars, || cancellation.check())
-    })
+    visible_scheduled_archive_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Repair,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            records.clone(),
+            move |cancellation, runtime| {
+                let records = records.clone();
+                let sidecars = sidecars.clone();
+                cancellation.check()?;
+                runtime
+                    .resize_checked(3, "sidecar-repair-plan:preflight", || cancellation.check())?;
+                let _access = access_reports.access_checked(|| cancellation.check())?;
+                archive_runtime_phase(&runtime, 1, "sidecar-repair-plan:plan", &cancellation)?;
+                let plan =
+                    plan_sidecar_recovery_checked(&records, &sidecars, || cancellation.check())?;
+                archive_runtime_phase(&runtime, 2, "sidecar-repair-plan:complete", &cancellation)?;
+                runtime.remember_completion_detail(format!(
+                    "completed:valid:{} invalid:{}",
+                    plan.valid_sidecars.len(),
+                    plan.invalid_sidecars.len()
+                ))?;
+                archive_runtime_phase(&runtime, 3, "sidecar-repair-plan:reported", &cancellation)?;
+                Ok(plan)
+            },
+        )?,
+        WORKER,
+    )
 }
 
 fn build_record_sidecar<T>(
     records: PathBuf,
     output: PathBuf,
     worker: &'static str,
-    build: impl FnOnce(PathBuf, Vec<FileRecord>, &Cancellation) -> Result<T> + Send + 'static,
+    build: impl Fn(PathBuf, Vec<FileRecord>, &Cancellation) -> Result<T> + Send + Sync + 'static,
 ) -> Result<T>
 where
     T: Send + 'static,
@@ -1071,16 +1228,35 @@ where
     let access_reports = RecordSidecarBuildAccessReports::for_paths(&records, &output, worker)?;
     access_reports.preflight_volumes(worker)?;
     let volume = access_reports.first_volume();
-    run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
-        cancellation.check()?;
-        let _access = access_reports.access_checked(worker, || cancellation.check())?;
-        cancellation.check()?;
-        let archive = MmapRecordArchive::open_checked(records, || cancellation.check())?;
-        cancellation.check()?;
-        let records = archive.records_checked(|| cancellation.check())?;
-        cancellation.check()?;
-        build(output, records, &cancellation)
-    })
+    visible_scheduled_archive_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Indexing,
+            worker,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            output.clone(),
+            move |cancellation, runtime| {
+                let records = records.clone();
+                let output = output.clone();
+                cancellation.check()?;
+                runtime
+                    .resize_checked(4, "record-sidecar-build:preflight", || cancellation.check())?;
+                let _access = access_reports.access_checked(worker, || cancellation.check())?;
+                archive_runtime_phase(&runtime, 1, "record-sidecar-build:map", &cancellation)?;
+                let archive = MmapRecordArchive::open_checked(records, || cancellation.check())?;
+                let record_count = archive.len();
+                archive_runtime_phase(&runtime, 2, "record-sidecar-build:load", &cancellation)?;
+                let records = archive.records_checked(|| cancellation.check())?;
+                archive_runtime_phase(&runtime, 3, "record-sidecar-build:write", &cancellation)?;
+                let result = build(output, records, &cancellation)?;
+                runtime.remember_completion_detail(format!("completed:records:{record_count}"))?;
+                archive_runtime_phase(&runtime, 4, "record-sidecar-build:reported", &cancellation)?;
+                Ok(result)
+            },
+        )?,
+        worker,
+    )
 }
 
 fn archive_migration_access_reports(
