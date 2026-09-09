@@ -3499,10 +3499,14 @@ fn persists_volume_index_state_from_binary() {
     let root = unique_temp_dir("gfm-cli-index-state-root");
     let index = unique_temp_path("gfm-cli-index-state-records", "gfmidx");
     let state = unique_temp_path("gfm-cli-index-state", "gfmstate");
+    let catalog = unique_temp_path("gfm-cli-index-state", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-index-state", "gfmprogress");
     fs::create_dir_all(root.join("Projects")).unwrap();
     fs::write(root.join("Projects").join("StatefulSearch.md"), "alpha").unwrap();
 
     let first = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
         .args([
             "index-state",
             root.to_str().unwrap(),
@@ -3524,6 +3528,20 @@ fn persists_volume_index_state_from_binary() {
     assert!(
         first_stdout.contains("\trecord-count=3\t"),
         "{first_stdout}"
+    );
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(
+        catalog_text.contains(&format!(
+            "payload\t1\tindexing\tindex\t{}\t",
+            index.display()
+        )) && catalog_text.contains("\tvisible:index:adaptive"),
+        "{catalog_text}"
+    );
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("progress\t1\tvisible\tvisible\tindex\t")
+            && progress_text.contains("\tcompleted\t3\t3\tcompleted:3 records:0 inaccessible\t"),
+        "{progress_text}"
     );
 
     let second = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -3579,6 +3597,8 @@ fn persists_volume_index_state_from_binary() {
     fs::remove_dir_all(root).unwrap();
     fs::remove_file(index).unwrap();
     fs::remove_file(state).unwrap();
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
 }
 
 #[test]
