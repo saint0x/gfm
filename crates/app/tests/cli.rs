@@ -5629,6 +5629,10 @@ fn searches_persisted_tags_from_binary() {
     let session_retry_progress =
         unique_temp_path("gfm-cli-sidecar-search-session-retry", "gfmprogress");
     let session_retry_probe = unique_temp_path("gfm-cli-sidecar-search-session-retry", "state");
+    let provider_session_journal = unique_temp_path("gfm-cli-sidecar-provider-session", "journal");
+    let provider_session_catalog = unique_temp_path("gfm-cli-sidecar-provider-session", "gfmjobs");
+    let provider_session_progress =
+        unique_temp_path("gfm-cli-sidecar-provider-session", "gfmprogress");
     let budget_retry_journal = unique_temp_path("gfm-cli-sidecar-budget-retry", "journal");
     let budget_retry_catalog = unique_temp_path("gfm-cli-sidecar-budget-retry", "gfmjobs");
     let budget_retry_progress = unique_temp_path("gfm-cli-sidecar-budget-retry", "gfmprogress");
@@ -6697,6 +6701,9 @@ fn searches_persisted_tags_from_binary() {
 
     let sidecar_provider_path = Path::new("/tmp/tagged.md");
     let sidecar_provider_session_search = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &provider_session_journal)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &provider_session_catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &provider_session_progress)
         .args([
             "search-index-sidecars-session-provider-invalidation",
             index.to_str().unwrap(),
@@ -6746,6 +6753,28 @@ fn searches_persisted_tags_from_binary() {
             && sidecar_provider_session_stderr.contains("\tresult-cache-hits=0")
             && sidecar_provider_session_stderr.contains("\tresult-cache-misses=1"),
         "{sidecar_provider_session_stderr}"
+    );
+    let provider_session_journal_text = fs::read_to_string(&provider_session_journal).unwrap();
+    assert!(
+        provider_session_journal_text
+            .contains("1\t1\tcompleted\tsidecar session provider invalidation"),
+        "{provider_session_journal_text}"
+    );
+    let provider_session_catalog_text = fs::read_to_string(&provider_session_catalog).unwrap();
+    assert!(
+        provider_session_catalog_text.contains(&format!(
+            "payload\t1\tindexing\tsidecar session provider invalidation\t{}\t",
+            index.display()
+        )) && provider_session_catalog_text
+            .contains("\tvisible:sidecar session provider invalidation:adaptive"),
+        "{provider_session_catalog_text}"
+    );
+    let provider_session_progress_text = fs::read_to_string(&provider_session_progress).unwrap();
+    assert!(
+        provider_session_progress_text
+            .contains("progress\t1\tvisible\tvisible\tsidecar session provider invalidation\t")
+            && provider_session_progress_text.contains("\tcompleted\t4\t4\tcompleted\t"),
+        "{provider_session_progress_text}"
     );
 
     let sidecar_session_retry_search = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -6989,6 +7018,9 @@ fn searches_persisted_tags_from_binary() {
     fs::remove_file(session_retry_catalog).unwrap();
     fs::remove_file(session_retry_progress).unwrap();
     fs::remove_file(session_retry_probe).unwrap();
+    fs::remove_file(provider_session_journal).unwrap();
+    fs::remove_file(provider_session_catalog).unwrap();
+    fs::remove_file(provider_session_progress).unwrap();
     fs::remove_file(budget_retry_journal).unwrap();
     fs::remove_file(budget_retry_catalog).unwrap();
     fs::remove_file(budget_retry_progress).unwrap();
@@ -15012,6 +15044,10 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
     let manifest_ids_retry_progress =
         unique_temp_path("gfm-cli-content-ids-manifest-retry", "gfmprogress");
     let manifest_ids_retry_probe = unique_temp_path("gfm-cli-content-ids-manifest-retry", "state");
+    let provider_session_journal = unique_temp_path("gfm-cli-content-provider-session", "journal");
+    let provider_session_catalog = unique_temp_path("gfm-cli-content-provider-session", "gfmjobs");
+    let provider_session_progress =
+        unique_temp_path("gfm-cli-content-provider-session", "gfmprogress");
     fs::write(root.join("left.md"), "metadata only").unwrap();
     fs::write(root.join("right.md"), "metadata only").unwrap();
 
@@ -15451,6 +15487,9 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
 
     let provider_path = root.join("left.md");
     let provider_session_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_JOURNAL", &provider_session_journal)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &provider_session_catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &provider_session_progress)
         .args([
             "search-content-index-set-session-provider-invalidation",
             records.to_str().unwrap(),
@@ -15497,6 +15536,28 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
         ) && provider_session_stderr.contains("\tposting-cache-hits=1\tposting-cache-misses=0")
             && provider_session_stderr.contains("\tresult-cache-hits=0\tresult-cache-misses=1"),
         "{provider_session_stderr}"
+    );
+    let provider_session_journal_text = fs::read_to_string(&provider_session_journal).unwrap();
+    assert!(
+        provider_session_journal_text
+            .contains("1\t1\tcompleted\tcontent index set session provider invalidation"),
+        "{provider_session_journal_text}"
+    );
+    let provider_session_catalog_text = fs::read_to_string(&provider_session_catalog).unwrap();
+    assert!(
+        provider_session_catalog_text.contains(&format!(
+            "payload\t1\tindexing\tcontent index set session provider invalidation\t{}\t",
+            records.display()
+        )) && provider_session_catalog_text
+            .contains("\tvisible:content index set session provider invalidation:adaptive"),
+        "{provider_session_catalog_text}"
+    );
+    let provider_session_progress_text = fs::read_to_string(&provider_session_progress).unwrap();
+    assert!(
+        provider_session_progress_text.contains(
+            "progress\t1\tvisible\tvisible\tcontent index set session provider invalidation\t"
+        ) && provider_session_progress_text.contains("\tcompleted\t4\t4\tcompleted\t"),
+        "{provider_session_progress_text}"
     );
 
     let manifest_session_search_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
@@ -15869,6 +15930,9 @@ fn searches_persisted_content_across_mmap_archive_set_from_binary() {
     fs::remove_file(manifest_ids_retry_catalog).unwrap();
     fs::remove_file(manifest_ids_retry_progress).unwrap();
     fs::remove_file(manifest_ids_retry_probe).unwrap();
+    fs::remove_file(provider_session_journal).unwrap();
+    fs::remove_file(provider_session_catalog).unwrap();
+    fs::remove_file(provider_session_progress).unwrap();
 }
 
 #[test]

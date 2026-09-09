@@ -6,7 +6,6 @@ use crate::content::{run_content_search, run_content_search_with_volume_report};
 use crate::extract::extraction_budget_profile_from_volume_report;
 use crate::platform::current_host_job_scheduling_pressure;
 use crate::runtime::{
-    run_retriable_volume_task_cancellable_with_payload_path,
     run_scheduled_volume_task_cancellable_with_runtime_and_payload_path, RuntimeJobHandle,
     ScheduledTaskOutcome,
 };
@@ -2595,78 +2594,96 @@ fn run_content_index_set_session_provider_invalidation(
     let volume_reports =
         preflight_content_index_set_volume_access(&records, &content_paths, WORKER)?;
     let volume = volume_reports.first_volume();
-    run_retriable_volume_task_cancellable_with_payload_path(
-        volume,
-        Priority::Visible,
+    scheduled_search_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Indexing,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            records.clone(),
+            move |cancellation, runtime| {
+                let records = records.clone();
+                let content_paths = content_paths.clone();
+                let query = query.clone();
+                let provider = provider.clone();
+                let volume_reports = volume_reports.clone();
+                cancellation.check()?;
+                runtime
+                    .resize_checked(4, "content-set-provider:preflight", || cancellation.check())?;
+                let _access = preflight_content_index_set_search_access_checked(
+                    &volume_reports,
+                    WORKER,
+                    || cancellation.check(),
+                )?;
+                search_phase(&runtime, 1, "content-set-provider:open", &cancellation)?;
+                let session = Indexer::default().load_content_set_query_session_cancellable(
+                    &records,
+                    &content_paths,
+                    &cancellation,
+                )?;
+                let archive_count = session.archive_count();
+                let parsed = SearchQuery::parse_cancellable(&query, &cancellation)?;
+                let first = session.search_structured_with_budget_cancellable(
+                    &parsed,
+                    50,
+                    SearchLookupBudget::default(),
+                    &cancellation,
+                )?;
+                let mut diagnostics = vec![format_content_session_report(
+                    "content-session-provider-first",
+                    archive_count,
+                    &first,
+                )];
+                let mut hits = first.search.hits;
+
+                cancellation.check()?;
+                let second = session.search_structured_with_budget_cancellable(
+                    &parsed,
+                    50,
+                    SearchLookupBudget::default(),
+                    &cancellation,
+                )?;
+                search_phase(&runtime, 2, "content-set-provider:reuse", &cancellation)?;
+                diagnostics.push(format_content_session_report(
+                    "content-session-provider-second",
+                    archive_count,
+                    &second,
+                ));
+                hits.extend(second.search.hits);
+
+                cancellation.check()?;
+                diagnostics.push(provider.as_tsv());
+                diagnostics.push(
+                    session
+                        .apply_provider_metadata_invalidation(&provider)
+                        .as_tsv(),
+                );
+                search_phase(
+                    &runtime,
+                    3,
+                    "content-set-provider:invalidate",
+                    &cancellation,
+                )?;
+
+                let third = session.search_structured_with_budget_cancellable(
+                    &parsed,
+                    50,
+                    SearchLookupBudget::default(),
+                    &cancellation,
+                )?;
+                diagnostics.push(format_content_session_report(
+                    "content-session-provider-third",
+                    archive_count,
+                    &third,
+                ));
+                hits.extend(third.search.hits);
+                search_phase(&runtime, 4, "content-set-provider:complete", &cancellation)?;
+                runtime.remember_completion_detail("completed")?;
+                Ok(ContentIndexSessionOutput { diagnostics, hits })
+            },
+        )?,
         WORKER,
-        records.clone(),
-        move |cancellation| {
-            let records = records.clone();
-            let content_paths = content_paths.clone();
-            let query = query.clone();
-            let provider = provider.clone();
-            let _access =
-                preflight_content_index_set_search_access_checked(&volume_reports, WORKER, || {
-                    cancellation.check()
-                })?;
-            cancellation.check()?;
-            let session = Indexer::default().load_content_set_query_session_cancellable(
-                &records,
-                &content_paths,
-                &cancellation,
-            )?;
-            let archive_count = session.archive_count();
-            let parsed = SearchQuery::parse_cancellable(&query, &cancellation)?;
-            let first = session.search_structured_with_budget_cancellable(
-                &parsed,
-                50,
-                SearchLookupBudget::default(),
-                &cancellation,
-            )?;
-            let mut diagnostics = vec![format_content_session_report(
-                "content-session-provider-first",
-                archive_count,
-                &first,
-            )];
-            let mut hits = first.search.hits;
-
-            cancellation.check()?;
-            let second = session.search_structured_with_budget_cancellable(
-                &parsed,
-                50,
-                SearchLookupBudget::default(),
-                &cancellation,
-            )?;
-            diagnostics.push(format_content_session_report(
-                "content-session-provider-second",
-                archive_count,
-                &second,
-            ));
-            hits.extend(second.search.hits);
-
-            cancellation.check()?;
-            diagnostics.push(provider.as_tsv());
-            diagnostics.push(
-                session
-                    .apply_provider_metadata_invalidation(&provider)
-                    .as_tsv(),
-            );
-
-            cancellation.check()?;
-            let third = session.search_structured_with_budget_cancellable(
-                &parsed,
-                50,
-                SearchLookupBudget::default(),
-                &cancellation,
-            )?;
-            diagnostics.push(format_content_session_report(
-                "content-session-provider-third",
-                archive_count,
-                &third,
-            ));
-            hits.extend(third.search.hits);
-            Ok(ContentIndexSessionOutput { diagnostics, hits })
-        },
     )
 }
 
@@ -3657,83 +3674,94 @@ fn run_sidecar_index_session_provider_invalidation(
     const WORKER: &str = "sidecar session provider invalidation";
     let volume_reports = preflight_sidecar_index_volume_access(&paths, WORKER)?;
     let volume = volume_reports.first_volume();
-    run_retriable_volume_task_cancellable_with_payload_path(
-        volume,
-        Priority::Visible,
+    scheduled_search_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Indexing,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            paths.records.clone(),
+            move |cancellation, runtime| {
+                let paths = paths.clone();
+                let query = query.clone();
+                let provider = provider.clone();
+                let volume_reports = volume_reports.clone();
+                cancellation.check()?;
+                runtime.resize_checked(4, "sidecar-provider:preflight", || cancellation.check())?;
+                let _access =
+                    preflight_sidecar_index_search_access_checked(&volume_reports, WORKER, || {
+                        cancellation.check()
+                    })?;
+                search_phase(&runtime, 1, "sidecar-provider:open", &cancellation)?;
+                let session = open_sidecar_index_query_session(paths, &cancellation)?;
+                let budget = SearchLookupBudget::default();
+                let parsed = SearchQuery::parse_cancellable(&query, &cancellation)?;
+
+                let first = session.search_structured_with_volume_scope_budget_cancellable(
+                    &parsed,
+                    50,
+                    &SearchVolumeScope::All,
+                    budget,
+                    &cancellation,
+                )?;
+                let mut diagnostics = vec![format_sidecar_session_report(
+                    "sidecar-session-provider-first",
+                    &session,
+                    &first,
+                    Some(&volume_reports),
+                    budget,
+                )];
+                let mut hits = first.search.hits;
+
+                cancellation.check()?;
+                let second = session.search_structured_with_volume_scope_budget_cancellable(
+                    &parsed,
+                    50,
+                    &SearchVolumeScope::All,
+                    budget,
+                    &cancellation,
+                )?;
+                search_phase(&runtime, 2, "sidecar-provider:reuse", &cancellation)?;
+                diagnostics.push(format_sidecar_session_report(
+                    "sidecar-session-provider-second",
+                    &session,
+                    &second,
+                    Some(&volume_reports),
+                    budget,
+                ));
+                hits.extend(second.search.hits);
+
+                cancellation.check()?;
+                diagnostics.push(provider.as_tsv());
+                diagnostics.push(
+                    session
+                        .apply_provider_metadata_invalidation(&provider)
+                        .as_tsv(),
+                );
+                search_phase(&runtime, 3, "sidecar-provider:invalidate", &cancellation)?;
+
+                let third = session.search_structured_with_volume_scope_budget_cancellable(
+                    &parsed,
+                    50,
+                    &SearchVolumeScope::All,
+                    budget,
+                    &cancellation,
+                )?;
+                diagnostics.push(format_sidecar_session_report(
+                    "sidecar-session-provider-third",
+                    &session,
+                    &third,
+                    Some(&volume_reports),
+                    budget,
+                ));
+                hits.extend(third.search.hits);
+                search_phase(&runtime, 4, "sidecar-provider:complete", &cancellation)?;
+                runtime.remember_completion_detail("completed")?;
+                Ok(SidecarSessionOutput { diagnostics, hits })
+            },
+        )?,
         WORKER,
-        paths.records.clone(),
-        move |cancellation| {
-            let paths = paths.clone();
-            let query = query.clone();
-            let provider = provider.clone();
-            let _access =
-                preflight_sidecar_index_search_access_checked(&volume_reports, WORKER, || {
-                    cancellation.check()
-                })?;
-            cancellation.check()?;
-            let session = open_sidecar_index_query_session(paths, &cancellation)?;
-            let budget = SearchLookupBudget::default();
-            let parsed = SearchQuery::parse_cancellable(&query, &cancellation)?;
-
-            let first = session.search_structured_with_volume_scope_budget_cancellable(
-                &parsed,
-                50,
-                &SearchVolumeScope::All,
-                budget,
-                &cancellation,
-            )?;
-            let mut diagnostics = vec![format_sidecar_session_report(
-                "sidecar-session-provider-first",
-                &session,
-                &first,
-                Some(&volume_reports),
-                budget,
-            )];
-            let mut hits = first.search.hits;
-
-            cancellation.check()?;
-            let second = session.search_structured_with_volume_scope_budget_cancellable(
-                &parsed,
-                50,
-                &SearchVolumeScope::All,
-                budget,
-                &cancellation,
-            )?;
-            diagnostics.push(format_sidecar_session_report(
-                "sidecar-session-provider-second",
-                &session,
-                &second,
-                Some(&volume_reports),
-                budget,
-            ));
-            hits.extend(second.search.hits);
-
-            cancellation.check()?;
-            diagnostics.push(provider.as_tsv());
-            diagnostics.push(
-                session
-                    .apply_provider_metadata_invalidation(&provider)
-                    .as_tsv(),
-            );
-
-            cancellation.check()?;
-            let third = session.search_structured_with_volume_scope_budget_cancellable(
-                &parsed,
-                50,
-                &SearchVolumeScope::All,
-                budget,
-                &cancellation,
-            )?;
-            diagnostics.push(format_sidecar_session_report(
-                "sidecar-session-provider-third",
-                &session,
-                &third,
-                Some(&volume_reports),
-                budget,
-            ));
-            hits.extend(third.search.hits);
-            Ok(SidecarSessionOutput { diagnostics, hits })
-        },
     )
 }
 
