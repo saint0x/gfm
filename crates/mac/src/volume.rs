@@ -3566,7 +3566,7 @@ fn volume_reachability(
     resource
         .filter(|resource| resource.status == NativeVolumeStatus::Available)
         .and_then(|resource| resource.is_reachable.or(resource.is_browsable))
-        .or_else(|| path.try_exists().ok())
+        .or_else(|| volume_lookup_path_exists(path).ok())
 }
 
 fn volume_network_state(
@@ -4458,7 +4458,7 @@ fn normalized_lookup_path(path: &Path) -> Option<PathBuf> {
     let mut candidate = path;
     let mut missing = Vec::new();
     loop {
-        match candidate.try_exists() {
+        match volume_lookup_path_exists(candidate) {
             Ok(true) => {
                 let mut normalized = candidate.canonicalize().ok()?;
                 for component in missing.iter().rev() {
