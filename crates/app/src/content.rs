@@ -17,8 +17,7 @@ use crate::runtime::{
     run_scheduled_volume_task_cancellable_with_runtime_and_payload_path,
     run_scheduled_volume_task_cancellable_with_volume,
     run_scheduled_volume_task_cancellable_with_volume_and_payload_path,
-    run_volume_task_cancellable, runtime_job_id_floor_checked, runtime_progress_store,
-    RuntimeJobHandle, ScheduledTaskOutcome,
+    runtime_job_id_floor_checked, runtime_progress_store, RuntimeJobHandle, ScheduledTaskOutcome,
 };
 use crate::{
     optional_path_arg, parse_battery_state, parse_io_pressure,
@@ -1286,22 +1285,57 @@ fn run_extraction_cache(path: PathBuf) -> Result<String> {
     )?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _access = access_report.access_checked(WORKER, || cancellation.check())?;
-        cancellation.check()?;
-        let record = record_for_path_checked(&path, None, false, || cancellation.check())?;
-        cancellation.check()?;
-        let mut cached = CachedExtractor::default();
-        let first = cached
-            .extract_record_report_checked(&record, || cancellation.check())?
-            .as_tsv();
-        cancellation.check()?;
-        let second = cached
-            .extract_record_report_checked(&record, || cancellation.check())?
-            .as_tsv();
-        Ok(format!("{first}\n{second}\n"))
-    })
+    visible_scheduled_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Extraction,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            path.clone(),
+            move |cancellation, runtime| {
+                runtime.resize_checked(4, "content-extraction-cache:preflight", || {
+                    cancellation.check()
+                })?;
+                let _access = access_report.access_checked(WORKER, || cancellation.check())?;
+                content_runtime_phase(
+                    &runtime,
+                    1,
+                    "content-extraction-cache:record",
+                    &cancellation,
+                )?;
+                let record = record_for_path_checked(&path, None, false, || cancellation.check())?;
+                content_runtime_phase(
+                    &runtime,
+                    2,
+                    "content-extraction-cache:first",
+                    &cancellation,
+                )?;
+                let mut cached = CachedExtractor::default();
+                let first = cached
+                    .extract_record_report_checked(&record, || cancellation.check())?
+                    .as_tsv();
+                content_runtime_phase(
+                    &runtime,
+                    3,
+                    "content-extraction-cache:second",
+                    &cancellation,
+                )?;
+                let second = cached
+                    .extract_record_report_checked(&record, || cancellation.check())?
+                    .as_tsv();
+                runtime.remember_completion_detail("completed:cache-probe".to_string())?;
+                content_runtime_phase(
+                    &runtime,
+                    4,
+                    "content-extraction-cache:complete",
+                    &cancellation,
+                )?;
+                Ok(format!("{first}\n{second}\n"))
+            },
+        )?,
+        WORKER,
+    )
 }
 
 fn run_content_compaction(output: PathBuf, segments: Vec<PathBuf>) -> Result<usize> {
@@ -1535,20 +1569,43 @@ fn run_index_footprint_inspect(
     let access_reports = IndexFootprintAccessReports::for_spec_checked(&spec, worker, || Ok(()))?;
     access_reports.preflight_volumes()?;
     let volume = access_reports.first_volume();
-    run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
-        cancellation.check()?;
-        let _access = access_reports.access_checked(|| cancellation.check())?;
-        let archive_paths = index_footprint_content_archive_paths(&spec, &cancellation)?;
-        let archive_access_reports =
-            IndexFootprintAccessReports::for_archive_paths_checked(&archive_paths, worker, || {
-                cancellation.check()
-            })?;
-        archive_access_reports.preflight_volumes_checked(|| cancellation.check())?;
-        cancellation.check()?;
-        let _archive_access = archive_access_reports.access_checked(|| cancellation.check())?;
-        cancellation.check()?;
-        gfm_index::inspect_index_footprint_checked(&spec, &cancellation)
-    })
+    let payload_path = spec.records.clone();
+    visible_scheduled_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Indexing,
+            worker,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            payload_path,
+            move |cancellation, runtime| {
+                runtime.resize_checked(4, "index-footprint:preflight", || cancellation.check())?;
+                let _access = access_reports.access_checked(|| cancellation.check())?;
+                content_runtime_phase(&runtime, 1, "index-footprint:archives", &cancellation)?;
+                let archive_paths = index_footprint_content_archive_paths(&spec, &cancellation)?;
+                let archive_access_reports =
+                    IndexFootprintAccessReports::for_archive_paths_checked(
+                        &archive_paths,
+                        worker,
+                        || cancellation.check(),
+                    )?;
+                archive_access_reports.preflight_volumes_checked(|| cancellation.check())?;
+                cancellation.check()?;
+                let _archive_access =
+                    archive_access_reports.access_checked(|| cancellation.check())?;
+                content_runtime_phase(&runtime, 2, "index-footprint:inspect", &cancellation)?;
+                let report = gfm_index::inspect_index_footprint_checked(&spec, &cancellation)?;
+                runtime.remember_completion_detail(format!(
+                    "completed:records:{} bytes:{} compaction:{}",
+                    report.record_count, report.total_bytes, report.compaction.scheduled
+                ))?;
+                content_runtime_phase(&runtime, 3, "index-footprint:decision", &cancellation)?;
+                content_runtime_phase(&runtime, 4, "index-footprint:complete", &cancellation)?;
+                Ok(report)
+            },
+        )?,
+        worker,
+    )
 }
 
 fn index_footprint_content_archive_paths(
@@ -2912,30 +2969,64 @@ fn run_extraction_quarantine(
     let access_reports = ExtractionQuarantineAccessReports::for_paths(&path, &store)?;
     access_reports.preflight_volumes(WORKER)?;
     let volume = access_reports.first_volume();
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _access = access_reports.access_checked(WORKER, || cancellation.check())?;
-        cancellation.check()?;
-        let fingerprint = ExtractionFingerprint::for_path_checked(&path, || cancellation.check())?;
-        let mut quarantine = ExtractionQuarantine::new(2);
-        let mut decision = quarantine.before_extract(&path, &fingerprint);
-        for _ in 0..attempts {
-            decision = quarantine.record_failure(
-                &path,
-                &fingerprint,
-                kind,
-                format!("worker-{}", kind.as_str()),
-            );
-        }
-        cancellation.check()?;
-        quarantine.write_checked(&store, || cancellation.check())?;
-        let reloaded = ExtractionQuarantine::read_checked(&store, || cancellation.check())?;
-        cancellation.check()?;
-        Ok(vec![
-            decision.as_tsv(),
-            reloaded.before_extract(&path, &fingerprint).as_tsv(),
-        ])
-    })
+    visible_scheduled_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Extraction,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            store.clone(),
+            move |cancellation, runtime| {
+                runtime.resize_checked(4, "extraction-quarantine:preflight", || {
+                    cancellation.check()
+                })?;
+                let _access = access_reports.access_checked(WORKER, || cancellation.check())?;
+                content_runtime_phase(
+                    &runtime,
+                    1,
+                    "extraction-quarantine:fingerprint",
+                    &cancellation,
+                )?;
+                let fingerprint =
+                    ExtractionFingerprint::for_path_checked(&path, || cancellation.check())?;
+                content_runtime_phase(&runtime, 2, "extraction-quarantine:record", &cancellation)?;
+                let mut quarantine = ExtractionQuarantine::new(2);
+                let mut decision = quarantine.before_extract(&path, &fingerprint);
+                for _ in 0..attempts {
+                    decision = quarantine.record_failure(
+                        &path,
+                        &fingerprint,
+                        kind,
+                        format!("worker-{}", kind.as_str()),
+                    );
+                }
+                content_runtime_phase(&runtime, 3, "extraction-quarantine:persist", &cancellation)?;
+                quarantine.write_checked(&store, || cancellation.check())?;
+                let reloaded = ExtractionQuarantine::read_checked(&store, || cancellation.check())?;
+                let decision_state = if decision.as_tsv().starts_with("quarantine\tblocked\t") {
+                    "blocked"
+                } else {
+                    "allow"
+                };
+                runtime.remember_completion_detail(format!(
+                    "completed:attempts:{attempts} decision:{}",
+                    decision_state
+                ))?;
+                content_runtime_phase(
+                    &runtime,
+                    4,
+                    "extraction-quarantine:complete",
+                    &cancellation,
+                )?;
+                Ok(vec![
+                    decision.as_tsv(),
+                    reloaded.before_extract(&path, &fingerprint).as_tsv(),
+                ])
+            },
+        )?,
+        WORKER,
+    )
 }
 
 fn retain_foreground_content_index_access_checked(
