@@ -4,6 +4,7 @@ mod finder;
 mod host;
 mod icon;
 mod permissions;
+mod process;
 mod security;
 mod spotlight;
 mod volume;
@@ -41,6 +42,7 @@ pub use permissions::{
     PermissionScopeChangeKind, PermissionState, PermissionStateInvalidationReport,
     PermissionStateSnapshot,
 };
+pub use process::{current_process_memory, ProcessMemoryReport};
 pub use security::{
     AccessIntent, AccessProbeState, ProtectedScope, SecurityAccessMode, SecurityDecisionAction,
     SecurityScopedAccessReport, SecurityScopedBookmark, SecurityScopedBookmarkAccess,

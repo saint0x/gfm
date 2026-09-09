@@ -107,6 +107,7 @@ fn verifies_retained_macrobench_report_from_binary() {
     );
     assert!(stdout.contains("\tfiles=201\t"), "{stdout}");
     assert!(stdout.contains("\tmeasurements=36\t"), "{stdout}");
+    assert!(stdout.contains("\tmax-peak-resident-bytes="), "{stdout}");
     assert!(stdout.contains("\tbudget-violations=0\t"), "{stdout}");
     assert!(stdout.contains("\tpassed=true"), "{stdout}");
 

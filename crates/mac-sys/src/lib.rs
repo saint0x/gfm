@@ -2,6 +2,7 @@ mod bookmark;
 mod fileprovider;
 mod finder;
 mod pressure;
+mod process;
 mod spotlight;
 mod url;
 mod volume;
@@ -25,6 +26,7 @@ pub use pressure::{
     copy_host_pressure, NativeHostPressure, NativeHostSignalStatus, NativePowerSourceState,
     NativeThermalState, NativeUserActivityState,
 };
+pub use process::{copy_process_memory, NativeProcessMemory, NativeProcessMemoryStatus};
 pub use spotlight::{
     read_spotlight_attributes, read_spotlight_attributes_batch, NativeSpotlightSnapshot,
     NativeSpotlightStatus,

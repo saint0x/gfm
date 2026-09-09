@@ -49,10 +49,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             );
             for measurement in report.measurements {
                 println!(
-                    "{}\t{}\t{}\t{}\t{}",
+                    "{}\t{}\t{}\t{}\t{}\t{}",
                     measurement.scenario.directory(),
                     macrobench_stage(measurement.stage),
                     measurement.duration.as_nanos(),
+                    measurement.peak_resident_bytes,
                     measurement.records,
                     measurement.hits
                 );
@@ -122,12 +123,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 },
             )?;
             println!(
-                "macrobench-report-verify\toutput={}\tfiles={}\tmeasurements={}\tscenarios={}\tstages-per-scenario={}\tbudget-violations={}\tpassed={}",
+                "macrobench-report-verify\toutput={}\tfiles={}\tmeasurements={}\tscenarios={}\tstages-per-scenario={}\tmax-peak-resident-bytes={}\tbudget-violations={}\tpassed={}",
                 verification.output_dir.display(),
                 verification.files_materialized,
                 verification.measurements,
                 verification.scenarios,
                 verification.stages_per_scenario,
+                verification.max_peak_resident_bytes,
                 verification.budget_violations,
                 verification.passed
             );

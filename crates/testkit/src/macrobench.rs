@@ -1,5 +1,6 @@
 use gfm_content::Extractor;
 use gfm_index::Indexer;
+use gfm_mac::current_process_memory;
 use gfm_telemetry::{PerformanceBudgets, ScenarioMetric};
 use gfm_types::{GfmError, Result};
 use std::collections::{BTreeMap, BTreeSet};
@@ -197,6 +198,7 @@ pub struct MacrobenchArtifactVerification {
     pub measurements: usize,
     pub scenarios: usize,
     pub stages_per_scenario: usize,
+    pub max_peak_resident_bytes: u64,
     pub budget_violations: usize,
     pub passed: bool,
 }
@@ -235,6 +237,7 @@ pub struct MacrobenchMeasurement {
     pub scenario: MacrobenchScenario,
     pub stage: MacrobenchStage,
     pub duration: Duration,
+    pub peak_resident_bytes: u64,
     pub records: usize,
     pub hits: usize,
 }
@@ -287,6 +290,7 @@ pub fn run_macrobench(options: &MacrobenchOptions) -> Result<MacrobenchReport> {
             scenario,
             stage: MacrobenchStage::IndexBuild,
             duration: build_duration,
+            peak_resident_bytes: current_peak_resident_bytes()?,
             records: snapshot.records.len(),
             hits: 0,
         });
@@ -303,6 +307,7 @@ pub fn run_macrobench(options: &MacrobenchOptions) -> Result<MacrobenchReport> {
             scenario,
             stage: MacrobenchStage::HotSearch,
             duration: hot_duration,
+            peak_resident_bytes: current_peak_resident_bytes()?,
             records: snapshot.records.len(),
             hits: hot_hits.len(),
         });
@@ -322,6 +327,7 @@ pub fn run_macrobench(options: &MacrobenchOptions) -> Result<MacrobenchReport> {
             scenario,
             stage: MacrobenchStage::StreamSearch,
             duration: stream_duration,
+            peak_resident_bytes: current_peak_resident_bytes()?,
             records: snapshot.records.len(),
             hits: stream_hits,
         });
@@ -342,6 +348,7 @@ pub fn run_macrobench(options: &MacrobenchOptions) -> Result<MacrobenchReport> {
             scenario,
             stage: MacrobenchStage::ContentSearch,
             duration: content_duration,
+            peak_resident_bytes: current_peak_resident_bytes()?,
             records: snapshot.records.len(),
             hits: content_hits.len(),
         });
@@ -432,6 +439,7 @@ pub fn verify_macrobench_artifacts(
 
     let mut seen = BTreeSet::new();
     let mut records_by_scenario: BTreeMap<MacrobenchScenario, usize> = BTreeMap::new();
+    let mut max_peak_resident_bytes = 0;
     for measurement in &measurements {
         if !seen.insert((measurement.scenario, measurement.stage)) {
             return Err(GfmError::Format(format!(
@@ -447,6 +455,14 @@ pub fn verify_macrobench_artifacts(
                 measurement.stage.as_str()
             )));
         }
+        if measurement.peak_resident_bytes == 0 {
+            return Err(GfmError::Format(format!(
+                "macrobench report contains zero peak resident memory for {} {}",
+                measurement.scenario.directory(),
+                measurement.stage.as_str()
+            )));
+        }
+        max_peak_resident_bytes = max_peak_resident_bytes.max(measurement.peak_resident_bytes);
         if measurement.records == 0 {
             return Err(GfmError::Format(format!(
                 "macrobench report contains zero records for {} {}",
@@ -493,6 +509,7 @@ pub fn verify_macrobench_artifacts(
         measurements: measurements.len(),
         scenarios: MacrobenchScenario::ALL.len(),
         stages_per_scenario: 4,
+        max_peak_resident_bytes,
         budget_violations,
         passed,
     })
@@ -682,15 +699,19 @@ fn write_macrobench_summary(report: &MacrobenchReport, path: &Path) -> Result<()
 
 fn write_macrobench_measurements(report: &MacrobenchReport, path: &Path) -> Result<()> {
     let mut file = fs::File::create(path).map_err(|err| GfmError::io(path, err))?;
-    writeln!(file, "scenario\tstage\tduration_ns\trecords\thits")
-        .map_err(|err| GfmError::io(path, err))?;
+    writeln!(
+        file,
+        "scenario\tstage\tduration_ns\tpeak_resident_bytes\trecords\thits"
+    )
+    .map_err(|err| GfmError::io(path, err))?;
     for measurement in &report.measurements {
         writeln!(
             file,
-            "{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}",
             measurement.scenario.directory(),
             measurement.stage.as_str(),
             measurement.duration.as_nanos(),
+            measurement.peak_resident_bytes,
             measurement.records,
             measurement.hits
         )
@@ -753,7 +774,7 @@ fn read_summary_tsv(path: &Path) -> Result<BTreeMap<String, String>> {
 fn read_measurements_tsv(path: &Path) -> Result<Vec<MacrobenchMeasurement>> {
     let content = fs::read_to_string(path).map_err(|err| GfmError::io(path, err))?;
     let mut lines = content.lines();
-    if lines.next() != Some("scenario\tstage\tduration_ns\trecords\thits") {
+    if lines.next() != Some("scenario\tstage\tduration_ns\tpeak_resident_bytes\trecords\thits") {
         return Err(GfmError::Format(format!(
             "{}: invalid macrobench measurements header",
             path.display()
@@ -762,7 +783,7 @@ fn read_measurements_tsv(path: &Path) -> Result<Vec<MacrobenchMeasurement>> {
     let mut measurements = Vec::new();
     for (line_index, line) in lines.enumerate() {
         let line_number = line_index + 2;
-        let columns = split_tsv_line(path, line_number, line, 5)?;
+        let columns = split_tsv_line(path, line_number, line, 6)?;
         let scenario = MacrobenchScenario::parse(columns[0]).ok_or_else(|| {
             GfmError::Format(format!(
                 "{}:{line_number}: unknown macrobench scenario {}",
@@ -783,12 +804,15 @@ fn read_measurements_tsv(path: &Path) -> Result<Vec<MacrobenchMeasurement>> {
             "duration_ns",
             columns[2],
         )?);
-        let records = parse_usize_field(path, line_number, "records", columns[3])?;
-        let hits = parse_usize_field(path, line_number, "hits", columns[4])?;
+        let peak_resident_bytes =
+            parse_u64_field(path, line_number, "peak_resident_bytes", columns[3])?;
+        let records = parse_usize_field(path, line_number, "records", columns[4])?;
+        let hits = parse_usize_field(path, line_number, "hits", columns[5])?;
         measurements.push(MacrobenchMeasurement {
             scenario,
             stage,
             duration,
+            peak_resident_bytes,
             records,
             hits,
         });
@@ -889,6 +913,10 @@ fn write_file(path: &Path, contents: &str) -> Result<()> {
         .map_err(|err| GfmError::io(path, err))
 }
 
+fn current_peak_resident_bytes() -> Result<u64> {
+    Ok(current_process_memory()?.peak_resident_bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -960,7 +988,8 @@ mod tests {
         let violations = fs::read_to_string(&artifacts.budget_violations_path).unwrap();
         assert!(summary.contains("files_materialized\t201"), "{summary}");
         assert!(summary.contains("measurements\t36"), "{summary}");
-        assert!(measurements.starts_with("scenario\tstage\tduration_ns\trecords\thits\n"));
+        assert!(measurements
+            .starts_with("scenario\tstage\tduration_ns\tpeak_resident_bytes\trecords\thits\n"));
         assert!(
             measurements.contains("small\tindex-build\t"),
             "{measurements}"
@@ -987,6 +1016,7 @@ mod tests {
         assert_eq!(verification.measurements, MacrobenchScenario::ALL.len() * 4);
         assert_eq!(verification.scenarios, MacrobenchScenario::ALL.len());
         assert_eq!(verification.stages_per_scenario, 4);
+        assert!(verification.max_peak_resident_bytes > 0);
         assert_eq!(verification.budget_violations, 0);
         assert!(verification.passed);
 

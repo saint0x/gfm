@@ -1851,6 +1851,7 @@ mod tests {
                 scenario: MacrobenchScenario::Small,
                 stage: MacrobenchStage::IndexBuild,
                 duration: Duration::from_millis(1),
+                peak_resident_bytes: 64 * 1024 * 1024,
                 records,
                 hits: 0,
             }],
