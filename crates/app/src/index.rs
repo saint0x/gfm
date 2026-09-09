@@ -1117,7 +1117,7 @@ fn dropped_root_exists_checked(
 fn run_index_read_task<T>(
     path: PathBuf,
     worker: &'static str,
-    read: impl FnOnce(PathBuf, &Cancellation) -> Result<T> + Send + 'static,
+    read: impl Fn(PathBuf, &Cancellation) -> Result<T> + Send + Sync + 'static,
 ) -> Result<T>
 where
     T: Send + 'static,
@@ -1128,7 +1128,7 @@ where
 fn run_index_read_task_checked<T>(
     path: PathBuf,
     worker: &'static str,
-    read: impl FnOnce(PathBuf, &Cancellation) -> Result<T> + Send + 'static,
+    read: impl Fn(PathBuf, &Cancellation) -> Result<T> + Send + Sync + 'static,
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<T>
 where
@@ -1141,15 +1141,32 @@ where
     preflight_volume_access_scope_with_report(&path, AccessIntent::Read, worker, &volume_report)?;
     check_control()?;
     let volume = volume_report.volume_for_path(&path).map(|volume| volume.id);
-    run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
-        cancellation.check()?;
-        let _access =
-            preflight_index_read_checked_with_volume_report(&path, worker, &volume_report, || {
-                cancellation.check()
-            })?;
-        cancellation.check()?;
-        read(path, &cancellation)
-    })
+    visible_scheduled_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Indexing,
+            worker,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            path.clone(),
+            move |cancellation, runtime| {
+                cancellation.check()?;
+                runtime.resize_checked(2, "index-read:preflight", || cancellation.check())?;
+                let _access = preflight_index_read_checked_with_volume_report(
+                    &path,
+                    worker,
+                    &volume_report,
+                    || cancellation.check(),
+                )?;
+                index_runtime_phase(&runtime, 1, "index-read:read", &cancellation)?;
+                let result = read(path.clone(), &cancellation)?;
+                runtime.remember_completion_detail("completed:read".to_string())?;
+                index_runtime_phase(&runtime, 2, "index-read:complete", &cancellation)?;
+                Ok(result)
+            },
+        )?,
+        worker,
+    )
 }
 
 #[derive(Clone)]

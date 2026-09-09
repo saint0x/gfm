@@ -3608,6 +3608,8 @@ fn persists_volume_index_state_from_binary() {
     );
 
     let inspect = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
         .args(["index-state-inspect", state.to_str().unwrap()])
         .output()
         .unwrap();
@@ -3620,6 +3622,20 @@ fn persists_volume_index_state_from_binary() {
     assert_worker_admitted(&inspect_stderr, "index state inspect", &state);
     let inspect_stdout = String::from_utf8(inspect.stdout).unwrap();
     assert_eq!(inspect_stdout, second_stdout);
+    let inspect_catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(
+        inspect_catalog_text.contains(&format!(
+            "payload\t2\tindexing\tindex state inspect\t{}\t",
+            state.display()
+        )) && inspect_catalog_text.contains("\tvisible:index state inspect:adaptive"),
+        "{inspect_catalog_text}"
+    );
+    let inspect_progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        inspect_progress_text.contains("progress\t2\tvisible\tvisible\tindex state inspect\t")
+            && inspect_progress_text.contains("\tcompleted\t2\t2\tcompleted:read\t"),
+        "{inspect_progress_text}"
+    );
 
     let search_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["search-index", index.to_str().unwrap(), "stateful"])
