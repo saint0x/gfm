@@ -1,6 +1,8 @@
 use gfm_content::Extractor;
 use gfm_index::Indexer;
-use gfm_mac::{current_host_profile, current_process_memory, CpuArchitecture, MacOsVersion};
+use gfm_mac::{
+    current_host_profile, current_process_memory, CpuArchitecture, MacOsVersion, VolumeDescriptor,
+};
 use gfm_telemetry::{PerformanceBudgets, ScenarioMetric};
 use gfm_types::{GfmError, Result};
 use std::collections::{BTreeMap, BTreeSet};
@@ -10,6 +12,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 const FIXTURE_ROOT: &str = "gfm-macrobench-fixture";
+const ESTIMATED_FILE_STORAGE_BYTES: u64 = 4 * 1024;
+const ESTIMATED_DIRECTORY_STORAGE_BYTES: u64 = 1024;
+const MIN_WORKSPACE_RESERVE_BYTES: u64 = 512 * 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum MacrobenchScenario {
@@ -136,6 +141,43 @@ impl MacrobenchScale {
             MacrobenchScenario::Network => self.network_files,
         }
     }
+
+    pub fn capacity_estimate(self) -> MacrobenchFixtureCapacityEstimate {
+        let scenarios = MacrobenchScenario::ALL
+            .into_iter()
+            .map(|scenario| {
+                let count = self.count_for(scenario);
+                match scenario {
+                    MacrobenchScenario::Developer => (count.saturating_mul(3), count * 2),
+                    MacrobenchScenario::Documents => (count, count.min(7)),
+                    MacrobenchScenario::Media => (count, count.div_ceil(64)),
+                    MacrobenchScenario::Medium => (count, count.div_ceil(32)),
+                    MacrobenchScenario::Huge => (count, count.div_ceil(256)),
+                    MacrobenchScenario::Small
+                    | MacrobenchScenario::ICloud
+                    | MacrobenchScenario::External
+                    | MacrobenchScenario::Network => (count, 0),
+                }
+            })
+            .collect::<Vec<_>>();
+        let files = scenarios.iter().map(|(files, _)| *files).sum::<usize>();
+        let directories = scenarios
+            .iter()
+            .map(|(_, directories)| *directories)
+            .sum::<usize>()
+            .saturating_add(MacrobenchScenario::ALL.len());
+        let estimated_fixture_bytes = (files as u64)
+            .saturating_mul(ESTIMATED_FILE_STORAGE_BYTES)
+            .saturating_add((directories as u64).saturating_mul(ESTIMATED_DIRECTORY_STORAGE_BYTES));
+        let reserve_bytes = MIN_WORKSPACE_RESERVE_BYTES.max(estimated_fixture_bytes / 5);
+        MacrobenchFixtureCapacityEstimate {
+            files,
+            directories,
+            estimated_fixture_bytes,
+            reserve_bytes,
+            required_available_bytes: estimated_fixture_bytes.saturating_add(reserve_bytes),
+        }
+    }
 }
 
 impl Default for MacrobenchScale {
@@ -206,6 +248,15 @@ pub struct MacrobenchArtifactVerification {
     pub max_peak_resident_bytes: u64,
     pub budget_violations: usize,
     pub passed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MacrobenchFixtureCapacityEstimate {
+    pub files: usize,
+    pub directories: usize,
+    pub estimated_fixture_bytes: u64,
+    pub reserve_bytes: u64,
+    pub required_available_bytes: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -400,6 +451,35 @@ pub fn write_macrobench_artifacts(
     })
 }
 
+pub fn preflight_macrobench_workspace_capacity(
+    workspace: impl AsRef<Path>,
+    scale: MacrobenchScale,
+) -> Result<MacrobenchFixtureCapacityEstimate> {
+    let workspace = workspace.as_ref();
+    let estimate = scale.capacity_estimate();
+    let volume = VolumeDescriptor::for_path_checked(workspace, || Ok(()))?;
+    let available = volume.capacity.available_bytes;
+    if available == 0 {
+        return Err(GfmError::Format(format!(
+            "macrobench workspace capacity unavailable for {}",
+            workspace.display()
+        )));
+    }
+    if available < estimate.required_available_bytes {
+        return Err(GfmError::Format(format!(
+            "macrobench workspace capacity insufficient for {}: available={} required={} estimated-fixture={} reserve={} files={} directories={}",
+            workspace.display(),
+            available,
+            estimate.required_available_bytes,
+            estimate.estimated_fixture_bytes,
+            estimate.reserve_bytes,
+            estimate.files,
+            estimate.directories
+        )));
+    }
+    Ok(estimate)
+}
+
 pub fn verify_macrobench_artifacts(
     output_dir: impl AsRef<Path>,
     min_files_materialized: usize,
@@ -559,6 +639,7 @@ pub fn materialize_macrobench_fixture_report(
 ) -> Result<MacrobenchFixtureReport> {
     let workspace = workspace.as_ref();
     fs::create_dir_all(workspace).map_err(|err| GfmError::io(workspace, err))?;
+    preflight_macrobench_workspace_capacity(workspace, scale)?;
     let fixture_root = workspace.join(FIXTURE_ROOT);
     if fixture_root.exists() {
         fs::remove_dir_all(&fixture_root).map_err(|err| GfmError::io(&fixture_root, err))?;
@@ -1021,6 +1102,55 @@ mod tests {
         assert!(fs::read_to_string(&report.manifest_path)
             .unwrap()
             .contains("documents\t"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn estimates_million_file_macrobench_capacity_before_materialization() {
+        let estimate = MacrobenchScale::million_files().capacity_estimate();
+
+        assert_eq!(estimate.files, 1_000_000);
+        assert!(estimate.directories > 100_000);
+        assert!(
+            estimate.estimated_fixture_bytes >= 1_000_000 * ESTIMATED_FILE_STORAGE_BYTES,
+            "{estimate:?}"
+        );
+        assert!(
+            estimate.required_available_bytes
+                >= estimate
+                    .estimated_fixture_bytes
+                    .saturating_add(MIN_WORKSPACE_RESERVE_BYTES),
+            "{estimate:?}"
+        );
+    }
+
+    #[test]
+    fn preflight_rejects_macrobench_scale_that_exceeds_volume_capacity() {
+        let root = unique_temp_dir("gfm-testkit-macrobench-capacity");
+        let scale = MacrobenchScale {
+            small_files: usize::MAX,
+            medium_files: 0,
+            huge_files: 0,
+            developer_projects: 0,
+            document_files: 0,
+            media_files: 0,
+            icloud_files: 0,
+            external_files: 0,
+            network_files: 0,
+        };
+
+        let err = preflight_macrobench_workspace_capacity(&root, scale).unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("macrobench workspace capacity insufficient"),
+            "{err}"
+        );
+        assert!(
+            !root.join(FIXTURE_ROOT).exists(),
+            "capacity preflight must not materialize fixture data"
+        );
 
         fs::remove_dir_all(root).unwrap();
     }
