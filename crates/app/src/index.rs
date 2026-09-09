@@ -3,9 +3,13 @@ use crate::{
         preflight_access_scope_checked, preflight_access_scope_checked_with_volume_report,
         preflight_volume_access_scope_with_report, ScopedAccessGuard,
     },
-    index_volume_descriptor, parse_u64_arg, parse_usize_arg, required_path, required_string,
+    index_volume_descriptor, parse_u64_arg, parse_usize_arg,
+    platform::current_host_job_scheduling_pressure,
+    required_path, required_string,
     runtime::{
-        run_retriable_volume_task_cancellable_with_payload_path, run_volume_task_cancellable,
+        run_retriable_volume_task_cancellable_with_payload_path,
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path,
+        run_volume_task_cancellable, RuntimeJobHandle, ScheduledTaskOutcome,
     },
 };
 use gfm_fs::read_directory_checked;
@@ -13,7 +17,7 @@ use gfm_index::{
     parse_volume_indexing_policy, EventBackpressureQueue, EventPriority, FseventsCursor,
     FseventsCursorHealth, IndexVolumeState, Indexer, LiveIndex, VolumeIndexPolicy,
 };
-use gfm_jobs::{Cancellation, Priority};
+use gfm_jobs::{Cancellation, JobPayloadKind, JobProgressState, Priority};
 use gfm_mac::{AccessIntent, FileEventStream, VolumeDiscoveryReport, WatchRoot};
 use gfm_store::atomic_write_checked;
 use gfm_types::{FileEvent, FileEventKind, FileKind, GfmError, Result};
@@ -121,16 +125,21 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 );
             }
             let volume = access_reports.first_volume();
-            let (record_count, inaccessible_count) =
-                run_retriable_volume_task_cancellable_with_payload_path(
-                    volume,
+            let (record_count, inaccessible_count) = visible_scheduled_result(
+                run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
                     Priority::Visible,
+                    JobPayloadKind::Indexing,
                     "index",
+                    current_host_job_scheduling_pressure(),
+                    || Ok(volume),
                     output.clone(),
-                    move |cancellation| {
+                    move |cancellation, runtime| {
                         let root = root.clone();
                         let output = output.clone();
                         let retry_probe = retry_probe.clone();
+                        let access_reports = access_reports.clone();
+                        cancellation.check()?;
+                        runtime.resize_checked(3, "index:preflight", || cancellation.check())?;
                         if let (Some(retry_probe), Some(retry_probe_access_report)) =
                             (retry_probe.as_ref(), retry_probe_access_report.as_ref())
                         {
@@ -146,14 +155,21 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         cancellation.check()?;
                         let _output_access = access_reports
                             .preflight_output_access_checked(|| cancellation.check())?;
-                        cancellation.check()?;
+                        index_runtime_phase(&runtime, 1, "index:scan", &cancellation)?;
                         let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
                         let record_count = snapshot.records.len();
                         let inaccessible_count = snapshot.inaccessible.len();
+                        index_runtime_phase(&runtime, 2, "index:save", &cancellation)?;
                         snapshot.save_checked(output, || cancellation.check())?;
+                        index_runtime_phase(&runtime, 3, "index:complete", &cancellation)?;
+                        runtime.remember_completion_detail(format!(
+                            "completed:{record_count} records:{inaccessible_count} inaccessible"
+                        ))?;
                         Ok((record_count, inaccessible_count))
                     },
-                )?;
+                )?,
+                "index",
+            )?;
             eprintln!("indexed {record_count} records; {inaccessible_count} inaccessible");
         }
         "index-state" => {
@@ -1545,6 +1561,23 @@ fn marker(kind: FileKind) -> &'static str {
         FileKind::Symlink => "link",
         FileKind::Other => "other",
     }
+}
+
+fn index_runtime_phase(
+    runtime: &RuntimeJobHandle,
+    completed_units: u64,
+    detail: &'static str,
+    cancellation: &Cancellation,
+) -> Result<()> {
+    runtime.progress_checked(JobProgressState::Running, completed_units, detail, || {
+        cancellation.check()
+    })
+}
+
+fn visible_scheduled_result<T>(outcome: ScheduledTaskOutcome<T>, label: &'static str) -> Result<T> {
+    outcome
+        .result
+        .ok_or_else(|| GfmError::Format(format!("{label} deferred before visible execution")))
 }
 
 fn event_marker(kind: &FileEventKind) -> &'static str {

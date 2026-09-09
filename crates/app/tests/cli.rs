@@ -281,6 +281,20 @@ fn index_retries_transient_failure_from_binary() {
         journal_text.contains("1\t2\tcompleted\tindex"),
         "{journal_text}"
     );
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(
+        catalog_text.contains(&format!(
+            "payload\t1\tindexing\tindex\t{}\t",
+            index.display()
+        )) && catalog_text.contains("\tvisible:index:adaptive"),
+        "{catalog_text}"
+    );
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        progress_text.contains("progress\t1\tvisible\tvisible\tindex\t")
+            && progress_text.contains("\tcompleted\t3\t3\tcompleted:3 records:0 inaccessible\t"),
+        "{progress_text}"
+    );
 
     let search_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["search-index", index.to_str().unwrap(), "retryplan"])
