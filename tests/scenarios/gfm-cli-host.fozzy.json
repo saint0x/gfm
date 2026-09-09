@@ -8202,16 +8202,6 @@
       "data": "1\t0\t1\t1\tOS-owned toolbar repaint\n0\t0\t2\t1\tOS-owned hover repaint\n"
     },
     {
-      "type": "fs_write",
-      "path": "tmp/fixtures/manifest.tsv",
-      "data": "scenario\troot\tfinder-view\tfiles\tdirectories\ntoolbar\t../gfm-parity-fixture/toolbar\ticon\t1\t0\n"
-    },
-    {
-      "type": "fs_write",
-      "path": "tmp/gfm-parity-fixture/toolbar/.keep",
-      "data": "toolbar fixture marker\n"
-    },
-    {
       "type": "proc_when",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [
@@ -8330,16 +8320,6 @@
       "type": "fs_write",
       "path": "tmp/gfm-parity-gate.tsv",
       "data": "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=gfm-fozzy-parity/gfm-parity-fixture/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttoolbar\tgfm-pixel-expected.rgba\tgfm-pixel-actual.rgba\t3\t1\tgfm-pixel-governed-mask.tsv\t1040\t720\tactive\ticon\tgfm-fozzy-parity/gfm-parity-fixture/toolbar\n"
-    },
-    {
-      "type": "fs_write",
-      "path": "tmp/gfm-pixel-expected.provenance.tsv",
-      "data": "target\tfinder\nfixture-root\ttmp/gfm-parity-fixture/toolbar\noutput\ttmp/gfm-pixel-expected.rgba\nscenario\ttoolbar\nview-mode\ticon\nmacos-build\t25A354\nhardware-profile\tmacbookpro18,3\ndisplay-profile\tstudio-display-p3\napp-version\t0.1.0\ncaptured-at\t2026-08-27T00:00:00Z\ncapture-command\tscreencapture:-x:-R:40,70,1040,720\nreviewer\tcodex\nsigner\tcodex\napproved-mask-set\tmacos-25A354-default\nappearance\tdark\nscale\t2x\ncolor-profile\tdisplay-p3\nfocus\tactive\nwindow-region\t40,70,1040,720\n"
-    },
-    {
-      "type": "fs_write",
-      "path": "tmp/gfm-pixel-actual.provenance.tsv",
-      "data": "target\tgfm\nfixture-root\ttmp/gfm-parity-fixture/toolbar\noutput\ttmp/gfm-pixel-actual.rgba\nscenario\ttoolbar\nview-mode\ticon\nmacos-build\t25A354\nhardware-profile\tmacbookpro18,3\ndisplay-profile\tstudio-display-p3\napp-version\t0.1.0\ncaptured-at\t2026-08-27T00:00:00Z\ncapture-command\tscreencapture:-x:-R:40,70,1040,720\nreviewer\tcodex\nsigner\tcodex\napproved-mask-set\tmacos-25A354-default\nappearance\tdark\nscale\t2x\ncolor-profile\tdisplay-p3\nfocus\tactive\nwindow-region\t40,70,1040,720\n"
     },
     {
       "type": "proc_when",
