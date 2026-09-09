@@ -7,7 +7,8 @@ use crate::access::{
 };
 use crate::volume::{resolve_volume_event_path, volume_event_invalidation_for_descriptor};
 use crate::{
-    index_volume_descriptor, parse_required_scheduling_pressure, parse_usize_arg,
+    index_volume_descriptor, parse_optional_scheduling_pressure_or_else,
+    parse_required_scheduling_pressure, parse_usize_arg,
     run_preview_contract_adaptive_with_volume_and_payload_path,
     runtime::{
         default_job_journal_path, preflight_runtime_job_state,
@@ -1074,7 +1075,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "preview-volume-scheduling" => {
             let path = required_path(args.next(), "preview-volume-scheduling requires a path")?;
             let kind = parse_preview_kind(args.next())?;
-            let pressure = parse_required_scheduling_pressure(args, "preview volume scheduling")?;
+            let pressure = parse_optional_scheduling_pressure_or_else(
+                args,
+                current_host_job_scheduling_pressure,
+            )?;
             let base = preview_base_scheduling_policy(kind);
             let report = VolumeDiscoveryReport::for_containing_path_policy_checked(
                 absolute_preview_path(&path),

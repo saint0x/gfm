@@ -65,7 +65,13 @@ fn reports_host_scheduling_pressure_from_binary() {
 
     assert!(stdout.starts_with("host-scheduling-pressure\t"), "{stdout}");
     assert!(
-        stdout.contains("\tio-status=unsupported\tio=nominal\t"),
+        stdout.contains("\tio-status=available\t")
+            || stdout.contains("\tio-status=unavailable\t")
+            || stdout.contains("\tio-status=unsupported\t"),
+        "{stdout}"
+    );
+    assert!(
+        !stdout.contains("macOS IO pressure source is not wired"),
         "{stdout}"
     );
     assert!(stdout.contains("\tthermal-status="), "{stdout}");
@@ -2327,6 +2333,38 @@ fn preview_volume_check_refuses_unreachable_volume_before_security_report_from_b
         stderr.contains("preview volume check volume access blocked: unreachable volume network"),
         "{stderr}"
     );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
+fn preview_volume_scheduling_defaults_to_host_pressure_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-preview-volume-scheduling-host-pressure-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join(".gfm-volume-kind"), "network\n").unwrap();
+    let path = root.join("Preview.png");
+    std::fs::write(&path, "image fixture").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .arg("preview-volume-scheduling")
+        .arg(&path)
+        .arg("thumbnail")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("preview-volume-scheduling\tkind=thumbnail\t"));
+    assert!(stdout.contains("\tvolume-kind=network\tremote=true\tslow=false\t"));
+    assert!(stdout.contains("\tmax-visible=8\tmax-prefetch=0\tcancel-offscreen=true\n"));
 
     let _ = std::fs::remove_dir_all(root);
 }
