@@ -1309,14 +1309,30 @@ fn run_content_compaction(output: PathBuf, segments: Vec<PathBuf>) -> Result<usi
     let access_reports = ContentSegmentsAccessReports::for_paths(None, &output, &segments, WORKER)?;
     access_reports.preflight_volumes(WORKER)?;
     let volume = access_reports.first_volume();
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _access = access_reports.access_checked(WORKER, || cancellation.check())?;
-        cancellation.check()?;
-        let terms = Indexer::default().compact_content_segments(output, &segments)?;
-        cancellation.check()?;
-        Ok(terms)
-    })
+    visible_scheduled_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Indexing,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            output.clone(),
+            move |cancellation, runtime| {
+                runtime
+                    .resize_checked(3, "content-compaction:preflight", || cancellation.check())?;
+                let _access = access_reports.access_checked(WORKER, || cancellation.check())?;
+                content_runtime_phase(&runtime, 1, "content-compaction:compact", &cancellation)?;
+                let terms =
+                    Indexer::default().compact_content_segments(output.clone(), &segments)?;
+                content_runtime_phase(&runtime, 2, "content-compaction:verify", &cancellation)?;
+                cancellation.check()?;
+                runtime.remember_completion_detail(format!("completed:terms:{terms}"))?;
+                content_runtime_phase(&runtime, 3, "content-compaction:complete", &cancellation)?;
+                Ok(terms)
+            },
+        )?,
+        WORKER,
+    )
 }
 
 fn run_tiered_content_compaction(
@@ -1327,18 +1343,54 @@ fn run_tiered_content_compaction(
     let access_reports = ContentSegmentsAccessReports::for_paths(None, &output, &segments, WORKER)?;
     access_reports.preflight_volumes(WORKER)?;
     let volume = access_reports.first_volume();
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _access = access_reports.access_checked(WORKER, || cancellation.check())?;
-        cancellation.check()?;
-        let outcome = Indexer::default().compact_content_segments_with_policy(
-            output,
-            &segments,
-            &ContentMergePolicy::default(),
-        )?;
-        cancellation.check()?;
-        Ok(outcome)
-    })
+    visible_scheduled_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Indexing,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            output.clone(),
+            move |cancellation, runtime| {
+                runtime.resize_checked(3, "tiered-content-compaction:preflight", || {
+                    cancellation.check()
+                })?;
+                let _access = access_reports.access_checked(WORKER, || cancellation.check())?;
+                content_runtime_phase(
+                    &runtime,
+                    1,
+                    "tiered-content-compaction:compact",
+                    &cancellation,
+                )?;
+                let outcome = Indexer::default().compact_content_segments_with_policy(
+                    output.clone(),
+                    &segments,
+                    &ContentMergePolicy::default(),
+                )?;
+                content_runtime_phase(
+                    &runtime,
+                    2,
+                    "tiered-content-compaction:verify",
+                    &cancellation,
+                )?;
+                cancellation.check()?;
+                runtime.remember_completion_detail(format!(
+                    "completed:terms:{} merged:{} retained:{}",
+                    outcome.postings.len(),
+                    outcome.merged_segments.len(),
+                    outcome.retained_segments.len()
+                ))?;
+                content_runtime_phase(
+                    &runtime,
+                    3,
+                    "tiered-content-compaction:complete",
+                    &cancellation,
+                )?;
+                Ok(outcome)
+            },
+        )?,
+        WORKER,
+    )
 }
 
 fn run_content_segment_maintenance(
@@ -1356,20 +1408,41 @@ fn run_content_segment_maintenance(
     access_reports.preflight_volumes(WORKER)?;
     let volume = access_reports.first_volume();
     let worker = BackgroundContentIndexer::default();
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _access = access_reports.access_checked(WORKER, || cancellation.check())?;
-        cancellation.check()?;
-        let report = worker.maintain_segments_cancellable(
-            &manifest_path,
-            &output_archive,
-            &segments,
-            &ContentMaintenanceOptions::default(),
-            &cancellation,
-        )?;
-        cancellation.check()?;
-        Ok(report)
-    })
+    visible_scheduled_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Indexing,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            output_archive.clone(),
+            move |cancellation, runtime| {
+                runtime
+                    .resize_checked(3, "content-maintenance:preflight", || cancellation.check())?;
+                let _access = access_reports.access_checked(WORKER, || cancellation.check())?;
+                content_runtime_phase(&runtime, 1, "content-maintenance:merge", &cancellation)?;
+                let report = worker.maintain_segments_cancellable(
+                    &manifest_path,
+                    &output_archive,
+                    &segments,
+                    &ContentMaintenanceOptions::default(),
+                    &cancellation,
+                )?;
+                content_runtime_phase(&runtime, 2, "content-maintenance:publish", &cancellation)?;
+                cancellation.check()?;
+                runtime.remember_completion_detail(format!(
+                    "completed:terms:{} merged:{} retained:{} manifest:{}",
+                    report.terms,
+                    report.merged_segments.len(),
+                    report.retained_segments.len(),
+                    report.manifest_archives
+                ))?;
+                content_runtime_phase(&runtime, 3, "content-maintenance:complete", &cancellation)?;
+                Ok(report)
+            },
+        )?,
+        WORKER,
+    )
 }
 
 fn load_resumable_content_job_spec(
