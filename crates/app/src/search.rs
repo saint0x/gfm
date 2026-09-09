@@ -3459,64 +3459,70 @@ fn run_sidecar_index_search(
             .as_ref()
             .and_then(SearchWriteAccessReport::volume)
     });
-    run_retriable_volume_task_cancellable_with_payload_path(
-        volume,
-        Priority::Visible,
-        WORKER,
-        paths.records.clone(),
-        move |cancellation| {
-            let paths = paths.clone();
-            let query = query.clone();
-            let retry_probe = retry_probe.clone();
-            let retry_access = retry_access.clone();
-            cancellation.check()?;
-            if let (Some(retry_probe), Some(retry_access)) =
-                (retry_probe.as_ref(), retry_access.as_ref())
-            {
-                fail_first_search_retry_probe_attempt(
-                    retry_probe,
-                    retry_access,
-                    WORKER,
+    scheduled_search_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Indexing,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            paths.records.clone(),
+            move |cancellation, runtime| {
+                let paths = paths.clone();
+                let query = query.clone();
+                let retry_probe = retry_probe.clone();
+                let retry_access = retry_access.clone();
+                let volume_reports = volume_reports.clone();
+                cancellation.check()?;
+                runtime.resize_checked(3, "sidecar-search:preflight", || cancellation.check())?;
+                if let (Some(retry_probe), Some(retry_access)) =
+                    (retry_probe.as_ref(), retry_access.as_ref())
+                {
+                    fail_first_search_retry_probe_attempt(
+                        retry_probe,
+                        retry_access,
+                        WORKER,
+                        &cancellation,
+                    )?;
+                }
+                let _access =
+                    preflight_sidecar_index_search_access_checked(&volume_reports, WORKER, || {
+                        cancellation.check()
+                    })?;
+                search_phase(&runtime, 1, "sidecar-search:open", &cancellation)?;
+                let OwnedSidecarIndexAccessPaths {
+                    records,
+                    columns,
+                    metadata,
+                    prefixes,
+                    substrings,
+                    fuzzy,
+                    content,
+                } = paths;
+                let session = SidecarIndexQuerySession::open_cancellable(
+                    records,
+                    columns,
+                    metadata,
+                    prefixes,
+                    substrings,
+                    fuzzy,
+                    content,
                     &cancellation,
                 )?;
-            }
-            let _access =
-                preflight_sidecar_index_search_access_checked(&volume_reports, WORKER, || {
-                    cancellation.check()
-                })?;
-            cancellation.check()?;
-            let OwnedSidecarIndexAccessPaths {
-                records,
-                columns,
-                metadata,
-                prefixes,
-                substrings,
-                fuzzy,
-                content,
-            } = paths;
-            let session = SidecarIndexQuerySession::open_cancellable(
-                records,
-                columns,
-                metadata,
-                prefixes,
-                substrings,
-                fuzzy,
-                content,
-                &cancellation,
-            )?;
-            cancellation.check()?;
-            let budget = SearchLookupBudget::default();
-            let parsed = SearchQuery::parse_cancellable(&query, &cancellation)?;
-            let report = session.search_structured_with_volume_scope_budget_cancellable(
-                &parsed,
-                50,
-                &SearchVolumeScope::All,
-                budget,
-                &cancellation,
-            )?;
-            let hydration = &report.hydration;
-            let volume_summary = volume_reports.admitted_volume_summary();
-            let diagnostics = format!(
+                cancellation.check()?;
+                let budget = SearchLookupBudget::default();
+                let parsed = SearchQuery::parse_cancellable(&query, &cancellation)?;
+                let report = session.search_structured_with_volume_scope_budget_cancellable(
+                    &parsed,
+                    50,
+                    &SearchVolumeScope::All,
+                    budget,
+                    &cancellation,
+                )?;
+                search_phase(&runtime, 2, "sidecar-search:rank", &cancellation)?;
+                let hydration = &report.hydration;
+                let volume_summary = volume_reports.admitted_volume_summary();
+                let diagnostics = format!(
             "{}\tcolumns-indexed {} records-loaded {} records-missing {} candidate-ids {} full-hydration {} metadata-keys {} prefix-keys {} substring-keys {} fuzzy-keys {} prefix-archive-keys {} substring-archive-keys {} fuzzy-archive-keys {} content-keys {} content-cache-hits {} content-cache-misses {} metadata-budget {} substring-budget {} content-budget {}",
             volume_summary.as_tsv_fields(),
             hydration.columns_applied,
@@ -3538,11 +3544,15 @@ fn run_sidecar_index_search(
             budget.max_substring_ids_per_gram,
             budget.max_content_ids_per_term
         );
-            Ok(SidecarSearchOutput {
-                diagnostics,
-                hits: report.search.hits,
-            })
-        },
+                search_phase(&runtime, 3, "sidecar-search:complete", &cancellation)?;
+                runtime.remember_completion_detail("completed")?;
+                Ok(SidecarSearchOutput {
+                    diagnostics,
+                    hits: report.search.hits,
+                })
+            },
+        )?,
+        WORKER,
     )
 }
 
