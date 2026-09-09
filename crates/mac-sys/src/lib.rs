@@ -23,8 +23,8 @@ pub use fileprovider::{
 };
 pub use finder::{copy_kind_string_for_path, NativeFinderKind, NativeFinderKindStatus};
 pub use pressure::{
-    copy_host_pressure, NativeHostPressure, NativeHostSignalStatus, NativePowerSourceState,
-    NativeThermalState, NativeUserActivityState,
+    copy_host_pressure, NativeHostPressure, NativeHostSignalStatus, NativeIoPressureState,
+    NativePowerSourceState, NativeThermalState, NativeUserActivityState,
 };
 pub use process::{copy_process_memory, NativeProcessMemory, NativeProcessMemoryStatus};
 pub use spotlight::{

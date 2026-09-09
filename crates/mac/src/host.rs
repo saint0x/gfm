@@ -329,6 +329,8 @@ impl HostSchedulingPressureReport {
             native.power_source_state,
             native.power_source_reason,
         );
+        let (io_status, io_state, io_reason) =
+            map_io_signal(native.io_status, native.io_state, native.io_reason);
         let (user_activity_status, user_activity, user_activity_reason) = map_user_activity_signal(
             native.user_activity_status,
             native.user_activity_state,
@@ -342,9 +344,9 @@ impl HostSchedulingPressureReport {
             battery_status,
             battery_state,
             battery_reason,
-            io_status: HostPressureSignalStatus::Unsupported,
-            io_state: HostIoPressure::Nominal,
-            io_reason: Some("macOS IO pressure source is not wired".to_string()),
+            io_status,
+            io_state,
+            io_reason,
             user_activity_status,
             user_activity,
             user_activity_reason,
@@ -367,6 +369,49 @@ impl HostSchedulingPressureReport {
             self.user_activity.as_str(),
             optional_host_reason(self.user_activity_reason.as_deref()),
         )
+    }
+}
+
+fn map_io_signal(
+    status: gfm_mac_sys::NativeHostSignalStatus,
+    state: Option<gfm_mac_sys::NativeIoPressureState>,
+    reason: Option<String>,
+) -> (HostPressureSignalStatus, HostIoPressure, Option<String>) {
+    match (status, state) {
+        (
+            gfm_mac_sys::NativeHostSignalStatus::Available,
+            Some(gfm_mac_sys::NativeIoPressureState::Nominal),
+        ) => (
+            HostPressureSignalStatus::Available,
+            HostIoPressure::Nominal,
+            reason,
+        ),
+        (
+            gfm_mac_sys::NativeHostSignalStatus::Available,
+            Some(gfm_mac_sys::NativeIoPressureState::Elevated),
+        ) => (
+            HostPressureSignalStatus::Available,
+            HostIoPressure::Elevated,
+            reason,
+        ),
+        (
+            gfm_mac_sys::NativeHostSignalStatus::Available,
+            Some(gfm_mac_sys::NativeIoPressureState::Saturated),
+        ) => (
+            HostPressureSignalStatus::Available,
+            HostIoPressure::Saturated,
+            reason,
+        ),
+        (gfm_mac_sys::NativeHostSignalStatus::Unsupported, _) => (
+            HostPressureSignalStatus::Unsupported,
+            HostIoPressure::Nominal,
+            reason,
+        ),
+        _ => (
+            HostPressureSignalStatus::Unavailable,
+            HostIoPressure::Nominal,
+            reason,
+        ),
     }
 }
 
@@ -647,6 +692,9 @@ mod tests {
             power_source_status: gfm_mac_sys::NativeHostSignalStatus::Available,
             power_source_state: Some(gfm_mac_sys::NativePowerSourceState::AcPower),
             power_source_reason: None,
+            io_status: gfm_mac_sys::NativeHostSignalStatus::Available,
+            io_state: Some(gfm_mac_sys::NativeIoPressureState::Saturated),
+            io_reason: Some("process disk IO 300000000B/s over 100ms".to_string()),
             user_activity_status: gfm_mac_sys::NativeHostSignalStatus::Available,
             user_activity_state: Some(gfm_mac_sys::NativeUserActivityState::Active),
             user_activity_idle_millis: Some(125),
@@ -657,11 +705,11 @@ mod tests {
         assert_eq!(report.thermal_state, HostThermalState::Critical);
         assert_eq!(report.battery_status, HostPressureSignalStatus::Available);
         assert_eq!(report.battery_state, HostBatteryState::LowPower);
-        assert_eq!(report.io_status, HostPressureSignalStatus::Unsupported);
-        assert_eq!(report.io_state, HostIoPressure::Nominal);
+        assert_eq!(report.io_status, HostPressureSignalStatus::Available);
+        assert_eq!(report.io_state, HostIoPressure::Saturated);
         assert_eq!(
             report.io_reason.as_deref(),
-            Some("macOS IO pressure source is not wired")
+            Some("process disk IO 300000000B/s over 100ms")
         );
         assert_eq!(
             report.user_activity_status,
@@ -686,6 +734,9 @@ mod tests {
             power_source_status: gfm_mac_sys::NativeHostSignalStatus::Available,
             power_source_state: Some(gfm_mac_sys::NativePowerSourceState::BatteryPower),
             power_source_reason: None,
+            io_status: gfm_mac_sys::NativeHostSignalStatus::Available,
+            io_state: Some(gfm_mac_sys::NativeIoPressureState::Nominal),
+            io_reason: Some("process disk IO 0B/s over 100ms".to_string()),
             user_activity_status: gfm_mac_sys::NativeHostSignalStatus::Available,
             user_activity_state: Some(gfm_mac_sys::NativeUserActivityState::Idle),
             user_activity_idle_millis: Some(8_000),
@@ -709,6 +760,9 @@ mod tests {
             power_source_status: gfm_mac_sys::NativeHostSignalStatus::Available,
             power_source_state: Some(gfm_mac_sys::NativePowerSourceState::AcPower),
             power_source_reason: None,
+            io_status: gfm_mac_sys::NativeHostSignalStatus::Available,
+            io_state: Some(gfm_mac_sys::NativeIoPressureState::Nominal),
+            io_reason: Some("process disk IO 0B/s over 100ms".to_string()),
             user_activity_status: gfm_mac_sys::NativeHostSignalStatus::Available,
             user_activity_state: Some(gfm_mac_sys::NativeUserActivityState::Idle),
             user_activity_idle_millis: Some(8_000),
@@ -731,6 +785,9 @@ mod tests {
             power_source_status: gfm_mac_sys::NativeHostSignalStatus::Available,
             power_source_state: Some(gfm_mac_sys::NativePowerSourceState::AcPower),
             power_source_reason: None,
+            io_status: gfm_mac_sys::NativeHostSignalStatus::Available,
+            io_state: Some(gfm_mac_sys::NativeIoPressureState::Nominal),
+            io_reason: Some("process disk IO 0B/s over 100ms".to_string()),
             user_activity_status: gfm_mac_sys::NativeHostSignalStatus::Available,
             user_activity_state: Some(gfm_mac_sys::NativeUserActivityState::Idle),
             user_activity_idle_millis: Some(12_500),
@@ -760,6 +817,9 @@ mod tests {
             power_source_status: gfm_mac_sys::NativeHostSignalStatus::Unsupported,
             power_source_state: None,
             power_source_reason: Some("power\tunsupported".to_string()),
+            io_status: gfm_mac_sys::NativeHostSignalStatus::Unavailable,
+            io_state: None,
+            io_reason: Some("io\tunknown".to_string()),
             user_activity_status: gfm_mac_sys::NativeHostSignalStatus::Unavailable,
             user_activity_state: None,
             user_activity_idle_millis: None,
@@ -769,7 +829,7 @@ mod tests {
         let tsv = report.as_tsv();
 
         assert!(tsv.starts_with("host-scheduling-pressure\t"));
-        assert!(tsv.contains("\tio-status=unsupported\tio=nominal\t"));
+        assert!(tsv.contains("\tio-status=unavailable\tio=nominal\tio-reason=io\\tunknown\t"));
         assert!(tsv.contains("\tthermal-status=unavailable\tthermal=nominal\t"));
         assert!(tsv.contains("\tthermal-reason=thermal\\tunknown\\nnow\\r\t"));
         assert!(tsv.contains("\tbattery-status=unsupported\tbattery=ac\t"));
