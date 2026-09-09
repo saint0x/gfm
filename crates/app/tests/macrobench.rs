@@ -98,6 +98,9 @@ fn benchmark_workspace_routes_refuse_unreachable_volume_before_materializing_fro
     fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
     let capture_output = offline.join("finder.png");
     let capture_provenance = offline.join("finder.provenance.tsv");
+    let capture_manifest = offline.join("capture-gate.tsv");
+    let finder_capture = offline.join("finder.rgba");
+    let gfm_capture = offline.join("gfm.rgba");
 
     let cases = [
         (
@@ -135,6 +138,7 @@ fn benchmark_workspace_routes_refuse_unreachable_volume_before_materializing_fro
                 "dark",
                 "2x",
                 "display-p3",
+                "active",
                 "40",
                 "70",
                 "1040",
@@ -142,6 +146,35 @@ fn benchmark_workspace_routes_refuse_unreachable_volume_before_materializing_fro
             ],
             "parity capture fixture",
             "parity-capture\t",
+        ),
+        (
+            vec![
+                "parity-capture-manifest",
+                capture_manifest.to_str().unwrap(),
+                "text",
+                finder_capture.to_str().unwrap(),
+                gfm_capture.to_str().unwrap(),
+                "-",
+                offline.to_str().unwrap(),
+                "text",
+                "list",
+                "25A354",
+                "macbookpro18,3",
+                "studio-display-p3",
+                "0.1.0",
+                "2026-09-09T00:00:00Z",
+                "codex",
+                "codex",
+                "macos-25A354-default",
+                "dark",
+                "2x",
+                "display-p3",
+                "active",
+                "1",
+                "1",
+            ],
+            "parity capture manifest",
+            "parity-capture-manifest\t",
         ),
         (
             vec!["regression-gate", offline.to_str().unwrap(), "smoke"],
@@ -200,6 +233,7 @@ fn benchmark_workspace_routes_refuse_unreachable_volume_before_materializing_fro
     assert!(!offline.join("gfm-parity-fixture").exists());
     assert!(!offline.join("finder.png").exists());
     assert!(!offline.join("finder.provenance.tsv").exists());
+    assert!(!offline.join("capture-gate.tsv").exists());
     assert!(!offline.join("gfm-large-sidecar-gate").exists());
     assert!(!offline.join("gfm-search-typing-benchmark").exists());
 
@@ -584,6 +618,87 @@ fn runs_parity_gate_from_binary_manifest() {
     assert!(
         stderr.contains("security-worker-admission\tworker=parity gate\t"),
         "{stderr}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn writes_parity_capture_manifest_from_binary() {
+    let root = unique_temp_dir("gfm-cli-parity-capture-manifest");
+    let finder = root.join("finder.rgba");
+    let gfm = root.join("gfm.rgba");
+    let manifest = root.join("gate.tsv");
+    fs::write(&finder, [1, 2, 3, 255]).unwrap();
+    fs::write(&gfm, [1, 2, 3, 255]).unwrap();
+    fs::write(
+        root.join("manifest.tsv"),
+        format!(
+            "scenario\troot\tfinder-view\tfiles\tdirectories\ntext\t{}\tlist\t1\t0\n",
+            root.display()
+        ),
+    )
+    .unwrap();
+    write_capture_pair_provenance_artifacts(&root, &finder, &gfm);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "parity-capture-manifest",
+            manifest.to_str().unwrap(),
+            "text",
+            finder.to_str().unwrap(),
+            gfm.to_str().unwrap(),
+            "-",
+            root.to_str().unwrap(),
+            "text",
+            "list",
+            "25A354",
+            "macbookpro18,3",
+            "studio-display-p3",
+            "0.1.0",
+            "2026-09-09T00:00:00Z",
+            "codex",
+            "codex",
+            "macos-25A354-default",
+            "dark",
+            "2x",
+            "display-p3",
+            "active",
+            "1",
+            "1",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("parity-capture-manifest\tmanifest="),
+        "{stdout}"
+    );
+
+    let content = fs::read_to_string(&manifest).unwrap();
+    assert!(content.starts_with("manifest-version\t1\nprofile\tmacos-build=25A354\t"));
+    assert!(content.contains("\tappearance=dark\tscale=2x\tcolor-profile=display-p3\n"));
+    assert!(content.contains("\nentry\ttext\t"));
+    assert!(content.contains("\t1\t1\t\t1\t1\tactive\tlist\t"));
+
+    let gate_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args(["parity-gate", manifest.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        gate_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&gate_output.stderr)
+    );
+    let gate_stdout = String::from_utf8(gate_output.stdout).unwrap();
+    assert!(
+        gate_stdout.contains("entries=1\tviolations=0\tpassed=true"),
+        "{gate_stdout}"
     );
 
     fs::remove_dir_all(root).unwrap();
@@ -1156,6 +1271,7 @@ fn parity_capture_rejects_unresolved_system_appearance_before_native_capture_fro
             "system",
             "2x",
             "display-p3",
+            "active",
             "40",
             "70",
             "1040",
@@ -1281,6 +1397,61 @@ fn write_capture_provenance_artifacts(root: &Path, fixture_root: &str) {
             scenario,
             root.join(fixture_root).display(),
             view
+        ),
+    )
+    .unwrap();
+    write_capture_artifact_provenance(
+        &root.join("expected.rgba"),
+        "finder",
+        root,
+        fixture_root,
+        scenario,
+        view,
+    );
+    write_capture_artifact_provenance(
+        &root.join("actual.rgba"),
+        "gfm",
+        root,
+        fixture_root,
+        scenario,
+        view,
+    );
+}
+
+fn write_capture_artifact_provenance(
+    output: &Path,
+    target: &str,
+    root: &Path,
+    fixture_root: &str,
+    scenario: &str,
+    view: &str,
+) {
+    fs::write(
+        output.with_extension("provenance.tsv"),
+        format!(
+            "target\t{}\nfixture-root\t{}\noutput\t{}\nscenario\t{}\nview-mode\t{}\nmacos-build\t25A354\nhardware-profile\tmacbookpro18,3\ndisplay-profile\tstudio-display-p3\napp-version\t0.1.0\ncaptured-at\t2026-08-27T00:00:00Z\ncapture-command\tscreencapture:-x:-R:40,70,1040,720\nreviewer\tcodex\nsigner\tcodex\napproved-mask-set\tmacos-25A354-default\nappearance\tdark\nscale\t2x\ncolor-profile\tdisplay-p3\nfocus\tactive\nwindow-region\t40,70,1040,720\n",
+            target,
+            root.join(fixture_root).display(),
+            output.display(),
+            scenario,
+            view
+        ),
+    )
+    .unwrap();
+}
+
+fn write_capture_pair_provenance_artifacts(root: &Path, finder: &Path, gfm: &Path) {
+    write_capture_provenance_artifact(root, finder, "finder");
+    write_capture_provenance_artifact(root, gfm, "gfm");
+}
+
+fn write_capture_provenance_artifact(root: &Path, output: &Path, target: &str) {
+    fs::write(
+        output.with_extension("provenance.tsv"),
+        format!(
+            "target\t{target}\nfixture-root\t{}\noutput\t{}\nscenario\ttext\nview-mode\tlist\nmacos-build\t25A354\nhardware-profile\tmacbookpro18,3\ndisplay-profile\tstudio-display-p3\napp-version\t0.1.0\ncaptured-at\t2026-09-09T00:00:00Z\ncapture-command\tscreencapture:-x:-R:0,0,1,1\nreviewer\tcodex\nsigner\tcodex\napproved-mask-set\tmacos-25A354-default\nappearance\tdark\nscale\t2x\ncolor-profile\tdisplay-p3\nfocus\tactive\nwindow-region\t0,0,1,1\n",
+            root.display(),
+            output.display(),
         ),
     )
     .unwrap();

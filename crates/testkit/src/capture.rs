@@ -1,4 +1,7 @@
-use crate::{ColorProfile, DisplayScale, ParityAppearance, ParityViewMode, PixelSize};
+use crate::{
+    ColorProfile, DisplayScale, ParityAppearance, ParityFocusState, ParitySurface, ParityViewMode,
+    PixelSize,
+};
 use gfm_types::{GfmError, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -48,6 +51,7 @@ pub struct ParityScreenshotCaptureOptions {
     pub appearance: ParityAppearance,
     pub scale: DisplayScale,
     pub color_profile: ColorProfile,
+    pub focus: ParityFocusState,
     pub window_origin_x: u32,
     pub window_origin_y: u32,
     pub window_size: PixelSize,
@@ -63,6 +67,15 @@ pub struct ParityScreenshotCaptureReport {
     pub window_region: CaptureRegion,
     pub prepare_command: Vec<String>,
     pub capture_command: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParityCapturePairManifestOptions {
+    pub manifest_path: PathBuf,
+    pub surface: ParitySurface,
+    pub finder: ParityScreenshotCaptureOptions,
+    pub gfm: ParityScreenshotCaptureOptions,
+    pub mask_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -141,7 +154,81 @@ pub fn plan_parity_capture_commands(
     ))
 }
 
+pub fn write_parity_capture_pair_manifest(
+    options: &ParityCapturePairManifestOptions,
+) -> Result<()> {
+    write_parity_capture_pair_manifest_checked(options, || Ok(()))
+}
+
+pub fn write_parity_capture_pair_manifest_checked(
+    options: &ParityCapturePairManifestOptions,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    check_control()?;
+    validate_capture_pair_manifest_options(options)?;
+    check_control()?;
+    if let Some(parent) = options.manifest_path.parent() {
+        fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
+    }
+    let finder = &options.finder;
+    let gfm = &options.gfm;
+    let mask = options
+        .mask_path
+        .as_ref()
+        .map(|path| path.display().to_string())
+        .unwrap_or_default();
+    let content = format!(
+        "manifest-version\t1\nprofile\tmacos-build={}\thardware-profile={}\tdisplay-profile={}\tapp-version={}\tfixture-manifest={}\tcaptured-at={}\tcapture-command={}\treviewer={}\tsigner={}\tapproved-mask-set={}\tappearance={}\tscale={}\tcolor-profile={}\nentry\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+        escape_tsv_field(&finder.macos_build),
+        escape_tsv_field(&finder.hardware_profile),
+        escape_tsv_field(&finder.display_profile),
+        escape_tsv_field(&finder.app_version),
+        escape_tsv_field(&finder.fixture_root.join("manifest.tsv").to_string_lossy()),
+        escape_tsv_field(&finder.captured_at),
+        escape_tsv_field(&format!(
+            "finder:screencapture:-x:-R:{},{},{},{};gfm:screencapture:-x:-R:{},{},{},{}",
+            finder.window_origin_x,
+            finder.window_origin_y,
+            finder.window_size.width,
+            finder.window_size.height,
+            gfm.window_origin_x,
+            gfm.window_origin_y,
+            gfm.window_size.width,
+            gfm.window_size.height
+        )),
+        escape_tsv_field(&finder.reviewer),
+        escape_tsv_field(&finder.signer),
+        escape_tsv_field(&finder.approved_mask_set),
+        finder.appearance.as_str(),
+        finder.scale.as_str(),
+        finder.color_profile.as_str(),
+        options.surface.as_str(),
+        escape_tsv_field(&finder.output_png.to_string_lossy()),
+        escape_tsv_field(&gfm.output_png.to_string_lossy()),
+        finder.window_size.width,
+        finder.window_size.height,
+        escape_tsv_field(&mask),
+        finder.window_size.width,
+        finder.window_size.height,
+        finder.focus.as_str(),
+        finder.view_mode.as_str(),
+        escape_tsv_field(&finder.fixture_root.to_string_lossy())
+    );
+    fs::write(&options.manifest_path, content)
+        .map_err(|err| GfmError::io(&options.manifest_path, err))
+}
+
 fn validate_capture_options(options: &ParityScreenshotCaptureOptions) -> Result<()> {
+    validate_capture_metadata(options)?;
+    if options.target == ParityCaptureTarget::Gfm && options.gfm_app.is_none() {
+        return Err(GfmError::Format(
+            "gfm parity capture requires a GFM app path".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_capture_metadata(options: &ParityScreenshotCaptureOptions) -> Result<()> {
     if !options.fixture_root.is_dir() {
         return Err(GfmError::Format(format!(
             "parity capture fixture root must be a directory: {}",
@@ -182,9 +269,48 @@ fn validate_capture_options(options: &ParityScreenshotCaptureOptions) -> Result<
             "parity capture appearance must be resolved light or dark".to_string(),
         ));
     }
-    if options.target == ParityCaptureTarget::Gfm && options.gfm_app.is_none() {
+    Ok(())
+}
+
+fn validate_capture_pair_manifest_options(
+    options: &ParityCapturePairManifestOptions,
+) -> Result<()> {
+    validate_capture_metadata(&options.finder)?;
+    validate_capture_metadata(&options.gfm)?;
+    if options.finder.target != ParityCaptureTarget::Finder {
         return Err(GfmError::Format(
-            "gfm parity capture requires a GFM app path".to_string(),
+            "parity capture manifest requires a Finder capture as expected artifact".to_string(),
+        ));
+    }
+    if options.gfm.target != ParityCaptureTarget::Gfm {
+        return Err(GfmError::Format(
+            "parity capture manifest requires a GFM capture as actual artifact".to_string(),
+        ));
+    }
+    if options.finder.fixture_root != options.gfm.fixture_root
+        || options.finder.scenario != options.gfm.scenario
+        || options.finder.view_mode != options.gfm.view_mode
+        || options.finder.macos_build != options.gfm.macos_build
+        || options.finder.hardware_profile != options.gfm.hardware_profile
+        || options.finder.display_profile != options.gfm.display_profile
+        || options.finder.app_version != options.gfm.app_version
+        || options.finder.captured_at != options.gfm.captured_at
+        || options.finder.reviewer != options.gfm.reviewer
+        || options.finder.signer != options.gfm.signer
+        || options.finder.approved_mask_set != options.gfm.approved_mask_set
+        || options.finder.appearance != options.gfm.appearance
+        || options.finder.scale != options.gfm.scale
+        || options.finder.color_profile != options.gfm.color_profile
+        || options.finder.focus != options.gfm.focus
+        || options.finder.window_size != options.gfm.window_size
+    {
+        return Err(GfmError::Format(
+            "parity capture manifest requires matching Finder and GFM capture metadata".to_string(),
+        ));
+    }
+    if options.finder.output_png == options.gfm.output_png {
+        return Err(GfmError::Format(
+            "parity capture manifest requires distinct Finder and GFM screenshots".to_string(),
         ));
     }
     Ok(())
@@ -268,7 +394,7 @@ fn write_capture_provenance(
     region: &CaptureRegion,
 ) -> Result<()> {
     let content = format!(
-        "target\t{}\nfixture-root\t{}\noutput\t{}\nscenario\t{}\nview-mode\t{}\nmacos-build\t{}\nhardware-profile\t{}\ndisplay-profile\t{}\napp-version\t{}\ncaptured-at\t{}\ncapture-command\t{}\nreviewer\t{}\nsigner\t{}\napproved-mask-set\t{}\nappearance\t{}\nscale\t{}\ncolor-profile\t{}\nwindow-region\t{}\n",
+        "target\t{}\nfixture-root\t{}\noutput\t{}\nscenario\t{}\nview-mode\t{}\nmacos-build\t{}\nhardware-profile\t{}\ndisplay-profile\t{}\napp-version\t{}\ncaptured-at\t{}\ncapture-command\t{}\nreviewer\t{}\nsigner\t{}\napproved-mask-set\t{}\nappearance\t{}\nscale\t{}\ncolor-profile\t{}\nfocus\t{}\nwindow-region\t{}\n",
         options.target.as_str(),
         escape_tsv_field(&options.fixture_root.to_string_lossy()),
         escape_tsv_field(&options.output_png.to_string_lossy()),
@@ -289,6 +415,7 @@ fn write_capture_provenance(
         options.appearance.as_str(),
         options.scale.as_str(),
         options.color_profile.as_str(),
+        options.focus.as_str(),
         region.screencapture_region()
     );
     fs::write(&options.provenance_tsv, content)
@@ -392,6 +519,86 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn writes_gate_manifest_from_paired_finder_and_gfm_captures() {
+        let root = unique_temp_dir("gfm-parity-capture-pair-manifest");
+        fs::write(
+            root.join("manifest.tsv"),
+            "scenario\troot\tview\nlist\t.\tlist\n",
+        )
+        .unwrap();
+        let finder = sample_options(
+            ParityCaptureTarget::Finder,
+            &root,
+            root.join("finder.png"),
+            root.join("finder.provenance.tsv"),
+        );
+        let mut gfm = sample_options(
+            ParityCaptureTarget::Gfm,
+            &root,
+            root.join("gfm.png"),
+            root.join("gfm.provenance.tsv"),
+        );
+        gfm.gfm_app = Some(PathBuf::from("/Applications/GFM.app"));
+        let manifest = root.join("gate.tsv");
+
+        write_parity_capture_pair_manifest(&ParityCapturePairManifestOptions {
+            manifest_path: manifest.clone(),
+            surface: ParitySurface::Text,
+            finder,
+            gfm,
+            mask_path: Some(root.join("mask.tsv")),
+        })
+        .unwrap();
+
+        let content = fs::read_to_string(manifest).unwrap();
+        assert!(content.starts_with("manifest-version\t1\nprofile\tmacos-build=24D70\t"));
+        assert!(content.contains("\tfixture-manifest="));
+        assert!(content.contains("\tcapture-command=finder:screencapture:-x:-R:40,70,1040,720;gfm:screencapture:-x:-R:40,70,1040,720\t"));
+        assert!(content.contains("\nentry\ttext\t"));
+        assert!(content.contains(&format!("\t{}\t", root.join("finder.png").display())));
+        assert!(content.contains(&format!("\t{}\t", root.join("gfm.png").display())));
+        assert!(content.contains(&format!(
+            "\t{}\t1040\t720\tactive\tlist\t",
+            root.join("mask.tsv").display()
+        )));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn capture_pair_manifest_rejects_mismatched_metadata() {
+        let root = unique_temp_dir("gfm-parity-capture-pair-mismatch");
+        let finder = sample_options(
+            ParityCaptureTarget::Finder,
+            &root,
+            root.join("finder.png"),
+            root.join("finder.provenance.tsv"),
+        );
+        let mut gfm = sample_options(
+            ParityCaptureTarget::Gfm,
+            &root,
+            root.join("gfm.png"),
+            root.join("gfm.provenance.tsv"),
+        );
+        gfm.gfm_app = Some(PathBuf::from("/Applications/GFM.app"));
+        gfm.focus = ParityFocusState::Inactive;
+
+        let err = write_parity_capture_pair_manifest(&ParityCapturePairManifestOptions {
+            manifest_path: root.join("gate.tsv"),
+            surface: ParitySurface::Text,
+            finder,
+            gfm,
+            mask_path: None,
+        })
+        .unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("requires matching Finder and GFM capture metadata"));
+        assert!(!root.join("gate.tsv").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
     fn sample_options(
         target: ParityCaptureTarget,
         fixture_root: &Path,
@@ -416,6 +623,7 @@ mod tests {
             appearance: ParityAppearance::Dark,
             scale: DisplayScale::Two,
             color_profile: ColorProfile::DisplayP3,
+            focus: ParityFocusState::Active,
             window_origin_x: 40,
             window_origin_y: 70,
             window_size: PixelSize::new(1040, 720),

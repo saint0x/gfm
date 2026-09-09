@@ -8,7 +8,8 @@ mod pixel;
 
 pub use capture::{
     capture_parity_screenshot, capture_parity_screenshot_checked, plan_parity_capture_commands,
-    CaptureRegion, ParityCaptureTarget, ParityScreenshotCaptureOptions,
+    write_parity_capture_pair_manifest, write_parity_capture_pair_manifest_checked, CaptureRegion,
+    ParityCapturePairManifestOptions, ParityCaptureTarget, ParityScreenshotCaptureOptions,
     ParityScreenshotCaptureReport,
 };
 pub use gates::{

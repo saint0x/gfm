@@ -15,10 +15,10 @@ use gfm_testkit::{
     run_parity_gate, run_regression_gate, run_search_typing_benchmark,
     run_search_typing_session_benchmark, write_parity_review_bundle, ColorProfile, DisplayScale,
     LargeSidecarGateOptions, MacOsParityProfile, MacrobenchOptions, MacrobenchScale,
-    MacrobenchStage, ParityAppearance, ParityCaptureTarget, ParityFixtureOptions,
-    ParityFixtureScale, ParityGateInput, ParityScreenshotCaptureOptions, ParitySurface,
-    PixelDiffOptions, PixelDriftThreshold, PixelSize, RegressionGateOptions,
-    SearchTypingBenchmarkOptions,
+    MacrobenchStage, ParityAppearance, ParityCapturePairManifestOptions, ParityCaptureTarget,
+    ParityFixtureOptions, ParityFixtureScale, ParityFocusState, ParityGateInput,
+    ParityScreenshotCaptureOptions, ParitySurface, PixelDiffOptions, PixelDriftThreshold,
+    PixelSize, RegressionGateOptions, SearchTypingBenchmarkOptions,
 };
 use gfm_types::{GfmError, Result};
 use std::fs;
@@ -151,6 +151,42 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 report.window_region.height,
                 escape_gate_tsv_field(&report.prepare_command.join(" ")),
                 escape_gate_tsv_field(&report.capture_command.join(" "))
+            );
+        }
+        "parity-capture-manifest" => {
+            let options = parity_capture_manifest_options(args)?;
+            let access_reports = parity_capture_manifest_access_reports(&options)?;
+            access_reports.preflight_volumes()?;
+            let volume = access_reports.first_volume();
+            let manifest_path = options.manifest_path.clone();
+            let report = run_volume_task_cancellable(
+                volume,
+                Priority::Visible,
+                "parity capture manifest",
+                move |cancellation| {
+                    cancellation.check()?;
+                    let _access = access_reports.access_checked(|| cancellation.check())?;
+                    cancellation.check()?;
+                    gfm_testkit::write_parity_capture_pair_manifest_checked(&options, || {
+                        cancellation.check()
+                    })?;
+                    Ok(options)
+                },
+            )?;
+            println!(
+                "parity-capture-manifest\tmanifest={}\tsurface={}\tfinder={}\tgfm={}\tmask={}\tfixture={}\tview-mode={}\tfocus={}",
+                escape_gate_tsv_path(&manifest_path),
+                report.surface.as_str(),
+                escape_gate_tsv_path(&report.finder.output_png),
+                escape_gate_tsv_path(&report.gfm.output_png),
+                report
+                    .mask_path
+                    .as_ref()
+                    .map(|path| escape_gate_tsv_path(path))
+                    .unwrap_or_else(|| "-".to_string()),
+                escape_gate_tsv_path(&report.finder.fixture_root),
+                report.finder.view_mode.as_str(),
+                report.finder.focus.as_str()
             );
         }
         "pixel-diff" => {
@@ -841,6 +877,46 @@ fn parity_capture_access_reports(
     ]))
 }
 
+fn parity_capture_manifest_access_reports(
+    options: &ParityCapturePairManifestOptions,
+) -> Result<GateAccessReports> {
+    let mut entries = vec![
+        GateAccessReport::new_checked(
+            options.manifest_path.clone(),
+            AccessIntent::Write,
+            "parity capture manifest",
+            || Ok(()),
+        )?,
+        GateAccessReport::new_checked(
+            options.finder.fixture_root.clone(),
+            AccessIntent::Read,
+            "parity capture manifest fixture",
+            || Ok(()),
+        )?,
+        GateAccessReport::new_checked(
+            options.finder.output_png.clone(),
+            AccessIntent::Read,
+            "parity capture manifest Finder capture",
+            || Ok(()),
+        )?,
+        GateAccessReport::new_checked(
+            options.gfm.output_png.clone(),
+            AccessIntent::Read,
+            "parity capture manifest GFM capture",
+            || Ok(()),
+        )?,
+    ];
+    if let Some(mask_path) = &options.mask_path {
+        entries.push(GateAccessReport::new_checked(
+            mask_path.clone(),
+            AccessIntent::Read,
+            "parity capture manifest mask",
+            || Ok(()),
+        )?);
+    }
+    Ok(GateAccessReports::new(entries))
+}
+
 fn read_parity_manifest_inputs_checked(
     manifest: &Path,
     mut check_control: impl FnMut() -> Result<()>,
@@ -1142,6 +1218,11 @@ fn parity_capture_options(
     let appearance = parse_parity_appearance(args.next())?;
     let scale = parse_display_scale(args.next())?;
     let color_profile = parse_color_profile(args.next())?;
+    let focus = args
+        .next()
+        .ok_or_else(|| GfmError::Format("parity-capture requires a focus state".to_string()))?
+        .parse::<ParityFocusState>()
+        .map_err(GfmError::Format)?;
     let window_origin_x = parse_u32_arg(args.next(), "parity-capture requires a window x")?;
     let window_origin_y = parse_u32_arg(args.next(), "parity-capture requires a window y")?;
     let width = parse_u32_arg(args.next(), "parity-capture requires a window width")?;
@@ -1165,10 +1246,149 @@ fn parity_capture_options(
         appearance,
         scale,
         color_profile,
+        focus,
         window_origin_x,
         window_origin_y,
         window_size: PixelSize::new(width, height),
         gfm_app,
+    })
+}
+
+fn parity_capture_manifest_options(
+    args: &mut impl Iterator<Item = String>,
+) -> Result<ParityCapturePairManifestOptions> {
+    let manifest_path = required_path(
+        args.next(),
+        "parity-capture-manifest requires a manifest output path",
+    )?;
+    let surface = args
+        .next()
+        .ok_or_else(|| GfmError::Format("parity-capture-manifest requires a surface".to_string()))?
+        .parse::<ParitySurface>()
+        .map_err(GfmError::Format)?;
+    let finder_output = required_path(
+        args.next(),
+        "parity-capture-manifest requires a Finder screenshot path",
+    )?;
+    let gfm_output = required_path(
+        args.next(),
+        "parity-capture-manifest requires a GFM screenshot path",
+    )?;
+    let mask_path = match args.next().as_deref() {
+        Some("-") | None => None,
+        Some(path) => Some(PathBuf::from(path)),
+    };
+    let fixture_root = required_path(
+        args.next(),
+        "parity-capture-manifest requires a fixture root",
+    )?;
+    let scenario = args.next().ok_or_else(|| {
+        GfmError::Format("parity-capture-manifest requires a scenario".to_string())
+    })?;
+    let view_mode = args
+        .next()
+        .ok_or_else(|| {
+            GfmError::Format("parity-capture-manifest requires a view mode".to_string())
+        })?
+        .parse()
+        .map_err(GfmError::Format)?;
+    let macos_build = args.next().ok_or_else(|| {
+        GfmError::Format("parity-capture-manifest requires a macOS build".to_string())
+    })?;
+    let hardware_profile = args.next().ok_or_else(|| {
+        GfmError::Format("parity-capture-manifest requires a hardware profile".to_string())
+    })?;
+    let display_profile = args.next().ok_or_else(|| {
+        GfmError::Format("parity-capture-manifest requires a display profile".to_string())
+    })?;
+    let app_version = args.next().ok_or_else(|| {
+        GfmError::Format("parity-capture-manifest requires an app version".to_string())
+    })?;
+    let captured_at = args.next().ok_or_else(|| {
+        GfmError::Format("parity-capture-manifest requires captured-at".to_string())
+    })?;
+    let reviewer = args.next().ok_or_else(|| {
+        GfmError::Format("parity-capture-manifest requires a reviewer".to_string())
+    })?;
+    let signer = args
+        .next()
+        .ok_or_else(|| GfmError::Format("parity-capture-manifest requires a signer".to_string()))?;
+    let approved_mask_set = args.next().ok_or_else(|| {
+        GfmError::Format("parity-capture-manifest requires an approved mask set".to_string())
+    })?;
+    let appearance = parse_parity_appearance(args.next())?;
+    let scale = parse_display_scale(args.next())?;
+    let color_profile = parse_color_profile(args.next())?;
+    let focus = args
+        .next()
+        .ok_or_else(|| {
+            GfmError::Format("parity-capture-manifest requires a focus state".to_string())
+        })?
+        .parse::<ParityFocusState>()
+        .map_err(GfmError::Format)?;
+    let width = parse_u32_arg(
+        args.next(),
+        "parity-capture-manifest requires a screenshot width",
+    )?;
+    let height = parse_u32_arg(
+        args.next(),
+        "parity-capture-manifest requires a screenshot height",
+    )?;
+
+    let finder = ParityScreenshotCaptureOptions {
+        target: ParityCaptureTarget::Finder,
+        fixture_root: fixture_root.clone(),
+        output_png: finder_output,
+        provenance_tsv: manifest_path.with_file_name("finder.provenance.tsv"),
+        scenario: scenario.clone(),
+        view_mode,
+        macos_build: macos_build.clone(),
+        hardware_profile: hardware_profile.clone(),
+        display_profile: display_profile.clone(),
+        app_version: app_version.clone(),
+        captured_at: captured_at.clone(),
+        reviewer: reviewer.clone(),
+        signer: signer.clone(),
+        approved_mask_set: approved_mask_set.clone(),
+        appearance,
+        scale,
+        color_profile,
+        focus,
+        window_origin_x: 0,
+        window_origin_y: 0,
+        window_size: PixelSize::new(width, height),
+        gfm_app: None,
+    };
+    let gfm = ParityScreenshotCaptureOptions {
+        target: ParityCaptureTarget::Gfm,
+        fixture_root,
+        output_png: gfm_output,
+        provenance_tsv: manifest_path.with_file_name("gfm.provenance.tsv"),
+        scenario,
+        view_mode,
+        macos_build,
+        hardware_profile,
+        display_profile,
+        app_version,
+        captured_at,
+        reviewer,
+        signer,
+        approved_mask_set,
+        appearance,
+        scale,
+        color_profile,
+        focus,
+        window_origin_x: 0,
+        window_origin_y: 0,
+        window_size: PixelSize::new(width, height),
+        gfm_app: None,
+    };
+    Ok(ParityCapturePairManifestOptions {
+        manifest_path,
+        surface,
+        finder,
+        gfm,
+        mask_path,
     })
 }
 

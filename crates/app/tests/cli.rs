@@ -1960,6 +1960,8 @@ fn parity_gate_and_review_use_governed_masks_from_binary() {
     )
     .unwrap();
     write_capture_provenance_artifacts(&root, "fixtures/toolbar");
+    write_capture_artifact_provenance(&root, "fixtures/toolbar", &expected, "finder");
+    write_capture_artifact_provenance(&root, "fixtures/toolbar", &actual, "gfm");
     fs::write(
         &manifest,
         format!(
@@ -21449,6 +21451,28 @@ fn write_capture_provenance_artifacts(root: &Path, fixture_root: &str) {
             scenario,
             root.join(fixture_root).display(),
             view
+        ),
+    )
+    .unwrap();
+}
+
+fn write_capture_artifact_provenance(root: &Path, fixture_root: &str, output: &Path, target: &str) {
+    let scenario = Path::new(fixture_root)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap();
+    let view = match scenario {
+        "list" | "text" => "list",
+        "column" | "sidebar" => "column",
+        "gallery" | "search" => "gallery",
+        _ => "icon",
+    };
+    fs::write(
+        output.with_extension("provenance.tsv"),
+        format!(
+            "target\t{target}\nfixture-root\t{}\noutput\t{}\nscenario\t{scenario}\nview-mode\t{view}\nmacos-build\t25A354\nhardware-profile\tmacbookpro18,3\ndisplay-profile\tstudio-display-p3\napp-version\t0.1.0\ncaptured-at\t2026-08-27T00:00:00Z\ncapture-command\tscreencapture:-x:-R:40,70,1040,720\nreviewer\tcodex\nsigner\tcodex\napproved-mask-set\tmacos-25A354-default\nappearance\tdark\nscale\t2x\ncolor-profile\tdisplay-p3\nfocus\tactive\nwindow-region\t40,70,1040,720\n",
+            root.join(fixture_root).display(),
+            output.display(),
         ),
     )
     .unwrap();

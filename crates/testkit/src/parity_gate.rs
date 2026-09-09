@@ -4,7 +4,7 @@ use crate::{
     PixelDriftThreshold, PixelSize, PixelThresholdEvaluation,
 };
 use gfm_types::{GfmError, Result};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -274,8 +274,8 @@ pub fn run_parity_gate_manifest(path: impl AsRef<Path>) -> Result<ParityGateRepo
 pub fn run_parity_gate(inputs: Vec<ParityGateInput>) -> Result<ParityGateReport> {
     let mut entries = Vec::with_capacity(inputs.len());
     for input in inputs {
-        validate_capture_provenance_artifacts(&input)?;
         validate_distinct_capture_artifacts(&input)?;
+        validate_capture_provenance_artifacts(&input)?;
         let masks = input
             .mask_path
             .as_ref()
@@ -346,7 +346,579 @@ fn validate_capture_provenance_artifacts(input: &ParityGateInput) -> Result<()> 
     if !fixture_root_metadata.is_dir() {
         return Err(missing_fixture_root());
     }
+    validate_capture_artifact_provenance(
+        input,
+        &input.expected_path,
+        CaptureArtifactKind::Finder,
+        provenance,
+    )?;
+    validate_capture_artifact_provenance(
+        input,
+        &input.actual_path,
+        CaptureArtifactKind::Gfm,
+        provenance,
+    )?;
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CaptureArtifactKind {
+    Finder,
+    Gfm,
+}
+
+impl CaptureArtifactKind {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Finder => "finder",
+            Self::Gfm => "gfm",
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Finder => "expected Finder",
+            Self::Gfm => "actual GFM",
+        }
+    }
+}
+
+fn validate_capture_artifact_provenance(
+    input: &ParityGateInput,
+    artifact_path: &Path,
+    kind: CaptureArtifactKind,
+    provenance: &ParityCaptureProvenance,
+) -> Result<()> {
+    let provenance_path = capture_artifact_provenance_path(artifact_path);
+    let content = fs::read_to_string(&provenance_path).map_err(|err| {
+        if err.kind() == ErrorKind::NotFound {
+            GfmError::Format(format!(
+                "parity gate entry for {} requires {} capture provenance file: {}",
+                input.surface.as_str(),
+                kind.label(),
+                provenance_path.display()
+            ))
+        } else {
+            GfmError::io(&provenance_path, err)
+        }
+    })?;
+    let artifact =
+        parse_capture_artifact_provenance(&content, &provenance_path, input.surface, kind)?;
+    artifact.validate_against(input, artifact_path, kind, provenance, &provenance_path)
+}
+
+fn capture_artifact_provenance_path(artifact_path: &Path) -> PathBuf {
+    artifact_path.with_extension("provenance.tsv")
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CaptureArtifactProvenance {
+    target: String,
+    fixture_root: PathBuf,
+    output: PathBuf,
+    scenario: String,
+    view_mode: ParityViewMode,
+    macos_build: String,
+    hardware_profile: String,
+    display_profile: String,
+    app_version: String,
+    captured_at: String,
+    capture_command: String,
+    reviewer: String,
+    signer: String,
+    approved_mask_set: String,
+    appearance: ParityAppearance,
+    scale: DisplayScale,
+    color_profile: ColorProfile,
+    focus: ParityFocusState,
+    window_region: CaptureArtifactRegion,
+}
+
+impl CaptureArtifactProvenance {
+    fn validate_against(
+        &self,
+        input: &ParityGateInput,
+        artifact_path: &Path,
+        kind: CaptureArtifactKind,
+        provenance: &ParityCaptureProvenance,
+        provenance_path: &Path,
+    ) -> Result<()> {
+        self.expect_value(
+            "target",
+            &self.target,
+            kind.as_str(),
+            input,
+            provenance_path,
+        )?;
+        self.expect_path(
+            "output",
+            &self.output,
+            artifact_path,
+            input,
+            provenance_path,
+        )?;
+        self.expect_path(
+            "fixture-root",
+            &self.fixture_root,
+            &provenance.fixture_root,
+            input,
+            provenance_path,
+        )?;
+        if !fixture_scenario_matches_surface(&self.scenario, input.surface) {
+            return Err(capture_artifact_provenance_mismatch(
+                input,
+                provenance_path,
+                "scenario",
+                &self.scenario,
+                "scenario matching parity surface",
+            ));
+        }
+        self.expect_value(
+            "view-mode",
+            self.view_mode.as_str(),
+            provenance.view_mode.as_str(),
+            input,
+            provenance_path,
+        )?;
+        self.expect_value(
+            "macos-build",
+            &self.macos_build,
+            &provenance.macos_build,
+            input,
+            provenance_path,
+        )?;
+        self.expect_value(
+            "hardware-profile",
+            &self.hardware_profile,
+            &provenance.hardware_profile,
+            input,
+            provenance_path,
+        )?;
+        self.expect_value(
+            "display-profile",
+            &self.display_profile,
+            &provenance.display_profile,
+            input,
+            provenance_path,
+        )?;
+        self.expect_value(
+            "app-version",
+            &self.app_version,
+            &provenance.app_version,
+            input,
+            provenance_path,
+        )?;
+        self.expect_value(
+            "captured-at",
+            &self.captured_at,
+            &provenance.captured_at,
+            input,
+            provenance_path,
+        )?;
+        if !capture_command_matches(&provenance.capture_command, &self.capture_command, kind) {
+            return Err(capture_artifact_provenance_mismatch(
+                input,
+                provenance_path,
+                "capture-command",
+                &self.capture_command,
+                &provenance.capture_command,
+            ));
+        }
+        self.expect_value(
+            "reviewer",
+            &self.reviewer,
+            &provenance.reviewer,
+            input,
+            provenance_path,
+        )?;
+        self.expect_value(
+            "signer",
+            &self.signer,
+            &provenance.signer,
+            input,
+            provenance_path,
+        )?;
+        self.expect_value(
+            "approved-mask-set",
+            &self.approved_mask_set,
+            &provenance.approved_mask_set,
+            input,
+            provenance_path,
+        )?;
+        self.expect_value(
+            "appearance",
+            self.appearance.as_str(),
+            provenance.appearance.as_str(),
+            input,
+            provenance_path,
+        )?;
+        self.expect_value(
+            "scale",
+            self.scale.as_str(),
+            provenance.scale.as_str(),
+            input,
+            provenance_path,
+        )?;
+        self.expect_value(
+            "color-profile",
+            self.color_profile.as_str(),
+            provenance.color_profile.as_str(),
+            input,
+            provenance_path,
+        )?;
+        self.expect_value(
+            "focus",
+            self.focus.as_str(),
+            provenance.focus.as_str(),
+            input,
+            provenance_path,
+        )?;
+        if self.window_region.width != provenance.window_size.width
+            || self.window_region.height != provenance.window_size.height
+        {
+            return Err(capture_artifact_provenance_mismatch(
+                input,
+                provenance_path,
+                "window-region",
+                &self.window_region.as_tsv_value(),
+                &format!(
+                    "*,*,{},{}",
+                    provenance.window_size.width, provenance.window_size.height
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    fn expect_value(
+        &self,
+        field: &str,
+        actual: &str,
+        expected: &str,
+        input: &ParityGateInput,
+        provenance_path: &Path,
+    ) -> Result<()> {
+        if actual == expected {
+            return Ok(());
+        }
+        Err(capture_artifact_provenance_mismatch(
+            input,
+            provenance_path,
+            field,
+            actual,
+            expected,
+        ))
+    }
+
+    fn expect_path(
+        &self,
+        field: &str,
+        actual: &Path,
+        expected: &Path,
+        input: &ParityGateInput,
+        provenance_path: &Path,
+    ) -> Result<()> {
+        if paths_refer_to_same_capture_root(actual, expected) {
+            return Ok(());
+        }
+        Err(capture_artifact_provenance_mismatch(
+            input,
+            provenance_path,
+            field,
+            &actual.display().to_string(),
+            &expected.display().to_string(),
+        ))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct CaptureArtifactRegion {
+    x: u32,
+    y: u32,
+    width: u32,
+    height: u32,
+}
+
+impl CaptureArtifactRegion {
+    fn as_tsv_value(self) -> String {
+        format!("{},{},{},{}", self.x, self.y, self.width, self.height)
+    }
+}
+
+fn parse_capture_artifact_provenance(
+    content: &str,
+    provenance_path: &Path,
+    surface: ParitySurface,
+    kind: CaptureArtifactKind,
+) -> Result<CaptureArtifactProvenance> {
+    let fields = parse_capture_artifact_provenance_fields(content, provenance_path)?;
+    Ok(CaptureArtifactProvenance {
+        target: required_capture_provenance_field(&fields, "target", provenance_path)?.to_string(),
+        fixture_root: PathBuf::from(required_capture_provenance_field(
+            &fields,
+            "fixture-root",
+            provenance_path,
+        )?),
+        output: PathBuf::from(required_capture_provenance_field(
+            &fields,
+            "output",
+            provenance_path,
+        )?),
+        scenario: required_capture_provenance_field(&fields, "scenario", provenance_path)?
+            .to_string(),
+        view_mode: required_capture_provenance_field(&fields, "view-mode", provenance_path)?
+            .parse::<ParityViewMode>()
+            .map_err(|err| {
+                capture_artifact_provenance_parse_error(surface, kind, provenance_path, err)
+            })?,
+        macos_build: required_capture_provenance_field(&fields, "macos-build", provenance_path)?
+            .to_string(),
+        hardware_profile: required_capture_provenance_field(
+            &fields,
+            "hardware-profile",
+            provenance_path,
+        )?
+        .to_string(),
+        display_profile: required_capture_provenance_field(
+            &fields,
+            "display-profile",
+            provenance_path,
+        )?
+        .to_string(),
+        app_version: required_capture_provenance_field(&fields, "app-version", provenance_path)?
+            .to_string(),
+        captured_at: required_capture_provenance_field(&fields, "captured-at", provenance_path)?
+            .to_string(),
+        capture_command: required_capture_provenance_field(
+            &fields,
+            "capture-command",
+            provenance_path,
+        )?
+        .to_string(),
+        reviewer: required_capture_provenance_field(&fields, "reviewer", provenance_path)?
+            .to_string(),
+        signer: required_capture_provenance_field(&fields, "signer", provenance_path)?.to_string(),
+        approved_mask_set: required_capture_provenance_field(
+            &fields,
+            "approved-mask-set",
+            provenance_path,
+        )?
+        .to_string(),
+        appearance: required_capture_provenance_field(&fields, "appearance", provenance_path)?
+            .parse::<ParityAppearance>()
+            .map_err(|err| {
+                capture_artifact_provenance_parse_error(surface, kind, provenance_path, err)
+            })?,
+        scale: required_capture_provenance_field(&fields, "scale", provenance_path)?
+            .parse::<DisplayScale>()
+            .map_err(|err| {
+                capture_artifact_provenance_parse_error(surface, kind, provenance_path, err)
+            })?,
+        color_profile: required_capture_provenance_field(
+            &fields,
+            "color-profile",
+            provenance_path,
+        )?
+        .parse::<ColorProfile>()
+        .map_err(|err| {
+            capture_artifact_provenance_parse_error(surface, kind, provenance_path, err)
+        })?,
+        focus: required_capture_provenance_field(&fields, "focus", provenance_path)?
+            .parse::<ParityFocusState>()
+            .map_err(|err| {
+                capture_artifact_provenance_parse_error(surface, kind, provenance_path, err)
+            })?,
+        window_region: parse_capture_artifact_region(
+            required_capture_provenance_field(&fields, "window-region", provenance_path)?,
+            surface,
+            kind,
+            provenance_path,
+        )?,
+    })
+}
+
+fn parse_capture_artifact_provenance_fields(
+    content: &str,
+    provenance_path: &Path,
+) -> Result<BTreeMap<String, String>> {
+    let mut fields = BTreeMap::new();
+    for (line_index, line) in content.lines().enumerate() {
+        let line = line.trim_end();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let columns = line.split('\t').collect::<Vec<_>>();
+        if columns.len() != 2 {
+            return Err(GfmError::Format(format!(
+                "capture provenance file {} line {} must contain exactly key and value columns",
+                provenance_path.display(),
+                line_index + 1
+            )));
+        }
+        let key = columns[0].trim();
+        if key.is_empty() {
+            return Err(GfmError::Format(format!(
+                "capture provenance file {} line {} has empty key",
+                provenance_path.display(),
+                line_index + 1
+            )));
+        }
+        if fields
+            .insert(
+                key.to_string(),
+                unescape_capture_tsv_field(columns[1], provenance_path, line_index)?,
+            )
+            .is_some()
+        {
+            return Err(GfmError::Format(format!(
+                "capture provenance file {} line {} duplicates `{key}`",
+                provenance_path.display(),
+                line_index + 1
+            )));
+        }
+    }
+    Ok(fields)
+}
+
+fn required_capture_provenance_field<'a>(
+    fields: &'a BTreeMap<String, String>,
+    key: &str,
+    provenance_path: &Path,
+) -> Result<&'a str> {
+    fields.get(key).map(|value| value.as_str()).ok_or_else(|| {
+        GfmError::Format(format!(
+            "capture provenance file {} missing `{key}`",
+            provenance_path.display()
+        ))
+    })
+}
+
+fn unescape_capture_tsv_field(
+    value: &str,
+    provenance_path: &Path,
+    line_index: usize,
+) -> Result<String> {
+    let mut output = String::new();
+    let mut chars = value.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            output.push(ch);
+            continue;
+        }
+        let Some(escaped) = chars.next() else {
+            return Err(GfmError::Format(format!(
+                "capture provenance file {} line {} ends with an incomplete escape",
+                provenance_path.display(),
+                line_index + 1
+            )));
+        };
+        match escaped {
+            '\\' => output.push('\\'),
+            't' => output.push('\t'),
+            'n' => output.push('\n'),
+            'r' => output.push('\r'),
+            _ => {
+                return Err(GfmError::Format(format!(
+                    "capture provenance file {} line {} has unsupported escape \\{}",
+                    provenance_path.display(),
+                    line_index + 1,
+                    escaped
+                )))
+            }
+        }
+    }
+    Ok(output)
+}
+
+fn parse_capture_artifact_region(
+    value: &str,
+    surface: ParitySurface,
+    kind: CaptureArtifactKind,
+    provenance_path: &Path,
+) -> Result<CaptureArtifactRegion> {
+    let fields = value.split(',').collect::<Vec<_>>();
+    if fields.len() != 4 {
+        return Err(capture_artifact_provenance_parse_error(
+            surface,
+            kind,
+            provenance_path,
+            format!("invalid window-region `{value}`"),
+        ));
+    }
+    Ok(CaptureArtifactRegion {
+        x: parse_capture_region_u32(fields[0], "x", surface, kind, provenance_path)?,
+        y: parse_capture_region_u32(fields[1], "y", surface, kind, provenance_path)?,
+        width: parse_capture_region_u32(fields[2], "width", surface, kind, provenance_path)?,
+        height: parse_capture_region_u32(fields[3], "height", surface, kind, provenance_path)?,
+    })
+}
+
+fn parse_capture_region_u32(
+    value: &str,
+    field: &str,
+    surface: ParitySurface,
+    kind: CaptureArtifactKind,
+    provenance_path: &Path,
+) -> Result<u32> {
+    value.parse::<u32>().map_err(|_| {
+        capture_artifact_provenance_parse_error(
+            surface,
+            kind,
+            provenance_path,
+            format!("invalid window-region {field} `{value}`"),
+        )
+    })
+}
+
+fn capture_command_matches(
+    manifest_command: &str,
+    artifact_command: &str,
+    kind: CaptureArtifactKind,
+) -> bool {
+    if artifact_command == manifest_command {
+        return true;
+    }
+    let target_prefix = format!("{}:", kind.as_str());
+    for command in manifest_command.split(';') {
+        if let Some(command) = command.strip_prefix(&target_prefix) {
+            return artifact_command == command;
+        }
+    }
+    artifact_command
+        .strip_prefix(manifest_command)
+        .is_some_and(|suffix| suffix.is_empty() || suffix.starts_with(':'))
+}
+
+fn capture_artifact_provenance_parse_error(
+    surface: ParitySurface,
+    kind: CaptureArtifactKind,
+    provenance_path: &Path,
+    message: impl std::fmt::Display,
+) -> GfmError {
+    GfmError::Format(format!(
+        "parity gate entry for {} has invalid {} capture provenance file {}: {}",
+        surface.as_str(),
+        kind.label(),
+        provenance_path.display(),
+        message
+    ))
+}
+
+fn capture_artifact_provenance_mismatch(
+    input: &ParityGateInput,
+    provenance_path: &Path,
+    field: &str,
+    actual: &str,
+    expected: &str,
+) -> GfmError {
+    GfmError::Format(format!(
+        "parity gate entry for {} has capture provenance mismatch in {} field `{}`: got `{}` expected `{}`",
+        input.surface.as_str(),
+        provenance_path.display(),
+        field,
+        actual,
+        expected
+    ))
 }
 
 fn validate_mask_file_approval(
@@ -1671,6 +2243,54 @@ mod tests {
     }
 
     #[test]
+    fn parity_gate_rejects_missing_capture_artifact_provenance() {
+        let root = unique_temp_dir("gfm-parity-gate-missing-artifact-provenance");
+        fs::write(root.join("expected.rgba"), [1, 2, 3, 255]).unwrap();
+        fs::write(root.join("actual.rgba"), [1, 2, 3, 255]).unwrap();
+        write_capture_provenance_artifacts(&root, "fixtures/icon");
+        fs::remove_file(root.join("expected.provenance.tsv")).unwrap();
+        fs::write(
+            root.join("gate.tsv"),
+            "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=light\tscale=2x\tcolor-profile=srgb\nentry\ticon\texpected.rgba\tactual.rgba\t1\t1\t\t1040\t720\tactive\ticon\tfixtures/icon\n",
+        )
+        .unwrap();
+
+        let err = run_parity_gate_manifest(root.join("gate.tsv")).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("requires expected Finder capture provenance file"));
+        assert!(err.to_string().contains("expected.provenance.tsv"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn parity_gate_rejects_capture_provenance_output_mismatch() {
+        let root = unique_temp_dir("gfm-parity-gate-artifact-output-mismatch");
+        fs::write(root.join("expected.rgba"), [1, 2, 3, 255]).unwrap();
+        fs::write(root.join("actual.rgba"), [1, 2, 3, 255]).unwrap();
+        write_capture_provenance_artifacts(&root, "fixtures/icon");
+        let provenance = fs::read_to_string(root.join("actual.provenance.tsv"))
+            .unwrap()
+            .replace("actual.rgba", "wrong.rgba");
+        fs::write(root.join("actual.provenance.tsv"), provenance).unwrap();
+        fs::write(
+            root.join("gate.tsv"),
+            "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=light\tscale=2x\tcolor-profile=srgb\nentry\ticon\texpected.rgba\tactual.rgba\t1\t1\t\t1040\t720\tactive\ticon\tfixtures/icon\n",
+        )
+        .unwrap();
+
+        let err = run_parity_gate_manifest(root.join("gate.tsv")).unwrap_err();
+
+        assert!(err.to_string().contains("actual.provenance.tsv"));
+        assert!(err.to_string().contains("capture provenance mismatch"));
+        assert!(err.to_string().contains("field `output`"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn parity_gate_rejects_provenance_mask_without_approved_set() {
         let root = unique_temp_dir("gfm-parity-gate-mask-missing-approval");
         fs::write(root.join("expected.rgba"), [1, 2, 3, 255]).unwrap();
@@ -1994,7 +2614,12 @@ mod tests {
         let output = root.join("review");
         fs::write(&expected, [0, 0, 0, 255, 10, 10, 10, 255]).unwrap();
         fs::write(&actual, [0, 0, 0, 255, 9, 10, 10, 255]).unwrap();
-        write_capture_provenance_artifacts(&root, "fixtures/text");
+        write_capture_provenance_artifacts_with_profile(
+            &root,
+            "fixtures/text",
+            ParityAppearance::Dark,
+            ColorProfile::DisplayP3,
+        );
         fs::write(
             root.join("gate.tsv"),
             "manifest-version\t1\nprofile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tappearance=dark\tscale=2x\tcolor-profile=display-p3\nentry\ttext\texpected.rgba\tactual.rgba\t2\t1\t\t1040\t720\tactive\tlist\tfixtures/text\n",
@@ -2192,6 +2817,20 @@ mod tests {
     }
 
     fn write_capture_provenance_artifacts(root: &Path, fixture_root: &str) {
+        write_capture_provenance_artifacts_with_profile(
+            root,
+            fixture_root,
+            ParityAppearance::Light,
+            ColorProfile::SRgb,
+        );
+    }
+
+    fn write_capture_provenance_artifacts_with_profile(
+        root: &Path,
+        fixture_root: &str,
+        appearance: ParityAppearance,
+        color_profile: ColorProfile,
+    ) {
         fs::create_dir_all(root.join("fixtures")).unwrap();
         fs::create_dir_all(root.join(fixture_root)).unwrap();
         let scenario = Path::new(fixture_root)
@@ -2211,6 +2850,46 @@ mod tests {
                 scenario,
                 root.join(fixture_root).display(),
                 view
+            ),
+        )
+        .unwrap();
+        let profile = TestCaptureArtifactProfile {
+            root,
+            fixture_root,
+            scenario,
+            view,
+            appearance,
+            color_profile,
+        };
+        write_capture_artifact_provenance(&root.join("expected.rgba"), "finder", &profile);
+        write_capture_artifact_provenance(&root.join("actual.rgba"), "gfm", &profile);
+    }
+
+    struct TestCaptureArtifactProfile<'a> {
+        root: &'a Path,
+        fixture_root: &'a str,
+        scenario: &'a str,
+        view: &'a str,
+        appearance: ParityAppearance,
+        color_profile: ColorProfile,
+    }
+
+    fn write_capture_artifact_provenance(
+        output: &Path,
+        target: &str,
+        profile: &TestCaptureArtifactProfile<'_>,
+    ) {
+        fs::write(
+            output.with_extension("provenance.tsv"),
+            format!(
+                "target\t{}\nfixture-root\t{}\noutput\t{}\nscenario\t{}\nview-mode\t{}\nmacos-build\t25A354\nhardware-profile\tmacbookpro18,3\ndisplay-profile\tstudio-display-p3\napp-version\t0.1.0\ncaptured-at\t2026-08-27T00:00:00Z\ncapture-command\tscreencapture:-x:-R:40,70,1040,720\nreviewer\tcodex\nsigner\tcodex\napproved-mask-set\tmacos-25A354-default\nappearance\t{}\nscale\t2x\ncolor-profile\t{}\nfocus\tactive\nwindow-region\t40,70,1040,720\n",
+                target,
+                profile.root.join(profile.fixture_root).display(),
+                output.display(),
+                profile.scenario,
+                profile.view,
+                profile.appearance.as_str(),
+                profile.color_profile.as_str()
             ),
         )
         .unwrap();
