@@ -3576,35 +3576,35 @@ fn volume_network_state(
     mount_table: Option<&NativeVolumeMountTableEntry>,
     kind: VolumeKind,
 ) -> bool {
-    if native
-        .filter(|native| native.status == NativeVolumeStatus::Available)
-        .and_then(|native| native.volume_network)
-        == Some(true)
-    {
+    let native = native.filter(|native| native.status == NativeVolumeStatus::Available);
+    if native.and_then(|native| native.volume_network) == Some(true) {
+        return true;
+    }
+    let mount_table =
+        mount_table.filter(|mount_table| mount_table.status == NativeVolumeStatus::Available);
+    if mount_table.and_then(|mount_table| mount_table.is_local) == Some(false) {
+        return true;
+    }
+    if mount_table_network_filesystem_state(mount_table) == Some(true) {
+        return true;
+    }
+    let resource = resource.filter(|resource| resource.status == NativeVolumeStatus::Available);
+    if resource.and_then(|resource| resource.is_local) == Some(false) {
         return true;
     }
     if let Some(network) = marker_network(marker) {
         return network;
     }
     mount_table
-        .filter(|mount_table| mount_table.status == NativeVolumeStatus::Available)
         .and_then(|mount_table| mount_table.is_local)
-        .or_else(|| {
-            mount_table_network_filesystem_state(mount_table)
-                .filter(|network| *network)
-                .map(|network| !network)
-        })
-        .or_else(|| {
-            resource
-                .filter(|resource| resource.status == NativeVolumeStatus::Available)
-                .and_then(|resource| resource.is_local)
-        })
-        .map(|local| !local)
+        .or_else(|| mount_table_network_filesystem_state(mount_table).map(|network| !network))
+        .or_else(|| resource.and_then(|resource| resource.is_local))
         .or_else(|| {
             native
-                .filter(|native| native.status == NativeVolumeStatus::Available)
                 .and_then(|native| native.volume_network)
+                .map(|network| !network)
         })
+        .map(|local| !local)
         .unwrap_or(kind == VolumeKind::Network)
 }
 
@@ -3615,32 +3615,31 @@ fn volume_local_state(
     mount_table: Option<&NativeVolumeMountTableEntry>,
     kind: VolumeKind,
 ) -> Option<bool> {
-    if native
-        .filter(|native| native.status == NativeVolumeStatus::Available)
-        .and_then(|native| native.volume_network)
-        == Some(true)
-    {
+    let native = native.filter(|native| native.status == NativeVolumeStatus::Available);
+    if native.and_then(|native| native.volume_network) == Some(true) {
+        return Some(false);
+    }
+    let mount_table =
+        mount_table.filter(|mount_table| mount_table.status == NativeVolumeStatus::Available);
+    if mount_table.and_then(|mount_table| mount_table.is_local) == Some(false) {
+        return Some(false);
+    }
+    if mount_table_network_filesystem_state(mount_table) == Some(true) {
+        return Some(false);
+    }
+    let resource = resource.filter(|resource| resource.status == NativeVolumeStatus::Available);
+    if resource.and_then(|resource| resource.is_local) == Some(false) {
         return Some(false);
     }
     if let Some(network) = marker_network(marker) {
         return Some(!network);
     }
     mount_table
-        .filter(|mount_table| mount_table.status == NativeVolumeStatus::Available)
         .and_then(|mount_table| mount_table.is_local)
-        .or_else(|| {
-            mount_table_network_filesystem_state(mount_table)
-                .filter(|network| *network)
-                .map(|network| !network)
-        })
-        .or_else(|| {
-            resource
-                .filter(|resource| resource.status == NativeVolumeStatus::Available)
-                .and_then(|resource| resource.is_local)
-        })
+        .or_else(|| mount_table_network_filesystem_state(mount_table).map(|network| !network))
+        .or_else(|| resource.and_then(|resource| resource.is_local))
         .or_else(|| {
             native
-                .filter(|native| native.status == NativeVolumeStatus::Available)
                 .and_then(|native| native.volume_network)
                 .map(|network| !network)
         })
@@ -4875,6 +4874,55 @@ mod tests {
     }
 
     #[test]
+    fn mount_table_local_flag_does_not_mask_url_resource_network_truth() {
+        let resource = resource_values(|values| {
+            values.is_local = Some(false);
+        });
+        let mount_table = mount_table_entry(|entry| {
+            entry.is_local = Some(true);
+            entry.filesystem_type = Some("apfs".to_string());
+        });
+
+        assert!(volume_network_state(
+            None,
+            None,
+            Some(&resource),
+            Some(&mount_table),
+            VolumeKind::Unknown
+        ));
+        assert_eq!(
+            volume_local_state(
+                None,
+                None,
+                Some(&resource),
+                Some(&mount_table),
+                VolumeKind::Unknown
+            ),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn mount_table_local_flag_does_not_mask_url_resource_network_classification() {
+        let resource = resource_values(|values| {
+            values.is_local = Some(false);
+        });
+        let mount_table = mount_table_entry(|entry| {
+            entry.is_local = Some(true);
+            entry.filesystem_type = Some("apfs".to_string());
+        });
+
+        let kind = classify_native_volume(
+            Path::new("/Volumes/Team Share"),
+            None,
+            Some(&resource),
+            Some(&mount_table),
+        );
+
+        assert_eq!(kind, Some(VolumeKind::Network));
+    }
+
+    #[test]
     fn classify_native_volume_prefers_mount_table_network_over_resource_ejectability() {
         let resource = resource_values(|values| {
             values.is_ejectable = Some(true);
@@ -5167,6 +5215,36 @@ mod tests {
                 VolumeKind::Network,
             ),
             Some(false)
+        );
+    }
+
+    #[test]
+    fn volume_network_state_ignores_unavailable_diskarbitration_values() {
+        let native = native_description(|description| {
+            description.status = NativeVolumeStatus::Unavailable;
+            description.volume_network = Some(true);
+            description.reason = Some("DiskArbitration unavailable".to_string());
+        });
+        let resource = resource_values(|values| {
+            values.is_local = Some(true);
+        });
+
+        assert!(!volume_network_state(
+            None,
+            Some(&native),
+            Some(&resource),
+            None,
+            VolumeKind::Internal,
+        ));
+        assert_eq!(
+            volume_local_state(
+                None,
+                Some(&native),
+                Some(&resource),
+                None,
+                VolumeKind::Internal,
+            ),
+            Some(true)
         );
     }
 
