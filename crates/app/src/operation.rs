@@ -1226,7 +1226,12 @@ fn operation_access_preflight_with_bookmark_store_checked(
         let Some(volume) = read_only_volume_for_path(volume_report, &probe.probe_path) else {
             continue;
         };
-        if broad_read_only_root_allows_path(volume, &probe.probe_path, probe.requirement.role) {
+        if broad_read_only_root_allows_path_checked(
+            volume,
+            &probe.probe_path,
+            probe.requirement.role,
+            &mut check_control,
+        )? {
             continue;
         }
         let reason = format!(
@@ -1357,12 +1362,17 @@ fn unavailable_volume_api_report(root: &Path) -> Result<VolumeDiscoveryReport> {
     })
 }
 
-fn broad_read_only_root_allows_path(
+fn broad_read_only_root_allows_path_checked(
     volume: &gfm_mac::VolumeDescriptor,
     path: &Path,
     role: OperationAccessRole,
-) -> bool {
-    volume.path == Path::new("/") && mutation_allowed_for_role(path, role)
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<bool> {
+    if volume.path != Path::new("/") {
+        return Ok(false);
+    }
+    check_control()?;
+    Ok(mutation_allowed_for_role(path, role))
 }
 
 fn unavailable_mount_volume_for_path<'a>(
@@ -2879,6 +2889,40 @@ mod tests {
         assert!(decision.reason.contains("bookmark=missing"));
         assert!(decision.refresh_on_permission_change);
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn operation_access_gate_checked_can_cancel_before_broad_read_only_root_exception() {
+        let root = unique_temp_dir("gfm-app-op-readonly-root-exception-cancel");
+        let source = root.join("source.txt");
+        let destination = root.join("destination.txt");
+        fs::write(&source, "content").unwrap();
+        let mut system_root = VolumeDescriptor::for_path("/").unwrap();
+        system_root.read_only = true;
+        system_root.writable = false;
+        system_root.kind = VolumeKind::System;
+        let report = VolumeDiscoveryReport {
+            volumes: vec![system_root],
+        };
+        let operation = Operation::Copy {
+            from: source,
+            to: destination.clone(),
+        };
+        let mut checks = 0usize;
+
+        let result = operation_access_gate_checked(&operation, &report, || {
+            checks += 1;
+            if checks >= 11 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        });
+
+        assert_eq!(result.err(), Some(GfmError::Cancelled));
+        assert_eq!(checks, 11);
+        assert!(!destination.exists());
         fs::remove_dir_all(root).unwrap();
     }
 
