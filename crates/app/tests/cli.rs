@@ -6778,6 +6778,20 @@ fn searches_persisted_tags_from_binary() {
         session_retry_journal_text.contains("1\t2\tcompleted\tsidecar session"),
         "{session_retry_journal_text}"
     );
+    let session_retry_catalog_text = fs::read_to_string(&session_retry_catalog).unwrap();
+    assert!(
+        session_retry_catalog_text.contains(&format!(
+            "payload\t1\tindexing\tsidecar session\t{}\t",
+            index.display()
+        )) && session_retry_catalog_text.contains("\tvisible:sidecar session:adaptive"),
+        "{session_retry_catalog_text}"
+    );
+    let session_retry_progress_text = fs::read_to_string(&session_retry_progress).unwrap();
+    assert!(
+        session_retry_progress_text.contains("progress\t1\tvisible\tvisible\tsidecar session\t")
+            && session_retry_progress_text.contains("\tcompleted\t3\t3\tcompleted\t"),
+        "{session_retry_progress_text}"
+    );
 
     let sidecar_scoped_search = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args([

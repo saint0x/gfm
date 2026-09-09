@@ -3572,71 +3572,80 @@ fn run_sidecar_index_session(
             .as_ref()
             .and_then(SearchWriteAccessReport::volume)
     });
-    run_retriable_volume_task_cancellable_with_payload_path(
-        volume,
-        Priority::Visible,
-        WORKER,
-        paths.records.clone(),
-        move |cancellation| {
-            let paths = paths.clone();
-            let query = query.clone();
-            let retry_probe = retry_probe.clone();
-            let retry_access = retry_access.clone();
-            cancellation.check()?;
-            if let (Some(retry_probe), Some(retry_access)) =
-                (retry_probe.as_ref(), retry_access.as_ref())
-            {
-                fail_first_search_retry_probe_attempt(
-                    retry_probe,
-                    retry_access,
-                    WORKER,
+    scheduled_search_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Indexing,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            paths.records.clone(),
+            move |cancellation, runtime| {
+                let paths = paths.clone();
+                let query = query.clone();
+                let retry_probe = retry_probe.clone();
+                let retry_access = retry_access.clone();
+                let volume_reports = volume_reports.clone();
+                cancellation.check()?;
+                runtime.resize_checked(3, "sidecar-session:preflight", || cancellation.check())?;
+                if let (Some(retry_probe), Some(retry_access)) =
+                    (retry_probe.as_ref(), retry_access.as_ref())
+                {
+                    fail_first_search_retry_probe_attempt(
+                        retry_probe,
+                        retry_access,
+                        WORKER,
+                        &cancellation,
+                    )?;
+                }
+                let _access =
+                    preflight_sidecar_index_search_access_checked(&volume_reports, WORKER, || {
+                        cancellation.check()
+                    })?;
+                search_phase(&runtime, 1, "sidecar-session:open", &cancellation)?;
+                let session = open_sidecar_index_query_session(paths, &cancellation)?;
+                cancellation.check()?;
+                let budget = SearchLookupBudget::default();
+                let parsed = SearchQuery::parse_cancellable(&query, &cancellation)?;
+                let first = session.search_structured_with_volume_scope_budget_cancellable(
+                    &parsed,
+                    50,
+                    &SearchVolumeScope::All,
+                    budget,
                     &cancellation,
                 )?;
-            }
-            let _access =
-                preflight_sidecar_index_search_access_checked(&volume_reports, WORKER, || {
-                    cancellation.check()
-                })?;
-            cancellation.check()?;
-            let session = open_sidecar_index_query_session(paths, &cancellation)?;
-            cancellation.check()?;
-            let budget = SearchLookupBudget::default();
-            let parsed = SearchQuery::parse_cancellable(&query, &cancellation)?;
-            let first = session.search_structured_with_volume_scope_budget_cancellable(
-                &parsed,
-                50,
-                &SearchVolumeScope::All,
-                budget,
-                &cancellation,
-            )?;
-            cancellation.check()?;
-            let second = session.search_structured_with_volume_scope_budget_cancellable(
-                &parsed,
-                50,
-                &SearchVolumeScope::All,
-                budget,
-                &cancellation,
-            )?;
-            Ok(SidecarSessionOutput {
-                diagnostics: vec![
-                    format_sidecar_session_report(
-                        "sidecar-session-first",
-                        &session,
-                        &first,
-                        Some(&volume_reports),
-                        budget,
-                    ),
-                    format_sidecar_session_report(
-                        "sidecar-session-second",
-                        &session,
-                        &second,
-                        Some(&volume_reports),
-                        budget,
-                    ),
-                ],
-                hits: second.search.hits,
-            })
-        },
+                search_phase(&runtime, 2, "sidecar-session:reuse", &cancellation)?;
+                let second = session.search_structured_with_volume_scope_budget_cancellable(
+                    &parsed,
+                    50,
+                    &SearchVolumeScope::All,
+                    budget,
+                    &cancellation,
+                )?;
+                search_phase(&runtime, 3, "sidecar-session:complete", &cancellation)?;
+                runtime.remember_completion_detail("completed")?;
+                Ok(SidecarSessionOutput {
+                    diagnostics: vec![
+                        format_sidecar_session_report(
+                            "sidecar-session-first",
+                            &session,
+                            &first,
+                            Some(&volume_reports),
+                            budget,
+                        ),
+                        format_sidecar_session_report(
+                            "sidecar-session-second",
+                            &session,
+                            &second,
+                            Some(&volume_reports),
+                            budget,
+                        ),
+                    ],
+                    hits: second.search.hits,
+                })
+            },
+        )?,
+        WORKER,
     )
 }
 
