@@ -20531,7 +20531,7 @@ fn volume_producers_persist_runtime_payload_and_progress_from_binary() {
 
     let progress_text = fs::read_to_string(&progress).unwrap();
     assert!(
-        progress_text.contains("progress\t1\tvisible\tvisible\tthumbnail generation"),
+        progress_text.contains("progress\t1\tbackground\tbackground\tthumbnail generation"),
         "{progress_text}"
     );
     assert!(
@@ -20588,7 +20588,7 @@ fn repeated_runtime_producers_replace_stale_payload_for_same_job_id_from_binary(
     let progress_text = fs::read_to_string(&progress).unwrap();
     assert_eq!(
         progress_text
-            .matches("\nprogress\t1\tvisible\tvisible\tthumbnail generation\t")
+            .matches("\nprogress\t1\tbackground\tbackground\tthumbnail generation\t")
             .count(),
         1,
         "{progress_text}"

@@ -1122,7 +1122,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "quicklook-session" => {
             let path = required_path(args.next(), "quicklook-session requires a path")?;
-            println!("{}", run_quicklook_session(path)?.as_tsv());
+            let outcome = run_quicklook_session(path)?;
+            print_quicklook_session_outcome(outcome)?;
         }
         "quicklook-session-retry-probe" => {
             let path = required_path(args.next(), "quicklook-session-retry-probe requires a path")?;
@@ -1148,23 +1149,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 }
                 Err(err) => return Err(err),
             };
-            match outcome.result {
-                Some(contract) => println!(
-                    "{}\taction={}\tdeferred={}",
-                    contract.as_tsv(),
-                    outcome.scheduling_action.as_str(),
-                    outcome.deferred
-                ),
-                None if outcome.scheduling_action == SchedulingAction::Defer => println!(
-                    "quicklook-session\tstatus=deferred\taction={}\tdeferred=true",
-                    outcome.scheduling_action.as_str()
-                ),
-                None => {
-                    return Err(GfmError::Format(
-                        "quicklook preview adaptive job completed without a contract".to_string(),
-                    ))
-                }
-            }
+            print_quicklook_session_outcome(outcome)?;
         }
         "quicklook-session-cancel" => {
             let path = required_path(args.next(), "quicklook-session-cancel requires a path")?;
@@ -1198,7 +1183,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "thumbnail-generation" => {
             let path = required_path(args.next(), "thumbnail-generation requires a path")?;
-            println!("{}", run_thumbnail_generation(path)?.as_tsv());
+            let outcome = run_thumbnail_generation(path)?;
+            print_thumbnail_generation_outcome(outcome)?;
         }
         "thumbnail-generation-retry-probe" => {
             let path = required_path(
@@ -1230,24 +1216,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     }
                     Err(err) => return Err(err),
                 };
-            match outcome.result {
-                Some(contract) => println!(
-                    "{}\taction={}\tdeferred={}",
-                    contract.as_tsv(),
-                    outcome.scheduling_action.as_str(),
-                    outcome.deferred
-                ),
-                None if outcome.scheduling_action == SchedulingAction::Defer => println!(
-                    "thumbnail-generation\tstatus=deferred\taction={}\tdeferred=true",
-                    outcome.scheduling_action.as_str()
-                ),
-                None => {
-                    return Err(GfmError::Format(
-                        "thumbnail generation adaptive job completed without a contract"
-                            .to_string(),
-                    ))
-                }
-            }
+            print_thumbnail_generation_outcome(outcome)?;
         }
         "thumbnail-generation-cancel" => {
             let path = required_path(args.next(), "thumbnail-generation-cancel requires a path")?;
@@ -3700,19 +3669,25 @@ fn run_icon_preview_retry_probe(
     )
 }
 
-fn run_quicklook_session(path: PathBuf) -> Result<QuickLookSessionContract> {
+fn run_quicklook_session(
+    path: PathBuf,
+) -> Result<crate::runtime::ScheduledTaskOutcome<QuickLookSessionContract>> {
     const WORKER: &str = "quicklook preview";
     let access_report = PreviewAccessReport::new_checked(path, || Ok(()))?;
-    access_report.preflight_volume(WORKER)?;
-    eprintln!("{}", access_report.volume_access_tsv(WORKER));
     let pressure = current_host_job_scheduling_pressure();
     eprintln!("{}", scheduling_pressure_tsv(pressure));
-    let volume = access_report.volume();
+    let volume_access_report = access_report.clone();
     let payload_path = access_report.path.clone();
-    run_preview_contract_cancellable_with_payload_path(
-        volume,
+    run_preview_contract_adaptive_with_volume_and_payload_path(
+        Priority::Visible,
         JobPayloadKind::Preview,
         WORKER,
+        pressure,
+        move || {
+            volume_access_report.preflight_volume(WORKER)?;
+            eprintln!("{}", volume_access_report.volume_access_tsv(WORKER));
+            Ok(volume_access_report.volume())
+        },
         payload_path,
         move |cancellation| {
             build_quicklook_session_contract(&access_report, WORKER, pressure, &cancellation)
@@ -3752,19 +3727,25 @@ fn run_quicklook_session_retry_probe(
     )
 }
 
-fn run_thumbnail_generation(path: PathBuf) -> Result<ThumbnailGenerationContract> {
+fn run_thumbnail_generation(
+    path: PathBuf,
+) -> Result<crate::runtime::ScheduledTaskOutcome<ThumbnailGenerationContract>> {
     const WORKER: &str = "thumbnail generation";
     let access_report = PreviewAccessReport::new_checked(path, || Ok(()))?;
-    access_report.preflight_volume(WORKER)?;
-    eprintln!("{}", access_report.volume_access_tsv(WORKER));
     let pressure = current_host_job_scheduling_pressure();
     eprintln!("{}", scheduling_pressure_tsv(pressure));
-    let volume = access_report.volume();
+    let volume_access_report = access_report.clone();
     let payload_path = access_report.path.clone();
-    run_preview_contract_cancellable_with_payload_path(
-        volume,
+    run_preview_contract_adaptive_with_volume_and_payload_path(
+        Priority::Background,
         JobPayloadKind::Thumbnail,
         WORKER,
+        pressure,
+        move || {
+            volume_access_report.preflight_volume(WORKER)?;
+            eprintln!("{}", volume_access_report.volume_access_tsv(WORKER));
+            Ok(volume_access_report.volume())
+        },
         payload_path,
         move |cancellation| {
             build_thumbnail_generation_contract(&access_report, WORKER, pressure, &cancellation)
@@ -3897,6 +3878,52 @@ fn build_thumbnail_generation_contract(
         input,
         || cancellation.check(),
     )
+}
+
+fn print_quicklook_session_outcome(
+    outcome: crate::runtime::ScheduledTaskOutcome<QuickLookSessionContract>,
+) -> Result<()> {
+    match outcome.result {
+        Some(contract) => println!(
+            "{}\taction={}\tdeferred={}",
+            contract.as_tsv(),
+            outcome.scheduling_action.as_str(),
+            outcome.deferred
+        ),
+        None if outcome.scheduling_action == SchedulingAction::Defer => println!(
+            "quicklook-session\tstatus=deferred\taction={}\tdeferred=true",
+            outcome.scheduling_action.as_str()
+        ),
+        None => {
+            return Err(GfmError::Format(
+                "quicklook preview adaptive job completed without a contract".to_string(),
+            ))
+        }
+    }
+    Ok(())
+}
+
+fn print_thumbnail_generation_outcome(
+    outcome: crate::runtime::ScheduledTaskOutcome<ThumbnailGenerationContract>,
+) -> Result<()> {
+    match outcome.result {
+        Some(contract) => println!(
+            "{}\taction={}\tdeferred={}",
+            contract.as_tsv(),
+            outcome.scheduling_action.as_str(),
+            outcome.deferred
+        ),
+        None if outcome.scheduling_action == SchedulingAction::Defer => println!(
+            "thumbnail-generation\tstatus=deferred\taction={}\tdeferred=true",
+            outcome.scheduling_action.as_str()
+        ),
+        None => {
+            return Err(GfmError::Format(
+                "thumbnail generation adaptive job completed without a contract".to_string(),
+            ))
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone)]

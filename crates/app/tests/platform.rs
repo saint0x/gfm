@@ -2396,7 +2396,12 @@ fn quicklook_and_thumbnail_generation_deny_descriptor_remote_untrusted_preview_f
         "{quicklook_stdout}"
     );
     assert!(
-        quicklook_stdout.ends_with("schedule=cancelled:denied\n"),
+        quicklook_stdout.contains("\tschedule=cancelled:denied\t"),
+        "{quicklook_stdout}"
+    );
+    assert!(quicklook_stdout.contains("\taction="), "{quicklook_stdout}");
+    assert!(
+        quicklook_stdout.ends_with("\tdeferred=false\n"),
         "{quicklook_stdout}"
     );
 
@@ -2421,7 +2426,12 @@ fn quicklook_and_thumbnail_generation_deny_descriptor_remote_untrusted_preview_f
         "{thumbnail_stdout}"
     );
     assert!(
-        thumbnail_stdout.ends_with("schedule=cancelled:denied\n"),
+        thumbnail_stdout.contains("\tschedule=cancelled:denied\t"),
+        "{thumbnail_stdout}"
+    );
+    assert!(thumbnail_stdout.contains("\taction="), "{thumbnail_stdout}");
+    assert!(
+        thumbnail_stdout.ends_with("\tdeferred=false\n"),
         "{thumbnail_stdout}"
     );
 
@@ -3384,7 +3394,12 @@ fn fileprovider_state_controls_preview_generation_from_binary() {
         "{quicklook_stdout}"
     );
     assert!(
-        quicklook_stdout.ends_with("schedule=cancelled:metadata-only\n"),
+        quicklook_stdout.contains("\tschedule=cancelled:metadata-only\t"),
+        "{quicklook_stdout}"
+    );
+    assert!(quicklook_stdout.contains("\taction="), "{quicklook_stdout}");
+    assert!(
+        quicklook_stdout.ends_with("\tdeferred=false\n"),
         "{quicklook_stdout}"
     );
 
@@ -3414,7 +3429,12 @@ fn fileprovider_state_controls_preview_generation_from_binary() {
         "{thumbnail_stdout}"
     );
     assert!(
-        thumbnail_stdout.ends_with("schedule=cancelled:fileprovider-in-flight\n"),
+        thumbnail_stdout.contains("\tschedule=cancelled:fileprovider-in-flight\t"),
+        "{thumbnail_stdout}"
+    );
+    assert!(thumbnail_stdout.contains("\taction="), "{thumbnail_stdout}");
+    assert!(
+        thumbnail_stdout.ends_with("\tdeferred=false\n"),
         "{thumbnail_stdout}"
     );
 
@@ -3436,7 +3456,15 @@ fn fileprovider_state_controls_preview_generation_from_binary() {
         "{unknown_quicklook_stdout}"
     );
     assert!(
-        unknown_quicklook_stdout.ends_with("schedule=cancelled:metadata-only\n"),
+        unknown_quicklook_stdout.contains("\tschedule=cancelled:metadata-only\t"),
+        "{unknown_quicklook_stdout}"
+    );
+    assert!(
+        unknown_quicklook_stdout.contains("\taction="),
+        "{unknown_quicklook_stdout}"
+    );
+    assert!(
+        unknown_quicklook_stdout.ends_with("\tdeferred=false\n"),
         "{unknown_quicklook_stdout}"
     );
 
@@ -3458,7 +3486,15 @@ fn fileprovider_state_controls_preview_generation_from_binary() {
         "{unknown_thumbnail_stdout}"
     );
     assert!(
-        unknown_thumbnail_stdout.ends_with("schedule=cancelled:metadata-only\n"),
+        unknown_thumbnail_stdout.contains("\tschedule=cancelled:metadata-only\t"),
+        "{unknown_thumbnail_stdout}"
+    );
+    assert!(
+        unknown_thumbnail_stdout.contains("\taction="),
+        "{unknown_thumbnail_stdout}"
+    );
+    assert!(
+        unknown_thumbnail_stdout.ends_with("\tdeferred=false\n"),
         "{unknown_thumbnail_stdout}"
     );
 
