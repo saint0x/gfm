@@ -432,7 +432,7 @@ impl SidecarIndexQuerySession {
         cancellation.check()?;
         let cache_hits_before = self.record_cache_hits.load(Ordering::Relaxed);
         let cache_misses_before = self.record_cache_misses.load(Ordering::Relaxed);
-        let (live, hydration) = self.live_from_import(import, cancellation)?;
+        let (live, hydration) = self.live_from_import(import, scope, cancellation)?;
         let search = live.search_structured_with_volume_scope_lookup_budget_cancellable(
             parsed,
             limit,
@@ -670,11 +670,12 @@ impl SidecarIndexQuerySession {
     fn live_from_import(
         &self,
         import: SidecarQueryImport,
+        scope: &SearchVolumeScope,
         cancellation: &Cancellation,
     ) -> Result<(crate::LiveIndex, SidecarRecordHydrationReport)> {
         cancellation.check()?;
         let (records, missing) = if import.report.requires_full_record_hydration {
-            self.hydrate_all_records(cancellation)?
+            self.hydrate_records_in_scope(scope, cancellation)?
         } else {
             self.hydrate_record_ids(
                 sidecar_candidate_ids_cancellable(&import, cancellation)?,
@@ -710,6 +711,31 @@ impl SidecarIndexQuerySession {
             import: import.report,
         };
         Ok((live, report))
+    }
+
+    fn hydrate_records_in_scope(
+        &self,
+        scope: &SearchVolumeScope,
+        cancellation: &Cancellation,
+    ) -> Result<(Vec<HydratedRecord>, usize)> {
+        match scope {
+            SearchVolumeScope::All => self.hydrate_all_records(cancellation),
+            SearchVolumeScope::Only(volumes) => {
+                let mut records = Vec::new();
+                for volume in volumes {
+                    cancellation.check()?;
+                    for record in self
+                        .records
+                        .records_for_volume_checked(*volume, || cancellation.check())?
+                    {
+                        cancellation.check()?;
+                        records.push(self.hydrate_record_checked(record, cancellation)?);
+                    }
+                }
+                cancellation.check()?;
+                Ok((records, 0))
+            }
+        }
     }
 
     fn hydrate_all_records(
@@ -2219,6 +2245,44 @@ mod tests {
         assert_eq!(report.hydration.records_loaded, 0);
         assert_eq!(report.hydration.import, SidecarQueryImportReport::default());
         assert_eq!(report.content_cache_misses, 0);
+        assert_eq!(report.record_cache_misses, 0);
+        assert_eq!(
+            session.lookup.cache_telemetry(),
+            SearchLookupTelemetry::default()
+        );
+    }
+
+    #[test]
+    fn sidecar_session_metadata_only_volume_scope_hydrates_only_admitted_records() {
+        let primary = record(FileId::new(VolumeId(7), 42));
+        let mut secondary = record(FileId::new(VolumeId(8), 43));
+        secondary.path = PathBuf::from("/Volumes/Fast/MetadataOnly.md");
+        secondary.name = "MetadataOnly.md".to_string();
+        let fixture = SidecarFixture::from_records(
+            "metadata-only-scoped-volume",
+            vec![primary, secondary.clone()],
+        );
+        let session = fixture.session();
+
+        let report = session
+            .search_with_volume_scope("kind:file", 10, &SearchVolumeScope::only([VolumeId(8)]))
+            .unwrap();
+
+        assert_eq!(report.search.hits.len(), 1);
+        assert_eq!(report.search.hits[0].record.id, secondary.id);
+        assert_eq!(report.hydration.records_loaded, 1);
+        assert_eq!(report.hydration.records_missing, 0);
+        assert_eq!(report.hydration.columns_applied, 1);
+        assert!(report.hydration.import.requires_full_record_hydration);
+        assert_eq!(report.hydration.import.candidate_ids, 0);
+        assert_eq!(report.hydration.import.metadata_postings, 0);
+        assert_eq!(report.hydration.import.prefix_postings, 0);
+        assert_eq!(report.hydration.import.substring_postings, 0);
+        assert_eq!(report.hydration.import.fuzzy_postings, 0);
+        assert_eq!(report.hydration.import.content_postings, 0);
+        assert_eq!(report.content_cache_hits, 0);
+        assert_eq!(report.content_cache_misses, 0);
+        assert_eq!(report.record_cache_hits, 0);
         assert_eq!(report.record_cache_misses, 0);
         assert_eq!(
             session.lookup.cache_telemetry(),
