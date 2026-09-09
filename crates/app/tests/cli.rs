@@ -1999,6 +1999,11 @@ fn parity_gate_and_review_use_governed_masks_from_binary() {
     );
     let bundle_stdout = String::from_utf8(bundle.stdout).unwrap();
     assert!(bundle_stdout.contains("passed=true"), "{bundle_stdout}");
+    assert!(
+        bundle_stdout.contains("provenance\t")
+            && bundle_stdout.contains(&format!("{}", review.join("provenance.tsv").display())),
+        "{bundle_stdout}"
+    );
     assert!(review
         .join("visual-diffs")
         .join("000-toolbar-diff.png")

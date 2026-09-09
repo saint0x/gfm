@@ -968,6 +968,11 @@ fn writes_parity_review_bundle_from_binary_manifest() {
         "{stdout}"
     );
     assert!(
+        stdout.contains("provenance\t")
+            && stdout.contains(&format!("{}", review.join("provenance.tsv").display())),
+        "{stdout}"
+    );
+    assert!(
         stderr.contains("security-worker-admission\tworker=parity review manifest\t")
             && stderr.contains("security-worker-admission\tworker=parity review output\t"),
         "{stderr}"
@@ -1049,6 +1054,10 @@ fn parity_routes_escape_control_character_paths_in_operator_rows_from_binary() {
     let review_stdout = String::from_utf8(review_output.stdout).unwrap();
     assert!(
         review_stdout.contains("review bundle/review.md"),
+        "{review_stdout}"
+    );
+    assert!(
+        review_stdout.contains("review bundle/provenance.tsv"),
         "{review_stdout}"
     );
     assert!(!review_stdout.contains("review\tbundle"), "{review_stdout}");

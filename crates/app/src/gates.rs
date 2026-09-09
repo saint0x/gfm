@@ -374,6 +374,10 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 escape_gate_tsv_path(&bundle.mask_justification_path)
             );
             println!(
+                "provenance\t{}",
+                escape_gate_tsv_path(&bundle.provenance_path)
+            );
+            println!(
                 "visual-diffs\t{}",
                 escape_gate_tsv_path(&bundle.visual_diff_dir)
             );
