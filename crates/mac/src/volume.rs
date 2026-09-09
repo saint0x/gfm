@@ -296,42 +296,49 @@ impl VolumeDescriptor {
             .as_ref()
             .and_then(|native| native.volume_name.clone())
             .unwrap_or_else(|| volume_label(&path));
-        let kind = classify_volume(
+        let evidence = volume_classification_evidence(
             &path,
             marker.as_deref(),
             native.as_ref(),
             resource.as_ref(),
             mount_table.as_ref(),
         );
+        let kind = classify_volume(
+            &path,
+            marker.as_deref(),
+            evidence.native,
+            evidence.resource,
+            evidence.mount_table,
+        );
         let mount_state = MountState::Mounted;
         let marker_value = marker.as_deref();
         let removable =
-            volume_removable_state(marker_value, native.as_ref(), resource.as_ref(), kind);
+            volume_removable_state(marker_value, evidence.native, evidence.resource, kind);
         let local = volume_local_state(
             marker_value,
-            native.as_ref(),
-            resource.as_ref(),
-            mount_table.as_ref(),
+            evidence.native,
+            evidence.resource,
+            evidence.mount_table,
             kind,
         );
         let network = volume_network_state(
             marker_value,
-            native.as_ref(),
-            resource.as_ref(),
-            mount_table.as_ref(),
+            evidence.native,
+            evidence.resource,
+            evidence.mount_table,
             kind,
         );
         let reachable = marker_reachability(
             marker.as_deref(),
             network,
             mount_state,
-            resource.as_ref(),
+            evidence.resource,
             &path,
         );
         let ejectable = volume_ejectable_state(
             marker_value,
-            native.as_ref(),
-            resource.as_ref(),
+            evidence.native,
+            evidence.resource,
             removable,
             network,
         );
@@ -366,9 +373,9 @@ impl VolumeDescriptor {
             id,
             &path,
             marker.as_deref(),
-            native.as_ref(),
-            resource.as_ref(),
-            mount_table.as_ref(),
+            evidence.native,
+            evidence.resource,
+            evidence.mount_table,
         );
         let source = marker
             .map(|marker| format!("fixture-marker:{marker}"))
@@ -3605,10 +3612,7 @@ fn volume_network_state(
     if resource.and_then(|resource| resource.is_local) == Some(false) {
         return true;
     }
-    if let Some(network) = marker_network(marker) {
-        return network;
-    }
-    mount_table
+    if let Some(local) = mount_table
         .and_then(|mount_table| mount_table.is_local)
         .or_else(|| mount_table_network_filesystem_state(mount_table).map(|network| !network))
         .or_else(|| resource.and_then(|resource| resource.is_local))
@@ -3617,8 +3621,13 @@ fn volume_network_state(
                 .and_then(|native| native.volume_network)
                 .map(|network| !network)
         })
-        .map(|local| !local)
-        .unwrap_or(kind == VolumeKind::Network)
+    {
+        return !local;
+    }
+    if let Some(network) = marker_network(marker) {
+        return network;
+    }
+    kind == VolumeKind::Network
 }
 
 fn volume_local_state(
@@ -3644,10 +3653,7 @@ fn volume_local_state(
     if resource.and_then(|resource| resource.is_local) == Some(false) {
         return Some(false);
     }
-    if let Some(network) = marker_network(marker) {
-        return Some(!network);
-    }
-    mount_table
+    if let Some(local) = mount_table
         .and_then(|mount_table| mount_table.is_local)
         .or_else(|| mount_table_network_filesystem_state(mount_table).map(|network| !network))
         .or_else(|| resource.and_then(|resource| resource.is_local))
@@ -3656,7 +3662,13 @@ fn volume_local_state(
                 .and_then(|native| native.volume_network)
                 .map(|network| !network)
         })
-        .or_else(|| (kind == VolumeKind::Network).then_some(false))
+    {
+        return Some(local);
+    }
+    if let Some(network) = marker_network(marker) {
+        return Some(!network);
+    }
+    (kind == VolumeKind::Network).then_some(false)
 }
 
 fn volume_removable_state(
@@ -3672,10 +3684,7 @@ fn volume_removable_state(
     {
         return true;
     }
-    if let Some(removable) = marker_removable(marker) {
-        return removable;
-    }
-    resource
+    if let Some(removable) = resource
         .filter(|resource| resource.status == NativeVolumeStatus::Available)
         .and_then(|resource| resource.is_removable)
         .or_else(|| {
@@ -3683,10 +3692,16 @@ fn volume_removable_state(
                 .filter(|native| native.status == NativeVolumeStatus::Available)
                 .and_then(|native| native.media_removable)
         })
-        .unwrap_or(matches!(
-            kind,
-            VolumeKind::External | VolumeKind::Removable | VolumeKind::DiskImage
-        ))
+    {
+        return removable;
+    }
+    if let Some(removable) = marker_removable(marker) {
+        return removable;
+    }
+    matches!(
+        kind,
+        VolumeKind::External | VolumeKind::Removable | VolumeKind::DiskImage
+    )
 }
 
 fn volume_ejectable_state(
@@ -3703,10 +3718,7 @@ fn volume_ejectable_state(
     {
         return true;
     }
-    if let Some(ejectable) = marker_ejectable(marker) {
-        return ejectable;
-    }
-    resource
+    if let Some(ejectable) = resource
         .filter(|resource| resource.status == NativeVolumeStatus::Available)
         .and_then(|resource| resource.is_ejectable)
         .or_else(|| {
@@ -3714,7 +3726,13 @@ fn volume_ejectable_state(
                 .filter(|native| native.status == NativeVolumeStatus::Available)
                 .and_then(|native| native.media_ejectable)
         })
-        .unwrap_or(removable || network)
+    {
+        return ejectable;
+    }
+    if let Some(ejectable) = marker_ejectable(marker) {
+        return ejectable;
+    }
+    removable || network
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3776,10 +3794,52 @@ fn marker_reachability(
     resource: Option<&NativeVolumeResourceValues>,
     path: &Path,
 ) -> Option<bool> {
+    if let Some(reachable) = resource
+        .filter(|resource| resource.status == NativeVolumeStatus::Available)
+        .and_then(|resource| resource.is_reachable.or(resource.is_browsable))
+    {
+        return Some(reachable);
+    }
     match marker {
         Some("network-unreachable") | Some("network-offline") => Some(false),
         _ => volume_reachability(network, mount_state, resource, path),
     }
+}
+
+struct VolumeClassificationEvidence<'a> {
+    native: Option<&'a NativeVolumeDescription>,
+    resource: Option<&'a NativeVolumeResourceValues>,
+    mount_table: Option<&'a NativeVolumeMountTableEntry>,
+}
+
+fn volume_classification_evidence<'a>(
+    path: &Path,
+    marker: Option<&str>,
+    native: Option<&'a NativeVolumeDescription>,
+    resource: Option<&'a NativeVolumeResourceValues>,
+    mount_table: Option<&'a NativeVolumeMountTableEntry>,
+) -> VolumeClassificationEvidence<'a> {
+    if marker.is_some()
+        && mount_table
+            .filter(|entry| entry.status == NativeVolumeStatus::Available)
+            .and_then(|entry| entry.mount_point.as_deref())
+            .is_some_and(|mount_point| !same_volume_path(path, mount_point))
+    {
+        return VolumeClassificationEvidence {
+            native: None,
+            resource: None,
+            mount_table: None,
+        };
+    }
+    VolumeClassificationEvidence {
+        native,
+        resource,
+        mount_table,
+    }
+}
+
+fn same_volume_path(left: &Path, right: &Path) -> bool {
+    left == right || normalized_lookup_path(left) == normalized_lookup_path(right)
 }
 
 fn classify_volume(
@@ -3791,6 +3851,12 @@ fn classify_volume(
 ) -> VolumeKind {
     if let Some(kind) = classify_positive_native_volume(path, native, resource, mount_table) {
         return kind;
+    }
+    if let Some(kind) = classify_native_volume(path, native, resource, mount_table) {
+        return kind;
+    }
+    if native_volume_evidence_present(native, resource, mount_table) {
+        return VolumeKind::Unknown;
     }
     match marker {
         Some("network")
@@ -3807,13 +3873,6 @@ fn classify_volume(
         Some("system") => return VolumeKind::System,
         Some("internal") => return VolumeKind::Internal,
         _ => {}
-    }
-
-    if let Some(kind) = classify_native_volume(path, native, resource, mount_table) {
-        return kind;
-    }
-    if native_volume_evidence_present(native, resource, mount_table) {
-        return VolumeKind::Unknown;
     }
 
     VolumeKind::Unknown
@@ -4068,15 +4127,24 @@ fn marker_aware_stable_identity(
     let native_stable_identity = stable_identity(id, path, native, resource, mount_table);
     match (
         marker,
-        host_stable_identity_from_native_sources(&native_stable_identity),
+        host_stable_identity_from_native_sources(&native_stable_identity, path),
     ) {
         (Some(_), true) | (None, _) => native_stable_identity,
         (Some(marker), false) => marker_stable_identity(marker, id, path),
     }
 }
 
-fn host_stable_identity_from_native_sources(identity: &str) -> bool {
+fn host_stable_identity_from_native_sources(identity: &str, path: &Path) -> bool {
     identity.starts_with("diskarbitration:")
+        || identity.starts_with("url-resource:")
+        || mount_table_identity_matches_path(identity, path)
+}
+
+fn mount_table_identity_matches_path(identity: &str, path: &Path) -> bool {
+    let Some((_, mount_point)) = identity.rsplit_once(':') else {
+        return false;
+    };
+    identity.starts_with("mount-table:") && mount_point == escape_field(&path.display().to_string())
 }
 
 fn mounted_volume_paths_checked(mut check: impl FnMut() -> Result<()>) -> Result<Vec<PathBuf>> {
@@ -4808,6 +4876,43 @@ mod tests {
     }
 
     #[test]
+    fn classify_volume_prefers_available_native_identity_before_fixture_marker() {
+        let resource = resource_values(|values| {
+            values.is_internal = Some(true);
+            values.is_local = Some(true);
+        });
+
+        let kind = classify_volume(
+            Path::new("/Volumes/InternalFixture"),
+            Some("network-smb"),
+            None,
+            Some(&resource),
+            None,
+        );
+
+        assert_eq!(kind, VolumeKind::Internal);
+    }
+
+    #[test]
+    fn classify_volume_reports_unknown_when_native_evidence_blocks_fixture_marker() {
+        let native = native_description(|description| {
+            description.status = NativeVolumeStatus::Unavailable;
+            description.reason = Some("DiskArbitration unavailable".to_string());
+            description.volume_network = Some(true);
+        });
+
+        let kind = classify_volume(
+            Path::new("/Volumes/UnavailableFixture"),
+            Some("network-smb"),
+            Some(&native),
+            None,
+            None,
+        );
+
+        assert_eq!(kind, VolumeKind::Unknown);
+    }
+
+    #[test]
     fn classify_native_volume_uses_mount_table_locality() {
         let mount_table = mount_table_entry(|entry| {
             entry.is_local = Some(false);
@@ -5208,6 +5313,38 @@ mod tests {
     }
 
     #[test]
+    fn volume_network_state_prefers_available_local_truth_before_marker() {
+        let native = native_description(|description| {
+            description.volume_network = Some(false);
+        });
+        let resource = resource_values(|values| {
+            values.is_local = Some(true);
+        });
+        let mount_table = mount_table_entry(|entry| {
+            entry.is_local = Some(true);
+            entry.filesystem_type = Some("apfs".to_string());
+        });
+
+        assert!(!volume_network_state(
+            Some("network-smb"),
+            Some(&native),
+            Some(&resource),
+            Some(&mount_table),
+            VolumeKind::Unknown,
+        ));
+        assert_eq!(
+            volume_local_state(
+                Some("network-smb"),
+                Some(&native),
+                Some(&resource),
+                Some(&mount_table),
+                VolumeKind::Unknown,
+            ),
+            Some(true)
+        );
+    }
+
+    #[test]
     fn volume_local_state_prefers_positive_diskarbitration_network_truth() {
         let native = native_description(|description| {
             description.volume_network = Some(true);
@@ -5334,6 +5471,32 @@ mod tests {
             Some("internal"),
             Some(&native),
             None,
+            false,
+            false,
+        ));
+    }
+
+    #[test]
+    fn volume_media_state_prefers_available_fixed_media_truth_before_marker() {
+        let native = native_description(|description| {
+            description.media_removable = Some(false);
+            description.media_ejectable = Some(false);
+        });
+        let resource = resource_values(|values| {
+            values.is_removable = Some(false);
+            values.is_ejectable = Some(false);
+        });
+
+        assert!(!volume_removable_state(
+            Some("external-removable"),
+            Some(&native),
+            Some(&resource),
+            VolumeKind::Unknown,
+        ));
+        assert!(!volume_ejectable_state(
+            Some("external-removable"),
+            Some(&native),
+            Some(&resource),
             false,
             false,
         ));
@@ -5734,6 +5897,26 @@ mod tests {
         let reachable = volume_reachability(true, MountState::Mounted, Some(&resource), &root);
 
         assert_eq!(reachable, Some(false));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn marker_reachability_prefers_available_resource_truth_before_marker() {
+        let root = unique_temp_dir("gfm-volume-marker-reachable");
+        let resource = resource_values(|values| {
+            values.is_reachable = Some(true);
+        });
+
+        let reachable = marker_reachability(
+            Some("network-unreachable"),
+            true,
+            MountState::Mounted,
+            Some(&resource),
+            &root,
+        );
+
+        assert_eq!(reachable, Some(true));
 
         fs::remove_dir_all(root).unwrap();
     }
@@ -9237,6 +9420,26 @@ mod tests {
             identity,
             "fixture-marker:network-smb:dev:7:/tmp/gfm-volume-fixture"
         );
+    }
+
+    #[test]
+    fn marker_aware_stable_identity_prefers_matching_mount_table_identity_before_fixture_marker() {
+        let mount_table = mount_table_entry(|entry| {
+            entry.mounted_from = Some("/dev/disk3s1".to_string());
+            entry.mount_point = Some(PathBuf::from("/Volumes/Fixture"));
+        });
+
+        let identity = marker_aware_stable_identity(
+            VolumeId(7),
+            Path::new("/Volumes/Fixture"),
+            Some("network-smb"),
+            None,
+            None,
+            Some(&mount_table),
+        );
+
+        assert_eq!(identity, "mount-table:/dev/disk3s1:/Volumes/Fixture");
+        assert!(!identity.starts_with("fixture-marker:"));
     }
 
     #[test]
