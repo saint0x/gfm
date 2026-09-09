@@ -1371,56 +1371,7 @@ impl WorkerPool {
     }
 
     pub fn run(&self, tasks: Vec<Task>) -> WorkerReport {
-        if tasks.is_empty() {
-            return WorkerReport {
-                outcomes: Vec::new(),
-            };
-        }
-
-        let task_count = tasks.len();
-        let queue = Arc::new(Mutex::new(VecDeque::from(tasks)));
-        let outcomes = Arc::new(Mutex::new(Vec::with_capacity(task_count)));
-        let threads = self.threads.min(task_count);
-
-        thread::scope(|scope| {
-            for _ in 0..threads {
-                let queue = Arc::clone(&queue);
-                let outcomes = Arc::clone(&outcomes);
-                scope.spawn(move || loop {
-                    let task = {
-                        let mut queue = queue.lock().expect("worker task queue poisoned");
-                        queue.pop_front()
-                    };
-                    let Some(mut task) = task else {
-                        break;
-                    };
-                    let cancellation = task.job.cancellation();
-                    let result = cancellation.check().and_then(|()| {
-                        task.work.take().expect("worker task missing work")(cancellation)
-                    });
-                    let status = match result {
-                        Ok(()) => TaskStatus::Completed,
-                        Err(GfmError::Cancelled) => TaskStatus::Cancelled,
-                        Err(err) => TaskStatus::Failed(err.to_string()),
-                    };
-                    outcomes
-                        .lock()
-                        .expect("worker outcome list poisoned")
-                        .push(TaskOutcome {
-                            id: task.job.id,
-                            label: task.job.label,
-                            status,
-                        });
-                });
-            }
-        });
-
-        let mut outcomes = Arc::try_unwrap(outcomes)
-            .expect("worker outcomes still shared")
-            .into_inner()
-            .expect("worker outcome list poisoned");
-        outcomes.sort_by_key(|outcome| outcome.id.value());
-        WorkerReport { outcomes }
+        self.run_isolated(tasks, VolumeConcurrencyPolicy::unlimited())
     }
 
     pub fn run_isolated(&self, tasks: Vec<Task>, policy: VolumeConcurrencyPolicy) -> WorkerReport {
@@ -1489,51 +1440,7 @@ impl WorkerPool {
         journal: &JobJournal,
         policy: RetryPolicy,
     ) -> WorkerReport {
-        if tasks.is_empty() {
-            return WorkerReport {
-                outcomes: Vec::new(),
-            };
-        }
-
-        let task_count = tasks.len();
-        let queue = Arc::new(Mutex::new(VecDeque::from(tasks)));
-        let outcomes = Arc::new(Mutex::new(Vec::with_capacity(task_count)));
-        let threads = self.threads.min(task_count);
-
-        thread::scope(|scope| {
-            for _ in 0..threads {
-                let queue = Arc::clone(&queue);
-                let outcomes = Arc::clone(&outcomes);
-                let journal = journal.clone();
-                scope.spawn(move || loop {
-                    let task = {
-                        let mut queue = queue.lock().expect("worker task queue poisoned");
-                        queue.pop_front()
-                    };
-                    let Some(task) = task else {
-                        break;
-                    };
-
-                    let final_status = execute_retriable_task(&task, &journal, policy);
-
-                    outcomes
-                        .lock()
-                        .expect("worker outcome list poisoned")
-                        .push(TaskOutcome {
-                            id: task.job.id,
-                            label: task.job.label,
-                            status: final_status,
-                        });
-                });
-            }
-        });
-
-        let mut outcomes = Arc::try_unwrap(outcomes)
-            .expect("worker outcomes still shared")
-            .into_inner()
-            .expect("worker outcome list poisoned");
-        outcomes.sort_by_key(|outcome| outcome.id.value());
-        WorkerReport { outcomes }
+        self.run_retriable_isolated(tasks, journal, policy, VolumeConcurrencyPolicy::unlimited())
     }
 
     pub fn run_retriable_isolated(

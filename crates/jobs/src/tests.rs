@@ -1341,6 +1341,36 @@ fn worker_pool_does_not_execute_pre_cancelled_tasks() {
 }
 
 #[test]
+fn worker_pool_releases_same_batch_dependency_after_completion() {
+    let mut scheduler = Scheduler::new();
+    let producer =
+        scheduler.schedule_in_class(Priority::Background, JobClass::Maintenance, "build sidecar");
+    let dependent = scheduler.schedule_in_class_with_dependencies(
+        Priority::Visible,
+        JobClass::Repair,
+        "repair view",
+        [producer.id],
+    );
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let producer_order = Arc::clone(&order);
+    let dependent_order = Arc::clone(&order);
+
+    let report = WorkerPool::new(2).run(vec![
+        Task::new(dependent, move |_| {
+            dependent_order.lock().unwrap().push("dependent");
+            Ok(())
+        }),
+        Task::new(producer, move |_| {
+            producer_order.lock().unwrap().push("producer");
+            Ok(())
+        }),
+    ]);
+
+    assert_eq!(report.completed(), 2);
+    assert_eq!(&*order.lock().unwrap(), &["producer", "dependent"]);
+}
+
+#[test]
 fn isolated_worker_pool_does_not_execute_pre_cancelled_tasks() {
     let mut scheduler = Scheduler::new();
     let job =
@@ -1678,6 +1708,45 @@ fn isolated_retriable_worker_releases_same_batch_dependency_after_completion() {
         &journal,
         RetryPolicy { max_attempts: 2 },
         VolumeConcurrencyPolicy::new(2),
+    );
+
+    assert_eq!(report.completed(), 2);
+    assert_eq!(&*order.lock().unwrap(), &["producer", "dependent"]);
+    assert_eq!(journal.read().unwrap().len(), 4);
+
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn retriable_worker_releases_same_batch_dependency_after_completion() {
+    let path = temp_path("gfm-retriable-dependency-journal", "journal");
+    let journal = JobJournal::new(&path);
+    let mut scheduler = Scheduler::new();
+    let producer =
+        scheduler.schedule_in_class(Priority::Background, JobClass::Maintenance, "build sidecar");
+    let dependent = scheduler.schedule_in_class_with_dependencies(
+        Priority::Visible,
+        JobClass::Repair,
+        "repair view",
+        [producer.id],
+    );
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let producer_order = Arc::clone(&order);
+    let dependent_order = Arc::clone(&order);
+
+    let report = WorkerPool::new(2).run_retriable(
+        vec![
+            RetriableTask::new(dependent, move |_| {
+                dependent_order.lock().unwrap().push("dependent");
+                Ok(())
+            }),
+            RetriableTask::new(producer, move |_| {
+                producer_order.lock().unwrap().push("producer");
+                Ok(())
+            }),
+        ],
+        &journal,
+        RetryPolicy { max_attempts: 2 },
     );
 
     assert_eq!(report.completed(), 2);

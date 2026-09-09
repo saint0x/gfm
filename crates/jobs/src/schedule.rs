@@ -139,6 +139,10 @@ impl VolumeConcurrencyPolicy {
         }
     }
 
+    pub fn unlimited() -> Self {
+        Self::new(usize::MAX)
+    }
+
     pub fn with_volume_limit(mut self, volume: VolumeId, limit: usize) -> Self {
         self.overrides.insert(volume, limit.max(1));
         self
