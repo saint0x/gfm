@@ -520,7 +520,7 @@ impl ConfigStore {
             Ok(config) => Ok(config),
             Err(err @ GfmError::Io { .. }) => {
                 check_control()?;
-                match self.path.try_exists() {
+                match config_path_exists(&self.path) {
                     Ok(false) => {
                         check_control()?;
                         let config = GfmConfig::default();
@@ -588,6 +588,14 @@ impl ConfigStore {
             std::process::id(),
             nonce = now_nanos()
         ))
+    }
+}
+
+fn config_path_exists(path: &Path) -> std::io::Result<bool> {
+    match fs::metadata(path) {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err),
     }
 }
 

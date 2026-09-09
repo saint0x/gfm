@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 
 pub(crate) fn recreate_dir(path: &Path, label: &str) -> Result<()> {
-    match path.try_exists() {
+    match path_exists(path) {
         Ok(true) => fs::remove_dir_all(path).map_err(|err| GfmError::io(path, err))?,
         Ok(false) => {}
         Err(err) => {
@@ -21,13 +21,21 @@ pub(crate) fn create_dir(path: &Path) -> Result<()> {
 }
 
 pub(crate) fn remove_existing_file(path: &Path, label: &str) -> Result<()> {
-    match path.try_exists() {
+    match path_exists(path) {
         Ok(true) => fs::remove_file(path).map_err(|err| GfmError::io(path, err)),
         Ok(false) => Ok(()),
         Err(err) => Err(GfmError::io(
             path,
             format!("{label} probe unavailable: {err}"),
         )),
+    }
+}
+
+fn path_exists(path: &Path) -> std::io::Result<bool> {
+    match fs::metadata(path) {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(err),
     }
 }
 
