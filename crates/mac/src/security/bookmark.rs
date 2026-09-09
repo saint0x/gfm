@@ -47,6 +47,13 @@ pub struct SecurityScopedBookmarkStoreReport {
     pub unavailable: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SecurityScopedBookmarkStoreProbe {
+    File,
+    Missing,
+    NotFile,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SecurityScopedBookmarkLookup {
     pub requested_path: PathBuf,
@@ -332,14 +339,14 @@ impl SecurityScopedBookmarkStore {
         mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<Vec<SecurityScopedBookmarkRecord>> {
         check_control()?;
-        match self.path.try_exists() {
-            Ok(true) => {}
-            Ok(false) => return Ok(Vec::new()),
-            Err(err) => {
-                return Err(GfmError::io(
-                    &self.path,
-                    format!("bookmark store existence unavailable: {err}"),
-                ));
+        match probe_bookmark_store_path(&self.path)? {
+            SecurityScopedBookmarkStoreProbe::File => {}
+            SecurityScopedBookmarkStoreProbe::Missing => return Ok(Vec::new()),
+            SecurityScopedBookmarkStoreProbe::NotFile => {
+                return Err(GfmError::Format(format!(
+                    "security bookmark store is not a regular file: {}",
+                    self.path.display()
+                )));
             }
         }
         check_control()?;
@@ -573,6 +580,20 @@ impl SecurityScopedBookmarkStore {
                 })
                 .count(),
         })
+    }
+}
+
+fn probe_bookmark_store_path(path: &Path) -> Result<SecurityScopedBookmarkStoreProbe> {
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() => Ok(SecurityScopedBookmarkStoreProbe::File),
+        Ok(_) => Ok(SecurityScopedBookmarkStoreProbe::NotFile),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            Ok(SecurityScopedBookmarkStoreProbe::Missing)
+        }
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("bookmark store existence unavailable: {err}"),
+        )),
     }
 }
 
@@ -1409,6 +1430,32 @@ mod tests {
 
         assert!(format!("{error:?}").contains("invalid hex digit"));
 
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bookmark_store_read_treats_missing_store_as_empty() {
+        let root = temp_root("security-bookmark-missing-store");
+        let store = SecurityScopedBookmarkStore::new(root.join("bookmarks.tsv"));
+
+        let records = store.read().unwrap();
+
+        assert!(records.is_empty());
+        assert!(!store.path().exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn bookmark_store_read_rejects_directory_before_open() {
+        let root = temp_root("security-bookmark-directory-store");
+        let store = SecurityScopedBookmarkStore::new(root.join("bookmarks.tsv"));
+        fs::create_dir(store.path()).unwrap();
+
+        let error = store.read().unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("security bookmark store is not a regular file"));
         fs::remove_dir_all(root).unwrap();
     }
 
