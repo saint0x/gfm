@@ -905,7 +905,7 @@ fn diagnostics_parity_baseline_rejects_missing_fixture_manifest_from_binary() {
     fs::create_dir_all(&baseline).unwrap();
     fs::write(
         baseline.join("manifest.tsv"),
-        "profile\tmacos-build=25A354\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\n",
+        "profile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\n",
     )
     .unwrap();
 
@@ -931,11 +931,11 @@ fn diagnostics_parity_baseline_rejects_missing_fixture_manifest_from_binary() {
 }
 
 #[test]
-fn diagnostics_parity_baseline_rejects_unknown_manifest_key_from_binary() {
-    let root = unique_temp_dir("gfm-cli-diagnostics-parity-unknown-key");
+fn diagnostics_parity_baseline_rejects_missing_hardware_profile_from_binary() {
+    let root = unique_temp_dir("gfm-cli-diagnostics-parity-missing-hardware-profile");
     let config = root.join("config.toml");
     let baseline = root.join("baselines");
-    fs::create_dir_all(baseline.join("fixtures")).unwrap();
+    fs::create_dir_all(baseline.join("fixtures/toolbar")).unwrap();
     fs::write(
         baseline.join("fixtures/manifest.tsv"),
         "scenario\troot\tfinder-view\tfiles\tdirectories\ntoolbar\tfixtures/toolbar\ticon\t1\t0\n",
@@ -943,7 +943,45 @@ fn diagnostics_parity_baseline_rejects_unknown_manifest_key_from_binary() {
     .unwrap();
     fs::write(
         baseline.join("manifest.tsv"),
-        "profile\tmacos-build=25A354\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tmystery=value\n",
+        "profile\tmacos-build=25A354\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "diagnostics-parity-baseline",
+            config.to_str().unwrap(),
+            baseline.to_str().unwrap(),
+            "25A354",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("25A354"), "{stdout}");
+    assert!(stderr.contains("missing hardware-profile"), "{stderr}");
+    assert!(!config.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn diagnostics_parity_baseline_rejects_unknown_manifest_key_from_binary() {
+    let root = unique_temp_dir("gfm-cli-diagnostics-parity-unknown-key");
+    let config = root.join("config.toml");
+    let baseline = root.join("baselines");
+    fs::create_dir_all(baseline.join("fixtures")).unwrap();
+    fs::create_dir_all(baseline.join("fixtures/toolbar")).unwrap();
+    fs::write(
+        baseline.join("fixtures/manifest.tsv"),
+        "scenario\troot\tfinder-view\tfiles\tdirectories\ntoolbar\tfixtures/toolbar\ticon\t1\t0\n",
+    )
+    .unwrap();
+    fs::write(
+        baseline.join("manifest.tsv"),
+        "profile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tmystery=value\n",
     )
     .unwrap();
 
@@ -962,6 +1000,44 @@ fn diagnostics_parity_baseline_rejects_unknown_manifest_key_from_binary() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!stdout.contains("25A354"), "{stdout}");
     assert!(stderr.contains("unknown profile key `mystery`"), "{stderr}");
+    assert!(!config.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn diagnostics_parity_baseline_rejects_missing_fixture_root_from_binary() {
+    let root = unique_temp_dir("gfm-cli-diagnostics-parity-missing-fixture-root");
+    let config = root.join("config.toml");
+    let baseline = root.join("baselines");
+    fs::create_dir_all(baseline.join("fixtures")).unwrap();
+    fs::write(
+        baseline.join("fixtures/manifest.tsv"),
+        "scenario\troot\tfinder-view\tfiles\tdirectories\ntoolbar\tfixtures/missing\ticon\t1\t0\n",
+    )
+    .unwrap();
+    fs::write(
+        baseline.join("manifest.tsv"),
+        "profile\tmacos-build=25A354\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "diagnostics-parity-baseline",
+            config.to_str().unwrap(),
+            baseline.to_str().unwrap(),
+            "25A354",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("25A354"), "{stdout}");
+    assert!(stderr.contains("fixture root unavailable"), "{stderr}");
+    assert!(stderr.contains("fixtures/missing"), "{stderr}");
     assert!(!config.exists());
 
     fs::remove_dir_all(root).unwrap();
@@ -1116,6 +1192,7 @@ fn assert_worker_admitted(stderr: &str, worker: &str, path: &Path) {
 fn write_parity_baseline_manifest(root: &Path, macos_build: &str) {
     fs::create_dir_all(root).unwrap();
     fs::create_dir_all(root.join("fixtures")).unwrap();
+    fs::create_dir_all(root.join("fixtures/toolbar")).unwrap();
     fs::write(
         root.join("fixtures/manifest.tsv"),
         "scenario\troot\tfinder-view\tfiles\tdirectories\ntoolbar\tfixtures/toolbar\ticon\t1\t0\n",
@@ -1124,7 +1201,7 @@ fn write_parity_baseline_manifest(root: &Path, macos_build: &str) {
     fs::write(
         root.join("manifest.tsv"),
         format!(
-            "profile\tmacos-build={macos_build}\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-{macos_build}-default\n"
+            "profile\tmacos-build={macos_build}\thardware-profile=macbookpro18,3\tdisplay-profile=studio-display-p3\tapp-version=0.1.0\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-{macos_build}-default\n"
         ),
     )
     .unwrap();
