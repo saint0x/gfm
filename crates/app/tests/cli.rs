@@ -4303,9 +4303,13 @@ fn persists_fsevents_cursor_from_binary() {
     let index = unique_temp_path("gfm-cli-fsevents-records", "gfmidx");
     let state = unique_temp_path("gfm-cli-fsevents-state", "gfmstate");
     let cursor = unique_temp_path("gfm-cli-fsevents-cursor", "gfmcursor");
+    let catalog = unique_temp_path("gfm-cli-fsevents-runtime", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-fsevents-runtime", "gfmprogress");
     fs::write(root.join("CursorSearch.md"), "alpha").unwrap();
 
     let index_state = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
         .args([
             "index-state",
             root.to_str().unwrap(),
@@ -4321,6 +4325,8 @@ fn persists_fsevents_cursor_from_binary() {
     );
 
     let checkpoint = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
         .args([
             "fsevents-cursor-checkpoint",
             state.to_str().unwrap(),
@@ -4343,6 +4349,21 @@ fn persists_fsevents_cursor_from_binary() {
         checkpoint_stdout.contains("\tlast-event-id=123\thealth=clean"),
         "{checkpoint_stdout}"
     );
+    let checkpoint_catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(
+        checkpoint_catalog_text.contains(&format!(
+            "payload\t2\tindexing\tfsevents cursor checkpoint\t{}\t",
+            cursor.display()
+        )) && checkpoint_catalog_text.contains("\tvisible:fsevents cursor checkpoint:adaptive"),
+        "{checkpoint_catalog_text}"
+    );
+    let checkpoint_progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        checkpoint_progress_text
+            .contains("progress\t2\tvisible\tvisible\tfsevents cursor checkpoint\t")
+            && checkpoint_progress_text.contains("\tcompleted\t3\t3\tcompleted:event-id:123\t"),
+        "{checkpoint_progress_text}"
+    );
 
     let inspect = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .args(["fsevents-cursor-inspect", cursor.to_str().unwrap()])
@@ -4359,6 +4380,8 @@ fn persists_fsevents_cursor_from_binary() {
     assert_eq!(inspect_stdout, checkpoint_stdout);
 
     let resume = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
         .args([
             "fsevents-cursor-resume",
             state.to_str().unwrap(),
@@ -4379,8 +4402,24 @@ fn persists_fsevents_cursor_from_binary() {
         resume_stdout.trim(),
         "fsevents-resume\taction=continue\tfrom-event-id=124\treason=cursor-clean"
     );
+    let resume_catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(
+        resume_catalog_text.contains(&format!(
+            "payload\t3\tindexing\tfsevents cursor resume\t{}\t",
+            cursor.display()
+        )) && resume_catalog_text.contains("\tvisible:fsevents cursor resume:adaptive"),
+        "{resume_catalog_text}"
+    );
+    let resume_progress_text = fs::read_to_string(&progress).unwrap();
+    assert!(
+        resume_progress_text.contains("progress\t3\tvisible\tvisible\tfsevents cursor resume\t")
+            && resume_progress_text.contains("\tcompleted\t3\t3\tcompleted:continue\t"),
+        "{resume_progress_text}"
+    );
 
     let reindex = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
         .args([
             "index-state",
             root.to_str().unwrap(),
@@ -4395,6 +4434,8 @@ fn persists_fsevents_cursor_from_binary() {
         String::from_utf8_lossy(&reindex.stderr)
     );
     let stale = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
         .args([
             "fsevents-cursor-resume",
             state.to_str().unwrap(),
@@ -4417,6 +4458,8 @@ fn persists_fsevents_cursor_from_binary() {
     fs::remove_file(index).unwrap();
     fs::remove_file(state).unwrap();
     fs::remove_file(cursor).unwrap();
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
 }
 
 #[test]

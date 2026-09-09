@@ -753,31 +753,59 @@ fn run_fsevents_cursor_checkpoint(
     event_id: u64,
     health: FseventsCursorHealth,
 ) -> Result<FseventsCursor> {
+    const WORKER: &str = "fsevents cursor checkpoint";
     let access_reports =
         FseventsCursorCheckpointAccessReports::for_state_and_cursor(&state, &cursor)?;
     access_reports.preflight_volumes()?;
     let volume = access_reports.first_volume();
-    run_volume_task_cancellable(
-        volume,
-        Priority::Visible,
-        "fsevents cursor checkpoint",
-        move |cancellation| {
-            cancellation.check()?;
-            let _state_access = access_reports
-                .state
-                .access_checked(|| cancellation.check())?;
-            let _cursor_access = access_reports
-                .cursor
-                .access_checked(|| cancellation.check())?;
-            cancellation.check()?;
-            Indexer::default().checkpoint_fsevents_cursor_cancellable(
-                state,
-                cursor,
-                event_id,
-                health,
-                &cancellation,
-            )
-        },
+    visible_scheduled_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Indexing,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            cursor.clone(),
+            move |cancellation, runtime| {
+                let state = state.clone();
+                let cursor = cursor.clone();
+                cancellation.check()?;
+                runtime.resize_checked(3, "fsevents-cursor-checkpoint:preflight", || {
+                    cancellation.check()
+                })?;
+                let _state_access = access_reports
+                    .state
+                    .access_checked(|| cancellation.check())?;
+                let _cursor_access = access_reports
+                    .cursor
+                    .access_checked(|| cancellation.check())?;
+                index_runtime_phase(
+                    &runtime,
+                    1,
+                    "fsevents-cursor-checkpoint:write",
+                    &cancellation,
+                )?;
+                let cursor_report = Indexer::default().checkpoint_fsevents_cursor_cancellable(
+                    state,
+                    cursor,
+                    event_id,
+                    health,
+                    &cancellation,
+                )?;
+                runtime.remember_completion_detail(format!(
+                    "completed:event-id:{}",
+                    cursor_report.last_event_id
+                ))?;
+                index_runtime_phase(
+                    &runtime,
+                    3,
+                    "fsevents-cursor-checkpoint:complete",
+                    &cancellation,
+                )?;
+                Ok(cursor_report)
+            },
+        )?,
+        WORKER,
     )
 }
 
@@ -785,24 +813,49 @@ fn run_fsevents_cursor_resume(
     state: PathBuf,
     cursor: PathBuf,
 ) -> Result<gfm_index::FseventsResumePlan> {
+    const WORKER: &str = "fsevents cursor resume";
     let access_reports = FseventsCursorResumeAccessReports::for_state_and_cursor(&state, &cursor);
     access_reports.preflight_volumes()?;
     let volume = access_reports.first_volume();
-    run_volume_task_cancellable(
-        volume,
-        Priority::Visible,
-        "fsevents cursor resume",
-        move |cancellation| {
-            cancellation.check()?;
-            let _state_access = access_reports
-                .state
-                .access_checked(|| cancellation.check())?;
-            let _cursor_access = access_reports
-                .cursor
-                .access_checked(|| cancellation.check())?;
-            cancellation.check()?;
-            Indexer::default().fsevents_resume_plan_cancellable(state, cursor, &cancellation)
-        },
+    visible_scheduled_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Indexing,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            cursor.clone(),
+            move |cancellation, runtime| {
+                let state = state.clone();
+                let cursor = cursor.clone();
+                cancellation.check()?;
+                runtime.resize_checked(3, "fsevents-cursor-resume:preflight", || {
+                    cancellation.check()
+                })?;
+                let _state_access = access_reports
+                    .state
+                    .access_checked(|| cancellation.check())?;
+                let _cursor_access = access_reports
+                    .cursor
+                    .access_checked(|| cancellation.check())?;
+                index_runtime_phase(&runtime, 1, "fsevents-cursor-resume:read", &cancellation)?;
+                let plan = Indexer::default().fsevents_resume_plan_cancellable(
+                    state,
+                    cursor,
+                    &cancellation,
+                )?;
+                runtime
+                    .remember_completion_detail(format!("completed:{}", plan.action.as_str()))?;
+                index_runtime_phase(
+                    &runtime,
+                    3,
+                    "fsevents-cursor-resume:complete",
+                    &cancellation,
+                )?;
+                Ok(plan)
+            },
+        )?,
+        WORKER,
     )
 }
 
