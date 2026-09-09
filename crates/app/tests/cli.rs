@@ -20209,7 +20209,10 @@ fn scheduled_runtime_retry_probe_retries_transient_failure_from_binary() {
 
     let catalog_text = fs::read_to_string(&catalog).unwrap();
     assert!(
-        catalog_text.contains("runtime retry probe"),
+        catalog_text.contains(&format!(
+            "payload\t1\trepair\truntime retry probe\t{}\t",
+            state.display()
+        )) && catalog_text.contains("\tbackground:runtime retry probe:adaptive"),
         "{catalog_text}"
     );
     let progress_text = fs::read_to_string(&progress).unwrap();
@@ -20218,7 +20221,7 @@ fn scheduled_runtime_retry_probe_retries_transient_failure_from_binary() {
         "{progress_text}"
     );
     assert!(
-        progress_text.contains("\tcompleted\t1\t1\tcompleted\t"),
+        progress_text.contains("\tcompleted\t3\t3\tcompleted:attempt:2\t"),
         "{progress_text}"
     );
 

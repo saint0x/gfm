@@ -4,7 +4,7 @@ use crate::access::{
 };
 use crate::platform::{current_host_job_scheduling_pressure, scheduling_pressure_tsv};
 use crate::runtime::{
-    default_job_journal_path, run_scheduled_volume_task_cancellable_with_volume,
+    default_job_journal_path, run_scheduled_volume_task_cancellable_with_runtime_and_payload_path,
     run_volume_task_cancellable,
 };
 use crate::{
@@ -148,8 +148,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             eprintln!("{}", scheduling_pressure_tsv(pressure));
             let retry_access = Arc::new(Mutex::new(None::<JobPathAccessReport>));
-            let outcome = run_scheduled_volume_task_cancellable_with_volume(
+            let outcome = run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
                 Priority::Background,
+                JobPayloadKind::Repair,
                 "runtime retry probe",
                 pressure,
                 {
@@ -171,8 +172,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         Ok(volume)
                     }
                 },
-                move |cancellation| {
+                state.clone(),
+                move |cancellation, runtime| {
                     cancellation.check()?;
+                    runtime.resize_checked(3, "runtime-retry-probe:preflight", || {
+                        cancellation.check()
+                    })?;
                     let access_report = retry_access
                         .lock()
                         .map_err(|_| {
@@ -190,7 +195,27 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     let _access = access_report
                         .access_checked("runtime retry probe", || cancellation.check())?;
                     cancellation.check()?;
-                    runtime_retry_probe_cancellable(&state, &cancellation)
+                    runtime.progress_checked(
+                        JobProgressState::Running,
+                        1,
+                        "runtime-retry-probe:attempt",
+                        || cancellation.check(),
+                    )?;
+                    let attempt = runtime_retry_probe_cancellable(&state, &cancellation)?;
+                    runtime.progress_checked(
+                        JobProgressState::Running,
+                        2,
+                        "runtime-retry-probe:complete",
+                        || cancellation.check(),
+                    )?;
+                    runtime.remember_completion_detail(format!("completed:attempt:{attempt}"))?;
+                    runtime.progress_checked(
+                        JobProgressState::Running,
+                        3,
+                        "runtime-retry-probe:reported",
+                        || cancellation.check(),
+                    )?;
+                    Ok(attempt)
                 },
             )?;
             if outcome.deferred {
