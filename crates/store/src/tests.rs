@@ -551,7 +551,7 @@ fn mmap_record_archive_reads_one_volume_from_directory_span() {
 
 #[test]
 fn mmap_record_archive_checked_volume_records_honors_pre_cancelled_control() {
-    let path = temp_path("gfm-store-mmap-volume-records-cancel", "idx");
+    let path = temp_path("gfm-store-mmap-volume-records-by-volume-cancel", "idx");
     let records = vec![sample_file_record(10, "alpha.txt")];
     write_records(&path, &records).unwrap();
     let archive = MmapRecordArchive::open(&path).unwrap();
