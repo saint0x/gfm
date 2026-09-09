@@ -8,6 +8,7 @@ use gfm_telemetry::{
     Telemetry,
 };
 use gfm_types::{FileKind, GfmError, Result};
+use std::collections::BTreeSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -252,7 +253,7 @@ fn validate_parity_baseline_manifest(baseline_root: &Path, macos_build: &str) ->
             format!("parity baseline manifest unavailable: {err}"),
         )
     })?;
-    let mut saw_matching_profile = false;
+    let mut matching_profile: Option<usize> = None;
     for (line_index, line) in content.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -264,13 +265,20 @@ fn validate_parity_baseline_manifest(baseline_root: &Path, macos_build: &str) ->
         }
         let profile = BaselineManifestProfile::parse(line_index, &fields)?;
         if profile.macos_build == macos_build {
-            saw_matching_profile = true;
+            if let Some(previous_line) = matching_profile {
+                return Err(GfmError::Format(format!(
+                    "parity baseline manifest {} contains duplicate macOS build `{macos_build}` profiles on lines {} and {}",
+                    manifest_path.display(),
+                    previous_line + 1,
+                    line_index + 1
+                )));
+            }
+            matching_profile = Some(line_index);
             profile.validate(line_index)?;
             validate_baseline_fixture_manifest(baseline_root, &profile, line_index)?;
-            break;
         }
     }
-    if !saw_matching_profile {
+    if matching_profile.is_none() {
         return Err(GfmError::Format(format!(
             "parity baseline manifest {} does not contain macOS build `{macos_build}`",
             manifest_path.display()
@@ -335,6 +343,7 @@ impl BaselineManifestProfile {
             signer: String::new(),
             approved_mask_set: String::new(),
         };
+        let mut seen_keys = BTreeSet::new();
         for field in fields.iter().skip(1) {
             let Some((key, value)) = field.split_once('=') else {
                 return Err(GfmError::Format(format!(
@@ -342,6 +351,12 @@ impl BaselineManifestProfile {
                     line_index + 1
                 )));
             };
+            if !seen_keys.insert(key) {
+                return Err(GfmError::Format(format!(
+                    "parity baseline manifest line {} has duplicate profile key `{key}`",
+                    line_index + 1
+                )));
+            }
             match key {
                 "macos-build" => profile.macos_build = value.to_string(),
                 "fixture-manifest" => profile.fixture_manifest = value.to_string(),
@@ -350,7 +365,12 @@ impl BaselineManifestProfile {
                 "reviewer" => profile.reviewer = value.to_string(),
                 "signer" => profile.signer = value.to_string(),
                 "approved-mask-set" => profile.approved_mask_set = value.to_string(),
-                _ => {}
+                _ => {
+                    return Err(GfmError::Format(format!(
+                        "parity baseline manifest line {} has unknown profile key `{key}`",
+                        line_index + 1
+                    )))
+                }
             }
         }
         Ok(profile)
@@ -836,6 +856,64 @@ mod tests {
     }
 
     #[test]
+    fn parity_baseline_selection_rejects_duplicate_profile_keys() {
+        let root = unique_temp_dir("gfm-diagnostics-parity-duplicate-key");
+        let store = ConfigStore::new(root.join("config.toml"));
+        write_parity_fixture_manifest(&root.join("baselines"));
+        fs::write(
+            root.join("baselines/manifest.tsv"),
+            "profile\tmacos-build=25A354\tmacos-build=25A999\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\n",
+        )
+        .unwrap();
+
+        let err = select_parity_baseline(&store, root.join("baselines"), "25A354").unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("duplicate profile key `macos-build`"));
+        assert!(!store.path().exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn parity_baseline_selection_rejects_unknown_profile_keys() {
+        let root = unique_temp_dir("gfm-diagnostics-parity-unknown-key");
+        let store = ConfigStore::new(root.join("config.toml"));
+        write_parity_fixture_manifest(&root.join("baselines"));
+        fs::write(
+            root.join("baselines/manifest.tsv"),
+            "profile\tmacos-build=25A354\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\tunknown=value\n",
+        )
+        .unwrap();
+
+        let err = select_parity_baseline(&store, root.join("baselines"), "25A354").unwrap_err();
+
+        assert!(err.to_string().contains("unknown profile key `unknown`"));
+        assert!(!store.path().exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn parity_baseline_selection_rejects_duplicate_matching_build_profiles() {
+        let root = unique_temp_dir("gfm-diagnostics-parity-duplicate-build");
+        let store = ConfigStore::new(root.join("config.toml"));
+        write_parity_fixture_manifest(&root.join("baselines"));
+        fs::write(
+            root.join("baselines/manifest.tsv"),
+            "profile\tmacos-build=25A354\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\nprofile\tmacos-build=25A354\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-28T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-25A354-default\n",
+        )
+        .unwrap();
+
+        let err = select_parity_baseline(&store, root.join("baselines"), "25A354").unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("contains duplicate macOS build `25A354` profiles"));
+        assert!(!store.path().exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn cancellable_storage_inspection_honors_pre_cancelled_control() {
         let root = unique_temp_dir("gfm-diagnostics-storage-pre-cancel");
         let records = root.join("records.gfmidx");
@@ -890,17 +968,21 @@ mod tests {
 
     fn write_parity_baseline_manifest(root: &Path, macos_build: &str) {
         fs::create_dir_all(root).unwrap();
-        fs::create_dir_all(root.join("fixtures")).unwrap();
-        fs::write(
-            root.join("fixtures/manifest.tsv"),
-            "scenario\troot\tfinder-view\tfiles\tdirectories\ntoolbar\tfixtures/toolbar\ticon\t1\t0\n",
-        )
-        .unwrap();
+        write_parity_fixture_manifest(root);
         fs::write(
             root.join("manifest.tsv"),
             format!(
                 "profile\tmacos-build={macos_build}\tfixture-manifest=fixtures/manifest.tsv\tcaptured-at=2026-08-27T00:00:00Z\tcapture-command=screencapture:-x\treviewer=codex\tsigner=codex\tapproved-mask-set=macos-{macos_build}-default\n"
             ),
+        )
+        .unwrap();
+    }
+
+    fn write_parity_fixture_manifest(root: &Path) {
+        fs::create_dir_all(root.join("fixtures")).unwrap();
+        fs::write(
+            root.join("fixtures/manifest.tsv"),
+            "scenario\troot\tfinder-view\tfiles\tdirectories\ntoolbar\tfixtures/toolbar\ticon\t1\t0\n",
         )
         .unwrap();
     }
