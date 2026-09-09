@@ -1929,6 +1929,28 @@ fn write_review_image_artifacts(
         copy_artifact(&entry.input.actual_path, &actual_copy)?;
         rows.push(render_bundle_manifest_row("finder-source", &expected_copy));
         rows.push(render_bundle_manifest_row("gfm-source", &actual_copy));
+        if entry.input.provenance.is_some() {
+            let provenance_copy = copy_capture_provenance_artifact(
+                &entry.input,
+                &entry.input.expected_path,
+                &source_artifact_dir.join(format!("{stem}-finder.provenance.tsv")),
+                CaptureArtifactKind::Finder,
+            )?;
+            rows.push(render_bundle_manifest_row(
+                "finder-provenance",
+                &provenance_copy,
+            ));
+            let provenance_copy = copy_capture_provenance_artifact(
+                &entry.input,
+                &entry.input.actual_path,
+                &source_artifact_dir.join(format!("{stem}-gfm.provenance.tsv")),
+                CaptureArtifactKind::Gfm,
+            )?;
+            rows.push(render_bundle_manifest_row(
+                "gfm-provenance",
+                &provenance_copy,
+            ));
+        }
     }
     Ok(rows)
 }
@@ -1944,6 +1966,25 @@ fn copy_artifact(source: &Path, destination: &Path) -> Result<()> {
     fs::copy(source, destination)
         .map(|_| ())
         .map_err(|err| GfmError::io(destination, err))
+}
+
+fn copy_capture_provenance_artifact(
+    input: &ParityGateInput,
+    source_artifact: &Path,
+    destination: &Path,
+    kind: CaptureArtifactKind,
+) -> Result<PathBuf> {
+    let provenance = capture_artifact_provenance_path(source_artifact);
+    match fs::copy(&provenance, destination) {
+        Ok(_) => Ok(destination.to_path_buf()),
+        Err(err) if err.kind() == ErrorKind::NotFound => Err(GfmError::Format(format!(
+            "parity review bundle for {} requires {} capture provenance file: {}",
+            input.surface.as_str(),
+            kind.label(),
+            provenance.display()
+        ))),
+        Err(err) => Err(GfmError::io(&provenance, err)),
+    }
 }
 
 fn escape_tsv_field(value: &str) -> String {
@@ -2641,6 +2682,14 @@ mod tests {
             .source_artifact_dir
             .join("000-text-finder.rgba")
             .exists());
+        assert!(bundle
+            .source_artifact_dir
+            .join("000-text-finder.provenance.tsv")
+            .exists());
+        assert!(bundle
+            .source_artifact_dir
+            .join("000-text-gfm.provenance.tsv")
+            .exists());
         assert!(fs::read_to_string(&bundle.review_path)
             .unwrap()
             .contains("Passed: false"));
@@ -2674,6 +2723,22 @@ mod tests {
         assert!(
             bundle_manifest
                 .lines()
+                .any(|line| line.starts_with("finder-provenance\t")
+                    && line.contains("000-text-finder.provenance.tsv\t")
+                    && line.split('\t').nth(3).is_some_and(|hash| hash.len() == 16)),
+            "{bundle_manifest}"
+        );
+        assert!(
+            bundle_manifest
+                .lines()
+                .any(|line| line.starts_with("gfm-provenance\t")
+                    && line.contains("000-text-gfm.provenance.tsv\t")
+                    && line.split('\t').nth(3).is_some_and(|hash| hash.len() == 16)),
+            "{bundle_manifest}"
+        );
+        assert!(
+            bundle_manifest
+                .lines()
                 .any(|line| line.starts_with("visual-diffs\t") && line.ends_with("\t-\t-")),
             "{bundle_manifest}"
         );
@@ -2689,6 +2754,16 @@ mod tests {
         let output = root.join("review\tbundle");
         fs::write(&expected, [0, 0, 0, 255]).unwrap();
         fs::write(&actual, [0, 0, 0, 255]).unwrap();
+        fs::write(
+            expected.with_extension("provenance.tsv"),
+            "target\tfinder\nfixture-root\tfixtures\\troot\noutput\tfinder\\tcapture.rgba\n",
+        )
+        .unwrap();
+        fs::write(
+            actual.with_extension("provenance.tsv"),
+            "target\tgfm\nfixture-root\tfixtures\\nroot\noutput\tgfm\\ncapture.rgba\n",
+        )
+        .unwrap();
 
         let report = ParityGateReport {
             manifest_path: Some(root.join("gate\rmanifest.tsv")),
@@ -2798,6 +2873,60 @@ mod tests {
             !bundle_manifest.contains("review\tbundle"),
             "{bundle_manifest}"
         );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn review_bundle_rejects_claimed_provenance_without_source_artifact_provenance() {
+        let root = unique_temp_dir("gfm-parity-review-missing-source-provenance");
+        let expected = root.join("expected.rgba");
+        let actual = root.join("actual.rgba");
+        fs::write(&expected, [0, 0, 0, 255]).unwrap();
+        fs::write(&actual, [0, 0, 0, 255]).unwrap();
+        let report = ParityGateReport {
+            manifest_path: Some(root.join("gate.tsv")),
+            entries: vec![ParityGateEntryReport {
+                input: ParityGateInput::new(
+                    ParitySurface::Text,
+                    &expected,
+                    &actual,
+                    PixelSize::new(1, 1),
+                )
+                .with_provenance(ParityCaptureProvenance {
+                    macos_build: "25A354".to_string(),
+                    hardware_profile: "macbookpro18,3".to_string(),
+                    display_profile: "studio-display-p3".to_string(),
+                    app_version: "0.1.0".to_string(),
+                    fixture_manifest: "fixtures/manifest.tsv".to_string(),
+                    captured_at: "2026-08-27T00:00:00Z".to_string(),
+                    capture_command: "screencapture:-x".to_string(),
+                    reviewer: "codex".to_string(),
+                    signer: "codex".to_string(),
+                    approved_mask_set: "macos-25A354-default".to_string(),
+                    appearance: ParityAppearance::Dark,
+                    scale: DisplayScale::Two,
+                    color_profile: ColorProfile::DisplayP3,
+                    window_size: PixelSize::new(1040, 720),
+                    focus: ParityFocusState::Active,
+                    view_mode: ParityViewMode::List,
+                    fixture_root: root.join("fixtures/text"),
+                }),
+                diff: empty_report(PixelSize::new(1, 1)),
+                evaluation: PixelThresholdEvaluation {
+                    threshold: PixelDriftThreshold::finder_strict(ParitySurface::Text),
+                    passed: true,
+                    violations: Vec::new(),
+                },
+            }],
+        };
+
+        let err = write_parity_review_bundle(report, root.join("review")).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("requires expected Finder capture provenance file"));
+        assert!(err.to_string().contains("expected.provenance.tsv"));
 
         fs::remove_dir_all(root).unwrap();
     }
