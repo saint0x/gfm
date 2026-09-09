@@ -7,7 +7,6 @@ use crate::{
     platform::current_host_job_scheduling_pressure,
     required_path, required_string,
     runtime::{
-        run_retriable_volume_task_cancellable_with_payload_path,
         run_scheduled_volume_task_cancellable_with_runtime_and_payload_path,
         run_volume_task_cancellable, RuntimeJobHandle, ScheduledTaskOutcome,
     },
@@ -832,60 +831,91 @@ fn run_fsevents_repair_schedule(
         report.preflight_volume()?;
     }
     let volume = access_reports.first_volume();
-    run_retriable_volume_task_cancellable_with_payload_path(
-        volume,
-        Priority::Visible,
-        "fsevents repair schedule",
-        cursor.clone(),
-        move |cancellation| {
-            let state = state.clone();
-            let cursor = cursor.clone();
-            let observed_event_ids = observed_event_ids.clone();
-            let reason = reason.clone();
-            let retry_probe = retry_probe.clone();
-            let retry_probe_access_report = retry_probe_access_report.clone();
-            let access_reports = access_reports.clone();
-            cancellation.check()?;
-            if let (Some(retry_probe), Some(retry_probe_access_report)) =
-                (retry_probe.as_ref(), retry_probe_access_report.as_ref())
-            {
-                fail_first_index_retry_probe_attempt_with_access(
-                    retry_probe_access_report,
-                    retry_probe,
-                    "fsevents repair schedule",
+    visible_scheduled_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Indexing,
+            "fsevents repair schedule",
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            cursor.clone(),
+            move |cancellation, runtime| {
+                let state = state.clone();
+                let cursor = cursor.clone();
+                let observed_event_ids = observed_event_ids.clone();
+                let reason = reason.clone();
+                let retry_probe = retry_probe.clone();
+                let retry_probe_access_report = retry_probe_access_report.clone();
+                let access_reports = access_reports.clone();
+                cancellation.check()?;
+                runtime.resize_checked(3, "fsevents-repair-schedule:preflight", || {
+                    cancellation.check()
+                })?;
+                if let (Some(retry_probe), Some(retry_probe_access_report)) =
+                    (retry_probe.as_ref(), retry_probe_access_report.as_ref())
+                {
+                    fail_first_index_retry_probe_attempt_with_access(
+                        retry_probe_access_report,
+                        retry_probe,
+                        "fsevents repair schedule",
+                        &cancellation,
+                    )?;
+                }
+                let existing_dropped_root_reports =
+                    access_reports.existing_dropped_roots_checked(|| cancellation.check())?;
+                let existing_dropped_roots = existing_dropped_root_reports
+                    .iter()
+                    .map(|entry| entry.path.clone())
+                    .collect::<Vec<_>>();
+                cancellation.check()?;
+                let _state_access = access_reports
+                    .state
+                    .access_checked(|| cancellation.check())?;
+                let _cursor_access = access_reports
+                    .cursor
+                    .access_checked(|| cancellation.check())?;
+                let _dropped_access = existing_dropped_root_reports
+                    .iter()
+                    .map(|root| {
+                        cancellation.check()?;
+                        root.access_checked(|| cancellation.check())
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                index_runtime_phase(
+                    &runtime,
+                    1,
+                    "fsevents-repair-schedule:repair",
                     &cancellation,
                 )?;
-            }
-            let existing_dropped_root_reports =
-                access_reports.existing_dropped_roots_checked(|| cancellation.check())?;
-            let existing_dropped_roots = existing_dropped_root_reports
-                .iter()
-                .map(|entry| entry.path.clone())
-                .collect::<Vec<_>>();
-            cancellation.check()?;
-            let _state_access = access_reports
-                .state
-                .access_checked(|| cancellation.check())?;
-            let _cursor_access = access_reports
-                .cursor
-                .access_checked(|| cancellation.check())?;
-            let _dropped_access = existing_dropped_root_reports
-                .iter()
-                .map(|root| {
-                    cancellation.check()?;
-                    root.access_checked(|| cancellation.check())
-                })
-                .collect::<Result<Vec<_>>>()?;
-            cancellation.check()?;
-            Indexer::default().repair_schedule_cancellable(
-                state,
-                cursor,
-                &observed_event_ids,
-                &existing_dropped_roots,
-                reason.as_deref(),
-                &cancellation,
-            )
-        },
+                let schedule = Indexer::default().repair_schedule_cancellable(
+                    state,
+                    cursor,
+                    &observed_event_ids,
+                    &existing_dropped_roots,
+                    reason.as_deref(),
+                    &cancellation,
+                )?;
+                index_runtime_phase(
+                    &runtime,
+                    2,
+                    "fsevents-repair-schedule:complete",
+                    &cancellation,
+                )?;
+                runtime.remember_completion_detail(format!(
+                    "completed:{} jobs:{} dropped_roots",
+                    schedule.jobs.len(),
+                    existing_dropped_roots.len()
+                ))?;
+                index_runtime_phase(
+                    &runtime,
+                    3,
+                    "fsevents-repair-schedule:reported",
+                    &cancellation,
+                )?;
+                Ok(schedule)
+            },
+        )?,
+        "fsevents repair schedule",
     )
 }
 
