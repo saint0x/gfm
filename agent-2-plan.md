@@ -23,9 +23,8 @@ GFM is macOS-only. It is a native Rust + GPUI Finder-parity file manager with GF
 
 ## DiskArbitration And Volume Remaining Work
 
-1. Replace remaining marker/path-derived volume classification with direct DiskArbitration, URL resource, mount table, and APFS/container metadata where available.
-2. Add captured Finder pixel baselines for mounted volumes, eject controls, network volumes, offline volumes, disk images, read-only volumes, and volume error sheets.
-3. Verify with pure descriptor mapping tests, host-backed operator tests, downstream policy tests, and Fozzy coverage. Leave `STATUS.md` item 29 in place until the full DiskArbitration scope is complete.
+1. Add captured Finder pixel baselines for mounted volumes, eject controls, network volumes, offline volumes, disk images, read-only volumes, and volume error sheets.
+2. Verify with pure descriptor mapping tests, host-backed operator tests, downstream policy tests, and Fozzy coverage. Leave `STATUS.md` item 29 in place until the full DiskArbitration scope is complete.
 
 ## Security, TCC, And Permission Remaining Work
 
