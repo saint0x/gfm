@@ -4101,13 +4101,19 @@ fn containing_mounted_volume_paths_checked(
         }
     }
     check()?;
-    if paths.is_empty() && path.try_exists().ok() == Some(false) {
-        for ancestor in path.ancestors() {
-            check()?;
-            if ancestor.try_exists().ok() == Some(true) {
-                paths = mounted_volume_paths_for_existing_path_checked(ancestor, &mut check)?;
-                break;
-            }
+    if paths.is_empty() {
+        let existing_ancestor = match volume_lookup_path_exists(path) {
+            Ok(true) => None,
+            Ok(false) => normalized_existing_ancestor_path_checked(path, &mut check)?,
+            Err(_) => path
+                .parent()
+                .map(|parent| normalized_existing_ancestor_path_checked(parent, &mut check))
+                .transpose()?
+                .flatten(),
+        };
+        check()?;
+        if let Some(ancestor) = existing_ancestor {
+            paths = mounted_volume_paths_for_existing_path_checked(&ancestor, &mut check)?;
         }
     }
     Ok(paths)
@@ -5367,6 +5373,28 @@ mod tests {
         assert_eq!(volume.kind, VolumeKind::Network);
 
         fs::remove_dir_all(volume.path.clone()).unwrap();
+    }
+
+    #[test]
+    fn checked_containing_mounted_volume_paths_can_cancel_after_missing_probe() {
+        let root = unique_temp_dir("gfm-volume-containing-post-probe-cancelled");
+        let missing = root.join("New Folder").join("Draft.txt");
+        let mut checks = 0usize;
+
+        let err = containing_mounted_volume_paths_checked(&missing, || {
+            checks += 1;
+            if checks > 2 {
+                Err(GfmError::Cancelled)
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+
+        assert_eq!(err, GfmError::Cancelled);
+        assert_eq!(checks, 3);
+        assert!(!missing.exists());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
