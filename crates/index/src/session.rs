@@ -1,8 +1,10 @@
 use crate::{ContentQueryLoadReport, LiveIndex, ProviderMetadataInvalidationReport};
 use gfm_jobs::Cancellation;
-use gfm_search::{SearchLookupBudget, SearchLookupTelemetry, SearchQuery, SearchQueryReport};
-use gfm_store::{MmapContentSet, MmapRecordArchive};
-use gfm_types::{ContentPosting, FileId, FileRecord, Result};
+use gfm_search::{
+    SearchLookupBudget, SearchLookupTelemetry, SearchQuery, SearchQueryReport, SearchVolumeScope,
+};
+use gfm_store::{LimitedContentPosting, MmapContentSet, MmapRecordArchive};
+use gfm_types::{ContentPosting, FileId, FileRecord, Result, VolumeId};
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -235,8 +237,46 @@ impl ContentIndexQuerySession {
         budget: SearchLookupBudget,
         cancellation: &Cancellation,
     ) -> Result<ContentQuerySessionReport> {
+        self.search_with_volume_scope_budget_cancellable(
+            query,
+            limit,
+            &SearchVolumeScope::All,
+            budget,
+            cancellation,
+        )
+    }
+
+    pub fn search_with_volume_scope(
+        &self,
+        query: &str,
+        limit: usize,
+        scope: &SearchVolumeScope,
+    ) -> Result<ContentQuerySessionReport> {
+        self.search_with_volume_scope_budget_cancellable(
+            query,
+            limit,
+            scope,
+            SearchLookupBudget::default(),
+            &Cancellation::default(),
+        )
+    }
+
+    pub fn search_with_volume_scope_budget_cancellable(
+        &self,
+        query: &str,
+        limit: usize,
+        scope: &SearchVolumeScope,
+        budget: SearchLookupBudget,
+        cancellation: &Cancellation,
+    ) -> Result<ContentQuerySessionReport> {
         let query = SearchQuery::parse_cancellable(query, cancellation)?;
-        self.search_structured_with_budget_cancellable(&query, limit, budget, cancellation)
+        self.search_structured_with_volume_scope_budget_cancellable(
+            &query,
+            limit,
+            scope,
+            budget,
+            cancellation,
+        )
     }
 
     pub fn search_structured_with_budget_cancellable(
@@ -246,11 +286,32 @@ impl ContentIndexQuerySession {
         budget: SearchLookupBudget,
         cancellation: &Cancellation,
     ) -> Result<ContentQuerySessionReport> {
+        self.search_structured_with_volume_scope_budget_cancellable(
+            parsed,
+            limit,
+            &SearchVolumeScope::All,
+            budget,
+            cancellation,
+        )
+    }
+
+    pub fn search_structured_with_volume_scope_budget_cancellable(
+        &self,
+        parsed: &SearchQuery,
+        limit: usize,
+        scope: &SearchVolumeScope,
+        budget: SearchLookupBudget,
+        cancellation: &Cancellation,
+    ) -> Result<ContentQuerySessionReport> {
         cancellation.check()?;
-        if parsed.is_empty() || limit == 0 {
+        if parsed.is_empty()
+            || limit == 0
+            || scope_excludes_all(scope)
+            || !self.records_contains_scope(scope)
+        {
             return Ok(empty_content_query_session_report());
         }
-        let result_cache_key = content_query_result_cache_key(parsed, limit, budget);
+        let result_cache_key = content_query_result_cache_key(parsed, limit, scope, budget);
         if let Some(mut report) = self.result_cache_lock().get(&result_cache_key) {
             self.result_cache_hits.fetch_add(1, Ordering::Relaxed);
             report.search.lookup = SearchLookupTelemetry::default();
@@ -267,7 +328,8 @@ impl ContentIndexQuerySession {
         let posting_misses_before = self.posting_cache_misses.load(Ordering::Relaxed);
         let content_terms = parsed.content_candidate_terms_cancellable(cancellation)?;
         let has_content_terms = !content_terms.is_empty();
-        let postings = self.postings_for_terms(content_terms, budget, cancellation)?;
+        let postings =
+            self.scoped_postings_for_terms(content_terms, scope, budget, cancellation)?;
         cancellation.check()?;
         let cache_hits_before = self.record_cache_hits.load(Ordering::Relaxed);
         let cache_misses_before = self.record_cache_misses.load(Ordering::Relaxed);
@@ -275,7 +337,7 @@ impl ContentIndexQuerySession {
         let hits = live.search_structured_with_volume_scope_cancellable(
             parsed,
             limit,
-            &gfm_search::SearchVolumeScope::All,
+            scope,
             cancellation,
         )?;
         let report = ContentQuerySessionReport {
@@ -306,6 +368,38 @@ impl ContentIndexQuerySession {
         self.result_cache_lock()
             .insert(result_cache_key, report.clone());
         Ok(report)
+    }
+
+    fn scoped_postings_for_terms(
+        &self,
+        terms: Vec<String>,
+        scope: &SearchVolumeScope,
+        budget: SearchLookupBudget,
+        cancellation: &Cancellation,
+    ) -> Result<Vec<ContentPosting>> {
+        match scope {
+            SearchVolumeScope::All => self.postings_for_terms(terms, budget, cancellation),
+            SearchVolumeScope::Only(volumes) => {
+                let mut postings = Vec::new();
+                for volume in volumes {
+                    cancellation.check()?;
+                    if self.records.contains_volume(*volume) {
+                        postings.extend(self.postings_for_terms_in_volume(
+                            terms.clone(),
+                            *volume,
+                            budget,
+                            cancellation,
+                        )?);
+                    }
+                }
+                postings.sort_by(|left, right| {
+                    left.term
+                        .cmp(&right.term)
+                        .then_with(|| left.ids.first().cmp(&right.ids.first()))
+                });
+                Ok(postings)
+            }
+        }
     }
 
     fn postings_for_terms(
@@ -365,6 +459,82 @@ impl ContentIndexQuerySession {
 
         postings.sort_by(|left, right| left.term.cmp(&right.term));
         Ok(postings)
+    }
+
+    fn postings_for_terms_in_volume(
+        &self,
+        terms: Vec<String>,
+        volume: VolumeId,
+        budget: SearchLookupBudget,
+        cancellation: &Cancellation,
+    ) -> Result<Vec<ContentPosting>> {
+        let mut selected = BTreeSet::new();
+        for term in terms {
+            cancellation.check()?;
+            let term = canonical_query_term_checked(&term, || cancellation.check())?;
+            if !term.is_empty() {
+                selected.insert(term);
+            }
+        }
+        if selected.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut postings = Vec::with_capacity(selected.len());
+        let mut misses = Vec::new();
+        {
+            let mut cache = self.posting_cache_lock();
+            for term in &selected {
+                cancellation.check()?;
+                let key = volume_posting_cache_key(term, volume, budget.max_content_ids_per_term);
+                if let Some(cached) = cache.get(&key) {
+                    self.posting_cache_hits.fetch_add(1, Ordering::Relaxed);
+                    if let Some(posting) = cached {
+                        postings.push(posting);
+                    }
+                } else {
+                    self.posting_cache_misses.fetch_add(1, Ordering::Relaxed);
+                    misses.push(term.clone());
+                }
+            }
+        }
+
+        let loaded = self
+            .content
+            .postings_for_terms_volume_limit_checked(
+                &misses,
+                volume,
+                budget.max_content_ids_per_term,
+                || cancellation.check(),
+            )?
+            .into_iter()
+            .map(|limited| (limited.posting.term.clone(), limited))
+            .collect::<HashMap<_, _>>();
+
+        let mut cache = self.posting_cache_lock();
+        for term in misses {
+            cancellation.check()?;
+            let key = volume_posting_cache_key(&term, volume, budget.max_content_ids_per_term);
+            let limited = loaded.get(&term).cloned();
+            if !limited.as_ref().is_some_and(|posting| posting.truncated) {
+                cache.insert(key, limited.as_ref().map(|posting| posting.posting.clone()));
+            }
+            if let Some(LimitedContentPosting { posting, .. }) = limited {
+                postings.push(posting);
+            }
+        }
+
+        postings.sort_by(|left, right| left.term.cmp(&right.term));
+        Ok(postings)
+    }
+
+    fn records_contains_scope(&self, scope: &SearchVolumeScope) -> bool {
+        match scope {
+            SearchVolumeScope::All => !self.records.is_empty(),
+            SearchVolumeScope::Only(volumes) => volumes
+                .iter()
+                .any(|volume| self.records.contains_volume(*volume)),
+        }
     }
 
     fn posting_cache_lock(&self) -> MutexGuard<'_, ContentPostingCache> {
@@ -549,17 +719,41 @@ fn posting_cache_key(term: &str, limit: usize) -> String {
     format!("{limit}:{term}")
 }
 
+fn volume_posting_cache_key(term: &str, volume: VolumeId, limit: usize) -> String {
+    format!("v:{}:{limit}:{term}", volume.0)
+}
+
 fn content_query_result_cache_key(
     query: &SearchQuery,
     limit: usize,
+    scope: &SearchVolumeScope,
     budget: SearchLookupBudget,
 ) -> String {
     format!(
-        "{}\0{}\0{}",
+        "{}\0{}\0{}\0{}",
         query.canonical_cache_key(),
         limit,
+        search_volume_scope_cache_key(scope),
         budget.max_content_ids_per_term
     )
+}
+
+fn search_volume_scope_cache_key(scope: &SearchVolumeScope) -> String {
+    match scope {
+        SearchVolumeScope::All => "all".to_string(),
+        SearchVolumeScope::Only(volumes) => {
+            let mut key = format!("only:{}", volumes.len());
+            for volume in volumes {
+                key.push(':');
+                key.push_str(&volume.0.to_string());
+            }
+            key
+        }
+    }
+}
+
+fn scope_excludes_all(scope: &SearchVolumeScope) -> bool {
+    matches!(scope, SearchVolumeScope::Only(volumes) if volumes.is_empty())
 }
 
 #[derive(Debug)]
@@ -765,6 +959,99 @@ mod tests {
         assert_eq!(second.result_cache_hits, 1);
         assert_eq!(second.result_cache_misses, 0);
         assert_eq!(session.result_cache_telemetry(), (1, 1));
+    }
+
+    #[test]
+    fn content_session_volume_scope_batches_content_terms_and_isolates_caches() {
+        let root = temp_dir("gfm-content-session-volume-scope");
+        let records = root.join("records.gfmidx");
+        let first_content = root.join("first.gfmcontent");
+        let second_content = root.join("second.gfmcontent");
+        let volume_one = VolumeId(1);
+        let volume_two = VolumeId(2);
+        let first_id = FileId::new(volume_one, 100);
+        let second_id = FileId::new(volume_two, 200);
+        write_records(
+            &records,
+            &[
+                FileRecord {
+                    id: first_id,
+                    path: root.join("one.md"),
+                    name: "one.md".to_string(),
+                    ..record(first_id)
+                },
+                FileRecord {
+                    id: second_id,
+                    path: root.join("two.md"),
+                    name: "two.md".to_string(),
+                    ..record(second_id)
+                },
+            ],
+        )
+        .unwrap();
+        write_content_postings(
+            &first_content,
+            &[ContentPosting {
+                term: "shared".to_string(),
+                ids: vec![first_id],
+                positions: vec![ContentPositions {
+                    id: first_id,
+                    positions: vec![1],
+                }],
+            }],
+        )
+        .unwrap();
+        write_content_postings(
+            &second_content,
+            &[ContentPosting {
+                term: "shared".to_string(),
+                ids: vec![second_id],
+                positions: vec![ContentPositions {
+                    id: second_id,
+                    positions: vec![2],
+                }],
+            }],
+        )
+        .unwrap();
+        let session =
+            ContentIndexQuerySession::open_set(&records, [&first_content, &second_content])
+                .unwrap();
+
+        let scoped = session
+            .search_with_volume_scope("shared", 10, &SearchVolumeScope::only([volume_two]))
+            .unwrap();
+        let cached_scoped = session
+            .search_with_volume_scope("SHARED", 10, &SearchVolumeScope::only([volume_two]))
+            .unwrap();
+        let all = session.search("shared", 10).unwrap();
+        let empty = session
+            .search_with_volume_scope("shared", 10, &SearchVolumeScope::only([VolumeId(99)]))
+            .unwrap();
+
+        assert_eq!(scoped.search.hits.len(), 1);
+        assert_eq!(scoped.search.hits[0].record.id, second_id);
+        assert_eq!(scoped.load.content_keys, 1);
+        assert_eq!(scoped.load.candidate_ids, 1);
+        assert_eq!(scoped.load.records_loaded, 1);
+        assert_eq!(scoped.load.records_missing, 0);
+        assert!(!scoped.load.full_hydration);
+        assert_eq!(scoped.posting_cache_hits, 0);
+        assert_eq!(scoped.posting_cache_misses, 1);
+        assert_eq!(scoped.record_cache_hits, 0);
+        assert_eq!(scoped.record_cache_misses, 1);
+        assert_eq!(scoped.search.hits, cached_scoped.search.hits);
+        assert_eq!(scoped.result_cache_hits, 0);
+        assert_eq!(scoped.result_cache_misses, 1);
+        assert_eq!(cached_scoped.result_cache_hits, 1);
+        assert_eq!(cached_scoped.result_cache_misses, 0);
+        assert_eq!(all.search.hits.len(), 2);
+        assert_eq!(all.result_cache_hits, 0);
+        assert_eq!(all.result_cache_misses, 1);
+        assert_eq!(empty.search.hits.len(), 0);
+        assert_eq!(empty.posting_cache_misses, 0);
+        assert_eq!(empty.record_cache_misses, 0);
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

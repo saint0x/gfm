@@ -1,6 +1,6 @@
-use crate::content::MmapContentArchive;
+use crate::content::{LimitedContentPosting, MmapContentArchive};
 use crate::contentset::ContentArchiveManifest;
-use gfm_types::{ContentPositions, ContentPosting, FileId, Result};
+use gfm_types::{ContentPositions, ContentPosting, FileId, Result, VolumeId};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -259,6 +259,94 @@ impl MmapContentSet {
             .collect::<Result<Vec<_>>>()
     }
 
+    pub fn postings_for_terms_volume_limit<I, S>(
+        &self,
+        terms: I,
+        volume: VolumeId,
+        limit_per_term: usize,
+    ) -> Result<Vec<LimitedContentPosting>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        self.postings_for_terms_volume_limit_checked(terms, volume, limit_per_term, || Ok(()))
+    }
+
+    pub fn postings_for_terms_volume_limit_checked<I, S>(
+        &self,
+        terms: I,
+        volume: VolumeId,
+        limit_per_term: usize,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<LimitedContentPosting>>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        check_control()?;
+        if limit_per_term == 0 {
+            return Ok(Vec::new());
+        }
+
+        let mut selected = BTreeSet::new();
+        for term in terms {
+            check_control()?;
+            let term = canonical_term_checked(term.as_ref(), &mut check_control)?;
+            if !term.is_empty() {
+                selected.insert(term);
+            }
+        }
+
+        let mut by_term: BTreeMap<String, BTreeMap<FileId, BTreeSet<u32>>> = selected
+            .iter()
+            .cloned()
+            .map(|term| (term, BTreeMap::new()))
+            .collect();
+        let mut truncated_by_term: BTreeMap<String, bool> = BTreeMap::new();
+
+        for archive in &self.archives {
+            check_control()?;
+            for limited in archive.postings_for_sorted_terms_volume_limit_checked(
+                &selected,
+                volume,
+                limit_per_term,
+                &mut check_control,
+            )? {
+                check_control()?;
+                let Some(positions_by_id) = by_term.get_mut(&limited.posting.term) else {
+                    continue;
+                };
+                if limited.truncated {
+                    truncated_by_term.insert(limited.posting.term.clone(), true);
+                }
+                merge_content_posting_positions(limited.posting, positions_by_id);
+            }
+        }
+
+        by_term
+            .into_iter()
+            .filter_map(|(term, mut positions_by_id)| {
+                if let Err(err) = check_control() {
+                    return Some(Err(err));
+                }
+                if positions_by_id.is_empty() {
+                    return None;
+                }
+                let mut truncated = truncated_by_term.remove(&term).unwrap_or(false);
+                if positions_by_id.len() > limit_per_term {
+                    truncated = true;
+                    while positions_by_id.len() > limit_per_term {
+                        positions_by_id.pop_last();
+                    }
+                }
+                Some(Ok(LimitedContentPosting {
+                    posting: content_posting_from_positions(term, positions_by_id),
+                    truncated,
+                }))
+            })
+            .collect::<Result<Vec<_>>>()
+    }
+
     pub fn archive_count(&self) -> usize {
         self.archives.len()
     }
@@ -439,6 +527,130 @@ mod tests {
         assert!(matches!(result, Err(GfmError::Cancelled)));
         assert!(checks >= 2);
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn content_set_reads_bounded_terms_for_one_volume_across_archives() {
+        let first = temp_path("gfm-content-set-volume-first", "gfmcontent");
+        let second = temp_path("gfm-content-set-volume-second", "gfmcontent");
+        let volume_one = VolumeId(1);
+        let volume_two = VolumeId(2);
+        let volume_two_ids = (0..5)
+            .map(|node| FileId::new(volume_two, 20_000 + node))
+            .collect::<Vec<_>>();
+        write_content_postings(
+            &first,
+            &[
+                ContentPosting {
+                    term: "alpha".to_string(),
+                    ids: vec![
+                        FileId::new(volume_one, 10),
+                        volume_two_ids[0],
+                        volume_two_ids[1],
+                    ],
+                    positions: vec![
+                        ContentPositions {
+                            id: volume_two_ids[0],
+                            positions: vec![2, 5],
+                        },
+                        ContentPositions {
+                            id: volume_two_ids[1],
+                            positions: vec![8],
+                        },
+                    ],
+                },
+                ContentPosting {
+                    term: "beta".to_string(),
+                    ids: vec![FileId::new(volume_one, 11)],
+                    positions: Vec::new(),
+                },
+            ],
+        )
+        .unwrap();
+        write_content_postings(
+            &second,
+            &[
+                ContentPosting {
+                    term: "alpha".to_string(),
+                    ids: vec![volume_two_ids[1], volume_two_ids[2], volume_two_ids[3]],
+                    positions: vec![
+                        ContentPositions {
+                            id: volume_two_ids[1],
+                            positions: vec![13],
+                        },
+                        ContentPositions {
+                            id: volume_two_ids[2],
+                            positions: vec![21],
+                        },
+                        ContentPositions {
+                            id: volume_two_ids[3],
+                            positions: vec![34],
+                        },
+                    ],
+                },
+                ContentPosting {
+                    term: "beta".to_string(),
+                    ids: vec![volume_two_ids[4]],
+                    positions: Vec::new(),
+                },
+            ],
+        )
+        .unwrap();
+
+        let set = MmapContentSet::open([&first, &second]).unwrap();
+        let postings = set
+            .postings_for_terms_volume_limit(["beta", "alpha", "alpha"], volume_two, 3)
+            .unwrap();
+
+        assert_eq!(postings.len(), 2);
+        assert_eq!(postings[0].posting.term, "alpha");
+        assert_eq!(postings[0].posting.ids, volume_two_ids[..3]);
+        assert_eq!(
+            postings[0].posting.positions,
+            vec![
+                ContentPositions {
+                    id: volume_two_ids[0],
+                    positions: vec![2, 5],
+                },
+                ContentPositions {
+                    id: volume_two_ids[1],
+                    positions: vec![8, 13],
+                },
+                ContentPositions {
+                    id: volume_two_ids[2],
+                    positions: vec![21],
+                },
+            ]
+        );
+        assert!(postings[0].truncated);
+        assert_eq!(postings[1].posting.term, "beta");
+        assert_eq!(postings[1].posting.ids, vec![volume_two_ids[4]]);
+        assert!(!postings[1].truncated);
+
+        std::fs::remove_file(first).unwrap();
+        std::fs::remove_file(second).unwrap();
+    }
+
+    #[test]
+    fn content_set_volume_limited_terms_query_can_cancel_during_term_canonicalization() {
+        let set = MmapContentSet {
+            archives: Vec::new(),
+        };
+        let long_term = "Needle".repeat(256);
+        let mut checks = 0usize;
+
+        let result =
+            set.postings_for_terms_volume_limit_checked([long_term], VolumeId(1), 10, || {
+                checks += 1;
+                if checks >= 3 {
+                    Err(GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            });
+
+        assert!(matches!(result, Err(GfmError::Cancelled)));
+        assert!(checks >= 3);
     }
 
     fn temp_path(prefix: &str, extension: &str) -> PathBuf {
