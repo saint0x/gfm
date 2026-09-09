@@ -1107,7 +1107,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         }
         "icon-preview" => {
             let path = required_path(args.next(), "icon-preview requires a path")?;
-            println!("{}", run_icon_preview(path)?.as_tsv());
+            let outcome = run_icon_preview(path)?;
+            print_icon_preview_outcome(outcome)?;
         }
         "icon-preview-retry-probe" => {
             let path = required_path(args.next(), "icon-preview-retry-probe requires a path")?;
@@ -3623,17 +3624,25 @@ fn run_native_icon_bridge(path: PathBuf) -> Result<NativeIconBridgeContract> {
     })
 }
 
-fn run_icon_preview(path: PathBuf) -> Result<IconPreviewContract> {
+fn run_icon_preview(
+    path: PathBuf,
+) -> Result<crate::runtime::ScheduledTaskOutcome<IconPreviewContract>> {
     const WORKER: &str = "icon preview";
     let access_report = PreviewAccessReport::new_checked(path, || Ok(()))?;
-    access_report.preflight_volume(WORKER)?;
-    eprintln!("{}", access_report.volume_access_tsv(WORKER));
-    let volume = access_report.volume();
+    let pressure = current_host_job_scheduling_pressure();
+    eprintln!("{}", scheduling_pressure_tsv(pressure));
+    let volume_access_report = access_report.clone();
     let payload_path = access_report.path.clone();
-    run_preview_contract_cancellable_with_payload_path(
-        volume,
+    run_preview_contract_adaptive_with_volume_and_payload_path(
+        Priority::Visible,
         JobPayloadKind::Preview,
         WORKER,
+        pressure,
+        move || {
+            volume_access_report.preflight_volume(WORKER)?;
+            eprintln!("{}", volume_access_report.volume_access_tsv(WORKER));
+            Ok(volume_access_report.volume())
+        },
         payload_path,
         move |cancellation| build_icon_preview_contract(&access_report, WORKER, &cancellation),
     )
@@ -3878,6 +3887,29 @@ fn build_thumbnail_generation_contract(
         input,
         || cancellation.check(),
     )
+}
+
+fn print_icon_preview_outcome(
+    outcome: crate::runtime::ScheduledTaskOutcome<IconPreviewContract>,
+) -> Result<()> {
+    match outcome.result {
+        Some(contract) => println!(
+            "{}\taction={}\tdeferred={}",
+            contract.as_tsv(),
+            outcome.scheduling_action.as_str(),
+            outcome.deferred
+        ),
+        None if outcome.scheduling_action == SchedulingAction::Defer => println!(
+            "icon-preview\tstatus=deferred\taction={}\tdeferred=true",
+            outcome.scheduling_action.as_str()
+        ),
+        None => {
+            return Err(GfmError::Format(
+                "icon preview adaptive job completed without a contract".to_string(),
+            ))
+        }
+    }
+    Ok(())
 }
 
 fn print_quicklook_session_outcome(

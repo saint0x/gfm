@@ -2137,7 +2137,7 @@ fn reports_icon_preview_contract_from_binary() {
     assert_eq!(
         stdout.trim(),
         format!(
-            "icon-preview\t{}\tapplication\tlaunchservices-application-icon\tcom.apple.application-bundle\tbadges=package\tcache=refresh-memory-only\tinvalidate-memory=true\tinvalidate-disk=false",
+            "icon-preview\t{}\tapplication\tlaunchservices-application-icon\tcom.apple.application-bundle\tbadges=package\tcache=refresh-memory-only\tinvalidate-memory=true\tinvalidate-disk=false\taction=Run\tdeferred=false",
             root.join("GFM.app").display()
         )
     );
