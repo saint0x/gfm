@@ -228,6 +228,13 @@ impl Scheduler {
         Self::default()
     }
 
+    pub fn new_starting_after(id: JobId) -> Self {
+        Self {
+            next: AtomicU64::new(id.value()),
+            ..Self::default()
+        }
+    }
+
     pub fn schedule(&mut self, priority: Priority, label: impl Into<String>) -> Job {
         self.schedule_with_volume(priority, label, None)
     }

@@ -308,17 +308,22 @@ where
 {
     let payload_path = payload_path.into();
     let scheduling = pressure.decide(priority, 1, 1);
-    let mut scheduler = Scheduler::new();
+    let stores = RuntimeJobBeginStores::from_environment();
+    let mut scheduler = Scheduler::new_starting_after(stores.max_job_id_checked()?);
     let mut job = scheduler.schedule_payload(priority, payload_kind, label);
     let journal = JobJournal::new(default_job_journal_path());
     if scheduling.action == SchedulingAction::Defer {
-        let runtime = RuntimeJobHandle::begin_with_payload_path(
+        let runtime = RuntimeJobHandle::begin_with_explicit_stores_checked(
             &job,
-            payload_kind,
-            label,
-            payload_path,
-            1,
-            format!("{}:{label}:adaptive", priority.as_str()),
+            RuntimeJobBeginRequest::new(
+                payload_kind,
+                label,
+                payload_path,
+                1,
+                format!("{}:{label}:adaptive", priority.as_str()),
+            ),
+            stores,
+            || Ok(()),
         )?;
         runtime.deferred(scheduling.action)?;
         return Ok(ScheduledTaskOutcome {
@@ -336,13 +341,17 @@ where
     let _journal_access = (scheduling.action != SchedulingAction::Defer)
         .then(|| preflight_runtime_write(journal.path(), label))
         .transpose()?;
-    let runtime = RuntimeJobHandle::begin_with_payload_path(
+    let runtime = RuntimeJobHandle::begin_with_explicit_stores_checked(
         &job,
-        payload_kind,
-        label,
-        payload_path,
-        1,
-        format!("{}:{label}:adaptive", priority.as_str()),
+        RuntimeJobBeginRequest::new(
+            payload_kind,
+            label,
+            payload_path,
+            1,
+            format!("{}:{label}:adaptive", priority.as_str()),
+        ),
+        stores,
+        || Ok(()),
     )?;
 
     let (result_tx, result_rx) = mpsc::sync_channel(1);
@@ -465,6 +474,25 @@ impl RuntimeJobBeginStores {
             progress_store: runtime_progress_store(),
         }
     }
+
+    fn max_job_id_checked(&self) -> Result<gfm_jobs::JobId> {
+        let mut max_id = 0;
+        if let Some(catalog) = &self.payload_catalog {
+            for record in catalog.read()? {
+                max_id = max_id.max(record.id.value());
+            }
+        }
+        if let Some(store) = &self.progress_store {
+            for snapshot in store.read()? {
+                max_id = max_id.max(snapshot.id.value());
+            }
+        }
+        Ok(gfm_jobs::JobId::from_raw(max_id))
+    }
+}
+
+pub(crate) fn runtime_job_id_floor_checked() -> Result<gfm_jobs::JobId> {
+    RuntimeJobBeginStores::from_environment().max_job_id_checked()
 }
 
 impl RuntimeJobHandle {

@@ -19392,8 +19392,21 @@ fn resumes_content_index_job_from_binary() {
         "{progress_text}"
     );
     assert!(
-        !progress_text.contains("resume background content recovery"),
+        progress_text.contains("progress\t2\tbackground\tbackground\tbackground content index"),
         "{progress_text}"
+    );
+    assert!(
+        progress_text.contains("progress\t1\tvisible\tvisible\tresume background content recovery")
+            && progress_text.contains("\tcompleted\t3\t3\tcompleted:recoverable:1\t"),
+        "{progress_text}"
+    );
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert!(
+        catalog_text.contains(&format!(
+            "payload\t1\tindexing\tresume background content recovery\t{}\t",
+            spec.display()
+        )) && catalog_text.contains("\tvisible:resume background content recovery:adaptive"),
+        "{catalog_text}"
     );
 
     fs::remove_dir_all(root).unwrap();

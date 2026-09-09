@@ -938,6 +938,16 @@ fn progress_store_round_trips_and_restores_active_snapshots() {
 }
 
 #[test]
+fn scheduler_can_start_after_persisted_runtime_job_id() {
+    let mut scheduler = Scheduler::new_starting_after(JobId::from_raw(41));
+    let first = scheduler.schedule(Priority::Visible, "resume recovery");
+    let second = scheduler.schedule(Priority::Background, "background index");
+
+    assert_eq!(first.id, JobId::from_raw(42));
+    assert_eq!(second.id, JobId::from_raw(43));
+}
+
+#[test]
 fn progress_store_upsert_skips_identical_snapshot_write() {
     let path = temp_path("gfm-job-progress-noop-upsert", "gfmprogress");
     let store = JobProgressStore::new(&path);

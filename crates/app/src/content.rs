@@ -17,8 +17,8 @@ use crate::runtime::{
     run_scheduled_volume_task_cancellable_with_runtime_and_payload_path,
     run_scheduled_volume_task_cancellable_with_volume,
     run_scheduled_volume_task_cancellable_with_volume_and_payload_path,
-    run_volume_task_cancellable, run_volume_task_cancellable_without_progress,
-    runtime_progress_store, RuntimeJobHandle, ScheduledTaskOutcome,
+    run_volume_task_cancellable, runtime_job_id_floor_checked, runtime_progress_store,
+    RuntimeJobHandle, ScheduledTaskOutcome,
 };
 use crate::{
     optional_path_arg, parse_battery_state, parse_io_pressure,
@@ -1381,34 +1381,76 @@ fn load_resumable_content_job_spec(
     let access_reports = BackgroundContentRecoveryAccessReports::for_paths(&spec_path, journal)?;
     let volume = access_reports.first_volume();
     let journal = JobJournal::new(journal.path().to_path_buf());
-    run_volume_task_cancellable_without_progress(
-        volume,
-        Priority::Visible,
+    visible_scheduled_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Indexing,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            spec_path.clone(),
+            move |cancellation, runtime| {
+                let access_reports = access_reports.clone();
+                let journal = journal.clone();
+                let spec_path = spec_path.clone();
+                if cancel_before_recovery_probe {
+                    cancellation.cancel();
+                }
+                runtime.resize_checked(
+                    3,
+                    "resume-background-content-recovery:preflight",
+                    || cancellation.check(),
+                )?;
+                access_reports.preflight_recovery_stores_checked(|| cancellation.check())?;
+                content_runtime_phase(
+                    &runtime,
+                    1,
+                    "resume-background-content-recovery:scan",
+                    &cancellation,
+                )?;
+                let recoverable =
+                    recoverable_background_content_jobs_checked(&journal, &access_reports, || {
+                        cancellation.check()
+                    })?;
+                if recoverable.total == 0 {
+                    runtime.remember_completion_detail("completed:none".to_string())?;
+                    content_runtime_phase(
+                        &runtime,
+                        3,
+                        "resume-background-content-recovery:complete",
+                        &cancellation,
+                    )?;
+                    return Ok(None);
+                }
+                content_runtime_phase(
+                    &runtime,
+                    2,
+                    "resume-background-content-recovery:spec",
+                    &cancellation,
+                )?;
+                access_reports
+                    .spec
+                    .preflight_volume("resume background content index")?;
+                cancellation.check()?;
+                let _access = access_reports
+                    .spec
+                    .access_checked("resume background content index", || cancellation.check())?;
+                let spec = ContentIndexJobSpec::read_checked(&spec_path, || cancellation.check())?;
+                cancellation.check()?;
+                runtime.remember_completion_detail(format!(
+                    "completed:recoverable:{}",
+                    recoverable.total
+                ))?;
+                content_runtime_phase(
+                    &runtime,
+                    3,
+                    "resume-background-content-recovery:complete",
+                    &cancellation,
+                )?;
+                Ok(Some((recoverable, spec)))
+            },
+        )?,
         WORKER,
-        move |cancellation| {
-            if cancel_before_recovery_probe {
-                cancellation.cancel();
-            }
-            access_reports.preflight_recovery_stores_checked(|| cancellation.check())?;
-            cancellation.check()?;
-            let recoverable =
-                recoverable_background_content_jobs_checked(&journal, &access_reports, || {
-                    cancellation.check()
-                })?;
-            if recoverable.total == 0 {
-                return Ok(None);
-            }
-            access_reports
-                .spec
-                .preflight_volume("resume background content index")?;
-            cancellation.check()?;
-            let _access = access_reports
-                .spec
-                .access_checked("resume background content index", || cancellation.check())?;
-            let spec = ContentIndexJobSpec::read_checked(&spec_path, || cancellation.check())?;
-            cancellation.check()?;
-            Ok(Some((recoverable, spec)))
-        },
     )
 }
 
@@ -3446,7 +3488,7 @@ pub(crate) fn run_content_job(
     let scheduling = pressure.decide(Priority::Background, 1, 1);
     let label = "background content index";
     if scheduling.action == SchedulingAction::Defer {
-        let mut scheduler = Scheduler::new();
+        let mut scheduler = Scheduler::new_starting_after(runtime_job_id_floor_checked()?);
         let volume = spec.volume;
         let job = if let Some(volume) = volume {
             scheduler.schedule_on_volume_payload(
@@ -3487,7 +3529,7 @@ pub(crate) fn run_content_job(
         })?;
     let job_spec = spec.clone();
     let (job_result_tx, job_result_rx) = mpsc::sync_channel(1);
-    let mut scheduler = Scheduler::new();
+    let mut scheduler = Scheduler::new_starting_after(runtime_job_id_floor_checked()?);
     let job = scheduler.schedule_on_volume_payload(
         Priority::Background,
         JobPayloadKind::Indexing,
