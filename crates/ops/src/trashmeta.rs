@@ -62,10 +62,7 @@ pub(crate) fn read_trash_metadata_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<BTreeMap<String, TrashRestoreMetadata>> {
     check_control()?;
-    if !path
-        .try_exists()
-        .map_err(|err| GfmError::io(path, format!("trash metadata existence unavailable: {err}")))?
-    {
+    if !trash_metadata_path_exists(path)? {
         return Ok(BTreeMap::new());
     }
     check_control()?;
@@ -118,6 +115,17 @@ pub(crate) fn read_trash_metadata_checked(
     }
     check_control()?;
     Ok(entries)
+}
+
+fn trash_metadata_path_exists(path: &Path) -> Result<bool> {
+    match fs::metadata(path) {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("trash metadata existence unavailable: {err}"),
+        )),
+    }
 }
 
 #[cfg(test)]

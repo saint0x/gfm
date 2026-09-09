@@ -129,12 +129,7 @@ pub(crate) fn append_journal(path: &Path, entry: &JournalEntry) -> Result<()> {
 
 pub fn read_journal(path: impl AsRef<Path>) -> Result<Vec<JournalEntry>> {
     let path = path.as_ref();
-    if !path.try_exists().map_err(|err| {
-        GfmError::io(
-            path,
-            format!("operation journal existence unavailable: {err}"),
-        )
-    })? {
+    if !journal_path_exists(path)? {
         return Ok(Vec::new());
     }
     let file = File::open(path).map_err(|err| GfmError::io(path, err))?;
@@ -147,6 +142,17 @@ pub fn read_journal(path: impl AsRef<Path>) -> Result<Vec<JournalEntry>> {
         })?);
     }
     Ok(entries)
+}
+
+fn journal_path_exists(path: &Path) -> Result<bool> {
+    match fs::metadata(path) {
+        Ok(_) => Ok(true),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("operation journal existence unavailable: {err}"),
+        )),
+    }
 }
 
 fn encode_entry(entry: &JournalEntry) -> String {
