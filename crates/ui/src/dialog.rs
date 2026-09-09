@@ -1021,6 +1021,10 @@ impl DialogContract {
                 "Permission Unavailable",
                 "GFM cannot prove access to this location yet.",
             ),
+            "blocked-unknown" => blocked_permission_contract(
+                "Permission Check Inconclusive",
+                "GFM cannot prove this operation is safe to run yet.",
+            ),
             "none" => Self::permission_prompt(kind),
             _ => Self::permission_prompt(kind),
         }
@@ -2040,6 +2044,15 @@ mod tests {
         assert!(volume.contains("\ttitle=Volume Unavailable\t"));
         assert!(volume.contains("button\tok\tOK\tdefault\tenabled=true"));
         assert!(!volume.contains("button\tchoose-location\tChoose...\t"));
+
+        let unknown = DialogContract::permission_prompt_for_action(
+            PermissionPromptKind::Blocked,
+            "blocked-unknown",
+        )
+        .as_tsv();
+        assert!(unknown.contains("\ttitle=Permission Check Inconclusive\t"));
+        assert!(unknown.contains("button\tok\tOK\tdefault\tenabled=true"));
+        assert!(!unknown.contains("button\tchoose-location\tChoose...\t"));
 
         let degraded = DialogContract::permission_prompt_for_action(
             PermissionPromptKind::DegradedSearch,

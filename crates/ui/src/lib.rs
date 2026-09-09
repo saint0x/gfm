@@ -503,20 +503,14 @@ impl AppLaunchSpec {
     pub fn with_permission_access(mut self, access: PermissionAccessContract) -> Self {
         let prompt = access.prompt_kind;
         let dialog = DialogContract::permission_prompt_for_action(prompt, &access.prompt_action);
-        if self.permission_prompt.is_none()
-            || self.permission_prompt == Some(PermissionPromptKind::General)
-        {
-            self.permission_dialog = Some(dialog);
-            self.permission_prompt = Some(prompt);
-        } else {
-            self.permission_dialog.get_or_insert(dialog);
-        }
+        self.permission_dialog = Some(dialog);
+        self.permission_prompt = Some(prompt);
         self.permission_access = Some(access);
         self
     }
 
     pub fn with_permission_onboarding(mut self, onboarding: PermissionOnboardingContract) -> Self {
-        if onboarding.requires_surface() {
+        if self.permission_access.is_none() && onboarding.requires_surface() {
             self.permission_dialog =
                 Some(DialogContract::permission_prompt(onboarding.prompt_kind));
             self.permission_prompt = Some(onboarding.prompt_kind);
@@ -1085,6 +1079,101 @@ mod tests {
         assert!(contract
             .as_tsv()
             .contains("\tprompt-kind=bookmark-acquisition\tprompt-action=choose-location\tpromptable=true\tprompt-source=security-scoped-bookmark\t"));
+    }
+
+    #[test]
+    fn lifecycle_permission_access_owns_active_prompt_over_onboarding() {
+        let onboarding = PermissionOnboardingContract::new(
+            "open-full-disk-access",
+            PermissionPromptKind::FullDiskAccess,
+            "first-run",
+            true,
+            false,
+        );
+        let access = PermissionAccessContract {
+            path: "/Users/me/Documents/Plan.md".to_string(),
+            intent: "preview".to_string(),
+            scope: "documents".to_string(),
+            probe: "denied".to_string(),
+            mode: "security-scoped-bookmark".to_string(),
+            access_action: "prompt".to_string(),
+            worker_action: "prompt".to_string(),
+            can_touch_filesystem: false,
+            bookmark_required: true,
+            bookmark_access: false,
+            refresh_on_permission_change: true,
+            prompt_kind: PermissionPromptKind::BookmarkAcquisition,
+            prompt_action: "choose-location".to_string(),
+            promptable: true,
+            prompt_source: "security-scoped-bookmark".to_string(),
+            reason: "preview worker must wait for permission prompt orchestration".to_string(),
+        };
+
+        let contract = WindowLifecycleContract::from_spec(
+            &AppLaunchSpec::new("/Users/me/Documents/Plan.md")
+                .with_permission_onboarding(onboarding.clone())
+                .with_permission_access(access.clone()),
+        )
+        .unwrap();
+        let tsv = contract.as_tsv();
+
+        assert_eq!(
+            contract.permission_prompt,
+            Some(PermissionPromptKind::BookmarkAcquisition)
+        );
+        assert_eq!(contract.permission_onboarding, Some(onboarding));
+        assert_eq!(contract.permission_access, Some(access));
+        assert!(tsv.contains("\npermission-prompt\tkind=bookmark-acquisition\tsurface=permission"));
+        assert!(tsv.contains("\npermission-onboarding\taction=open-full-disk-access\t"));
+        assert!(!tsv.contains("\npermission-prompt\tkind=full-disk-access\tsurface=permission"));
+    }
+
+    #[test]
+    fn lifecycle_onboarding_does_not_replace_existing_access_prompt() {
+        let access = PermissionAccessContract {
+            path: "/Volumes/Offline/Plan.md".to_string(),
+            intent: "operate".to_string(),
+            scope: "none".to_string(),
+            probe: "unknown".to_string(),
+            mode: "denied".to_string(),
+            access_action: "deny".to_string(),
+            worker_action: "deny".to_string(),
+            can_touch_filesystem: false,
+            bookmark_required: false,
+            bookmark_access: false,
+            refresh_on_permission_change: true,
+            prompt_kind: PermissionPromptKind::Blocked,
+            prompt_action: "blocked-volume".to_string(),
+            promptable: false,
+            prompt_source: "volume".to_string(),
+            reason: "copy source volume access blocked: unreachable volume network".to_string(),
+        };
+        let onboarding = PermissionOnboardingContract::new(
+            "open-full-disk-access",
+            PermissionPromptKind::FullDiskAccess,
+            "first-run",
+            true,
+            false,
+        );
+
+        let contract = WindowLifecycleContract::from_spec(
+            &AppLaunchSpec::new("/Volumes/Offline/Plan.md")
+                .with_permission_access(access.clone())
+                .with_permission_onboarding(onboarding.clone()),
+        )
+        .unwrap();
+        let tsv = contract.as_tsv();
+
+        assert_eq!(
+            contract.permission_prompt,
+            Some(PermissionPromptKind::Blocked)
+        );
+        assert_eq!(contract.permission_access, Some(access));
+        assert_eq!(contract.permission_onboarding, Some(onboarding));
+        assert!(tsv.contains("\npermission-prompt\tkind=blocked\tsurface=permission"));
+        assert!(tsv
+            .contains("\tprompt-action=blocked-volume\tpromptable=false\tprompt-source=volume\t"));
+        assert!(!tsv.contains("\npermission-prompt\tkind=full-disk-access\tsurface=permission"));
     }
 
     #[test]

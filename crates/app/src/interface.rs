@@ -2077,6 +2077,9 @@ fn permission_prompt_action_for_admission(
     if matches!(admission.access.probe, AccessProbeState::Unavailable) {
         return "blocked-unavailable";
     }
+    if matches!(admission.access.probe, AccessProbeState::Unknown) {
+        return "blocked-unknown";
+    }
     if matches!(
         admission.worker_action,
         SecurityWorkerAction::Prompt | SecurityWorkerAction::Deny
@@ -2115,6 +2118,9 @@ fn permission_prompt_orchestration_for_admission(
     }
     if matches!(admission.access.probe, AccessProbeState::Unavailable) {
         return (false, "unavailable");
+    }
+    if matches!(admission.access.probe, AccessProbeState::Unknown) {
+        return (false, "unknown");
     }
     if matches!(
         admission.worker_action,
@@ -2594,6 +2600,39 @@ mod tests {
             assert_eq!(access.prompt_source, "full-disk-access");
             assert!(permission_access_requires_surface(&access));
         }
+    }
+
+    #[test]
+    fn permission_access_routes_unknown_denials_to_inconclusive_blocked_surface() {
+        let admission = SecurityWorkerAdmissionReport::from_access_report(
+            "operation worker",
+            gfm_mac::SecurityScopedAccessReport {
+                path: PathBuf::from("/Users/me/Documents/Plan.md"),
+                intent: gfm_mac::AccessIntent::Operate,
+                scope: gfm_mac::ProtectedScope::Documents,
+                probe: gfm_mac::AccessProbeState::Unknown,
+                mode: SecurityAccessMode::Denied,
+                action: gfm_mac::SecurityDecisionAction::Deny,
+                bookmark_required: false,
+                can_read: false,
+                can_write: false,
+                least_privilege: true,
+                reason: "access probe was inconclusive; mutating workers must fail closed"
+                    .to_string(),
+            },
+        );
+
+        let access = permission_access_contract(&admission);
+        let dialog = validated_permission_access_dialog(&access).unwrap();
+
+        assert_eq!(access.prompt_kind, PermissionPromptKind::Blocked);
+        assert_eq!(access.prompt_action, "blocked-unknown");
+        assert!(!access.promptable);
+        assert_eq!(access.prompt_source, "unknown");
+        assert!(permission_access_requires_surface(&access));
+        assert!(dialog
+            .as_tsv()
+            .contains("\ttitle=Permission Check Inconclusive\t"));
     }
 
     #[test]
