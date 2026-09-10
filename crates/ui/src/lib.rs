@@ -489,10 +489,17 @@ fn escape_contract_field(value: &str) -> String {
 
 impl AppLaunchSpec {
     pub fn new(initial_path: impl Into<PathBuf>) -> Self {
+        let initial_path = initial_path.into();
         Self {
-            initial_path: initial_path.into(),
+            title: finder_window_title(&initial_path),
+            initial_path,
             ..Self::default()
         }
+    }
+
+    pub fn with_finder_window_title(mut self) -> Self {
+        self.title = finder_window_title(&self.initial_path);
+        self
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -704,6 +711,21 @@ impl AppLaunchSpec {
         self.permission_refresh = Some(refresh);
         self
     }
+}
+
+fn finder_window_title(path: &std::path::Path) -> String {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| {
+            let fallback = path.display().to_string();
+            if fallback.trim().is_empty() {
+                "GFM".to_string()
+            } else {
+                fallback
+            }
+        })
 }
 
 fn validate_permission_prompt_orchestration(access: &PermissionAccessContract) -> Result<()> {
@@ -1267,7 +1289,7 @@ mod tests {
         let spec = AppLaunchSpec::new("/Users/deepsaint/Desktop");
         let contract = WindowLifecycleContract::from_spec(&spec).unwrap();
 
-        assert_eq!(contract.title, "GFM");
+        assert_eq!(contract.title, "Desktop");
         assert_eq!(contract.width, DEFAULT_WIDTH);
         assert_eq!(contract.height, DEFAULT_HEIGHT);
         assert!(contract.transparent_titlebar);
@@ -1305,14 +1327,14 @@ mod tests {
         let output = contract.as_tsv();
 
         assert!(output.starts_with(
-            "window\tGFM\t/tmp/gfm\t1040x720\tmin=640x420\ttransparent-titlebar=true\tactivate=true\ttabs=gfm-main-window\tsidebar-home=available\tsidebar-icloud=missing\tinitial-view=icon\tpermission-dialog=none\n"
+            "window\tgfm\t/tmp/gfm\t1040x720\tmin=640x420\ttransparent-titlebar=true\tactivate=true\ttabs=gfm-main-window\tsidebar-home=available\tsidebar-icloud=missing\tinitial-view=icon\tpermission-dialog=none\n"
         ));
         assert!(output.contains(
             "\nsession\trestore=restore-last-window-bounds\tplacement-policy=persisted-or-centered\ttab-policy=native-macos-tab-group\tactivation=activate-app-and-focus-new-window\ttabs=gfm-main-window\trestore-key=main-window\t"
         ));
         assert!(output.contains("\tplacement=centered\tcascade=0\tfocus=true\tshow=true\tmovable=true\tresizable=true\tminimizable=true\n"));
         assert!(output.contains(
-            "\ntitlebar\tGFM\theight=54\ttraffic-light=20x20\tmaterial=transparent-system-titlebar\tfocus=system-active-inactive\tfull-screen=native-macos-zoom-and-full-screen\ttabs=gfm-main-window\n"
+            "\ntitlebar\tgfm\theight=54\ttraffic-light=20x20\tmaterial=transparent-system-titlebar\tfocus=system-active-inactive\tfull-screen=native-macos-zoom-and-full-screen\ttabs=gfm-main-window\n"
         ));
         assert!(output.contains("\ntoolbar\theight=54\ttraffic-light-gutter=96\n"));
         assert!(output.contains(
@@ -1375,8 +1397,32 @@ mod tests {
 
         assert_eq!(contract.session.placement, Some(placement));
         assert_eq!(contract.session.cascade_ordinal, 0);
-        assert!(output.contains("window\tGFM\t/tmp/gfm\t800x500\tmin=640x420\t"));
+        assert!(output.contains("window\tgfm\t/tmp/gfm\t800x500\tmin=640x420\t"));
         assert!(output.contains("\tplacement=40,70,800,500\tcascade=0\t"));
+    }
+
+    #[test]
+    fn launch_spec_titles_window_from_initial_path() {
+        let spec = AppLaunchSpec::new("/Users/tester/Documents");
+        let contract = WindowLifecycleContract::from_spec(&spec).unwrap();
+        let tsv = contract.as_tsv();
+
+        assert_eq!(spec.title, "Documents");
+        assert_eq!(contract.title, "Documents");
+        assert!(tsv.starts_with("window\tDocuments\t/Users/tester/Documents\t"));
+        assert!(tsv.contains("\ntitlebar\tDocuments\theight=54\t"));
+    }
+
+    #[test]
+    fn finder_window_title_derivation_is_explicit_for_default_specs() {
+        let mut spec = AppLaunchSpec {
+            initial_path: PathBuf::from("/Users/tester/Downloads"),
+            ..Default::default()
+        };
+        assert_eq!(spec.title, "GFM");
+
+        spec = spec.with_finder_window_title();
+        assert_eq!(spec.title, "Downloads");
     }
 
     #[test]

@@ -142,7 +142,7 @@ mod tests {
         let spec = AppLaunchSpec::new("/tmp/gfm");
         let contract = TitlebarContract::from_spec(&spec).unwrap();
 
-        assert_eq!(contract.title, "GFM");
+        assert_eq!(contract.title, "gfm");
         assert_eq!(contract.height_px, 54);
         assert_eq!(contract.traffic_light_x_px, 20);
         assert_eq!(contract.traffic_light_y_px, 20);
@@ -163,7 +163,7 @@ mod tests {
 
         assert_eq!(
             contract.as_tsv(),
-            "titlebar\tGFM\theight=54\ttraffic-light=20x20\tmaterial=transparent-system-titlebar\tfocus=system-active-inactive\tfull-screen=native-macos-zoom-and-full-screen\ttabs=gfm-main-window"
+            "titlebar\tgfm\theight=54\ttraffic-light=20x20\tmaterial=transparent-system-titlebar\tfocus=system-active-inactive\tfull-screen=native-macos-zoom-and-full-screen\ttabs=gfm-main-window"
         );
     }
 

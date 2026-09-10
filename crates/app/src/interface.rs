@@ -1888,7 +1888,9 @@ fn app_launch_spec_checked(
 ) -> Result<AppLaunchSpec> {
     check_control()?;
     let initial_view_mode = native_initial_view_mode_from_env()?;
-    let mut spec = path.map(AppLaunchSpec::new).unwrap_or_default();
+    let mut spec = path
+        .map(AppLaunchSpec::new)
+        .unwrap_or_else(|| AppLaunchSpec::default().with_finder_window_title());
     let sidebar_volumes = native_sidebar_volumes_checked(&spec.initial_path, &mut check_control)?;
     spec = spec
         .with_sidebar_path_snapshot(SidebarPathSnapshot::discover())

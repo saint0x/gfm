@@ -20390,9 +20390,16 @@ fn native_app_launch_dispatches_without_operator_command_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("window\tGFM\t"), "{stdout}");
+    let root_title = root.file_name().unwrap().to_string_lossy();
+    assert!(
+        stdout.contains(&format!("window\t{root_title}\t")),
+        "{stdout}"
+    );
     assert!(stdout.contains("transparent-titlebar=true"), "{stdout}");
-    assert!(stdout.contains("\ntitlebar\tGFM\t"), "{stdout}");
+    assert!(
+        stdout.contains(&format!("\ntitlebar\t{root_title}\t")),
+        "{stdout}"
+    );
     assert!(stdout.contains("\ntoolbar\theight=54\t"), "{stdout}");
     assert!(
         stdout.contains("control\tlocation\tpath-title\t"),
@@ -20519,8 +20526,13 @@ fn native_app_launch_dispatches_existing_path_arg_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
+    let fixture_title = fixture.file_name().unwrap().to_string_lossy();
     assert!(
-        stdout.contains(&format!("window\tGFM\t{}", fixture.display())),
+        stdout.contains(&format!("window\t{fixture_title}\t{}", fixture.display())),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(&format!("\ntitlebar\t{fixture_title}\t")),
         "{stdout}"
     );
     assert!(stdout.contains("icon-view\t"), "{stdout}");
