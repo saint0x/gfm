@@ -13,12 +13,11 @@ use crate::{
 use gfm_jobs::{
     Cancellation, FailureClass, JobClass, JobFairnessPolicy, JobJournal, JobPayloadCatalog,
     JobPayloadKind, JobPayloadRecord, JobProgressCommand, JobProgressSnapshot, JobProgressState,
-    JobProgressStore, Priority, RecoveryReason, RetryPolicy, Scheduler, TaskOutcome, TaskStatus,
-    WorkerReport,
+    JobProgressStore, JobRestorePlan, Priority, RecoveryReason, RetryPolicy, Scheduler,
+    TaskOutcome, TaskStatus, WorkerReport,
 };
 use gfm_mac::{AccessIntent, VolumeDiscoveryReport};
 use gfm_types::{GfmError, Result, VolumeId};
-use std::collections::HashMap;
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -619,37 +618,19 @@ fn run_jobs_payload_restore_plan(
                     "jobs-payload-restore-plan:restore",
                     &cancellation,
                 )?;
-                let store = JobProgressStore::new(&progress_path);
-                let restored =
-                    store.restore_interrupted_checked(updated_ms, || cancellation.check())?;
+                let plan = JobRestorePlan::from_catalog_and_progress_checked(
+                    &JobPayloadCatalog::new(&catalog_path),
+                    &JobProgressStore::new(&progress_path),
+                    updated_ms,
+                    || cancellation.check(),
+                )?;
                 jobs_runtime_phase(
                     &runtime,
                     2,
                     "jobs-payload-restore-plan:payloads",
                     &cancellation,
                 )?;
-                let payloads = JobPayloadCatalog::new(&catalog_path)
-                    .read_for_ids_checked(restored.iter().map(|snapshot| snapshot.id), || {
-                        cancellation.check()
-                    })?
-                    .into_iter()
-                    .map(|record| (record.id, record))
-                    .collect::<HashMap<_, _>>();
-                let lines: Vec<String> = restored
-                    .into_iter()
-                    .map(|snapshot| {
-                        if let Some(payload) = payloads.get(&snapshot.id) {
-                            format!("restore\t{}\t{}", snapshot.state.as_str(), payload.as_tsv())
-                        } else {
-                            format!(
-                                "missing-payload\t{}\t{}\t{}",
-                                snapshot.id.value(),
-                                snapshot.state.as_str(),
-                                snapshot.label
-                            )
-                        }
-                    })
-                    .collect();
+                let lines = plan.as_tsv_lines();
                 runtime.remember_completion_detail(format!(
                     "completed:restore-plan:{}",
                     lines.len()

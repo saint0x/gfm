@@ -16,6 +16,7 @@ mod cancel;
 mod fair;
 mod isolated;
 mod progress;
+mod restore;
 mod retry;
 mod schedule;
 pub use cancel::Cancellation;
@@ -24,6 +25,7 @@ use isolated::{
     IsolatedRetriableTaskQueue, IsolatedTaskQueue, RetriableTaskLeaseResult, TaskLeaseResult,
 };
 pub use progress::{JobProgressCommand, JobProgressSnapshot, JobProgressState, JobProgressStore};
+pub use restore::{JobRestoreEntry, JobRestorePlan};
 pub use retry::{FailureClass, RetryDecision, RetryPolicy};
 pub use schedule::{
     JobBatteryState, JobIoPressure, JobThermalState, JobUserActivity, SchedulingAction,

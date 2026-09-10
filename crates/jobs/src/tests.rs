@@ -2862,6 +2862,125 @@ fn payload_catalog_filtered_read_uses_latest_legacy_duplicate_record() {
 }
 
 #[test]
+fn job_restore_plan_marks_interrupted_payloads_and_missing_payloads() {
+    let catalog_path = temp_path("gfm-job-restore-catalog", "gfmjobs");
+    let progress_path = temp_path("gfm-job-restore-progress", "gfmprogress");
+    let catalog = JobPayloadCatalog::new(&catalog_path);
+    let progress = JobProgressStore::new(&progress_path);
+    let payload = sample_payload_record(1);
+    let missing = JobProgressSnapshot::new(
+        JobId::from_raw(2),
+        JobClass::Visible,
+        Priority::Visible,
+        "missing preview",
+        Some(VolumeId(7)),
+        10,
+    )
+    .with_progress(JobProgressState::Running, 4, "rendering", 100);
+    let terminal = JobProgressSnapshot::new(
+        JobId::from_raw(3),
+        JobClass::Visible,
+        Priority::Visible,
+        "completed preview",
+        Some(VolumeId(7)),
+        1,
+    )
+    .with_progress(JobProgressState::Completed, 1, "done", 101);
+
+    catalog.write_all(std::slice::from_ref(&payload)).unwrap();
+    progress
+        .write_all(&[
+            JobProgressSnapshot::new(
+                payload.id,
+                JobClass::Visible,
+                Priority::Visible,
+                "quicklook preview",
+                Some(VolumeId(7)),
+                10,
+            )
+            .with_progress(JobProgressState::Running, 2, "rendering", 99),
+            missing.clone(),
+            terminal,
+        ])
+        .unwrap();
+
+    let plan = JobRestorePlan::from_catalog_and_progress(&catalog, &progress, 200).unwrap();
+    let restored_missing = missing.with_progress(
+        JobProgressState::Paused,
+        4,
+        "interrupted:running:rendering",
+        200,
+    );
+
+    assert_eq!(plan.ready().count(), 1);
+    assert_eq!(
+        plan.missing_payload().collect::<Vec<_>>(),
+        vec![&restored_missing]
+    );
+    assert_eq!(
+        plan.as_tsv_lines(),
+        vec![
+            format!("restore\tpaused\t{}", payload.as_tsv()),
+            "missing-payload\t2\tpaused\tmissing preview".to_string(),
+        ]
+    );
+    let restored = progress.read().unwrap();
+    assert_eq!(restored[0].state, JobProgressState::Paused);
+    assert_eq!(restored[0].detail, "interrupted:running:rendering");
+    assert_eq!(restored[0].updated_ms, 200);
+    assert_eq!(restored[2].state, JobProgressState::Completed);
+
+    std::fs::remove_file(catalog_path).unwrap();
+    std::fs::remove_file(progress_path).unwrap();
+}
+
+#[test]
+fn job_restore_plan_rejects_payload_volume_mismatches() {
+    let catalog_path = temp_path("gfm-job-restore-catalog-volume-mismatch", "gfmjobs");
+    let progress_path = temp_path("gfm-job-restore-progress-volume-mismatch", "gfmprogress");
+    let catalog = JobPayloadCatalog::new(&catalog_path);
+    let progress = JobProgressStore::new(&progress_path);
+    let payload = sample_payload_record(4);
+    catalog.write_all(std::slice::from_ref(&payload)).unwrap();
+    progress
+        .write_all(&[JobProgressSnapshot::new(
+            payload.id,
+            JobClass::Visible,
+            Priority::Visible,
+            "quicklook preview",
+            Some(VolumeId(9)),
+            10,
+        )
+        .with_progress(JobProgressState::Paused, 2, "user-paused", 99)])
+        .unwrap();
+
+    let err = JobRestorePlan::from_catalog_and_progress(&catalog, &progress, 200).unwrap_err();
+
+    assert!(err
+        .to_string()
+        .contains("restore payload 4 volume 7 does not match progress volume 9"));
+    std::fs::remove_file(catalog_path).unwrap();
+    std::fs::remove_file(progress_path).unwrap();
+}
+
+#[test]
+fn job_restore_plan_checked_honors_pre_cancelled_control() {
+    let catalog_path = temp_path("gfm-job-restore-catalog-cancel", "gfmjobs");
+    let progress_path = temp_path("gfm-job-restore-progress-cancel", "gfmprogress");
+    let catalog = JobPayloadCatalog::new(&catalog_path);
+    let progress = JobProgressStore::new(&progress_path);
+
+    let result =
+        JobRestorePlan::from_catalog_and_progress_checked(&catalog, &progress, 200, || {
+            Err(GfmError::Cancelled)
+        });
+
+    assert_eq!(result, Err(GfmError::Cancelled));
+    assert!(!catalog_path.exists());
+    assert!(!progress_path.exists());
+}
+
+#[test]
 fn payload_catalog_read_surfaces_path_probe_failures() {
     let root = temp_dir("gfm-job-payload-catalog-probe");
     let path = unprobeable_child_path(&root, "job-payload-catalog-unavailable", "gfmjobs");
