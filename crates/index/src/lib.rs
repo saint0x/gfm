@@ -50,9 +50,10 @@ pub use backpressure::{
     EventBackpressureQueue, EventBackpressureReport, EventBackpressureSnapshot, EventPriority,
 };
 pub use content::{
-    BackgroundContentIndexer, ContentIndexBatchReport, ContentIndexDelta, ContentIndexJobSpec,
-    ContentIndexOptions, ContentIndexReport, ContentMaintenanceOptions, ContentMaintenanceReport,
-    QuarantineContentIndexRequest,
+    content_extractor_versions_path, read_content_extractor_versions_cancellable,
+    BackgroundContentIndexer, ContentExtractorVersionState, ContentIndexBatchReport,
+    ContentIndexDelta, ContentIndexJobSpec, ContentIndexOptions, ContentIndexReport,
+    ContentMaintenanceOptions, ContentMaintenanceReport, QuarantineContentIndexRequest,
 };
 pub use cursor::{
     FseventsCursor, FseventsCursorHealth, FseventsResumeAction, FseventsResumePlan,

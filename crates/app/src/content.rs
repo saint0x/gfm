@@ -32,9 +32,10 @@ use gfm_content::{
 };
 use gfm_fs::record_for_path_checked;
 use gfm_index::{
-    BackgroundContentIndexer, CompactionPressure, ContentIndexJobSpec, ContentIndexReport,
-    ContentMaintenanceOptions, ContentMaintenanceReport, ContentMergePolicy, IndexFootprintSpec,
-    Indexer, QuarantineContentIndexRequest,
+    content_extractor_versions_path, read_content_extractor_versions_cancellable,
+    BackgroundContentIndexer, CompactionPressure, ContentExtractorVersionState,
+    ContentIndexJobSpec, ContentIndexReport, ContentMaintenanceOptions, ContentMaintenanceReport,
+    ContentMergePolicy, IndexFootprintSpec, Indexer, QuarantineContentIndexRequest,
 };
 use gfm_jobs::{
     Cancellation, FailureClass, JobFairnessPolicy, JobJournal, JobPayloadKind, JobProgressState,
@@ -3949,8 +3950,9 @@ impl ContentJobAccessReports {
         mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<Self> {
         let quarantine_path = default_extraction_quarantine_path();
+        let extractor_versions_path = content_extractor_versions_path(&spec.content_path);
         let mut entries = Vec::with_capacity(
-            6 + usize::from(spec.ocr_queue_path.is_some())
+            7 + usize::from(spec.ocr_queue_path.is_some())
                 + usize::from(spec.ocr_recognition_cache_path.is_some())
                 + usize::from(journal_path.is_some()),
         );
@@ -3966,6 +3968,7 @@ impl ContentJobAccessReports {
             spec.content_path.as_path(),
             spec_path,
             quarantine_path.as_path(),
+            extractor_versions_path.as_path(),
         ] {
             check_control()?;
             let path =
@@ -4412,6 +4415,12 @@ pub(crate) fn run_content_job(
                 } else {
                     Vec::new()
                 };
+                let extractor_versions_path =
+                    content_extractor_versions_path(&job_spec.content_path);
+                let previous_extractor_versions = read_content_extractor_versions_cancellable(
+                    &extractor_versions_path,
+                    &cancellation,
+                )?;
                 snapshot.save_checked(&job_spec.records_path, || cancellation.check())?;
                 let root_access_report = access_reports.root_report()?;
                 let extractor =
@@ -4427,6 +4436,7 @@ pub(crate) fn run_content_job(
                 let request = QuarantineContentIndexRequest {
                     snapshot: &snapshot,
                     previous_records: &previous_records,
+                    previous_extractor_versions: previous_extractor_versions.as_ref(),
                     previous_content_path: Some(&job_spec.content_path),
                     segment_dir: &job_spec.segment_dir,
                     content_path: &job_spec.content_path,
@@ -4438,6 +4448,8 @@ pub(crate) fn run_content_job(
                     request,
                     &mut extraction_quarantine,
                 )?;
+                ContentExtractorVersionState::from_records(&snapshot.records)
+                    .write_checked(&extractor_versions_path, || cancellation.check())?;
                 extraction_quarantine.write_checked(&quarantine_store, || cancellation.check())?;
                 job_result_tx.send((report, inaccessible)).map_err(|_| {
                     GfmError::Format("background content index result receiver dropped".to_string())

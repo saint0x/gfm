@@ -14,7 +14,7 @@ use gfm_store::{
 use gfm_types::{
     ContentPosting, ContentSegment, FileId, FileKind, FileRecord, GfmError, Result, VolumeId,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -60,6 +60,7 @@ pub struct ContentIndexBatchReport {
 pub struct QuarantineContentIndexRequest<'a> {
     pub snapshot: &'a IndexSnapshot,
     pub previous_records: &'a [FileRecord],
+    pub previous_extractor_versions: Option<&'a ContentExtractorVersionState>,
     pub previous_content_path: Option<&'a Path>,
     pub segment_dir: &'a Path,
     pub content_path: &'a Path,
@@ -77,6 +78,14 @@ pub struct ContentIndexDelta {
 
 impl ContentIndexDelta {
     pub fn from_records(current: &[FileRecord], previous: &[FileRecord]) -> Self {
+        Self::from_records_with_previous_extractor_versions(current, previous, None)
+    }
+
+    pub fn from_records_with_previous_extractor_versions(
+        current: &[FileRecord],
+        previous: &[FileRecord],
+        previous_extractor_versions: Option<&ContentExtractorVersionState>,
+    ) -> Self {
         let previous_by_id = previous
             .iter()
             .map(|record| (record.id, record))
@@ -93,7 +102,10 @@ impl ContentIndexDelta {
             match previous_by_id.get(&record.id) {
                 Some(previous_record)
                     if content_record_signature(record)
-                        == content_record_signature(previous_record) =>
+                        == previous_content_record_signature(
+                            previous_record,
+                            previous_extractor_versions,
+                        ) =>
                 {
                     unchanged += 1;
                 }
@@ -150,6 +162,181 @@ impl ContentIndexDelta {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ContentExtractorVersionState {
+    versions: BTreeMap<FileId, u32>,
+}
+
+impl ContentExtractorVersionState {
+    pub fn from_records(records: &[FileRecord]) -> Self {
+        Self {
+            versions: records
+                .iter()
+                .filter(|record| record.kind == FileKind::File)
+                .map(|record| (record.id, extractor_version_for_path(&record.path)))
+                .collect(),
+        }
+    }
+
+    pub fn get(&self, id: FileId) -> Option<u32> {
+        self.versions.get(&id).copied()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.versions.is_empty()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn insert_for_test(&mut self, id: FileId, version: u32) {
+        self.versions.insert(id, version);
+    }
+
+    pub fn read(path: impl AsRef<Path>) -> Result<Self> {
+        Self::read_checked(path, || Ok(()))
+    }
+
+    pub fn read_checked(
+        path: impl AsRef<Path>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Self> {
+        let path = path.as_ref();
+        check_control()?;
+        let file = fs::File::open(path).map_err(|err| GfmError::io(path, err))?;
+        check_control()?;
+        let mut lines = BufReader::new(file).lines();
+        match lines.next() {
+            Some(Ok(header)) if header == "gfm-content-extractor-versions-v1" => {}
+            Some(Ok(header)) => {
+                return Err(GfmError::Format(format!(
+                    "unsupported content extractor version header `{header}` in {}",
+                    path.display()
+                )))
+            }
+            Some(Err(err)) => return Err(GfmError::io(path, err)),
+            None => {
+                return Err(GfmError::Format(format!(
+                    "empty content extractor version state {}",
+                    path.display()
+                )))
+            }
+        }
+
+        let mut versions = BTreeMap::new();
+        for (line_index, line) in lines.enumerate() {
+            check_control()?;
+            let line = line.map_err(|err| GfmError::io(path, err))?;
+            let mut fields = line.split('\t');
+            let volume = fields
+                .next()
+                .ok_or_else(|| malformed_extractor_version_state(path, line_index))?
+                .parse()
+                .map_err(|err| {
+                    GfmError::Format(format!(
+                        "{} line {}: invalid volume id: {err}",
+                        path.display(),
+                        line_index + 2
+                    ))
+                })?;
+            let node = fields
+                .next()
+                .ok_or_else(|| malformed_extractor_version_state(path, line_index))?
+                .parse()
+                .map_err(|err| {
+                    GfmError::Format(format!(
+                        "{} line {}: invalid node id: {err}",
+                        path.display(),
+                        line_index + 2
+                    ))
+                })?;
+            let version = fields
+                .next()
+                .ok_or_else(|| malformed_extractor_version_state(path, line_index))?
+                .parse()
+                .map_err(|err| {
+                    GfmError::Format(format!(
+                        "{} line {}: invalid extractor version: {err}",
+                        path.display(),
+                        line_index + 2
+                    ))
+                })?;
+            if fields.next().is_some() {
+                return Err(malformed_extractor_version_state(path, line_index));
+            }
+            versions.insert(FileId::new(VolumeId(volume), node), version);
+        }
+        Ok(Self { versions })
+    }
+
+    pub fn write(&self, path: impl AsRef<Path>) -> Result<()> {
+        self.write_checked(path, || Ok(()))
+    }
+
+    pub fn write_checked(
+        &self,
+        path: impl AsRef<Path>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<()> {
+        let path = path.as_ref();
+        atomic_write_checked(path, &mut check_control, |writer, check_control| {
+            let mut writer = BufWriter::new(writer);
+            writeln!(writer, "gfm-content-extractor-versions-v1")
+                .map_err(|err| GfmError::io(path, err))?;
+            for (id, version) in &self.versions {
+                check_control()?;
+                writeln!(writer, "{}\t{}\t{}", id.volume.0, id.node, version)
+                    .map_err(|err| GfmError::io(path, err))?;
+            }
+            writer.flush().map_err(|err| GfmError::io(path, err))
+        })
+        .map(|_| ())
+    }
+}
+
+pub fn content_extractor_versions_path(content_path: impl AsRef<Path>) -> PathBuf {
+    let content_path = content_path.as_ref();
+    let file_name = content_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("content.gfmcontent");
+    content_path.with_file_name(format!("{file_name}.extractors"))
+}
+
+pub fn read_content_extractor_versions_cancellable(
+    path: &Path,
+    cancellation: &Cancellation,
+) -> Result<Option<ContentExtractorVersionState>> {
+    cancellation.check()?;
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() => {
+            cancellation.check()?;
+            ContentExtractorVersionState::read_checked(path, || cancellation.check()).map(Some)
+        }
+        Ok(_) => Ok(None),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("content extractor version metadata unavailable: {err}"),
+        )),
+    }
+}
+
+fn malformed_extractor_version_state(path: &Path, line_index: usize) -> GfmError {
+    GfmError::Format(format!(
+        "{} line {}: expected volume, node, and extractor version",
+        path.display(),
+        line_index + 2
+    ))
+}
+
+#[derive(Debug, Clone, Copy)]
+struct IncrementalContentSegmentRequest<'a> {
+    snapshot: &'a IndexSnapshot,
+    previous_records: &'a [FileRecord],
+    previous_extractor_versions: Option<&'a ContentExtractorVersionState>,
+    output_dir: &'a Path,
+    cancellation: &'a Cancellation,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct ContentRecordSignature {
     kind: FileKind,
@@ -167,6 +354,17 @@ fn content_record_signature(record: &FileRecord) -> ContentRecordSignature {
         changed_ns: system_time_ns(record.changed),
         extractor_version: extractor_version_for_path(&record.path),
     }
+}
+
+fn previous_content_record_signature(
+    record: &FileRecord,
+    previous_extractor_versions: Option<&ContentExtractorVersionState>,
+) -> ContentRecordSignature {
+    let mut signature = content_record_signature(record);
+    if let Some(version) = previous_extractor_versions.and_then(|state| state.get(record.id)) {
+        signature.extractor_version = version;
+    }
+    signature
 }
 
 fn system_time_ns(value: Option<std::time::SystemTime>) -> Option<u128> {
@@ -453,11 +651,15 @@ impl BackgroundContentIndexer {
         output_dir: impl AsRef<Path>,
         cancellation: &Cancellation,
     ) -> Result<ContentIndexReport> {
+        let output_dir = output_dir.as_ref();
         self.run_incremental_to_segments_with_quarantine(
-            snapshot,
-            previous_records,
-            output_dir,
-            cancellation,
+            IncrementalContentSegmentRequest {
+                snapshot,
+                previous_records,
+                previous_extractor_versions: None,
+                output_dir,
+                cancellation,
+            },
             None,
             None,
         )
@@ -465,18 +667,23 @@ impl BackgroundContentIndexer {
 
     fn run_incremental_to_segments_with_quarantine(
         &self,
-        snapshot: &IndexSnapshot,
-        previous_records: &[FileRecord],
-        output_dir: impl AsRef<Path>,
-        cancellation: &Cancellation,
+        request: IncrementalContentSegmentRequest<'_>,
         mut quarantine: Option<&mut ExtractionQuarantine>,
         ocr_cache: Option<&OcrRecognitionCache>,
     ) -> Result<ContentIndexReport> {
-        let output_dir = output_dir.as_ref();
+        let output_dir = request.output_dir;
         fs::create_dir_all(output_dir).map_err(|err| gfm_types::GfmError::io(output_dir, err))?;
-        let mut delta = ContentIndexDelta::from_records(&snapshot.records, previous_records);
+        let mut delta = ContentIndexDelta::from_records_with_previous_extractor_versions(
+            &request.snapshot.records,
+            request.previous_records,
+            request.previous_extractor_versions,
+        );
         if let Some(quarantine) = quarantine.as_deref() {
-            delta.retry_quarantine_entries(&snapshot.records, quarantine, cancellation)?;
+            delta.retry_quarantine_entries(
+                &request.snapshot.records,
+                quarantine,
+                request.cancellation,
+            )?;
         }
         let batch_size = self.options.batch_size.max(1);
         let mut report = ContentIndexReport {
@@ -492,7 +699,7 @@ impl BackgroundContentIndexer {
         };
 
         if delta.records.is_empty() && !delta.tombstones.is_empty() {
-            cancellation.check()?;
+            request.cancellation.check()?;
             let segment_path =
                 output_dir.join(format!("{}-{:08}.gfmseg", self.options.segment_prefix, 0));
             write_content_segment_checked(
@@ -501,14 +708,14 @@ impl BackgroundContentIndexer {
                     tombstones: delta.tombstones,
                     postings: Vec::new(),
                 },
-                || cancellation.check(),
+                || request.cancellation.check(),
             )?;
             report.segments.push(segment_path);
             return Ok(report);
         }
 
         for (batch_index, records) in delta.records.chunks(batch_size).enumerate() {
-            cancellation.check()?;
+            request.cancellation.check()?;
             let segment_path = output_dir.join(format!(
                 "{}-{:08}.gfmseg",
                 self.options.segment_prefix, batch_index
@@ -519,12 +726,12 @@ impl BackgroundContentIndexer {
                     &self.extractor,
                     quarantine,
                     ocr_cache,
-                    cancellation,
+                    request.cancellation,
                 )?,
                 None => live.index_content_batch_with_ocr_cache_cancellable(
                     &self.extractor,
                     ocr_cache,
-                    cancellation,
+                    request.cancellation,
                 )?,
             };
             report.indexed += batch.indexed;
@@ -544,7 +751,7 @@ impl BackgroundContentIndexer {
                     },
                     postings,
                 },
-                || cancellation.check(),
+                || request.cancellation.check(),
             )?;
             report.segments.push(segment_path);
         }
@@ -605,10 +812,13 @@ impl BackgroundContentIndexer {
             request.cancellation,
         )?;
         let mut report = self.run_incremental_to_segments_with_quarantine(
-            request.snapshot,
-            request.previous_records,
-            request.segment_dir,
-            request.cancellation,
+            IncrementalContentSegmentRequest {
+                snapshot: request.snapshot,
+                previous_records: request.previous_records,
+                previous_extractor_versions: request.previous_extractor_versions,
+                output_dir: request.segment_dir,
+                cancellation: request.cancellation,
+            },
             Some(quarantine),
             ocr_cache.as_ref(),
         )?;

@@ -4455,6 +4455,7 @@ fn background_content_indexer_publishes_ocr_queue_after_compaction() {
             QuarantineContentIndexRequest {
                 snapshot: &snapshot,
                 previous_records: &[],
+                previous_extractor_versions: None,
                 previous_content_path: None,
                 segment_dir: &segments,
                 content_path: &content,
@@ -4510,6 +4511,7 @@ fn background_content_indexer_merges_recognized_ocr_text_into_searchable_content
             QuarantineContentIndexRequest {
                 snapshot: &snapshot,
                 previous_records: &[],
+                previous_extractor_versions: None,
                 previous_content_path: None,
                 segment_dir: &segments,
                 content_path: &content,
@@ -4571,6 +4573,7 @@ fn background_content_indexer_merges_recognized_pdf_ocr_text_into_searchable_con
             QuarantineContentIndexRequest {
                 snapshot: &snapshot,
                 previous_records: &[],
+                previous_extractor_versions: None,
                 previous_content_path: None,
                 segment_dir: &segments,
                 content_path: &content,
@@ -4598,6 +4601,85 @@ fn background_content_indexer_merges_recognized_pdf_ocr_text_into_searchable_con
     fs::remove_dir_all(segments).unwrap();
     fs::remove_file(content).unwrap();
     fs::remove_file(ocr_cache).unwrap();
+}
+
+#[test]
+fn background_content_indexer_reindexes_when_previous_extractor_version_is_stale() {
+    let root = unique_temp_dir("gfm-background-content-extractor-version-root");
+    let segments = unique_temp_dir("gfm-background-content-extractor-version-segments");
+    let content = unique_temp_path("gfm-background-content-extractor-version", "gfmcontent");
+    fs::write(root.join("stale.md"), "stable versiontoken").unwrap();
+
+    let indexer = Indexer::default();
+    let previous = indexer.build(&root).unwrap();
+    BackgroundContentIndexer::default()
+        .run_and_compact(&previous, &segments, &content, &Cancellation::default())
+        .unwrap();
+    let mut previous_versions = ContentExtractorVersionState::from_records(&previous.records);
+    let stale_record = previous
+        .records
+        .iter()
+        .find(|record| record.name == "stale.md")
+        .unwrap();
+    previous_versions.insert_for_test(
+        stale_record.id,
+        gfm_content::extractor_version_for_path(&stale_record.path).saturating_sub(1),
+    );
+    let current = indexer.build(&root).unwrap();
+
+    let report = BackgroundContentIndexer::default()
+        .run_incremental_and_compact_with_quarantine(
+            QuarantineContentIndexRequest {
+                snapshot: &current,
+                previous_records: &previous.records,
+                previous_extractor_versions: Some(&previous_versions),
+                previous_content_path: Some(&content),
+                segment_dir: &segments,
+                content_path: &content,
+                ocr_queue_path: None,
+                ocr_recognition_cache_path: None,
+                cancellation: &Cancellation::default(),
+            },
+            &mut ExtractionQuarantine::new(2),
+        )
+        .unwrap();
+
+    assert_eq!(report.indexed, 1);
+    assert_eq!(report.unchanged, 1);
+    assert_eq!(report.tombstoned, 1);
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(segments).unwrap();
+    fs::remove_file(content).unwrap();
+}
+
+#[test]
+fn content_extractor_version_state_round_trips_current_file_versions() {
+    let root = unique_temp_dir("gfm-content-extractor-version-state-root");
+    let path = unique_temp_path("gfm-content-extractor-version-state", "gfmextractors");
+    fs::write(root.join("note.md"), "note").unwrap();
+    fs::write(root.join("scan.pdf"), image_only_pdf()).unwrap();
+
+    let snapshot = Indexer::default().build(&root).unwrap();
+    let state = ContentExtractorVersionState::from_records(&snapshot.records);
+    state.write(&path).unwrap();
+    let read = ContentExtractorVersionState::read(&path).unwrap();
+
+    assert_eq!(read, state);
+    assert!(!read.is_empty());
+    for record in snapshot
+        .records
+        .iter()
+        .filter(|record| record.kind == FileKind::File)
+    {
+        assert_eq!(
+            read.get(record.id),
+            Some(gfm_content::extractor_version_for_path(&record.path))
+        );
+    }
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_file(path).unwrap();
 }
 
 #[test]
@@ -4722,6 +4804,7 @@ fn background_content_indexer_persists_extraction_quarantine() {
             QuarantineContentIndexRequest {
                 snapshot: &previous,
                 previous_records: &[],
+                previous_extractor_versions: None,
                 previous_content_path: None,
                 segment_dir: &segments,
                 content_path: &content,
@@ -4737,6 +4820,7 @@ fn background_content_indexer_persists_extraction_quarantine() {
             QuarantineContentIndexRequest {
                 snapshot: &previous,
                 previous_records: &[],
+                previous_extractor_versions: None,
                 previous_content_path: Some(&content),
                 segment_dir: &segments,
                 content_path: &content,
@@ -4752,6 +4836,7 @@ fn background_content_indexer_persists_extraction_quarantine() {
             QuarantineContentIndexRequest {
                 snapshot: &previous,
                 previous_records: &[],
+                previous_extractor_versions: None,
                 previous_content_path: Some(&content),
                 segment_dir: &segments,
                 content_path: &content,
