@@ -214,12 +214,14 @@ fn rarest_content_postings<'a>(
     terms: &[String],
     postings: &'a BTreeMap<String, BTreeMap<FileId, Vec<u32>>>,
 ) -> Option<&'a BTreeMap<FileId, Vec<u32>>> {
-    terms
-        .iter()
-        .map(|term| postings.get(term))
-        .collect::<Option<Vec<_>>>()?
-        .into_iter()
-        .min_by_key(|ids| ids.len())
+    let mut rarest = None;
+    for term in terms {
+        let ids = postings.get(term)?;
+        if rarest.is_none_or(|current: &BTreeMap<FileId, Vec<u32>>| ids.len() < current.len()) {
+            rarest = Some(ids);
+        }
+    }
+    rarest
 }
 
 fn sorted_contains_position(positions: &[u32], position: u32) -> bool {
@@ -235,4 +237,40 @@ pub(super) fn sorted_has_position_within(positions: &[u32], anchor: u32, distanc
     positions
         .get(index)
         .is_some_and(|position| *position <= max)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gfm_types::VolumeId;
+
+    #[test]
+    fn rarest_content_postings_selects_sparse_anchor() {
+        let first = FileId::new(VolumeId(1), 1);
+        let second = FileId::new(VolumeId(1), 2);
+        let mut postings = BTreeMap::new();
+        postings.insert(
+            "common".to_string(),
+            BTreeMap::from([(first, vec![0, 4]), (second, vec![1, 8])]),
+        );
+        postings.insert("rare".to_string(), BTreeMap::from([(second, vec![8])]));
+
+        let terms = vec!["common".to_string(), "rare".to_string()];
+        let rarest = rarest_content_postings(&terms, &postings).unwrap();
+
+        assert_eq!(rarest, postings.get("rare").unwrap());
+    }
+
+    #[test]
+    fn rarest_content_postings_fails_closed_when_term_is_missing() {
+        let mut postings = BTreeMap::new();
+        postings.insert(
+            "present".to_string(),
+            BTreeMap::from([(FileId::new(VolumeId(1), 1), vec![0])]),
+        );
+
+        let terms = vec!["present".to_string(), "missing".to_string()];
+
+        assert!(rarest_content_postings(&terms, &postings).is_none());
+    }
 }
