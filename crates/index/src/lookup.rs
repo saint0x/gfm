@@ -763,7 +763,7 @@ impl SidecarIndexQuerySession {
         let mut hydrated_by_id = HashMap::new();
         let mut misses = Vec::new();
         {
-            let cache = self.record_cache_lock();
+            let mut cache = self.record_cache_lock();
             for id in &ids {
                 cancellation.check()?;
                 if let Some(record) = cache.get(*id) {
@@ -2074,6 +2074,45 @@ mod tests {
     }
 
     #[test]
+    fn record_cache_refreshes_hot_hydrated_records() {
+        let first = FileId::new(VolumeId(7), 1);
+        let second = FileId::new(VolumeId(7), 2);
+        let third = FileId::new(VolumeId(7), 3);
+        let mut cache = RecordCache::new(2);
+        cache.insert(
+            first,
+            HydratedRecord {
+                record: record(first),
+                columns: None,
+            },
+        );
+        cache.insert(
+            second,
+            HydratedRecord {
+                record: record(second),
+                columns: None,
+            },
+        );
+
+        for _ in 0..32 {
+            assert_eq!(cache.get(first).unwrap().record.id, first);
+        }
+
+        assert!(cache.order.len() <= 8, "{:?}", cache.order);
+        cache.insert(
+            third,
+            HydratedRecord {
+                record: record(third),
+                columns: None,
+            },
+        );
+
+        assert_eq!(cache.get(first).unwrap().record.id, first);
+        assert!(cache.get(second).is_none());
+        assert_eq!(cache.get(third).unwrap().record.id, third);
+    }
+
+    #[test]
     fn sidecar_session_empty_zero_limit_and_empty_scope_skip_cache_work() {
         let fixture = SidecarFixture::new("empty-query");
         let session = fixture.session();
@@ -2514,37 +2553,78 @@ struct LookupCacheEntry<V> {
 #[derive(Debug)]
 struct RecordCache {
     capacity: usize,
-    order: VecDeque<FileId>,
-    values: HashMap<FileId, HydratedRecord>,
+    next_generation: u64,
+    order: VecDeque<(u64, FileId)>,
+    values: HashMap<FileId, RecordCacheEntry>,
+}
+
+#[derive(Debug)]
+struct RecordCacheEntry {
+    generation: u64,
+    record: HydratedRecord,
 }
 
 impl RecordCache {
     fn new(capacity: usize) -> Self {
         Self {
             capacity,
+            next_generation: 0,
             order: VecDeque::with_capacity(capacity),
             values: HashMap::new(),
         }
     }
 
-    fn get(&self, id: FileId) -> Option<HydratedRecord> {
-        self.values.get(&id).cloned()
+    fn get(&mut self, id: FileId) -> Option<HydratedRecord> {
+        let generation = next_lookup_generation(&mut self.next_generation);
+        let record = {
+            let entry = self.values.get_mut(&id)?;
+            entry.generation = generation;
+            entry.record.clone()
+        };
+        self.order.push_back((generation, id));
+        self.compact_stale_order_if_needed();
+        Some(record)
     }
 
     fn insert(&mut self, id: FileId, record: HydratedRecord) {
         if self.capacity == 0 {
             return;
         }
-        if !self.values.contains_key(&id) {
-            self.order.push_back(id);
-        }
-        self.values.insert(id, record);
+        let generation = next_lookup_generation(&mut self.next_generation);
+        self.order.push_back((generation, id));
+        self.values
+            .insert(id, RecordCacheEntry { generation, record });
+        self.evict_over_capacity();
+        self.compact_stale_order_if_needed();
+    }
+
+    fn evict_over_capacity(&mut self) {
         while self.values.len() > self.capacity {
             let Some(expired) = self.order.pop_front() else {
                 break;
             };
-            self.values.remove(&expired);
+            if self
+                .values
+                .get(&expired.1)
+                .is_some_and(|entry| entry.generation == expired.0)
+            {
+                self.values.remove(&expired.1);
+            }
         }
+    }
+
+    fn compact_stale_order_if_needed(&mut self) {
+        let max_order = self.capacity.saturating_mul(4).max(self.capacity + 1);
+        if self.order.len() <= max_order {
+            return;
+        }
+        let mut live = self
+            .values
+            .iter()
+            .map(|(id, entry)| (entry.generation, *id))
+            .collect::<Vec<_>>();
+        live.sort_by_key(|(generation, _)| *generation);
+        self.order = live.into_iter().collect();
     }
 }
 
