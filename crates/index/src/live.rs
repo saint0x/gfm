@@ -635,16 +635,18 @@ impl LiveIndex {
                 report.skipped += 1;
                 continue;
             }
-            if ocr_candidate_for_record(&record).is_some() {
+            if let Some(candidate) = ocr_candidate_for_record(&record) {
                 report.skipped += 1;
                 report.ocr_candidates += 1;
+                report.ocr_queue.push(candidate);
                 continue;
             }
             let extraction =
                 extractor.extract_path_report_checked(&record.path, || cancellation.check())?;
             cancellation.check()?;
-            if ocr_candidate_for_extraction(&extraction).is_some() {
+            if let Some(candidate) = ocr_candidate_for_extraction(&extraction) {
                 report.ocr_candidates += 1;
+                report.ocr_queue.push(candidate);
             }
             if let Some(document) = extraction.document {
                 cancellation.check()?;
@@ -683,9 +685,10 @@ impl LiveIndex {
                 report.skipped += 1;
                 continue;
             }
-            if ocr_candidate_for_record(&record).is_some() {
+            if let Some(candidate) = ocr_candidate_for_record(&record) {
                 report.skipped += 1;
                 report.ocr_candidates += 1;
+                report.ocr_queue.push(candidate);
                 continue;
             }
 
@@ -705,8 +708,9 @@ impl LiveIndex {
                 extractor.extract_path_report_checked(&record.path, || cancellation.check())?;
             cancellation.check()?;
             let status = extraction.status.clone();
-            if ocr_candidate_for_extraction(&extraction).is_some() {
+            if let Some(candidate) = ocr_candidate_for_extraction(&extraction) {
                 report.ocr_candidates += 1;
+                report.ocr_queue.push(candidate);
             }
             let decision = quarantine.record_report(&extraction);
             if let Some(document) = extraction.document {

@@ -1,6 +1,7 @@
 use crate::{IndexSnapshot, LiveIndex};
 use gfm_content::{
     extractor_version_for_path, ExtractionFingerprint, ExtractionQuarantine, Extractor,
+    OcrCandidate,
 };
 use gfm_jobs::Cancellation;
 use gfm_store::{
@@ -39,6 +40,7 @@ pub struct ContentIndexReport {
     pub skipped: usize,
     pub quarantined: usize,
     pub ocr_candidates: usize,
+    pub ocr_queue: Vec<OcrCandidate>,
     pub unchanged: usize,
     pub tombstoned: usize,
     pub terms: usize,
@@ -51,6 +53,7 @@ pub struct ContentIndexBatchReport {
     pub skipped: usize,
     pub quarantined: usize,
     pub ocr_candidates: usize,
+    pub ocr_queue: Vec<OcrCandidate>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -379,6 +382,7 @@ impl BackgroundContentIndexer {
             skipped: 0,
             quarantined: 0,
             ocr_candidates: 0,
+            ocr_queue: Vec::new(),
             unchanged: 0,
             tombstoned: 0,
             terms: 0,
@@ -396,6 +400,7 @@ impl BackgroundContentIndexer {
             report.indexed += batch.indexed;
             report.skipped += batch.skipped;
             report.ocr_candidates += batch.ocr_candidates;
+            report.ocr_queue.extend(batch.ocr_queue);
             let postings = live.content_postings();
             report.terms += postings.len();
             write_content_segment_checked(
@@ -447,6 +452,7 @@ impl BackgroundContentIndexer {
             skipped: 0,
             quarantined: 0,
             ocr_candidates: 0,
+            ocr_queue: Vec::new(),
             unchanged: delta.unchanged,
             tombstoned: delta.tombstones.len(),
             terms: 0,
@@ -488,6 +494,7 @@ impl BackgroundContentIndexer {
             report.skipped += batch.skipped;
             report.quarantined += batch.quarantined;
             report.ocr_candidates += batch.ocr_candidates;
+            report.ocr_queue.extend(batch.ocr_queue);
             let postings = live.content_postings();
             report.terms += postings.len();
             write_content_segment_checked(

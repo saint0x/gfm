@@ -488,6 +488,7 @@ impl IndexSnapshot {
             skipped: batch.skipped,
             quarantined: 0,
             ocr_candidates: batch.ocr_candidates,
+            ocr_queue: batch.ocr_queue,
             unchanged: delta.unchanged,
             tombstoned: delta.tombstones.len(),
             terms,

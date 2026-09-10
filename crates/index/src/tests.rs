@@ -1,6 +1,8 @@
 use super::*;
 use crate::content::read_previous_content_postings_cancellable;
-use gfm_content::ExtractionQuarantine;
+use gfm_content::{
+    ExtractionQuarantine, OcrCandidateKind, OcrCandidateQueue, OCR_EXTRACTOR_VERSION,
+};
 use gfm_fs::FinderMetadataReport;
 use gfm_jobs::Cancellation;
 use gfm_store::{
@@ -4320,6 +4322,22 @@ fn background_content_indexer_reports_ocr_candidates_without_blocking_primary_co
     assert_eq!(report.indexed, 1);
     assert_eq!(report.skipped, 3);
     assert_eq!(report.ocr_candidates, 2);
+    assert_eq!(report.ocr_queue.len(), 2);
+    assert!(report
+        .ocr_queue
+        .iter()
+        .all(|candidate| { candidate.fingerprint.extractor_version == OCR_EXTRACTOR_VERSION }));
+    assert!(report.ocr_queue.iter().any(|candidate| {
+        candidate.kind == OcrCandidateKind::ImageOnlyPdf
+            && candidate.path.file_name().and_then(|name| name.to_str()) == Some("scan.pdf")
+    }));
+    assert!(report.ocr_queue.iter().any(|candidate| {
+        candidate.kind == OcrCandidateKind::ScreenshotImage
+            && candidate.path.file_name().and_then(|name| name.to_str())
+                == Some("Screenshot 2026-08-24 at 6.59.43 PM.png")
+    }));
+    let queue = OcrCandidateQueue::new(report.ocr_queue.clone());
+    assert_eq!(queue.len(), 2);
     assert_eq!(live.search("searchabletoken", 5).len(), 1);
     assert!(live.search("abcdefghijkl", 5).is_empty());
 
