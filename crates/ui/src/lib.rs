@@ -1002,6 +1002,7 @@ fn open_main_window(
         cx.new(|_| RootView {
             bounds_subscription: None,
             session_writer: WindowSessionWriter::new(session_store),
+            toolbar: ToolbarContract::finder_default(&spec.initial_path),
             sidebar: spec.sidebar_contract.clone().unwrap_or_else(|| {
                 sidebar::SidebarContract::from_path_snapshot(
                     &spec.initial_path,
@@ -1018,7 +1019,6 @@ fn open_main_window(
             permission_onboarding: spec.permission_onboarding,
             permission_access: spec.permission_access,
             permission_refresh: spec.permission_refresh,
-            initial_path: spec.initial_path,
         })
     })?;
     if activate {
@@ -1080,6 +1080,7 @@ fn window_options(
 struct RootView {
     bounds_subscription: Option<Subscription>,
     session_writer: WindowSessionWriter,
+    toolbar: ToolbarContract,
     sidebar: SidebarContract,
     initial_view: InitialViewContract,
     context_menus: Vec<ContextMenuContract>,
@@ -1090,7 +1091,6 @@ struct RootView {
     permission_onboarding: Option<PermissionOnboardingContract>,
     permission_access: Option<PermissionAccessContract>,
     permission_refresh: Option<PermissionRefreshContract>,
-    initial_path: PathBuf,
 }
 
 impl Render for RootView {
@@ -1106,7 +1106,7 @@ impl Render for RootView {
             .flex()
             .flex_col()
             .bg(rgb(0x1e1e1e))
-            .child(toolbar::render(&self.initial_path))
+            .child(toolbar::render(&self.toolbar))
             .child(
                 div()
                     .flex()

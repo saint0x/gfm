@@ -195,114 +195,133 @@ impl ToolbarContract {
     }
 }
 
-pub fn render(path: &Path) -> impl IntoElement {
-    let title = toolbar_title(path);
-
-    div()
+pub fn render(contract: &ToolbarContract) -> impl IntoElement {
+    let mut toolbar = div()
         .id("gfm-toolbar")
         .flex()
         .flex_row()
         .items_center()
         .w_full()
-        .h(px(TOOLBAR_HEIGHT))
-        .pl(px(TRAFFIC_LIGHT_GUTTER))
+        .h(px(contract.height_px as f32))
+        .pl(px(contract.traffic_light_gutter_px as f32))
         .pr(px(12.0))
         .gap_3()
         .bg(rgb(0x2c2c2c))
-        .text_color(rgb(0xd7d7d7))
-        .child(
-            toolbar_group("navigation")
-                .child(button("<", true))
-                .child(button(">", false)),
-        )
-        .child(
-            div()
-                .id("path-title")
-                .flex()
-                .items_center()
-                .h(px(32.0))
-                .min_w(px(170.0))
-                .flex_1()
-                .truncate()
-                .text_sm()
-                .child(title),
-        )
-        .child(
-            toolbar_group("view")
-                .child(segment("grid", true))
-                .child(segment("list", false))
-                .child(segment("columns", false))
-                .child(segment("gallery", false)),
-        )
-        .child(toolbar_group("arrange").child(button("arrange", true)))
-        .child(
-            toolbar_group("actions")
-                .child(button("share", false))
-                .child(button("tags", false))
-                .child(button("more", true)),
-        )
-        .child(search_field())
+        .text_color(rgb(0xd7d7d7));
+
+    for group in grouped_controls(&contract.controls) {
+        toolbar = toolbar.child(render_toolbar_group(group));
+    }
+
+    toolbar
 }
 
-fn toolbar_group(id: &'static str) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(id)
+fn grouped_controls(controls: &[ToolbarControlSpec]) -> Vec<&[ToolbarControlSpec]> {
+    let mut groups = Vec::new();
+    let mut start = 0;
+    while start < controls.len() {
+        let group = controls[start].group;
+        let mut end = start + 1;
+        while end < controls.len() && controls[end].group == group {
+            end += 1;
+        }
+        groups.push(&controls[start..end]);
+        start = end;
+    }
+    groups
+}
+
+fn render_toolbar_group(controls: &[ToolbarControlSpec]) -> impl IntoElement {
+    let mut group = div()
+        .id(controls[0].group)
         .flex()
         .flex_row()
         .items_center()
         .gap_1()
-        .flex_shrink_0()
+        .flex_shrink_0();
+
+    for control in controls {
+        group = group.child(render_control(control));
+    }
+
+    group
 }
 
-fn button(label: &'static str, enabled: bool) -> gpui::Div {
-    let text_color = if enabled {
+fn render_control(control: &ToolbarControlSpec) -> gpui::Stateful<gpui::Div> {
+    match control.kind {
+        ToolbarControlKind::Button | ToolbarControlKind::MenuButton => button(control),
+        ToolbarControlKind::SegmentedButton => segment(control),
+        ToolbarControlKind::PathTitle => path_title(control),
+        ToolbarControlKind::SearchField => search_field(control),
+    }
+}
+
+fn button(control: &ToolbarControlSpec) -> gpui::Stateful<gpui::Div> {
+    let text_color = if control.enabled {
         rgb(0xd7d7d7)
     } else {
         rgb(0x777777)
     };
     div()
+        .id(control.id)
         .flex()
         .items_center()
         .justify_center()
-        .size(px(BUTTON_SIZE))
+        .w(px(control.width_px as f32))
+        .h(px(BUTTON_SIZE))
         .rounded(px(6.0))
         .text_xs()
         .text_color(text_color)
         .bg(rgb(0x303030))
-        .child(label)
+        .child(control.label.clone())
 }
 
-fn segment(label: &'static str, selected: bool) -> gpui::Div {
-    let background = if selected {
+fn segment(control: &ToolbarControlSpec) -> gpui::Stateful<gpui::Div> {
+    let background = if control.selected {
         rgb(0x3f3f3f)
     } else {
         rgb(0x303030)
     };
     div()
+        .id(control.id)
         .flex()
         .items_center()
         .justify_center()
-        .w(px(34.0))
+        .w(px(control.width_px as f32))
         .h(px(28.0))
         .rounded(px(6.0))
         .text_xs()
         .bg(background)
-        .child(label)
+        .child(control.label.clone())
 }
 
-fn search_field() -> gpui::Stateful<gpui::Div> {
+fn path_title(control: &ToolbarControlSpec) -> gpui::Stateful<gpui::Div> {
     div()
-        .id("search-field")
+        .id(control.id)
         .flex()
         .items_center()
-        .w(px(SEARCH_WIDTH))
+        .h(px(32.0))
+        .min_w(px(170.0))
+        .w(px(control.width_px as f32))
+        .flex_1()
+        .truncate()
+        .text_sm()
+        .child(control.label.clone())
+}
+
+fn search_field(control: &ToolbarControlSpec) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(control.id)
+        .flex()
+        .items_center()
+        .w(px(control.width_px as f32))
         .h(px(30.0))
         .px_2()
         .rounded(px(7.0))
         .bg(rgb(0x242424))
         .text_color(rgb(0x8f8f8f))
         .text_sm()
-        .child("Search")
+        .child(control.label.clone())
 }
 
 fn toolbar_title(path: &Path) -> String {
