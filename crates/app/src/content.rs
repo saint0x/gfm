@@ -25,7 +25,10 @@ use crate::{
     parse_required_scheduling_pressure, parse_thermal_state, parse_u32, parse_u64,
     parse_user_activity, required_path, required_string,
 };
-use gfm_content::{CachedExtractor, ExtractionFingerprint, ExtractionQuarantine, Extractor};
+use gfm_content::{
+    CachedExtractor, ExtractionFingerprint, ExtractionQuarantine, Extractor, OcrCandidateQueue,
+    OcrRecognition, OcrRecognitionCache,
+};
 use gfm_fs::record_for_path_checked;
 use gfm_index::{
     BackgroundContentIndexer, CompactionPressure, ContentIndexJobSpec, ContentIndexReport,
@@ -37,7 +40,9 @@ use gfm_jobs::{
     Priority, RecoveryReason, RetriableTask, RetryPolicy, Scheduler, SchedulingAction,
     SchedulingPressure, TaskStatus, WorkerPool,
 };
-use gfm_mac::{AccessIntent, VolumeDiscoveryReport};
+use gfm_mac::{
+    AccessIntent, VisionTextRecognitionReport, VisionTextRecognitionStatus, VolumeDiscoveryReport,
+};
 use gfm_store::{atomic_write_checked, read_records_checked, ContentArchiveManifest};
 use gfm_types::{GfmError, Result, SearchHit, VolumeId};
 use std::collections::{BTreeSet, HashSet};
@@ -356,6 +361,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "extract-cache" => {
             let path = required_path(args.next(), "extract-cache requires a path")?;
             print!("{}", run_extraction_cache(path)?);
+        }
+        "ocr-worker" => {
+            let queue = required_path(args.next(), "ocr-worker requires a queue path")?;
+            let cache = required_path(args.next(), "ocr-worker requires a recognition cache path")?;
+            print!("{}", run_ocr_worker(queue, cache)?);
         }
         "extract-quarantine" => {
             let path = required_path(args.next(), "extract-quarantine requires a path")?;
@@ -1342,6 +1352,185 @@ fn run_extraction_cache(path: PathBuf) -> Result<String> {
     )
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct OcrWorkerReport {
+    candidates: usize,
+    cached: usize,
+    recognized: usize,
+    empty: usize,
+    missing: usize,
+    unsupported: usize,
+    failed: usize,
+    unavailable: usize,
+}
+
+impl OcrWorkerReport {
+    fn record(&mut self, status: VisionTextRecognitionStatus) {
+        match status {
+            VisionTextRecognitionStatus::Recognized => self.recognized += 1,
+            VisionTextRecognitionStatus::Empty => self.empty += 1,
+            VisionTextRecognitionStatus::Missing => self.missing += 1,
+            VisionTextRecognitionStatus::Unsupported => self.unsupported += 1,
+            VisionTextRecognitionStatus::Failed => self.failed += 1,
+            VisionTextRecognitionStatus::Unavailable => self.unavailable += 1,
+        }
+    }
+
+    fn as_tsv(&self) -> String {
+        format!(
+            "ocr-worker\tcandidates={}\tcached={}\trecognized={}\tempty={}\tmissing={}\tunsupported={}\tfailed={}\tunavailable={}",
+            self.candidates,
+            self.cached,
+            self.recognized,
+            self.empty,
+            self.missing,
+            self.unsupported,
+            self.failed,
+            self.unavailable
+        )
+    }
+}
+
+fn run_ocr_worker(queue: PathBuf, cache: PathBuf) -> Result<String> {
+    const WORKER: &str = "ocr worker";
+    let queue_access = ForegroundContentIndexAccessReports::entry_checked(
+        queue.clone(),
+        AccessIntent::Read,
+        || Ok(()),
+    )?;
+    let cache_probe = checked_write_probe_path(&cache, WORKER, || Ok(()))?;
+    let cache_access = ForegroundContentIndexAccessReports::entry_checked(
+        cache_probe,
+        AccessIntent::Write,
+        || Ok(()),
+    )?;
+    queue_access.preflight_volume(WORKER)?;
+    cache_access.preflight_volume(WORKER)?;
+    let volume = queue_access.volume().or_else(|| cache_access.volume());
+    visible_scheduled_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Background,
+            JobPayloadKind::Extraction,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            queue.clone(),
+            move |cancellation, runtime| {
+                runtime.resize_checked(4, "ocr-worker:preflight", || cancellation.check())?;
+                let _queue_access = queue_access.access_checked(WORKER, || cancellation.check())?;
+                let _cache_access = cache_access.access_checked(WORKER, || cancellation.check())?;
+                content_runtime_phase(&runtime, 1, "ocr-worker:read", &cancellation)?;
+                let candidates = OcrCandidateQueue::read_checked(&queue, || cancellation.check())?;
+                let mut cache_store =
+                    read_ocr_recognition_cache_or_default_checked(&cache, || cancellation.check())?;
+                let mut report = OcrWorkerReport {
+                    candidates: candidates.len(),
+                    ..OcrWorkerReport::default()
+                };
+                let mut lines = Vec::new();
+                content_runtime_phase(&runtime, 2, "ocr-worker:recognize", &cancellation)?;
+                for candidate in candidates.candidates() {
+                    cancellation.check()?;
+                    if cache_store.get(candidate).is_some() {
+                        report.cached += 1;
+                        lines.push(format!(
+                            "ocr-candidate\tpath={}\tstatus=cached\tlines=0\ttext-bytes=0\treason=-",
+                            escape_content_tsv_path(&candidate.path)
+                        ));
+                        continue;
+                    }
+                    let recognition = match access_existing_ocr_candidate(
+                        candidate.path.clone(),
+                        &cancellation,
+                    ) {
+                        Ok(_access) => {
+                            VisionTextRecognitionReport::recognize_image(&candidate.path)
+                        }
+                        Err(err) if gfm_error_is_not_found(&err) => {
+                            VisionTextRecognitionReport::missing(format!("{err}"))
+                        }
+                        Err(err) => return Err(err),
+                    };
+                    report.record(recognition.status());
+                    lines.push(format!(
+                        "ocr-candidate\tpath={}\tstatus={}\tlines={}\ttext-bytes={}\treason={}",
+                        escape_content_tsv_path(&candidate.path),
+                        recognition.status().as_str(),
+                        recognition.lines().len(),
+                        recognition.text().len(),
+                        recognition
+                            .reason()
+                            .map(escape_content_tsv_field)
+                            .unwrap_or_else(|| "-".to_string())
+                    ));
+                    if recognition.status() == VisionTextRecognitionStatus::Recognized {
+                        cache_store.insert(OcrRecognition {
+                            candidate: candidate.clone(),
+                            text: recognition.text().to_string(),
+                        });
+                    }
+                }
+                content_runtime_phase(&runtime, 3, "ocr-worker:write", &cancellation)?;
+                cache_store.write_checked(&cache, || cancellation.check())?;
+                content_runtime_phase(&runtime, 4, "ocr-worker:complete", &cancellation)?;
+                runtime.remember_completion_detail(format!(
+                    "completed:{} recognized:{} cached:{}",
+                    report.candidates, report.recognized, report.cached
+                ))?;
+                lines.push(report.as_tsv());
+                Ok(format!("{}\n", lines.join("\n")))
+            },
+        )?,
+        WORKER,
+    )
+}
+
+fn read_ocr_recognition_cache_or_default_checked(
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<OcrRecognitionCache> {
+    check_control()?;
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() => {
+            OcrRecognitionCache::read_checked(path, &mut check_control)
+        }
+        Ok(_) => Ok(OcrRecognitionCache::default()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(OcrRecognitionCache::default()),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("OCR recognition cache metadata unavailable: {err}"),
+        )),
+    }
+}
+
+fn access_existing_ocr_candidate(
+    path: PathBuf,
+    cancellation: &Cancellation,
+) -> Result<ScopedAccessGuard> {
+    let report =
+        ForegroundContentIndexAccessReports::entry_checked(path, AccessIntent::Read, || {
+            cancellation.check()
+        })?;
+    report.access_checked("ocr worker", || cancellation.check())
+}
+
+fn gfm_error_is_not_found(err: &GfmError) -> bool {
+    let message_matches = |message: &str| {
+        message.contains("No such file")
+            || message.contains("not found")
+            || message.contains("does not exist")
+            || message.contains("path is not present")
+    };
+    if message_matches(&err.to_string()) {
+        return true;
+    }
+    match err {
+        GfmError::Io { message, .. } => message_matches(message),
+        GfmError::Format(message) => message_matches(message),
+        _ => false,
+    }
+}
+
 fn run_content_compaction(output: PathBuf, segments: Vec<PathBuf>) -> Result<usize> {
     const WORKER: &str = "content compaction";
     let access_reports = ContentSegmentsAccessReports::for_paths(None, &output, &segments, WORKER)?;
@@ -1926,7 +2115,7 @@ impl RecoverableContentJobs {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gfm_content::ExtractionVolumeClass;
+    use gfm_content::{ExtractionVolumeClass, OcrCandidate, OcrCandidateKind};
     use gfm_mac::VolumeCapacity;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -2769,6 +2958,79 @@ mod tests {
             escape_content_tsv_path(&path),
             "/tmp/Content\\\\Rows/Segment\\tDraft\\nFinal\\r.gfmseg"
         );
+    }
+
+    #[test]
+    fn ocr_worker_uses_existing_cache_without_touching_candidate_file() {
+        let root = unique_temp_dir("gfm-ocr-worker-cache-hit");
+        let queue = root.join("ocr.gfmocrq");
+        let cache = root.join("ocr.gfmocrcache");
+        let candidate = OcrCandidate {
+            path: root.join("Screenshot 2026-09-10 at 10.00.00 AM.png"),
+            kind: OcrCandidateKind::ScreenshotImage,
+            fingerprint: ExtractionFingerprint {
+                extractor_version: 1,
+                len: 120,
+                modified_ns: Some(42),
+            },
+        };
+        OcrCandidateQueue::new([candidate.clone()])
+            .write(&queue)
+            .unwrap();
+        OcrRecognitionCache::new([OcrRecognition {
+            candidate: candidate.clone(),
+            text: "already recognized text".to_string(),
+        }])
+        .write(&cache)
+        .unwrap();
+
+        let output = run_ocr_worker(queue, cache.clone()).unwrap();
+        let reloaded = OcrRecognitionCache::read(cache).unwrap();
+
+        assert!(output.contains("\tstatus=cached\t"), "{output}");
+        assert!(
+            output.contains(
+                "ocr-worker\tcandidates=1\tcached=1\trecognized=0\tempty=0\tmissing=0\tunsupported=0\tfailed=0\tunavailable=0"
+            ),
+            "{output}"
+        );
+        assert_eq!(
+            reloaded.get(&candidate).unwrap().text,
+            "already recognized text"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn ocr_worker_reports_missing_uncached_candidate_without_cache_entry() {
+        let root = unique_temp_dir("gfm-ocr-worker-missing");
+        let queue = root.join("ocr.gfmocrq");
+        let cache = root.join("ocr.gfmocrcache");
+        let candidate = OcrCandidate {
+            path: root.join("Screenshot 2026-09-10 at 10.00.01 AM.png"),
+            kind: OcrCandidateKind::ScreenshotImage,
+            fingerprint: ExtractionFingerprint {
+                extractor_version: 1,
+                len: 121,
+                modified_ns: Some(43),
+            },
+        };
+        OcrCandidateQueue::new([candidate.clone()])
+            .write(&queue)
+            .unwrap();
+
+        let output = run_ocr_worker(queue, cache.clone()).unwrap();
+        let reloaded = OcrRecognitionCache::read(cache).unwrap();
+
+        assert!(output.contains("\tstatus=missing\t"), "{output}");
+        assert!(
+            output.contains(
+                "ocr-worker\tcandidates=1\tcached=0\trecognized=0\tempty=0\tmissing=1\tunsupported=0\tfailed=0\tunavailable=0"
+            ),
+            "{output}"
+        );
+        assert!(reloaded.get(&candidate).is_none());
+        fs::remove_dir_all(root).unwrap();
     }
 
     fn unique_temp_dir(prefix: &str) -> PathBuf {

@@ -5,6 +5,7 @@ mod pressure;
 mod process;
 mod spotlight;
 mod url;
+mod vision;
 mod volume;
 
 pub use bookmark::{
@@ -31,6 +32,7 @@ pub use spotlight::{
     read_spotlight_attributes, read_spotlight_attributes_batch, NativeSpotlightSnapshot,
     NativeSpotlightStatus,
 };
+pub use vision::{recognize_text_for_image, NativeTextRecognition, NativeTextRecognitionStatus};
 pub use volume::{
     copy_volume_description_for_path, copy_volume_mount_table, copy_volume_mount_table_entry,
     copy_volume_node_capacity, copy_volume_resource_values, submit_volume_mount_by_bsd_name,

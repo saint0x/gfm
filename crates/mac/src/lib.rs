@@ -7,6 +7,7 @@ mod permissions;
 mod process;
 mod security;
 mod spotlight;
+mod vision;
 mod volume;
 mod watch;
 
@@ -57,6 +58,7 @@ pub use spotlight::{
     SpotlightIngestionPlan, SpotlightIngestionPolicy, SpotlightMetadataReader,
     SpotlightReconciliationReport, SpotlightSnapshot, SpotlightStatus,
 };
+pub use vision::{VisionTextRecognitionReport, VisionTextRecognitionStatus};
 pub use volume::{
     read_volume_node_capacity, ApfsVolumeRole, MountState, VolumeCapacity, VolumeCommandPolicy,
     VolumeCommandState, VolumeDescriptor, VolumeDiscoveryReport, VolumeEventInvalidationReport,

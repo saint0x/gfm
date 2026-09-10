@@ -10,6 +10,7 @@ pub enum MacFramework {
     DiskArbitration,
     FileProvider,
     Spotlight,
+    Vision,
 }
 
 impl MacFramework {
@@ -25,6 +26,7 @@ impl MacFramework {
             Self::DiskArbitration => "diskarbitration",
             Self::FileProvider => "fileprovider",
             Self::Spotlight => "spotlight",
+            Self::Vision => "vision",
         }
     }
 }
@@ -205,6 +207,14 @@ impl MacBridgeContract {
                 "crates/index",
                 "metadata-import-without-primary-correctness-dependency",
                 MacBridgeThreadPolicy::BackgroundSafe,
+                MacBridgeStatus::Implemented,
+            ),
+            MacBridgeSpec::new(
+                "vision-text-recognition",
+                MacFramework::Vision,
+                "crates/mac",
+                "native-image-text-recognition-for-ocr-workers",
+                MacBridgeThreadPolicy::DedicatedWorker,
                 MacBridgeStatus::Implemented,
             ),
         ];
