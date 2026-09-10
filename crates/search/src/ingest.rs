@@ -94,14 +94,15 @@ impl SearchIndex {
             if !is_prefix_term(&prefix) {
                 continue;
             }
-            let ids = posting
-                .ids
-                .iter()
-                .copied()
-                .filter(|id| self.records.contains_key(id))
-                .collect::<BTreeSet<_>>();
-            if !ids.is_empty() {
-                self.name_prefixes.entry(prefix).or_default().extend(ids);
+            if posting.ids.iter().any(|id| self.records.contains_key(id)) {
+                let records = &self.records;
+                self.name_prefixes.entry(prefix).or_default().extend(
+                    posting
+                        .ids
+                        .iter()
+                        .copied()
+                        .filter(|id| records.contains_key(id)),
+                );
             }
         }
         self.name_prefixes.len()
@@ -113,14 +114,15 @@ impl SearchIndex {
             if !is_substring_gram(&gram) {
                 continue;
             }
-            let ids = posting
-                .ids
-                .iter()
-                .copied()
-                .filter(|id| self.records.contains_key(id))
-                .collect::<BTreeSet<_>>();
-            if !ids.is_empty() {
-                self.name_substrings.entry(gram).or_default().extend(ids);
+            if posting.ids.iter().any(|id| self.records.contains_key(id)) {
+                let records = &self.records;
+                self.name_substrings.entry(gram).or_default().extend(
+                    posting
+                        .ids
+                        .iter()
+                        .copied()
+                        .filter(|id| records.contains_key(id)),
+                );
             }
         }
         self.name_substrings.len()
@@ -132,13 +134,13 @@ impl SearchIndex {
             if key.is_empty() {
                 continue;
             }
-            let terms = posting
+            let mut terms = posting
                 .terms
                 .iter()
                 .map(|term| normalize(term))
                 .filter(|term| is_fuzzy_term(term))
-                .collect::<BTreeSet<_>>();
-            if !terms.is_empty() {
+                .peekable();
+            if terms.peek().is_some() {
                 self.fuzzy_terms.entry(key).or_default().extend(terms);
             }
         }
@@ -151,15 +153,15 @@ impl SearchIndex {
             if term.is_empty() {
                 continue;
             }
+            if !posting.ids.iter().any(|id| self.records.contains_key(id)) {
+                continue;
+            }
+            let records = &self.records;
             let ids = posting
                 .ids
                 .iter()
                 .copied()
-                .filter(|id| self.records.contains_key(id))
-                .collect::<BTreeSet<_>>();
-            if ids.is_empty() {
-                continue;
-            }
+                .filter(|id| records.contains_key(id));
             match posting.field {
                 SearchMetadataField::Tag => self.tags.entry(term).or_default().extend(ids),
                 SearchMetadataField::Comment => {
