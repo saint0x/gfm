@@ -10,11 +10,25 @@ const ARCHIVE_DECODE_CHUNK_BYTES: usize = 256 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ArchiveKind {
+    Bzip2,
+    Gzip,
+    Rar,
+    SevenZip,
     Tar,
     TarBz2,
     TarGz,
     TarXz,
+    Xz,
     Zip,
+}
+
+impl ArchiveKind {
+    pub(crate) const fn supports_metadata(self) -> bool {
+        matches!(
+            self,
+            Self::Tar | Self::TarBz2 | Self::TarGz | Self::TarXz | Self::Zip
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +58,11 @@ pub(crate) fn extract_archive_metadata_checked(
 ) -> Result<(ArchiveExtractStatus, Option<ContentDocument>)> {
     check_control()?;
     match kind {
+        ArchiveKind::Bzip2
+        | ArchiveKind::Gzip
+        | ArchiveKind::Rar
+        | ArchiveKind::SevenZip
+        | ArchiveKind::Xz => Ok((ArchiveExtractStatus::Unsupported, None)),
         ArchiveKind::Tar => extract_tar_metadata_checked(bytes, policy, check_control),
         ArchiveKind::TarBz2 => extract_compressed_tar_metadata_checked(
             BzDecoder::new(Cursor::new(bytes)),

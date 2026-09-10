@@ -128,6 +128,7 @@ The index is compact and incremental:
 - explicit legacy Office classification for DOC, XLS, and PPT through the Office extraction budget and fingerprint lane, with deterministic `legacy-office` skips until the sandboxed binary worker lands
 - encrypted Office compound-file detection for protected DOCX, XLSX, and PPTX inputs so password-protected packages quarantine as `encrypted-office` instead of corrupt archives
 - bounded HTML, RTF, MIME multipart email, and ZIP/TAR/TAR.GZ/TAR.BZ2/TAR.XZ archive-metadata extraction policies, including PAX and GNU TAR long-name headers
+- explicit archive classification for RAR, 7Z, GZIP, BZIP2, and XZ payloads, with archive-scoped versioning and `unsupported-archive` skips until safe metadata readers exist
 - structured JSON, CSV, XML plist, and binary plist extraction for searchable keys, cells, and values
 - format-scoped extractor versioning so parser upgrades invalidate only the affected content-cache family
 - incremental content indexing that tombstones changed/deleted file IDs, re-extracts only new or content-modified records, checks cancellation before each record-level extraction/insertion step, and keeps archive compaction cancellable through segment planning, merge, materialization, and publish boundaries

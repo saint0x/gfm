@@ -85,8 +85,13 @@ pub(crate) fn archive_kind(path: &Path) -> Option<ArchiveKind> {
         return Some(ArchiveKind::TarXz);
     }
     match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+        "bz2" => Some(ArchiveKind::Bzip2),
+        "gz" => Some(ArchiveKind::Gzip),
+        "rar" => Some(ArchiveKind::Rar),
         "tar" => Some(ArchiveKind::Tar),
+        "xz" => Some(ArchiveKind::Xz),
         "zip" => Some(ArchiveKind::Zip),
+        "7z" => Some(ArchiveKind::SevenZip),
         _ => None,
     }
 }

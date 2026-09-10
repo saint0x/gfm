@@ -268,6 +268,47 @@ fn extracts_bzip2_and_xz_tar_metadata_through_public_report_path() {
 }
 
 #[test]
+fn classifies_unsupported_archive_formats_as_archive_without_reading_payloads() {
+    for extension in ["rar", "7z", "gz", "bz2", "xz"] {
+        let root = unique_temp_dir(&format!("gfm-content-unsupported-archive-{extension}"));
+        let path = root.join(format!("payload.{extension}"));
+        fs::write(&path, b"unsupported archive payload with ignored needle").unwrap();
+
+        let report = Extractor::default().extract_path_report(&path).unwrap();
+
+        assert_eq!(report.format, ExtractionFormat::Archive);
+        assert_eq!(
+            report.status,
+            ExtractionStatus::Skipped("unsupported-archive")
+        );
+        assert_eq!(
+            report.fingerprint.extractor_version,
+            ARCHIVE_EXTRACTOR_VERSION
+        );
+        assert!(report.document.is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn applies_archive_byte_budget_to_unsupported_archive_formats() {
+    let root = unique_temp_dir("gfm-content-unsupported-archive-budget");
+    let path = root.join("large.7z");
+    fs::write(&path, vec![0_u8; 128]).unwrap();
+    let extractor = Extractor::new(ExtractionPolicy {
+        max_archive_bytes: 16,
+        ..ExtractionPolicy::default()
+    });
+
+    let report = extractor.extract_path_report(&path).unwrap();
+
+    assert_eq!(report.format, ExtractionFormat::Archive);
+    assert_eq!(report.status, ExtractionStatus::Skipped("too-large"));
+    assert!(report.document.is_none());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn extraction_fingerprint_checked_honors_pre_cancelled_control_before_metadata_probe() {
     let root = unique_temp_dir("gfm-content-fingerprint-pre-cancel");
     let path = root.join("missing.md");
@@ -552,6 +593,10 @@ fn extractor_versions_are_scoped_by_extraction_format() {
     );
     assert_eq!(
         extractor_version_for_path(Path::new("bundle.tar.gz")),
+        ARCHIVE_EXTRACTOR_VERSION
+    );
+    assert_eq!(
+        extractor_version_for_path(Path::new("compressed.7z")),
         ARCHIVE_EXTRACTOR_VERSION
     );
     assert_eq!(
