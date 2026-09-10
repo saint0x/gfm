@@ -743,7 +743,7 @@ impl ContentIndexQuerySession {
         let mut records_by_id = HashMap::new();
         let mut misses = Vec::new();
         {
-            let cache = self.record_cache_lock();
+            let mut cache = self.record_cache_lock();
             for id in &ids {
                 cancellation.check()?;
                 if let Some(record) = cache.get(*id) {
@@ -893,89 +893,175 @@ fn scope_excludes_all(scope: &SearchVolumeScope) -> bool {
 #[derive(Debug)]
 struct ContentPostingCache {
     capacity: usize,
-    order: VecDeque<String>,
-    values: HashMap<String, Option<ContentPosting>>,
+    next_generation: u64,
+    order: VecDeque<(u64, String)>,
+    values: HashMap<String, ContentPostingCacheEntry>,
+}
+
+#[derive(Debug)]
+struct ContentPostingCacheEntry {
+    generation: u64,
+    posting: Option<ContentPosting>,
 }
 
 impl ContentPostingCache {
     fn new(capacity: usize) -> Self {
         Self {
             capacity,
+            next_generation: 0,
             order: VecDeque::with_capacity(capacity),
             values: HashMap::new(),
         }
     }
 
     fn get(&mut self, key: &str) -> Option<Option<ContentPosting>> {
-        let value = self.values.get(key).cloned()?;
-        refresh_string_recency(&mut self.order, key);
-        Some(value)
+        let generation = next_cache_generation(&mut self.next_generation);
+        let posting = {
+            let entry = self.values.get_mut(key)?;
+            entry.generation = generation;
+            entry.posting.clone()
+        };
+        self.order.push_back((generation, key.to_string()));
+        self.compact_stale_order_if_needed();
+        Some(posting)
     }
 
     fn insert(&mut self, key: String, posting: Option<ContentPosting>) {
         if self.capacity == 0 {
             return;
         }
-        if self.values.contains_key(&key) {
-            refresh_string_recency(&mut self.order, &key);
-        } else {
-            self.order.push_back(key.clone());
-        }
-        self.values.insert(key, posting);
+        let generation = next_cache_generation(&mut self.next_generation);
+        self.order.push_back((generation, key.clone()));
+        self.values.insert(
+            key,
+            ContentPostingCacheEntry {
+                generation,
+                posting,
+            },
+        );
+        self.evict_over_capacity();
+        self.compact_stale_order_if_needed();
+    }
+
+    fn evict_over_capacity(&mut self) {
         while self.values.len() > self.capacity {
             let Some(expired) = self.order.pop_front() else {
                 break;
             };
-            self.values.remove(&expired);
+            if self
+                .values
+                .get(&expired.1)
+                .is_some_and(|entry| entry.generation == expired.0)
+            {
+                self.values.remove(&expired.1);
+            }
         }
+    }
+
+    fn compact_stale_order_if_needed(&mut self) {
+        let max_order = self.capacity.saturating_mul(4).max(self.capacity + 1);
+        if self.order.len() <= max_order {
+            return;
+        }
+        let mut live = self
+            .values
+            .iter()
+            .map(|(key, entry)| (entry.generation, key.clone()))
+            .collect::<Vec<_>>();
+        live.sort_by_key(|(generation, _)| *generation);
+        self.order = live.into_iter().collect();
     }
 }
 
 #[derive(Debug)]
 struct ContentRecordCache {
     capacity: usize,
-    order: VecDeque<FileId>,
-    values: HashMap<FileId, FileRecord>,
+    next_generation: u64,
+    order: VecDeque<(u64, FileId)>,
+    values: HashMap<FileId, ContentRecordCacheEntry>,
+}
+
+#[derive(Debug)]
+struct ContentRecordCacheEntry {
+    generation: u64,
+    record: FileRecord,
 }
 
 #[derive(Debug)]
 struct ContentResultCache {
     capacity: usize,
-    order: VecDeque<String>,
-    values: HashMap<String, ContentQuerySessionReport>,
+    next_generation: u64,
+    order: VecDeque<(u64, String)>,
+    values: HashMap<String, ContentResultCacheEntry>,
+}
+
+#[derive(Debug)]
+struct ContentResultCacheEntry {
+    generation: u64,
+    report: ContentQuerySessionReport,
 }
 
 impl ContentResultCache {
     fn new(capacity: usize) -> Self {
         Self {
             capacity,
+            next_generation: 0,
             order: VecDeque::with_capacity(capacity),
             values: HashMap::new(),
         }
     }
 
     fn get(&mut self, key: &str) -> Option<ContentQuerySessionReport> {
-        let value = self.values.get(key).cloned()?;
-        refresh_string_recency(&mut self.order, key);
-        Some(value)
+        let generation = next_cache_generation(&mut self.next_generation);
+        let report = {
+            let entry = self.values.get_mut(key)?;
+            entry.generation = generation;
+            entry.report.clone()
+        };
+        self.order.push_back((generation, key.to_string()));
+        self.compact_stale_order_if_needed();
+        Some(report)
     }
 
     fn insert(&mut self, key: String, report: ContentQuerySessionReport) {
         if self.capacity == 0 {
             return;
         }
-        if self.values.contains_key(&key) {
-            refresh_string_recency(&mut self.order, &key);
-        } else {
-            self.order.push_back(key.clone());
-        }
-        self.values.insert(key, report);
+        let generation = next_cache_generation(&mut self.next_generation);
+        self.order.push_back((generation, key.clone()));
+        self.values
+            .insert(key, ContentResultCacheEntry { generation, report });
+        self.evict_over_capacity();
+        self.compact_stale_order_if_needed();
+    }
+
+    fn evict_over_capacity(&mut self) {
         while self.values.len() > self.capacity {
             let Some(expired) = self.order.pop_front() else {
                 break;
             };
-            self.values.remove(&expired);
+            if self
+                .values
+                .get(&expired.1)
+                .is_some_and(|entry| entry.generation == expired.0)
+            {
+                self.values.remove(&expired.1);
+            }
         }
+    }
+
+    fn compact_stale_order_if_needed(&mut self) {
+        let max_order = self.capacity.saturating_mul(4).max(self.capacity + 1);
+        if self.order.len() <= max_order {
+            return;
+        }
+        let mut live = self
+            .values
+            .iter()
+            .map(|(key, entry)| (entry.generation, key.clone()))
+            .collect::<Vec<_>>();
+        live.sort_by_key(|(generation, _)| *generation);
+        self.order = live.into_iter().collect();
     }
 
     fn clear(&mut self) {
@@ -988,44 +1074,74 @@ impl ContentResultCache {
     }
 }
 
-fn refresh_string_recency(order: &mut VecDeque<String>, key: &str) {
-    let Some(index) = order.iter().position(|candidate| candidate == key) else {
-        return;
-    };
-    let Some(key) = order.remove(index) else {
-        return;
-    };
-    order.push_back(key);
-}
-
 impl ContentRecordCache {
     fn new(capacity: usize) -> Self {
         Self {
             capacity,
+            next_generation: 0,
             order: VecDeque::with_capacity(capacity),
             values: HashMap::new(),
         }
     }
 
-    fn get(&self, id: FileId) -> Option<FileRecord> {
-        self.values.get(&id).cloned()
+    fn get(&mut self, id: FileId) -> Option<FileRecord> {
+        let generation = next_cache_generation(&mut self.next_generation);
+        let record = {
+            let entry = self.values.get_mut(&id)?;
+            entry.generation = generation;
+            entry.record.clone()
+        };
+        self.order.push_back((generation, id));
+        self.compact_stale_order_if_needed();
+        Some(record)
     }
 
     fn insert(&mut self, id: FileId, record: FileRecord) {
         if self.capacity == 0 {
             return;
         }
-        if !self.values.contains_key(&id) {
-            self.order.push_back(id);
-        }
-        self.values.insert(id, record);
+        let generation = next_cache_generation(&mut self.next_generation);
+        self.order.push_back((generation, id));
+        self.values
+            .insert(id, ContentRecordCacheEntry { generation, record });
+        self.evict_over_capacity();
+        self.compact_stale_order_if_needed();
+    }
+
+    fn evict_over_capacity(&mut self) {
         while self.values.len() > self.capacity {
             let Some(expired) = self.order.pop_front() else {
                 break;
             };
-            self.values.remove(&expired);
+            if self
+                .values
+                .get(&expired.1)
+                .is_some_and(|entry| entry.generation == expired.0)
+            {
+                self.values.remove(&expired.1);
+            }
         }
     }
+
+    fn compact_stale_order_if_needed(&mut self) {
+        let max_order = self.capacity.saturating_mul(4).max(self.capacity + 1);
+        if self.order.len() <= max_order {
+            return;
+        }
+        let mut live = self
+            .values
+            .iter()
+            .map(|(id, entry)| (entry.generation, *id))
+            .collect::<Vec<_>>();
+        live.sort_by_key(|(generation, _)| *generation);
+        self.order = live.into_iter().collect();
+    }
+}
+
+fn next_cache_generation(next_generation: &mut u64) -> u64 {
+    let generation = *next_generation;
+    *next_generation = next_generation.wrapping_add(1);
+    generation
 }
 
 #[cfg(test)]
@@ -1330,6 +1446,37 @@ mod tests {
     }
 
     #[test]
+    fn content_posting_cache_hot_hits_compact_stale_recency_entries() {
+        let first = ContentPosting {
+            term: "first".to_string(),
+            ids: vec![FileId::new(VolumeId(1), 1)],
+            positions: Vec::new(),
+        };
+        let second = ContentPosting {
+            term: "second".to_string(),
+            ids: vec![FileId::new(VolumeId(1), 2)],
+            positions: Vec::new(),
+        };
+        let third = ContentPosting {
+            term: "third".to_string(),
+            ids: vec![FileId::new(VolumeId(1), 3)],
+            positions: Vec::new(),
+        };
+        let mut cache = ContentPostingCache::new(2);
+        cache.insert("first".to_string(), Some(first.clone()));
+        cache.insert("second".to_string(), Some(second));
+
+        for _ in 0..32 {
+            assert_eq!(cache.get("first"), Some(Some(first.clone())));
+        }
+
+        assert!(cache.order.len() <= 8, "{:?}", cache.order);
+        cache.insert("third".to_string(), Some(third));
+        assert_eq!(cache.get("first"), Some(Some(first)));
+        assert_eq!(cache.get("second"), None);
+    }
+
+    #[test]
     fn content_result_cache_refreshes_recency_on_hit() {
         let mut first = empty_content_query_session_report();
         first.result_cache_misses = 11;
@@ -1346,6 +1493,48 @@ mod tests {
 
         assert_eq!(cache.get("first"), Some(first));
         assert_eq!(cache.get("second"), None);
+    }
+
+    #[test]
+    fn content_result_cache_hot_hits_compact_stale_recency_entries() {
+        let mut first = empty_content_query_session_report();
+        first.result_cache_misses = 11;
+        let mut second = empty_content_query_session_report();
+        second.result_cache_misses = 22;
+        let mut third = empty_content_query_session_report();
+        third.result_cache_misses = 33;
+        let mut cache = ContentResultCache::new(2);
+        cache.insert("first".to_string(), first.clone());
+        cache.insert("second".to_string(), second);
+
+        for _ in 0..32 {
+            assert_eq!(cache.get("first"), Some(first.clone()));
+        }
+
+        assert!(cache.order.len() <= 8, "{:?}", cache.order);
+        cache.insert("third".to_string(), third);
+        assert_eq!(cache.get("first"), Some(first));
+        assert_eq!(cache.get("second"), None);
+    }
+
+    #[test]
+    fn content_record_cache_refreshes_hot_records() {
+        let first = FileId::new(VolumeId(1), 1);
+        let second = FileId::new(VolumeId(1), 2);
+        let third = FileId::new(VolumeId(1), 3);
+        let mut cache = ContentRecordCache::new(2);
+        cache.insert(first, record(first));
+        cache.insert(second, record(second));
+
+        for _ in 0..32 {
+            assert_eq!(cache.get(first).unwrap().id, first);
+        }
+
+        assert!(cache.order.len() <= 8, "{:?}", cache.order);
+        cache.insert(third, record(third));
+        assert_eq!(cache.get(first).unwrap().id, first);
+        assert!(cache.get(second).is_none());
+        assert_eq!(cache.get(third).unwrap().id, third);
     }
 
     #[test]
