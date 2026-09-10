@@ -6661,8 +6661,12 @@ fn reports_volume_discovery_from_binary() {
     std::fs::write(external.join(".gfm-volume-kind"), "external-removable\n").unwrap();
     std::fs::write(network.join(".gfm-volume-kind"), "network-smb\n").unwrap();
     std::fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+    let catalog = root.join("payloads.gfmjobs");
+    let progress = root.join("progress.gfmprogress");
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
         .arg("volume-discovery")
         .arg(&external)
         .arg(&network)
@@ -6697,6 +6701,22 @@ fn reports_volume_discovery_from_binary() {
     assert!(!stdout.contains("\tmount-status=-\t"));
     assert!(stdout.contains("source=fixture-marker:network-smb"));
     assert!(stdout.contains("source=fixture-marker:network-unreachable"));
+    let catalog_text = std::fs::read_to_string(&catalog).unwrap();
+    assert_platform_payload_catalog_kind(
+        &catalog_text,
+        1,
+        "indexing",
+        "volume discovery",
+        &external,
+    );
+    let progress_text = std::fs::read_to_string(&progress).unwrap();
+    assert_platform_runtime_progress_units(
+        &progress_text,
+        1,
+        "volume discovery",
+        2,
+        "completed:volumes:3",
+    );
 
     let _ = std::fs::remove_dir_all(root);
 }

@@ -3194,31 +3194,55 @@ fn volume_discovery_report_with_capacity(
     cancel_after_first: bool,
     read_capacity: bool,
 ) -> Result<VolumeDiscoveryReport> {
-    run_volume_task_cancellable(
-        None,
-        Priority::Visible,
-        "volume discovery",
-        move |cancellation| {
-            let mut checks = 0usize;
-            let mut check = || {
-                checks += 1;
-                if cancel_after_first && checks >= 5 {
-                    cancellation.cancel();
-                }
-                cancellation.check()
-            };
-            if paths.is_empty() {
-                if read_capacity {
-                    VolumeDiscoveryReport::discover_checked(&mut check)
+    let payload_path = paths
+        .first()
+        .cloned()
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    scheduled_platform_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Indexing,
+            "volume discovery",
+            current_host_job_scheduling_pressure(),
+            || Ok(None),
+            payload_path,
+            move |cancellation, runtime| {
+                runtime.resize_checked(2, "volume-discovery:discover", || cancellation.check())?;
+                let mut checks = 0usize;
+                let mut check = || {
+                    checks += 1;
+                    if cancel_after_first && checks >= 5 {
+                        cancellation.cancel();
+                    }
+                    cancellation.check()
+                };
+                let report = if paths.is_empty() {
+                    if read_capacity {
+                        VolumeDiscoveryReport::discover_checked(&mut check)
+                    } else {
+                        VolumeDiscoveryReport::discover_policy_checked(&mut check)
+                    }
+                } else if read_capacity {
+                    VolumeDiscoveryReport::from_paths_checked_with_control(
+                        paths.clone(),
+                        &mut check,
+                    )
                 } else {
-                    VolumeDiscoveryReport::discover_policy_checked(&mut check)
-                }
-            } else if read_capacity {
-                VolumeDiscoveryReport::from_paths_checked_with_control(paths, &mut check)
-            } else {
-                VolumeDiscoveryReport::from_paths_policy_checked_with_control(paths, &mut check)
-            }
-        },
+                    VolumeDiscoveryReport::from_paths_policy_checked_with_control(
+                        paths.clone(),
+                        &mut check,
+                    )
+                }?;
+                platform_runtime_phase(&runtime, 1, "volume-discovery:complete", &cancellation)?;
+                runtime.remember_completion_detail(format!(
+                    "completed:volumes:{}",
+                    report.volumes.len()
+                ))?;
+                platform_runtime_phase(&runtime, 2, "volume-discovery:reported", &cancellation)?;
+                Ok(report)
+            },
+        )?,
+        "volume discovery",
     )
 }
 
