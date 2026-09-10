@@ -1,6 +1,7 @@
 mod archive;
 mod cache;
 mod kind;
+mod legacy;
 mod ocr;
 mod ooxml;
 mod pdf;
@@ -22,6 +23,7 @@ use kind::{
     archive_kind, extraction_format, legacy_office_kind, office_kind, path_is_pdf, rich_kind,
     structured_kind,
 };
+use legacy::extract_legacy_office_checked;
 pub use ocr::{
     ocr_candidate_for_extraction, ocr_candidate_for_record, OcrCandidate, OcrCandidateKind,
     OcrCandidateQueue, OcrFailureDecision, OcrFailureEntry, OcrFailureKind, OcrFailureQuarantine,
@@ -53,7 +55,7 @@ use structured::extract_structured_checked;
 
 pub const TEXT_EXTRACTOR_VERSION: u32 = 4;
 pub const PDF_EXTRACTOR_VERSION: u32 = 4;
-pub const OFFICE_EXTRACTOR_VERSION: u32 = 5;
+pub const OFFICE_EXTRACTOR_VERSION: u32 = 6;
 pub const RICH_EXTRACTOR_VERSION: u32 = 6;
 pub const ARCHIVE_EXTRACTOR_VERSION: u32 = 7;
 pub const STRUCTURED_EXTRACTOR_VERSION: u32 = 3;
@@ -201,16 +203,6 @@ impl Extractor {
             });
         }
 
-        if legacy_office.is_some() {
-            return Ok(ExtractionReport {
-                path: path.to_path_buf(),
-                format,
-                status: ExtractionStatus::Skipped("legacy-office"),
-                fingerprint,
-                document: None,
-            });
-        }
-
         if archive.is_some_and(|kind| !kind.supports_metadata()) {
             return Ok(ExtractionReport {
                 path: path.to_path_buf(),
@@ -244,6 +236,18 @@ impl Extractor {
                 status: ooxml_report_status(status),
                 fingerprint,
                 document,
+            });
+        }
+
+        if let Some(kind) = legacy_office {
+            let status =
+                extract_legacy_office_checked(&bytes, kind, &self.policy, &mut check_control)?;
+            return Ok(ExtractionReport {
+                path: path.to_path_buf(),
+                format,
+                status: status::legacy_office_report_status(status),
+                fingerprint,
+                document: None,
             });
         }
 

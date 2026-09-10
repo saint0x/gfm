@@ -1,4 +1,5 @@
 use crate::archive::ArchiveExtractStatus;
+use crate::legacy::LegacyOfficeExtractStatus;
 use crate::ooxml::OoxmlExtractStatus;
 use crate::pdf::PdfExtractStatus;
 use crate::report::{ContentDocument, ExtractionStatus};
@@ -26,6 +27,15 @@ pub(crate) fn ooxml_report_status(status: OoxmlExtractStatus) -> ExtractionStatu
         OoxmlExtractStatus::EntryTooLarge => ExtractionStatus::Skipped("entry-too-large"),
         OoxmlExtractStatus::Encrypted => ExtractionStatus::Quarantined("encrypted-office"),
         OoxmlExtractStatus::Corrupt => ExtractionStatus::Quarantined("corrupt-office"),
+    }
+}
+
+pub(crate) fn legacy_office_report_status(status: LegacyOfficeExtractStatus) -> ExtractionStatus {
+    match status {
+        LegacyOfficeExtractStatus::Unsupported => ExtractionStatus::Skipped("legacy-office"),
+        LegacyOfficeExtractStatus::TooLarge => ExtractionStatus::Skipped("too-large"),
+        LegacyOfficeExtractStatus::Encrypted => ExtractionStatus::Quarantined("encrypted-office"),
+        LegacyOfficeExtractStatus::Corrupt => ExtractionStatus::Quarantined("corrupt-office"),
     }
 }
 

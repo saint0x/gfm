@@ -12,6 +12,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use xz2::write::XzEncoder;
 use zip::write::SimpleFileOptions;
 
+const TEST_OLE_FREESECT: u32 = 0xFFFF_FFFF;
+const TEST_OLE_ENDOFCHAIN: u32 = 0xFFFF_FFFE;
+const TEST_OLE_FATSECT: u32 = 0xFFFF_FFFD;
+
 #[test]
 fn extracts_utf8_text_with_byte_budget() {
     let root = unique_temp_dir("gfm-content");
@@ -778,10 +782,14 @@ fn extracts_pptx_text() {
 
 #[test]
 fn classifies_legacy_office_as_bounded_skipped_office_content() {
-    for extension in ["doc", "xls", "ppt"] {
+    for (extension, stream) in [
+        ("doc", "WordDocument"),
+        ("xls", "Workbook"),
+        ("ppt", "PowerPoint Document"),
+    ] {
         let root = unique_temp_dir(&format!("gfm-content-legacy-office-{extension}"));
         let path = root.join(format!("legacy.{extension}"));
-        fs::write(&path, legacy_office_bytes()).unwrap();
+        fs::write(&path, legacy_office_bytes(&[stream])).unwrap();
 
         let report = Extractor::default().extract_path_report(&path).unwrap();
 
@@ -804,7 +812,11 @@ fn classifies_legacy_office_as_bounded_skipped_office_content() {
 fn quarantines_encrypted_ooxml_without_reporting_corruption() {
     let root = unique_temp_dir("gfm-content-encrypted-office");
     let path = root.join("locked.docx");
-    fs::write(&path, legacy_office_bytes()).unwrap();
+    fs::write(
+        &path,
+        legacy_office_bytes(&["WordDocument", "EncryptionInfo"]),
+    )
+    .unwrap();
     let mut quarantine = ExtractionQuarantine::new(1);
 
     let report = Extractor::default().extract_path_report(&path).unwrap();
@@ -822,6 +834,56 @@ fn quarantines_encrypted_ooxml_without_reporting_corruption() {
     assert!(report.document.is_none());
     assert!(matches!(decision, QuarantineDecision::Quarantined(_)));
     assert!(decision.as_tsv().contains("\treason=encrypted-office\t"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn quarantines_encrypted_legacy_office_without_reporting_corruption() {
+    let root = unique_temp_dir("gfm-content-encrypted-legacy-office");
+    let path = root.join("locked.doc");
+    fs::write(
+        &path,
+        legacy_office_bytes(&["WordDocument", "EncryptionInfo"]),
+    )
+    .unwrap();
+    let mut quarantine = ExtractionQuarantine::new(1);
+
+    let report = Extractor::default().extract_path_report(&path).unwrap();
+    let decision = quarantine.record_report(&report);
+
+    assert_eq!(report.format, ExtractionFormat::Office);
+    assert_eq!(
+        report.status,
+        ExtractionStatus::Quarantined("encrypted-office")
+    );
+    assert_eq!(
+        report.fingerprint.extractor_version,
+        OFFICE_EXTRACTOR_VERSION
+    );
+    assert!(report.document.is_none());
+    assert!(matches!(decision, QuarantineDecision::Quarantined(_)));
+    assert!(decision.as_tsv().contains("\treason=encrypted-office\t"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn quarantines_corrupt_legacy_office_compound_file_without_required_stream() {
+    let root = unique_temp_dir("gfm-content-corrupt-legacy-office");
+    let path = root.join("bad.doc");
+    fs::write(&path, legacy_office_bytes(&["NotOffice"])).unwrap();
+    let mut quarantine = ExtractionQuarantine::new(1);
+
+    let report = Extractor::default().extract_path_report(&path).unwrap();
+    let decision = quarantine.record_report(&report);
+
+    assert_eq!(report.format, ExtractionFormat::Office);
+    assert_eq!(
+        report.status,
+        ExtractionStatus::Quarantined("corrupt-office")
+    );
+    assert!(report.document.is_none());
+    assert!(matches!(decision, QuarantineDecision::Quarantined(_)));
+    assert!(decision.as_tsv().contains("\treason=corrupt-office\t"));
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -884,7 +946,11 @@ fn quarantines_malformed_ooxml_package_without_required_part() {
 fn applies_office_byte_budget_to_legacy_office() {
     let root = unique_temp_dir("gfm-content-legacy-office-budget");
     let path = root.join("large.DOC");
-    fs::write(&path, [legacy_office_bytes(), vec![0_u8; 128]].concat()).unwrap();
+    fs::write(
+        &path,
+        [legacy_office_bytes(&["WordDocument"]), vec![0_u8; 128]].concat(),
+    )
+    .unwrap();
     let extractor = Extractor::new(ExtractionPolicy {
         max_office_bytes: 16,
         ..ExtractionPolicy::default()
@@ -1692,10 +1758,64 @@ fn set_zip_encrypted_flags(bytes: &mut [u8]) {
     }
 }
 
-fn legacy_office_bytes() -> Vec<u8> {
-    let mut bytes = b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1".to_vec();
-    bytes.extend_from_slice(b"GFM legacy Office fixture");
-    bytes
+fn legacy_office_bytes(streams: &[&str]) -> Vec<u8> {
+    const HEADER_BYTES: usize = 512;
+    const DIRECTORY_ENTRY_BYTES: usize = 128;
+
+    let mut header = vec![0_u8; HEADER_BYTES];
+    header[..8].copy_from_slice(b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1");
+    header[24..26].copy_from_slice(&0x003e_u16.to_le_bytes());
+    header[26..28].copy_from_slice(&0x0003_u16.to_le_bytes());
+    header[28..30].copy_from_slice(&0xfffe_u16.to_le_bytes());
+    header[30..32].copy_from_slice(&9_u16.to_le_bytes());
+    header[32..34].copy_from_slice(&6_u16.to_le_bytes());
+    header[44..48].copy_from_slice(&1_u32.to_le_bytes());
+    header[48..52].copy_from_slice(&1_u32.to_le_bytes());
+    header[56..60].copy_from_slice(&4096_u32.to_le_bytes());
+    header[60..64].copy_from_slice(&TEST_OLE_ENDOFCHAIN.to_le_bytes());
+    header[68..72].copy_from_slice(&TEST_OLE_ENDOFCHAIN.to_le_bytes());
+    header[76..80].copy_from_slice(&0_u32.to_le_bytes());
+    for offset in (80..HEADER_BYTES).step_by(4) {
+        header[offset..offset + 4].copy_from_slice(&TEST_OLE_FREESECT.to_le_bytes());
+    }
+
+    let mut fat = vec![0xff_u8; HEADER_BYTES];
+    write_fat_entry(&mut fat, 0, TEST_OLE_FATSECT);
+    write_fat_entry(&mut fat, 1, TEST_OLE_ENDOFCHAIN);
+
+    let mut directory = vec![0_u8; HEADER_BYTES];
+    write_directory_entry(&mut directory[0..DIRECTORY_ENTRY_BYTES], "Root Entry", 5);
+    for (index, stream) in streams.iter().take(3).enumerate() {
+        let offset = (index + 1) * DIRECTORY_ENTRY_BYTES;
+        write_directory_entry(
+            &mut directory[offset..offset + DIRECTORY_ENTRY_BYTES],
+            stream,
+            2,
+        );
+    }
+
+    [header, fat, directory].concat()
+}
+
+fn write_fat_entry(fat: &mut [u8], index: usize, value: u32) {
+    let offset = index * 4;
+    fat[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+}
+
+fn write_directory_entry(entry: &mut [u8], name: &str, object_type: u8) {
+    let mut utf16 = name.encode_utf16().collect::<Vec<_>>();
+    utf16.push(0);
+    for (index, unit) in utf16.iter().enumerate() {
+        let offset = index * 2;
+        entry[offset..offset + 2].copy_from_slice(&unit.to_le_bytes());
+    }
+    entry[64..66].copy_from_slice(&((utf16.len() * 2) as u16).to_le_bytes());
+    entry[66] = object_type;
+    entry[67] = 1;
+    entry[68..72].copy_from_slice(&TEST_OLE_FREESECT.to_le_bytes());
+    entry[72..76].copy_from_slice(&TEST_OLE_FREESECT.to_le_bytes());
+    entry[76..80].copy_from_slice(&TEST_OLE_FREESECT.to_le_bytes());
+    entry[116..120].copy_from_slice(&TEST_OLE_ENDOFCHAIN.to_le_bytes());
 }
 
 fn tar_gz_package(parts: &[(&str, &str)]) -> Vec<u8> {
