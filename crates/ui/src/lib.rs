@@ -394,6 +394,23 @@ impl PermissionRefreshContract {
         );
         lines.join("\n")
     }
+
+    pub fn visible_summary(&self) -> String {
+        if self.changed == 0 {
+            "Permission state unchanged".to_string()
+        } else if self.refresh_ui || self.refresh_workers || self.refresh_operations {
+            format!("Permission state changed: {} update(s)", self.changed)
+        } else {
+            format!("Permission state observed: {} update(s)", self.changed)
+        }
+    }
+
+    pub fn visible_audience(&self) -> String {
+        format!(
+            "UI={} workers={} operations={}",
+            self.refresh_ui, self.refresh_workers, self.refresh_operations
+        )
+    }
 }
 
 impl PermissionRefreshChangeContract {
@@ -406,6 +423,13 @@ impl PermissionRefreshChangeContract {
             escape_contract_field(&self.current),
             escape_contract_field(&self.path),
             escape_contract_field(&self.reason)
+        )
+    }
+
+    pub fn visible_line(&self) -> String {
+        format!(
+            "{} {}: {} -> {}",
+            self.scope, self.kind, self.previous, self.current
         )
     }
 }
@@ -941,7 +965,7 @@ impl Render for RootView {
                 .child(div().invisible().child(conflict.as_tsv()));
         }
         if let Some(refresh) = &self.permission_refresh {
-            root = root.child(
+            root = root.child(render_permission_refresh_state(refresh)).child(
                 div()
                     .id("permission-refresh-state")
                     .invisible()
@@ -950,6 +974,62 @@ impl Render for RootView {
         }
         root
     }
+}
+
+fn render_permission_refresh_state(refresh: &PermissionRefreshContract) -> impl IntoElement {
+    let mut changes = div()
+        .id("permission-refresh-changes")
+        .flex()
+        .flex_col()
+        .gap(px(4.0));
+    for change in refresh.changes.iter().take(3) {
+        changes = changes.child(
+            div()
+                .id("permission-refresh-change")
+                .text_size(px(11.0))
+                .line_height(px(15.0))
+                .text_color(rgb(0xc7c7cc))
+                .child(change.visible_line()),
+        );
+    }
+    if refresh.changes.len() > 3 {
+        changes = changes.child(
+            div()
+                .id("permission-refresh-more")
+                .text_size(px(11.0))
+                .text_color(rgb(0x9a9aa0))
+                .child(format!("{} more changes", refresh.changes.len() - 3)),
+        );
+    }
+
+    div()
+        .id("permission-refresh-visible-state")
+        .absolute()
+        .right(px(14.0))
+        .bottom(px(14.0))
+        .w(px(320.0))
+        .p(px(10.0))
+        .rounded(px(6.0))
+        .border_1()
+        .border_color(rgb(0x5f6368))
+        .bg(rgb(0x242426))
+        .child(
+            div()
+                .id("permission-refresh-summary")
+                .text_size(px(12.0))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(rgb(0xf2f2f2))
+                .child(refresh.visible_summary()),
+        )
+        .child(
+            div()
+                .id("permission-refresh-audience")
+                .mt(px(4.0))
+                .text_size(px(11.0))
+                .text_color(rgb(0x9a9aa0))
+                .child(refresh.visible_audience()),
+        )
+        .child(changes)
 }
 
 #[cfg(test)]
@@ -1748,6 +1828,19 @@ mod tests {
         let contract = WindowLifecycleContract::from_spec(&spec).unwrap();
 
         assert_eq!(contract.permission_refresh, Some(refresh));
+        let refresh = contract.permission_refresh.as_ref().unwrap();
+        assert_eq!(
+            refresh.visible_summary(),
+            "Permission state changed: 1 update(s)"
+        );
+        assert_eq!(
+            refresh.visible_audience(),
+            "UI=true workers=true operations=true"
+        );
+        assert_eq!(
+            refresh.changes[0].visible_line(),
+            "desktop granted: denied -> granted"
+        );
         assert!(contract
             .as_tsv()
             .contains("\npermission-refresh\taudience=ui\tinitialized=false\tchanged=1\t"));
