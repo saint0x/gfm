@@ -829,6 +829,7 @@ pub struct WindowLifecycleContract {
     pub sidebar_volumes: Vec<SidebarVolumeSpec>,
     pub sidebar_contract: Option<SidebarContract>,
     pub initial_view: InitialViewContract,
+    pub session: WindowSessionContract,
     pub context_menus: Vec<ContextMenuContract>,
     pub progress_surfaces: Vec<OperationProgressContract>,
     pub operation_conflicts: Vec<OperationConflictContract>,
@@ -857,6 +858,12 @@ impl WindowLifecycleContract {
             sidebar_volumes: spec.sidebar_volumes.clone(),
             sidebar_contract: spec.sidebar_contract.clone(),
             initial_view: spec.initial_view.clone(),
+            session: WindowSessionContract::from_spec_with_restored_placement(
+                spec,
+                &WindowSessionStore::platform_default(),
+                0,
+                None,
+            ),
             context_menus: spec.context_menus.clone(),
             progress_surfaces: spec.progress_surfaces.clone(),
             operation_conflicts: spec.operation_conflicts.clone(),
@@ -888,6 +895,7 @@ impl WindowLifecycleContract {
                 .map(DialogSurface::as_str)
                 .unwrap_or("none")
         )];
+        lines.push(self.session.as_tsv());
         lines.push(self.effective_titlebar_contract().as_tsv());
         lines.push(self.effective_toolbar_contract().as_tsv());
         lines.push(self.effective_menu_contract().as_tsv());
@@ -1244,6 +1252,12 @@ mod tests {
         assert_eq!(contract.height, DEFAULT_HEIGHT);
         assert!(contract.transparent_titlebar);
         assert_eq!(contract.tabbing_identifier, "gfm-main-window");
+        assert_eq!(
+            contract.session.restore_policy,
+            RestorePolicy::RestoreLastWindowBounds
+        );
+        assert_eq!(contract.session.tab_policy, TabPolicy::NativeMacosTabGroup);
+        assert_eq!(contract.session.placement, None);
         assert!(contract.sidebar_volumes.is_empty());
         assert_eq!(contract.initial_view.mode(), "icon");
         assert_eq!(contract.context_menus.len(), 8);
@@ -1273,6 +1287,10 @@ mod tests {
         assert!(output.starts_with(
             "window\tGFM\t/tmp/gfm\t1040x720\tmin=640x420\ttransparent-titlebar=true\tactivate=true\ttabs=gfm-main-window\tsidebar-home=available\tsidebar-icloud=missing\tinitial-view=icon\tpermission-dialog=none\n"
         ));
+        assert!(output.contains(
+            "\nsession\trestore=restore-last-window-bounds\tplacement-policy=persisted-or-centered\ttab-policy=native-macos-tab-group\tactivation=activate-app-and-focus-new-window\ttabs=gfm-main-window\trestore-key=main-window\t"
+        ));
+        assert!(output.contains("\tplacement=centered\tcascade=0\tfocus=true\tshow=true\tmovable=true\tresizable=true\tminimizable=true\n"));
         assert!(output.contains(
             "\ntitlebar\tGFM\theight=54\ttraffic-light=20x20\tmaterial=transparent-system-titlebar\tfocus=system-active-inactive\tfull-screen=native-macos-zoom-and-full-screen\ttabs=gfm-main-window\n"
         ));
@@ -1321,6 +1339,24 @@ mod tests {
         assert!(output.contains(
             "item\tpaste-item\tPaste Item\tgfm::PasteItem\tcommand\tenabled=false\tdestructive=false"
         ));
+    }
+
+    #[test]
+    fn lifecycle_contract_tracks_launch_session_placement() {
+        let placement = WindowPlacement {
+            x: 40.0,
+            y: 70.0,
+            width: 800.0,
+            height: 500.0,
+        };
+        let spec = AppLaunchSpec::new("/tmp/gfm").with_launch_placement(placement);
+        let contract = WindowLifecycleContract::from_spec(&spec).unwrap();
+        let output = contract.as_tsv();
+
+        assert_eq!(contract.session.placement, Some(placement));
+        assert_eq!(contract.session.cascade_ordinal, 0);
+        assert!(output.contains("window\tGFM\t/tmp/gfm\t800x500\tmin=640x420\t"));
+        assert!(output.contains("\tplacement=40,70,800,500\tcascade=0\t"));
     }
 
     #[test]
