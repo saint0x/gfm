@@ -402,6 +402,54 @@ impl OperationProgressContract {
         }));
         lines.join("\n")
     }
+
+    pub fn visible_status(&self) -> String {
+        format!(
+            "{}% complete - {} of {}",
+            self.percent_complete, self.completed_units, self.total_units
+        )
+    }
+
+    pub fn visible_detail(&self) -> String {
+        match self.detail_kind {
+            OperationProgressDetailKind::Plain => self.detail.clone(),
+            OperationProgressDetailKind::Planned => self
+                .detail
+                .strip_prefix("planned:")
+                .unwrap_or(&self.detail)
+                .to_string(),
+            OperationProgressDetailKind::Advanced => self
+                .detail
+                .strip_prefix("advanced:")
+                .unwrap_or(&self.detail)
+                .to_string(),
+            OperationProgressDetailKind::Deferred => self
+                .detail
+                .strip_prefix("deferred:")
+                .unwrap_or(&self.detail)
+                .to_string(),
+            OperationProgressDetailKind::Pressure => self
+                .detail
+                .strip_prefix("pressure:")
+                .unwrap_or(&self.detail)
+                .to_string(),
+            OperationProgressDetailKind::MetadataDegraded => {
+                "metadata preservation degraded".to_string()
+            }
+            OperationProgressDetailKind::Cancelled => "cancelled".to_string(),
+            OperationProgressDetailKind::Failed => "failed".to_string(),
+        }
+    }
+
+    pub fn visible_payload(&self) -> Option<String> {
+        self.payload_summary
+            .as_ref()
+            .or(self.payload_path.as_ref())
+            .map(|value| match self.payload_kind {
+                Some(kind) => format!("{}: {value}", kind.as_str()),
+                None => value.clone(),
+            })
+    }
 }
 
 fn operation_progress_detail_kind(detail: &str) -> OperationProgressDetailKind {
@@ -1069,6 +1117,87 @@ pub fn render(contract: &DialogContract) -> impl IntoElement {
     render_with_state(contract.clone(), None)
 }
 
+pub fn render_progress(progress: &OperationProgressContract) -> impl IntoElement {
+    let bar_width = 360.0;
+    let filled_width = bar_width * progress.percent_complete.min(100) as f32 / 100.0;
+    let mut detail = div()
+        .id("progress-detail")
+        .text_size(px(12.0))
+        .line_height(px(17.0))
+        .text_color(rgb(0xc7c7cc))
+        .child(progress.visible_detail());
+    if let Some(payload) = progress.visible_payload() {
+        detail = detail.child(
+            div()
+                .id("progress-payload")
+                .mt(px(5.0))
+                .text_size(px(11.0))
+                .text_color(rgb(0x9a9aa0))
+                .child(payload),
+        );
+    }
+
+    render_sheet_content(
+        "progress-sheet",
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(12.0))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(10.0))
+                    .child(
+                        div()
+                            .w(px(28.0))
+                            .h(px(28.0))
+                            .rounded(px(6.0))
+                            .bg(rgb(0x4f8cff)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.0))
+                            .child(
+                                div()
+                                    .id("progress-label")
+                                    .text_size(px(16.0))
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(rgb(0xf2f2f2))
+                                    .child(progress.label.clone()),
+                            )
+                            .child(
+                                div()
+                                    .id("progress-percent")
+                                    .text_size(px(12.0))
+                                    .text_color(rgb(0xb6b6bd))
+                                    .child(progress.visible_status()),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .id("progress-bar")
+                    .w(px(bar_width))
+                    .h(px(6.0))
+                    .rounded(px(3.0))
+                    .bg(rgb(0x3a3a3c))
+                    .child(
+                        div()
+                            .id("progress-bar-fill")
+                            .w(px(filled_width))
+                            .h(px(6.0))
+                            .rounded(px(3.0))
+                            .bg(rgb(0x0a84ff)),
+                    ),
+            )
+            .child(detail)
+            .child(render_buttons(&progress.dialog)),
+    )
+}
+
 pub fn render_permission(
     contract: &DialogContract,
     access: Option<&super::PermissionAccessContract>,
@@ -1102,48 +1231,40 @@ fn render_with_state(
         DialogSurface::Conflict => "conflict-sheet",
         DialogSurface::Permission => "permission-sheet",
     };
-    let mut sheet_content = div()
-        .id(sheet_id)
-        .w(px(420.0))
-        .p(px(18.0))
-        .rounded(px(8.0))
-        .border_1()
-        .border_color(rgb(0x5f6368))
-        .bg(rgb(0x2d2d30))
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(12.0))
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap(px(10.0))
-                        .child(
-                            div()
-                                .w(px(28.0))
-                                .h(px(28.0))
-                                .rounded(px(6.0))
-                                .bg(rgb(0x4f8cff)),
-                        )
-                        .child(
-                            div()
-                                .text_size(px(16.0))
-                                .font_weight(gpui::FontWeight::SEMIBOLD)
-                                .text_color(rgb(0xf2f2f2))
-                                .child(contract.title),
-                        ),
-                )
-                .child(
-                    div()
-                        .text_size(px(13.0))
-                        .line_height(px(18.0))
-                        .text_color(rgb(0xd4d4d4))
-                        .child(contract.message),
-                )
-                .child(render_buttons(&contract)),
-        );
+    let mut sheet_content = base_sheet(sheet_id).child(
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(12.0))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(10.0))
+                    .child(
+                        div()
+                            .w(px(28.0))
+                            .h(px(28.0))
+                            .rounded(px(6.0))
+                            .bg(rgb(0x4f8cff)),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(16.0))
+                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_color(rgb(0xf2f2f2))
+                            .child(contract.title),
+                    ),
+            )
+            .child(
+                div()
+                    .text_size(px(13.0))
+                    .line_height(px(18.0))
+                    .text_color(rgb(0xd4d4d4))
+                    .child(contract.message),
+            )
+            .child(render_buttons(&contract)),
+    );
     if let Some(state) = access_state {
         sheet_content = sheet_content.child(
             div()
@@ -1152,6 +1273,25 @@ fn render_with_state(
                 .child(state.0),
         );
     }
+    render_sheet(sheet_content)
+}
+
+fn render_sheet_content(sheet_id: &'static str, content: impl IntoElement) -> impl IntoElement {
+    render_sheet(base_sheet(sheet_id).child(content))
+}
+
+fn base_sheet(sheet_id: &'static str) -> gpui::Stateful<gpui::Div> {
+    div()
+        .id(sheet_id)
+        .w(px(420.0))
+        .p(px(18.0))
+        .rounded(px(8.0))
+        .border_1()
+        .border_color(rgb(0x5f6368))
+        .bg(rgb(0x2d2d30))
+}
+
+fn render_sheet(sheet_content: impl IntoElement) -> impl IntoElement {
     div()
         .absolute()
         .inset_0()
@@ -1870,6 +2010,46 @@ mod tests {
         assert!(contract.as_tsv().contains(
             "\tpayload-kind=repair\tpayload-path=repair/sidecar.gfmjob\tpayload-summary=repair:sidecars"
         ));
+    }
+
+    #[test]
+    fn operation_progress_visible_text_uses_runtime_state() {
+        let contract = OperationProgressContract::from_input(
+            OperationProgressInput::new(
+                "copy selected files",
+                OperationProgressState::Running,
+                42,
+                100,
+                "pressure:throttled",
+            )
+            .with_job_id(7)
+            .with_payload(
+                OperationProgressPayloadKind::Operation,
+                "/tmp/source",
+                "copy:/tmp/source",
+            ),
+        );
+
+        assert_eq!(contract.visible_status(), "42% complete - 42 of 100");
+        assert_eq!(contract.visible_detail(), "throttled");
+        assert_eq!(
+            contract.visible_payload().as_deref(),
+            Some("operation: copy:/tmp/source")
+        );
+    }
+
+    #[test]
+    fn operation_progress_visible_text_handles_metadata_degradation() {
+        let contract = OperationProgressContract::from_input(OperationProgressInput::new(
+            "copy package",
+            OperationProgressState::Paused,
+            1,
+            4,
+            "operation-metadata-degradation\tacl",
+        ));
+
+        assert_eq!(contract.visible_detail(), "metadata preservation degraded");
+        assert_eq!(contract.visible_payload(), None);
     }
 
     #[test]

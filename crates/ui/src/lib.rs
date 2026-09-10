@@ -911,7 +911,7 @@ impl Render for RootView {
         }
         for progress in &self.progress_surfaces {
             root = root
-                .child(dialog::render(&progress.dialog))
+                .child(dialog::render_progress(progress))
                 .child(div().invisible().child(progress.as_tsv()));
         }
         for conflict in &self.operation_conflicts {
