@@ -170,6 +170,22 @@ impl PermissionOnboardingContract {
         );
         lines.join("\n")
     }
+
+    pub fn visible_status(&self) -> String {
+        if self.machine_search_ready {
+            "Machine-wide search ready".to_string()
+        } else {
+            format!("Machine-wide search limited: {}", self.prompt_mode)
+        }
+    }
+
+    pub fn visible_scope_summary(&self) -> String {
+        match self.scopes.len() {
+            0 => "No protected scopes need attention".to_string(),
+            1 => "1 protected scope needs attention".to_string(),
+            count => format!("{count} protected scopes need attention"),
+        }
+    }
 }
 
 impl PermissionOnboardingScopeContract {
@@ -195,6 +211,10 @@ impl PermissionOnboardingScopeContract {
             escape_contract_field(&self.path),
             escape_contract_field(&self.reason)
         )
+    }
+
+    pub fn visible_line(&self) -> String {
+        format!("{}: {} - {}", self.scope, self.state, self.path)
     }
 }
 
@@ -888,9 +908,10 @@ impl Render for RootView {
                     .child(div().flex_1().h_full().child(icon::render(&self.icon_view))),
             );
         if let Some(dialog) = &self.permission_dialog {
-            root = root.child(dialog::render_permission(
+            root = root.child(dialog::render_permission_onboarding(
                 dialog,
                 self.permission_access.as_ref(),
+                self.permission_onboarding.as_ref(),
             ));
         }
         if let Some(access) = &self.permission_access {
@@ -1037,6 +1058,19 @@ mod tests {
         assert!(contract.as_tsv().contains(
             "\npermission-scope\tdesktop\tstate=denied\tpath=/Users/me/Desktop\treason=full disk access required"
         ));
+        let onboarding = contract.permission_onboarding.as_ref().unwrap();
+        assert_eq!(
+            onboarding.visible_status(),
+            "Machine-wide search limited: first-run"
+        );
+        assert_eq!(
+            onboarding.visible_scope_summary(),
+            "1 protected scope needs attention"
+        );
+        assert_eq!(
+            onboarding.scopes[0].visible_line(),
+            "desktop: denied - /Users/me/Desktop"
+        );
     }
 
     #[test]
@@ -1340,6 +1374,35 @@ mod tests {
         assert!(access
             .as_tsv()
             .contains("\tprompt-action=choose-location\tpromptable=true\tprompt-source=security-scoped-bookmark\t"));
+    }
+
+    #[test]
+    fn permission_dialog_renderer_accepts_onboarding_scope_state() {
+        let onboarding = PermissionOnboardingContract::new(
+            "open-full-disk-access",
+            PermissionPromptKind::FullDiskAccess,
+            "first-run",
+            true,
+            false,
+        )
+        .with_scopes(vec![PermissionOnboardingScopeContract::new(
+            "documents",
+            "denied",
+            "/Users/me/Documents",
+            "full disk access required",
+        )]);
+        let dialog = DialogContract::permission_prompt(PermissionPromptKind::FullDiskAccess);
+
+        let _element = dialog::render_permission_onboarding(&dialog, None, Some(&onboarding));
+
+        assert_eq!(
+            onboarding.visible_status(),
+            "Machine-wide search limited: first-run"
+        );
+        assert_eq!(
+            onboarding.scopes[0].visible_line(),
+            "documents: denied - /Users/me/Documents"
+        );
     }
 
     #[test]

@@ -1913,10 +1913,11 @@ fn app_launch_spec_checked(
         &mut check_control,
     )?;
     let access = permission_access_contract(&admission);
-    if permission_access_requires_surface(&access) {
+    let permission_surface_required = permission_access_requires_surface(&access);
+    if permission_surface_required {
         spec = spec.with_permission_access(access);
     }
-    if admission.can_touch_filesystem {
+    if admission.can_touch_filesystem && !permission_surface_required {
         let page = read_directory_with_access(&spec.initial_path, "native app initial icon view")?;
         spec = spec.with_initial_icon_view(IconViewContract::from_records(
             &page.entries,

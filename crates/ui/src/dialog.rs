@@ -1130,7 +1130,7 @@ impl DialogContract {
 }
 
 pub fn render(contract: &DialogContract) -> impl IntoElement {
-    render_with_state(contract.clone(), None)
+    render_with_state(contract.clone(), None, None)
 }
 
 pub fn render_progress(progress: &OperationProgressContract) -> impl IntoElement {
@@ -1317,15 +1317,33 @@ pub fn render_permission(
     contract: &DialogContract,
     access: Option<&super::PermissionAccessContract>,
 ) -> impl IntoElement {
+    render_permission_onboarding(contract, access, None)
+}
+
+pub fn render_permission_onboarding(
+    contract: &DialogContract,
+    access: Option<&super::PermissionAccessContract>,
+    onboarding: Option<&super::PermissionOnboardingContract>,
+) -> impl IntoElement {
     let contract = access
         .map(|access| {
             DialogContract::permission_prompt_for_action(access.prompt_kind, &access.prompt_action)
         })
         .unwrap_or_else(|| contract.clone());
-    render_with_state(contract, access.map(PermissionAccessContractState::from))
+    render_with_state(
+        contract,
+        access.map(PermissionAccessContractState::from),
+        onboarding.map(PermissionOnboardingContractState::from),
+    )
 }
 
 struct PermissionAccessContractState(String);
+struct PermissionOnboardingContractState {
+    status: String,
+    scope_summary: String,
+    scopes: Vec<String>,
+    tsv: String,
+}
 
 impl From<&super::PermissionAccessContract> for PermissionAccessContractState {
     fn from(access: &super::PermissionAccessContract) -> Self {
@@ -1333,9 +1351,25 @@ impl From<&super::PermissionAccessContract> for PermissionAccessContractState {
     }
 }
 
+impl From<&super::PermissionOnboardingContract> for PermissionOnboardingContractState {
+    fn from(onboarding: &super::PermissionOnboardingContract) -> Self {
+        Self {
+            status: onboarding.visible_status(),
+            scope_summary: onboarding.visible_scope_summary(),
+            scopes: onboarding
+                .scopes
+                .iter()
+                .map(super::PermissionOnboardingScopeContract::visible_line)
+                .collect(),
+            tsv: onboarding.as_tsv(),
+        }
+    }
+}
+
 fn render_with_state(
     contract: DialogContract,
     access_state: Option<PermissionAccessContractState>,
+    onboarding_state: Option<PermissionOnboardingContractState>,
 ) -> impl IntoElement {
     let sheet_id = match contract.surface {
         DialogSurface::Alert => "alert-sheet",
@@ -1346,40 +1380,43 @@ fn render_with_state(
         DialogSurface::Conflict => "conflict-sheet",
         DialogSurface::Permission => "permission-sheet",
     };
-    let mut sheet_content = base_sheet(sheet_id).child(
-        div()
-            .flex()
-            .flex_col()
-            .gap(px(12.0))
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(10.0))
-                    .child(
-                        div()
-                            .w(px(28.0))
-                            .h(px(28.0))
-                            .rounded(px(6.0))
-                            .bg(rgb(0x4f8cff)),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(16.0))
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_color(rgb(0xf2f2f2))
-                            .child(contract.title),
-                    ),
-            )
-            .child(
-                div()
-                    .text_size(px(13.0))
-                    .line_height(px(18.0))
-                    .text_color(rgb(0xd4d4d4))
-                    .child(contract.message),
-            )
-            .child(render_buttons(&contract)),
-    );
+    let mut content = div()
+        .flex()
+        .flex_col()
+        .gap(px(12.0))
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap(px(10.0))
+                .child(
+                    div()
+                        .w(px(28.0))
+                        .h(px(28.0))
+                        .rounded(px(6.0))
+                        .bg(rgb(0x4f8cff)),
+                )
+                .child(
+                    div()
+                        .text_size(px(16.0))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(rgb(0xf2f2f2))
+                        .child(contract.title),
+                ),
+        )
+        .child(
+            div()
+                .text_size(px(13.0))
+                .line_height(px(18.0))
+                .text_color(rgb(0xd4d4d4))
+                .child(contract.message),
+        );
+    if let Some(onboarding) = &onboarding_state {
+        content = content.child(render_permission_onboarding_state(onboarding));
+    }
+    content = content.child(render_buttons(&contract));
+
+    let mut sheet_content = base_sheet(sheet_id).child(content);
     if let Some(state) = access_state {
         sheet_content = sheet_content.child(
             div()
@@ -1388,7 +1425,67 @@ fn render_with_state(
                 .child(state.0),
         );
     }
+    if let Some(state) = onboarding_state {
+        sheet_content = sheet_content.child(
+            div()
+                .id("permission-onboarding-state")
+                .invisible()
+                .child(state.tsv),
+        );
+    }
     render_sheet(sheet_content)
+}
+
+fn render_permission_onboarding_state(
+    onboarding: &PermissionOnboardingContractState,
+) -> impl IntoElement {
+    let mut rows = div()
+        .id("permission-onboarding-scopes")
+        .flex()
+        .flex_col()
+        .gap(px(5.0));
+    for scope in onboarding.scopes.iter().take(4) {
+        rows = rows.child(
+            div()
+                .id("permission-onboarding-scope")
+                .text_size(px(11.0))
+                .line_height(px(15.0))
+                .text_color(rgb(0xc7c7cc))
+                .child(scope.clone()),
+        );
+    }
+    if onboarding.scopes.len() > 4 {
+        rows = rows.child(
+            div()
+                .id("permission-onboarding-more")
+                .text_size(px(11.0))
+                .text_color(rgb(0x9a9aa0))
+                .child(format!("{} more scopes", onboarding.scopes.len() - 4)),
+        );
+    }
+
+    div()
+        .id("permission-onboarding-visible-state")
+        .p(px(8.0))
+        .rounded(px(6.0))
+        .bg(rgb(0x242426))
+        .child(
+            div()
+                .id("permission-onboarding-status")
+                .text_size(px(12.0))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(rgb(0xf2f2f2))
+                .child(onboarding.status.clone()),
+        )
+        .child(
+            div()
+                .id("permission-onboarding-scope-summary")
+                .mt(px(3.0))
+                .text_size(px(11.0))
+                .text_color(rgb(0x9a9aa0))
+                .child(onboarding.scope_summary.clone()),
+        )
+        .child(rows)
 }
 
 fn render_sheet_content(sheet_id: &'static str, content: impl IntoElement) -> impl IntoElement {
