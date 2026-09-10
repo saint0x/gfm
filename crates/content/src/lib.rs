@@ -1,6 +1,7 @@
 mod archive;
 mod cache;
 mod kind;
+mod ocr;
 mod ooxml;
 mod pdf;
 mod policy;
@@ -20,6 +21,10 @@ pub use kind::extractor_version_for_path;
 use kind::{
     archive_kind, extraction_format, legacy_office_kind, office_kind, path_is_pdf, rich_kind,
     structured_kind,
+};
+pub use ocr::{
+    ocr_candidate_for_extraction, ocr_candidate_for_record, OcrCandidate, OcrCandidateKind,
+    OCR_EXTRACTOR_VERSION,
 };
 use ooxml::extract_ooxml_checked;
 use pdf::extract_pdf_checked;

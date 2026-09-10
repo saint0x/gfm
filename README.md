@@ -133,6 +133,7 @@ The index is compact and incremental:
 - structured JSON, CSV, XML plist, and binary plist extraction for searchable keys, cells, and values
 - format-scoped extractor versioning so parser upgrades invalidate only the affected content-cache family
 - incremental content indexing that tombstones changed/deleted file IDs, re-extracts only new or content-modified records, checks cancellation before each record-level extraction/insertion step, and keeps archive compaction cancellable through segment planning, merge, materialization, and publish boundaries
+- OCR candidate accounting for image-only PDFs and Mac-style screenshot images during background content indexing, so deferred recognition work can be scheduled without blocking primary content postings
 - persistent extraction quarantine during background content indexing so repeated corrupt/encrypted extractor failures are skipped before they spend more indexing latency
 - explicit ranking accumulator for exact, prefix, substring, fuzzy, path, metadata, kind, tag, content, recency, term-frequency, and user-pinned signals
 - user-intent boosts for Applications, Recents, Downloads, Desktop, screenshots, and project folders

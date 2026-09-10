@@ -473,7 +473,7 @@ impl IndexSnapshot {
     ) -> Result<ContentIndexReport> {
         let delta = ContentIndexDelta::from_records(&self.records, previous_records);
         let mut live = LiveIndex::from_records(delta.records.clone());
-        let indexed = live.index_content(extractor)?;
+        let batch = live.index_content_batch_cancellable(extractor, &Cancellation::default())?;
         let postings = live.content_postings();
         let terms = postings.len();
         write_content_segment(
@@ -484,9 +484,10 @@ impl IndexSnapshot {
             },
         )?;
         Ok(ContentIndexReport {
-            indexed,
-            skipped: delta.records.len().saturating_sub(indexed),
+            indexed: batch.indexed,
+            skipped: batch.skipped,
             quarantined: 0,
+            ocr_candidates: batch.ocr_candidates,
             unchanged: delta.unchanged,
             tombstoned: delta.tombstones.len(),
             terms,

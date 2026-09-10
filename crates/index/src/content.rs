@@ -38,6 +38,7 @@ pub struct ContentIndexReport {
     pub indexed: usize,
     pub skipped: usize,
     pub quarantined: usize,
+    pub ocr_candidates: usize,
     pub unchanged: usize,
     pub tombstoned: usize,
     pub terms: usize,
@@ -49,6 +50,7 @@ pub struct ContentIndexBatchReport {
     pub indexed: usize,
     pub skipped: usize,
     pub quarantined: usize,
+    pub ocr_candidates: usize,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -376,6 +378,7 @@ impl BackgroundContentIndexer {
             indexed: 0,
             skipped: 0,
             quarantined: 0,
+            ocr_candidates: 0,
             unchanged: 0,
             tombstoned: 0,
             terms: 0,
@@ -389,9 +392,10 @@ impl BackgroundContentIndexer {
                 self.options.segment_prefix, batch_index
             ));
             let mut live = LiveIndex::from_records(records.to_vec());
-            let indexed = live.index_content_cancellable(&self.extractor, cancellation)?;
-            report.indexed += indexed;
-            report.skipped += records.len().saturating_sub(indexed);
+            let batch = live.index_content_batch_cancellable(&self.extractor, cancellation)?;
+            report.indexed += batch.indexed;
+            report.skipped += batch.skipped;
+            report.ocr_candidates += batch.ocr_candidates;
             let postings = live.content_postings();
             report.terms += postings.len();
             write_content_segment_checked(
@@ -442,6 +446,7 @@ impl BackgroundContentIndexer {
             indexed: 0,
             skipped: 0,
             quarantined: 0,
+            ocr_candidates: 0,
             unchanged: delta.unchanged,
             tombstoned: delta.tombstones.len(),
             terms: 0,
@@ -477,18 +482,12 @@ impl BackgroundContentIndexer {
                     quarantine,
                     cancellation,
                 )?,
-                None => {
-                    let indexed = live.index_content_cancellable(&self.extractor, cancellation)?;
-                    ContentIndexBatchReport {
-                        indexed,
-                        skipped: records.len().saturating_sub(indexed),
-                        quarantined: 0,
-                    }
-                }
+                None => live.index_content_batch_cancellable(&self.extractor, cancellation)?,
             };
             report.indexed += batch.indexed;
             report.skipped += batch.skipped;
             report.quarantined += batch.quarantined;
+            report.ocr_candidates += batch.ocr_candidates;
             let postings = live.content_postings();
             report.terms += postings.len();
             write_content_segment_checked(

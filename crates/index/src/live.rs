@@ -4,7 +4,8 @@ use crate::{
     RenameCorrelationReport, SidecarQueryImport, SidecarRecordHydrationReport,
 };
 use gfm_content::{
-    ExtractionFingerprint, ExtractionQuarantine, ExtractionStatus, Extractor, QuarantineDecision,
+    ocr_candidate_for_extraction, ocr_candidate_for_record, ExtractionFingerprint,
+    ExtractionQuarantine, ExtractionStatus, Extractor, QuarantineDecision,
 };
 use gfm_jobs::Cancellation;
 use gfm_search::{
@@ -616,19 +617,44 @@ impl LiveIndex {
         extractor: &Extractor,
         cancellation: &Cancellation,
     ) -> Result<usize> {
+        Ok(self
+            .index_content_batch_cancellable(extractor, cancellation)?
+            .indexed)
+    }
+
+    pub fn index_content_batch_cancellable(
+        &mut self,
+        extractor: &Extractor,
+        cancellation: &Cancellation,
+    ) -> Result<ContentIndexBatchReport> {
         let records: Vec<_> = self.index.records().cloned().collect();
-        let mut indexed = 0;
+        let mut report = ContentIndexBatchReport::default();
         for record in records {
             cancellation.check()?;
-            if let Some(document) =
-                extractor.extract_record_checked(&record, || cancellation.check())?
-            {
+            if record.kind != FileKind::File {
+                report.skipped += 1;
+                continue;
+            }
+            if ocr_candidate_for_record(&record).is_some() {
+                report.skipped += 1;
+                report.ocr_candidates += 1;
+                continue;
+            }
+            let extraction =
+                extractor.extract_path_report_checked(&record.path, || cancellation.check())?;
+            cancellation.check()?;
+            if ocr_candidate_for_extraction(&extraction).is_some() {
+                report.ocr_candidates += 1;
+            }
+            if let Some(document) = extraction.document {
                 cancellation.check()?;
                 self.index.insert_content(record.id, &document.text);
-                indexed += 1;
+                report.indexed += 1;
+            } else {
+                report.skipped += 1;
             }
         }
-        Ok(indexed)
+        Ok(report)
     }
 
     pub fn index_content_with_quarantine(
@@ -657,6 +683,11 @@ impl LiveIndex {
                 report.skipped += 1;
                 continue;
             }
+            if ocr_candidate_for_record(&record).is_some() {
+                report.skipped += 1;
+                report.ocr_candidates += 1;
+                continue;
+            }
 
             let fingerprint =
                 ExtractionFingerprint::for_path_checked(&record.path, || cancellation.check())?;
@@ -674,6 +705,9 @@ impl LiveIndex {
                 extractor.extract_path_report_checked(&record.path, || cancellation.check())?;
             cancellation.check()?;
             let status = extraction.status.clone();
+            if ocr_candidate_for_extraction(&extraction).is_some() {
+                report.ocr_candidates += 1;
+            }
             let decision = quarantine.record_report(&extraction);
             if let Some(document) = extraction.document {
                 self.index.insert_content(record.id, &document.text);

@@ -4298,6 +4298,37 @@ fn background_content_indexer_batches_segments_and_compacts() {
 }
 
 #[test]
+fn background_content_indexer_reports_ocr_candidates_without_blocking_primary_content() {
+    let root = unique_temp_dir("gfm-background-content-ocr-root");
+    let segments = unique_temp_dir("gfm-background-content-ocr-segments");
+    let content = unique_temp_path("gfm-background-content-ocr", "gfmcontent");
+    fs::write(root.join("note.md"), "primary searchabletoken").unwrap();
+    fs::write(root.join("scan.pdf"), image_only_pdf()).unwrap();
+    fs::write(
+        root.join("Screenshot 2026-08-24 at 6.59.43 PM.png"),
+        b"\x89PNG\r\n\x1a\n",
+    )
+    .unwrap();
+
+    let snapshot = Indexer::default().build(&root).unwrap();
+    let report = BackgroundContentIndexer::default()
+        .run_and_compact(&snapshot, &segments, &content, &Cancellation::default())
+        .unwrap();
+    let mut live = snapshot.into_live();
+    live.load_content_postings(&content).unwrap();
+
+    assert_eq!(report.indexed, 1);
+    assert_eq!(report.skipped, 3);
+    assert_eq!(report.ocr_candidates, 2);
+    assert_eq!(live.search("searchabletoken", 5).len(), 1);
+    assert!(live.search("abcdefghijkl", 5).is_empty());
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(segments).unwrap();
+    fs::remove_file(content).unwrap();
+}
+
+#[test]
 fn background_content_indexer_incrementally_updates_existing_archive() {
     let root = unique_temp_dir("gfm-background-content-incremental-root");
     let segments = unique_temp_dir("gfm-background-content-incremental-segments");
@@ -5969,5 +6000,20 @@ stream
 not-valid-zlib
 endstream
 endobj"
+        .to_vec()
+}
+
+fn image_only_pdf() -> Vec<u8> {
+    b"%PDF-1.4
+1 0 obj
+<< /Type /Page /Resources << /XObject << /Im0 2 0 R >> >> >>
+endobj
+2 0 obj
+<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length 12 >>
+stream
+abcdefghijkl
+endstream
+endobj
+%%EOF"
         .to_vec()
 }
