@@ -361,16 +361,21 @@ where
         if set_index % CANCELLATION_STRIDE == 0 {
             cancellation.check()?;
         }
-        let mut retained = BTreeSet::new();
-        for (id_index, id) in ids.iter().copied().enumerate() {
-            if id_index % CANCELLATION_STRIDE == 0 {
-                cancellation.check()?;
+        let mut retained_index = 0usize;
+        let mut cancellation_error = None;
+        ids.retain(|id| {
+            if retained_index.is_multiple_of(CANCELLATION_STRIDE) {
+                if let Err(err) = cancellation.check() {
+                    cancellation_error = Some(err);
+                    return false;
+                }
             }
-            if candidates.contains(&id) {
-                retained.insert(id);
-            }
+            retained_index += 1;
+            candidates.contains(id)
+        });
+        if let Some(err) = cancellation_error {
+            return Err(err);
         }
-        ids = retained;
         if ids.is_empty() {
             break;
         }
