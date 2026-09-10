@@ -834,7 +834,7 @@ pub struct WindowLifecycleContract {
     pub progress_surfaces: Vec<OperationProgressContract>,
     pub operation_conflicts: Vec<OperationConflictContract>,
     pub provider_conflicts: Vec<ProviderConflictContract>,
-    pub permission_dialog: Option<DialogSurface>,
+    pub permission_dialog: Option<DialogContract>,
     pub permission_prompt: Option<PermissionPromptKind>,
     pub permission_onboarding: Option<PermissionOnboardingContract>,
     pub permission_access: Option<PermissionAccessContract>,
@@ -868,7 +868,7 @@ impl WindowLifecycleContract {
             progress_surfaces: spec.progress_surfaces.clone(),
             operation_conflicts: spec.operation_conflicts.clone(),
             provider_conflicts: spec.provider_conflicts.clone(),
-            permission_dialog: spec.permission_dialog.as_ref().map(|dialog| dialog.surface),
+            permission_dialog: spec.permission_dialog.clone(),
             permission_prompt: spec.permission_prompt,
             permission_onboarding: spec.permission_onboarding.clone(),
             permission_access: spec.permission_access.clone(),
@@ -892,6 +892,8 @@ impl WindowLifecycleContract {
             self.sidebar_paths.icloud_drive_state.as_str(),
             self.initial_view.mode(),
             self.permission_dialog
+                .as_ref()
+                .map(|dialog| dialog.surface)
                 .map(DialogSurface::as_str)
                 .unwrap_or("none")
         )];
@@ -916,6 +918,9 @@ impl WindowLifecycleContract {
                 .iter()
                 .map(|conflict| conflict.as_tsv()),
         );
+        if let Some(dialog) = &self.permission_dialog {
+            lines.push(dialog.as_tsv());
+        }
         if let Some(prompt) = self.permission_prompt {
             lines.push(format!(
                 "permission-prompt\tkind={}\tsurface=permission",
@@ -1416,12 +1421,24 @@ mod tests {
             .with_permission_prompt(PermissionPromptKind::BookmarkAcquisition);
         let contract = WindowLifecycleContract::from_spec(&spec).unwrap();
 
-        assert_eq!(contract.permission_dialog, Some(DialogSurface::Permission));
+        assert_eq!(
+            contract
+                .permission_dialog
+                .as_ref()
+                .map(|dialog| dialog.surface),
+            Some(DialogSurface::Permission)
+        );
         assert_eq!(
             contract.permission_prompt,
             Some(PermissionPromptKind::BookmarkAcquisition)
         );
         assert!(contract.as_tsv().contains("\tpermission-dialog=permission"));
+        assert!(contract.as_tsv().contains(
+            "\ndialog\tsurface=permission\tpresentation=window-sheet\ttitle=Choose a Folder to Continue\t"
+        ));
+        assert!(contract
+            .as_tsv()
+            .contains("\nbutton\tchoose-location\tChoose...\tdefault\tenabled=true"));
         assert!(contract
             .as_tsv()
             .contains("\npermission-prompt\tkind=bookmark-acquisition\tsurface=permission"));
@@ -1446,7 +1463,13 @@ mod tests {
             AppLaunchSpec::new("/Users/me/Desktop").with_permission_onboarding(onboarding.clone());
         let contract = WindowLifecycleContract::from_spec(&spec).unwrap();
 
-        assert_eq!(contract.permission_dialog, Some(DialogSurface::Permission));
+        assert_eq!(
+            contract
+                .permission_dialog
+                .as_ref()
+                .map(|dialog| dialog.surface),
+            Some(DialogSurface::Permission)
+        );
         assert_eq!(
             contract.permission_prompt,
             Some(PermissionPromptKind::FullDiskAccess)
@@ -1521,7 +1544,13 @@ mod tests {
             .with_permission_access(access.clone());
         let contract = WindowLifecycleContract::from_spec(&spec).unwrap();
 
-        assert_eq!(contract.permission_dialog, Some(DialogSurface::Permission));
+        assert_eq!(
+            contract
+                .permission_dialog
+                .as_ref()
+                .map(|dialog| dialog.surface),
+            Some(DialogSurface::Permission)
+        );
         assert_eq!(
             contract.permission_prompt,
             Some(PermissionPromptKind::BookmarkAcquisition)

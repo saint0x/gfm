@@ -20664,6 +20664,61 @@ fn native_app_launch_selects_trash_view_contract_from_binary() {
 }
 
 #[test]
+fn native_app_launch_renders_permission_dialog_contract_from_binary() {
+    let root = unique_temp_dir("gfm-cli-native-launch-permission-dialog");
+    let home = root.join("home");
+    let documents = home.join("Documents");
+    let protected = documents.join("Plan.md");
+    fs::create_dir_all(&documents).unwrap();
+    fs::write(&protected, "plan").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .current_dir(&root)
+        .env("HOME", &home)
+        .env("GFM_NATIVE_LAUNCH_CONTRACT", "1")
+        .arg(&protected)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("\tpermission-dialog=permission"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "\ndialog\tsurface=permission\tpresentation=window-sheet\ttitle=Choose a Folder to Continue\t"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\nbutton\tchoose-location\tChoose...\tdefault\tenabled=true"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\nbutton\tnot-now\tNot Now\tcancel\tenabled=true"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\npermission-prompt\tkind=bookmark-acquisition\tsurface=permission"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\npermission-access\tpath=")
+            && stdout.contains("\tscope=documents\t")
+            && stdout.contains("\tprompt-action=choose-location\t"),
+        "{stdout}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn native_app_launch_renders_fileprovider_conflict_surface_from_binary() {
     let root = unique_temp_dir("gfm-cli-native-launch-provider-conflict");
     let conflict = root.join("Conflict.icloud-conflict.md");
