@@ -27,7 +27,7 @@ use crate::{
 };
 use gfm_content::{
     CachedExtractor, ExtractionFingerprint, ExtractionQuarantine, Extractor, OcrCandidateQueue,
-    OcrRecognition, OcrRecognitionCache,
+    OcrFailureDecision, OcrFailureKind, OcrFailureQuarantine, OcrRecognition, OcrRecognitionCache,
 };
 use gfm_fs::record_for_path_checked;
 use gfm_index::{
@@ -365,7 +365,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "ocr-worker" => {
             let queue = required_path(args.next(), "ocr-worker requires a queue path")?;
             let cache = required_path(args.next(), "ocr-worker requires a recognition cache path")?;
-            print!("{}", run_ocr_worker(queue, cache)?);
+            let quarantine = args.next().map(PathBuf::from);
+            print!("{}", run_ocr_worker(queue, cache, quarantine)?);
         }
         "extract-quarantine" => {
             let path = required_path(args.next(), "extract-quarantine requires a path")?;
@@ -1357,6 +1358,7 @@ struct OcrWorkerReport {
     candidates: usize,
     cached: usize,
     recognized: usize,
+    quarantined: usize,
     empty: usize,
     missing: usize,
     unsupported: usize,
@@ -1378,10 +1380,11 @@ impl OcrWorkerReport {
 
     fn as_tsv(&self) -> String {
         format!(
-            "ocr-worker\tcandidates={}\tcached={}\trecognized={}\tempty={}\tmissing={}\tunsupported={}\tfailed={}\tunavailable={}",
+            "ocr-worker\tcandidates={}\tcached={}\trecognized={}\tquarantined={}\tempty={}\tmissing={}\tunsupported={}\tfailed={}\tunavailable={}",
             self.candidates,
             self.cached,
             self.recognized,
+            self.quarantined,
             self.empty,
             self.missing,
             self.unsupported,
@@ -1391,8 +1394,9 @@ impl OcrWorkerReport {
     }
 }
 
-fn run_ocr_worker(queue: PathBuf, cache: PathBuf) -> Result<String> {
+fn run_ocr_worker(queue: PathBuf, cache: PathBuf, quarantine: Option<PathBuf>) -> Result<String> {
     const WORKER: &str = "ocr worker";
+    let quarantine = quarantine.unwrap_or_else(|| cache.with_extension("gfmocr-failures"));
     let queue_access = ForegroundContentIndexAccessReports::entry_checked(
         queue.clone(),
         AccessIntent::Read,
@@ -1404,9 +1408,19 @@ fn run_ocr_worker(queue: PathBuf, cache: PathBuf) -> Result<String> {
         AccessIntent::Write,
         || Ok(()),
     )?;
+    let quarantine_probe = checked_write_probe_path(&quarantine, WORKER, || Ok(()))?;
+    let quarantine_access = ForegroundContentIndexAccessReports::entry_checked(
+        quarantine_probe,
+        AccessIntent::Write,
+        || Ok(()),
+    )?;
     queue_access.preflight_volume(WORKER)?;
     cache_access.preflight_volume(WORKER)?;
-    let volume = queue_access.volume().or_else(|| cache_access.volume());
+    quarantine_access.preflight_volume(WORKER)?;
+    let volume = queue_access
+        .volume()
+        .or_else(|| cache_access.volume())
+        .or_else(|| quarantine_access.volume());
     visible_scheduled_result(
         run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
             Priority::Background,
@@ -1416,13 +1430,19 @@ fn run_ocr_worker(queue: PathBuf, cache: PathBuf) -> Result<String> {
             || Ok(volume),
             queue.clone(),
             move |cancellation, runtime| {
-                runtime.resize_checked(4, "ocr-worker:preflight", || cancellation.check())?;
+                runtime.resize_checked(5, "ocr-worker:preflight", || cancellation.check())?;
                 let _queue_access = queue_access.access_checked(WORKER, || cancellation.check())?;
                 let _cache_access = cache_access.access_checked(WORKER, || cancellation.check())?;
+                let _quarantine_access =
+                    quarantine_access.access_checked(WORKER, || cancellation.check())?;
                 content_runtime_phase(&runtime, 1, "ocr-worker:read", &cancellation)?;
                 let candidates = OcrCandidateQueue::read_checked(&queue, || cancellation.check())?;
                 let mut cache_store =
                     read_ocr_recognition_cache_or_default_checked(&cache, || cancellation.check())?;
+                let mut failure_quarantine =
+                    read_ocr_failure_quarantine_or_default_checked(&quarantine, || {
+                        cancellation.check()
+                    })?;
                 let mut report = OcrWorkerReport {
                     candidates: candidates.len(),
                     ..OcrWorkerReport::default()
@@ -1433,10 +1453,18 @@ fn run_ocr_worker(queue: PathBuf, cache: PathBuf) -> Result<String> {
                     cancellation.check()?;
                     if cache_store.get(candidate).is_some() {
                         report.cached += 1;
+                        failure_quarantine.record_success(candidate);
                         lines.push(format!(
                             "ocr-candidate\tpath={}\tstatus=cached\tlines=0\ttext-bytes=0\treason=-",
                             escape_content_tsv_path(&candidate.path)
                         ));
+                        continue;
+                    }
+                    if let OcrFailureDecision::Quarantined(entry) =
+                        failure_quarantine.before_recognize(candidate)
+                    {
+                        report.quarantined += 1;
+                        lines.push(OcrFailureDecision::Quarantined(entry).as_tsv());
                         continue;
                     }
                     let recognition = match access_existing_ocr_candidate(
@@ -1468,14 +1496,30 @@ fn run_ocr_worker(queue: PathBuf, cache: PathBuf) -> Result<String> {
                             candidate: candidate.clone(),
                             text: recognition.text().to_string(),
                         });
+                        failure_quarantine.record_success(candidate);
+                    } else if let Some(failure_kind) =
+                        ocr_failure_kind_for_status(recognition.status())
+                    {
+                        let decision = failure_quarantine.record_failure(
+                            candidate.clone(),
+                            failure_kind,
+                            recognition
+                                .reason()
+                                .unwrap_or_else(|| recognition.status().as_str()),
+                        );
+                        if matches!(decision, OcrFailureDecision::Quarantined(_)) {
+                            report.quarantined += 1;
+                        }
                     }
                 }
-                content_runtime_phase(&runtime, 3, "ocr-worker:write", &cancellation)?;
+                content_runtime_phase(&runtime, 3, "ocr-worker:write-cache", &cancellation)?;
                 cache_store.write_checked(&cache, || cancellation.check())?;
-                content_runtime_phase(&runtime, 4, "ocr-worker:complete", &cancellation)?;
+                content_runtime_phase(&runtime, 4, "ocr-worker:write-quarantine", &cancellation)?;
+                failure_quarantine.write_checked(&quarantine, || cancellation.check())?;
+                content_runtime_phase(&runtime, 5, "ocr-worker:complete", &cancellation)?;
                 runtime.remember_completion_detail(format!(
-                    "completed:{} recognized:{} cached:{}",
-                    report.candidates, report.recognized, report.cached
+                    "completed:{} recognized:{} cached:{} quarantined:{}",
+                    report.candidates, report.recognized, report.cached, report.quarantined
                 ))?;
                 lines.push(report.as_tsv());
                 Ok(format!("{}\n", lines.join("\n")))
@@ -1500,6 +1544,35 @@ fn read_ocr_recognition_cache_or_default_checked(
             path,
             format!("OCR recognition cache metadata unavailable: {err}"),
         )),
+    }
+}
+
+fn read_ocr_failure_quarantine_or_default_checked(
+    path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<OcrFailureQuarantine> {
+    check_control()?;
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() => {
+            OcrFailureQuarantine::read_checked(path, &mut check_control)
+        }
+        Ok(_) => Ok(OcrFailureQuarantine::default()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(OcrFailureQuarantine::default()),
+        Err(err) => Err(GfmError::io(
+            path,
+            format!("OCR failure quarantine metadata unavailable: {err}"),
+        )),
+    }
+}
+
+fn ocr_failure_kind_for_status(status: VisionTextRecognitionStatus) -> Option<OcrFailureKind> {
+    match status {
+        VisionTextRecognitionStatus::Recognized => None,
+        VisionTextRecognitionStatus::Empty => Some(OcrFailureKind::Empty),
+        VisionTextRecognitionStatus::Missing => Some(OcrFailureKind::Missing),
+        VisionTextRecognitionStatus::Unsupported => Some(OcrFailureKind::Unsupported),
+        VisionTextRecognitionStatus::Failed => Some(OcrFailureKind::Failed),
+        VisionTextRecognitionStatus::Unavailable => Some(OcrFailureKind::Unavailable),
     }
 }
 
@@ -2984,13 +3057,13 @@ mod tests {
         .write(&cache)
         .unwrap();
 
-        let output = run_ocr_worker(queue, cache.clone()).unwrap();
+        let output = run_ocr_worker(queue, cache.clone(), None).unwrap();
         let reloaded = OcrRecognitionCache::read(cache).unwrap();
 
         assert!(output.contains("\tstatus=cached\t"), "{output}");
         assert!(
             output.contains(
-                "ocr-worker\tcandidates=1\tcached=1\trecognized=0\tempty=0\tmissing=0\tunsupported=0\tfailed=0\tunavailable=0"
+                "ocr-worker\tcandidates=1\tcached=1\trecognized=0\tquarantined=0\tempty=0\tmissing=0\tunsupported=0\tfailed=0\tunavailable=0"
             ),
             "{output}"
         );
@@ -3006,6 +3079,7 @@ mod tests {
         let root = unique_temp_dir("gfm-ocr-worker-missing");
         let queue = root.join("ocr.gfmocrq");
         let cache = root.join("ocr.gfmocrcache");
+        let quarantine = root.join("ocr.gfmocrfail");
         let candidate = OcrCandidate {
             path: root.join("Screenshot 2026-09-10 at 10.00.01 AM.png"),
             kind: OcrCandidateKind::ScreenshotImage,
@@ -3019,17 +3093,57 @@ mod tests {
             .write(&queue)
             .unwrap();
 
-        let output = run_ocr_worker(queue, cache.clone()).unwrap();
+        let output = run_ocr_worker(queue, cache.clone(), Some(quarantine.clone())).unwrap();
         let reloaded = OcrRecognitionCache::read(cache).unwrap();
+        let failures = OcrFailureQuarantine::read(quarantine).unwrap();
 
         assert!(output.contains("\tstatus=missing\t"), "{output}");
         assert!(
             output.contains(
-                "ocr-worker\tcandidates=1\tcached=0\trecognized=0\tempty=0\tmissing=1\tunsupported=0\tfailed=0\tunavailable=0"
+                "ocr-worker\tcandidates=1\tcached=0\trecognized=0\tquarantined=0\tempty=0\tmissing=1\tunsupported=0\tfailed=0\tunavailable=0"
             ),
             "{output}"
         );
         assert!(reloaded.get(&candidate).is_none());
+        assert!(failures.has_entry(&candidate));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn ocr_worker_quarantines_repeated_missing_candidate() {
+        let root = unique_temp_dir("gfm-ocr-worker-repeated-missing");
+        let queue = root.join("ocr.gfmocrq");
+        let cache = root.join("ocr.gfmocrcache");
+        let quarantine = root.join("ocr.gfmocrfail");
+        let candidate = OcrCandidate {
+            path: root.join("Screenshot 2026-09-10 at 10.00.02 AM.png"),
+            kind: OcrCandidateKind::ScreenshotImage,
+            fingerprint: ExtractionFingerprint {
+                extractor_version: 1,
+                len: 122,
+                modified_ns: Some(44),
+            },
+        };
+        OcrCandidateQueue::new([candidate.clone()])
+            .write(&queue)
+            .unwrap();
+
+        let first = run_ocr_worker(queue.clone(), cache.clone(), Some(quarantine.clone())).unwrap();
+        let second =
+            run_ocr_worker(queue.clone(), cache.clone(), Some(quarantine.clone())).unwrap();
+        let third = run_ocr_worker(queue, cache.clone(), Some(quarantine.clone())).unwrap();
+        let failures = OcrFailureQuarantine::read(quarantine).unwrap();
+
+        assert!(first.contains("\tstatus=missing\t"), "{first}");
+        assert!(
+            second.contains(
+                "ocr-worker\tcandidates=1\tcached=0\trecognized=0\tquarantined=1\tempty=0\tmissing=1\tunsupported=0\tfailed=0\tunavailable=0"
+            ),
+            "{second}"
+        );
+        assert!(third.contains("ocr-quarantine\tblocked\t"), "{third}");
+        assert!(failures.has_entry(&candidate));
+        assert!(OcrRecognitionCache::read(cache).unwrap().is_empty());
         fs::remove_dir_all(root).unwrap();
     }
 
