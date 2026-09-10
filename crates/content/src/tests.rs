@@ -543,6 +543,10 @@ fn extractor_versions_are_scoped_by_extraction_format() {
         OFFICE_EXTRACTOR_VERSION
     );
     assert_eq!(
+        extractor_version_for_path(Path::new("legacy.DOC")),
+        OFFICE_EXTRACTOR_VERSION
+    );
+    assert_eq!(
         extractor_version_for_path(Path::new("message.eml")),
         RICH_EXTRACTOR_VERSION
     );
@@ -652,6 +656,48 @@ fn extracts_pptx_text() {
     let doc = Extractor::default().extract_path(&path).unwrap().unwrap();
 
     assert_eq!(doc.text, "slideneedle launch plan");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn classifies_legacy_office_as_bounded_skipped_office_content() {
+    for extension in ["doc", "xls", "ppt"] {
+        let root = unique_temp_dir(&format!("gfm-content-legacy-office-{extension}"));
+        let path = root.join(format!("legacy.{extension}"));
+        fs::write(&path, legacy_office_bytes()).unwrap();
+
+        let report = Extractor::default().extract_path_report(&path).unwrap();
+
+        assert_eq!(report.format, ExtractionFormat::Office);
+        assert_eq!(report.status, ExtractionStatus::Skipped("legacy-office"));
+        assert_eq!(
+            report.fingerprint.extractor_version,
+            OFFICE_EXTRACTOR_VERSION
+        );
+        assert!(report.document.is_none());
+        assert!(report
+            .fingerprint
+            .cache_key(&path)
+            .starts_with(&format!("v{OFFICE_EXTRACTOR_VERSION}:")));
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn applies_office_byte_budget_to_legacy_office() {
+    let root = unique_temp_dir("gfm-content-legacy-office-budget");
+    let path = root.join("large.DOC");
+    fs::write(&path, [legacy_office_bytes(), vec![0_u8; 128]].concat()).unwrap();
+    let extractor = Extractor::new(ExtractionPolicy {
+        max_office_bytes: 16,
+        ..ExtractionPolicy::default()
+    });
+
+    let report = extractor.extract_path_report(&path).unwrap();
+
+    assert_eq!(report.format, ExtractionFormat::Office);
+    assert_eq!(report.status, ExtractionStatus::Skipped("too-large"));
+    assert!(report.document.is_none());
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -1416,6 +1462,12 @@ fn multi_page_pdf(pages: usize) -> Vec<u8> {
 
 fn ooxml_package(parts: &[(&str, &str)]) -> Vec<u8> {
     zip_package(parts)
+}
+
+fn legacy_office_bytes() -> Vec<u8> {
+    let mut bytes = b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1".to_vec();
+    bytes.extend_from_slice(b"GFM legacy Office fixture");
+    bytes
 }
 
 fn tar_gz_package(parts: &[(&str, &str)]) -> Vec<u8> {

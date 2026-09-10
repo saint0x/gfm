@@ -14,7 +14,7 @@ use std::path::Path;
 pub fn extractor_version_for_path(path: &Path) -> u32 {
     if path_is_pdf(path) {
         PDF_EXTRACTOR_VERSION
-    } else if office_kind(path).is_some() {
+    } else if office_kind(path).is_some() || legacy_office_kind(path).is_some() {
         OFFICE_EXTRACTOR_VERSION
     } else if archive_kind(path).is_some() {
         ARCHIVE_EXTRACTOR_VERSION
@@ -32,13 +32,14 @@ pub fn extractor_version_for_path(path: &Path) -> u32 {
 pub(crate) fn extraction_format(
     is_pdf: bool,
     office: Option<OoxmlKind>,
+    legacy_office: Option<LegacyOfficeKind>,
     archive: Option<ArchiveKind>,
     rich: Option<RichKind>,
     structured: Option<StructuredKind>,
 ) -> ExtractionFormat {
     if is_pdf {
         ExtractionFormat::Pdf
-    } else if office.is_some() {
+    } else if office.is_some() || legacy_office.is_some() {
         ExtractionFormat::Office
     } else if archive.is_some() {
         ExtractionFormat::Archive
@@ -95,6 +96,22 @@ pub(crate) fn office_kind(path: &Path) -> Option<OoxmlKind> {
         "docx" => Some(OoxmlKind::Docx),
         "xlsx" => Some(OoxmlKind::Xlsx),
         "pptx" => Some(OoxmlKind::Pptx),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LegacyOfficeKind {
+    Doc,
+    Xls,
+    Ppt,
+}
+
+pub(crate) fn legacy_office_kind(path: &Path) -> Option<LegacyOfficeKind> {
+    match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+        "doc" => Some(LegacyOfficeKind::Doc),
+        "xls" => Some(LegacyOfficeKind::Xls),
+        "ppt" => Some(LegacyOfficeKind::Ppt),
         _ => None,
     }
 }

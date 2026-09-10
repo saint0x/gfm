@@ -17,7 +17,10 @@ pub use cache::{
 };
 use gfm_types::{FileKind, FileRecord, GfmError, Result, SearchSnippet, SnippetHighlight};
 pub use kind::extractor_version_for_path;
-use kind::{archive_kind, extraction_format, office_kind, path_is_pdf, rich_kind, structured_kind};
+use kind::{
+    archive_kind, extraction_format, legacy_office_kind, office_kind, path_is_pdf, rich_kind,
+    structured_kind,
+};
 use ooxml::extract_ooxml_checked;
 use pdf::extract_pdf_checked;
 pub use policy::{
@@ -43,7 +46,7 @@ use structured::extract_structured_checked;
 
 pub const TEXT_EXTRACTOR_VERSION: u32 = 4;
 pub const PDF_EXTRACTOR_VERSION: u32 = 3;
-pub const OFFICE_EXTRACTOR_VERSION: u32 = 3;
+pub const OFFICE_EXTRACTOR_VERSION: u32 = 4;
 pub const RICH_EXTRACTOR_VERSION: u32 = 6;
 pub const ARCHIVE_EXTRACTOR_VERSION: u32 = 6;
 pub const STRUCTURED_EXTRACTOR_VERSION: u32 = 3;
@@ -80,7 +83,8 @@ impl Extractor {
         }
         let max_bytes = if path_is_pdf(&record.path) {
             self.policy.max_pdf_bytes
-        } else if office_kind(&record.path).is_some() {
+        } else if office_kind(&record.path).is_some() || legacy_office_kind(&record.path).is_some()
+        {
             self.policy.max_office_bytes
         } else if archive_kind(&record.path).is_some() {
             self.policy.max_archive_bytes
@@ -165,14 +169,15 @@ impl Extractor {
         let extractor_version = extractor_version_for_path(path);
         let fingerprint = ExtractionFingerprint::from_metadata(&metadata, extractor_version);
         let office = office_kind(path);
+        let legacy_office = legacy_office_kind(path);
         let rich = rich_kind(path);
         let archive = archive_kind(path);
         let structured = structured_kind(path);
         let is_pdf = path_is_pdf(path);
-        let format = extraction_format(is_pdf, office, archive, rich, structured);
+        let format = extraction_format(is_pdf, office, legacy_office, archive, rich, structured);
         let max_bytes = if is_pdf {
             self.policy.max_pdf_bytes
-        } else if office.is_some() {
+        } else if office.is_some() || legacy_office.is_some() {
             self.policy.max_office_bytes
         } else if archive.is_some() {
             self.policy.max_archive_bytes
@@ -184,6 +189,16 @@ impl Extractor {
                 path: path.to_path_buf(),
                 format,
                 status: ExtractionStatus::Skipped("too-large"),
+                fingerprint,
+                document: None,
+            });
+        }
+
+        if legacy_office.is_some() {
+            return Ok(ExtractionReport {
+                path: path.to_path_buf(),
+                format,
+                status: ExtractionStatus::Skipped("legacy-office"),
                 fingerprint,
                 document: None,
             });
@@ -292,6 +307,7 @@ impl Extractor {
     fn accepts_path(&self, path: &Path) -> bool {
         path_is_pdf(path)
             || office_kind(path).is_some()
+            || legacy_office_kind(path).is_some()
             || archive_kind(path).is_some()
             || rich_kind(path).is_some()
             || structured_kind(path).is_some()
