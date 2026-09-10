@@ -96,7 +96,7 @@ where
     } else {
         scheduler.schedule_payload(priority, payload_kind, label)
     };
-    let job = drain_single_runtime_job(&mut scheduler, job, label)?;
+    let job = drain_single_runtime_job(&mut scheduler, job, label, JobFairnessPolicy::default())?;
     let runtime = RuntimeJobHandle::begin_with_explicit_stores_checked(
         &job,
         RuntimeJobBeginRequest::new(
@@ -157,7 +157,7 @@ where
     } else {
         scheduler.schedule_payload(priority, payload_kind, label)
     };
-    let job = drain_single_runtime_job(&mut scheduler, job, label)?;
+    let job = drain_single_runtime_job(&mut scheduler, job, label, JobFairnessPolicy::default())?;
     let task = Task::new(job.clone(), move |cancellation| {
         let result = work(cancellation)?;
         result_tx
@@ -360,7 +360,12 @@ where
     )?;
 
     let (result_tx, result_rx) = mpsc::sync_channel(1);
-    let job = drain_single_runtime_job(&mut scheduler, job, label)?;
+    let job = drain_single_runtime_job(
+        &mut scheduler,
+        job,
+        label,
+        scheduling.fairness_policy.clone(),
+    )?;
     let runtime_task = runtime.clone();
     let task = RetriableTask::new(job.clone(), move |cancellation| {
         runtime_task.running_checked(|| cancellation.check())?;
@@ -403,8 +408,13 @@ where
     })
 }
 
-fn drain_single_runtime_job(scheduler: &mut Scheduler, job: Job, label: &str) -> Result<Job> {
-    let plan = scheduler.drain_fair_ready(JobFairnessPolicy::default(), []);
+fn drain_single_runtime_job(
+    scheduler: &mut Scheduler,
+    job: Job,
+    label: &str,
+    fairness_policy: JobFairnessPolicy,
+) -> Result<Job> {
+    let plan = scheduler.drain_fair_ready(fairness_policy, []);
     if let Some(blocked) = plan.blocked.first() {
         let missing = format_runtime_dependency_ids(blocked.missing_dependencies.iter().copied());
         let failed = format_runtime_dependency_ids(blocked.failed_dependencies.iter().copied());

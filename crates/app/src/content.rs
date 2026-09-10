@@ -38,9 +38,9 @@ use gfm_index::{
     ContentMergePolicy, IndexFootprintSpec, Indexer, QuarantineContentIndexRequest,
 };
 use gfm_jobs::{
-    Cancellation, FailureClass, JobFairnessPolicy, JobJournal, JobPayloadKind, JobProgressState,
-    Priority, RecoveryReason, RetriableTask, RetryPolicy, Scheduler, SchedulingAction,
-    SchedulingPressure, TaskStatus, WorkerPool,
+    Cancellation, FailureClass, JobJournal, JobPayloadKind, JobProgressState, Priority,
+    RecoveryReason, RetriableTask, RetryPolicy, Scheduler, SchedulingAction, SchedulingPressure,
+    TaskStatus, WorkerPool,
 };
 use gfm_mac::{
     AccessIntent, PdfPageRasterizationReport, PdfPageRasterizationStatus,
@@ -4354,7 +4354,7 @@ pub(crate) fn run_content_job(
         volume,
     );
     let runtime = begin_background_content_runtime(&job, spec, spec_path)?;
-    let plan = scheduler.drain_fair_ready(JobFairnessPolicy::default(), []);
+    let plan = scheduler.drain_fair_ready(scheduling.fairness_policy.clone(), []);
     if let Some(blocked) = plan.blocked.first() {
         let missing = blocked
             .missing_dependencies
