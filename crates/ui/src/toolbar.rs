@@ -65,6 +65,10 @@ pub struct ToolbarContract {
 
 impl ToolbarContract {
     pub fn finder_default(path: impl AsRef<Path>) -> Self {
+        Self::finder_for_view_mode(path, "icon")
+    }
+
+    pub fn finder_for_view_mode(path: impl AsRef<Path>, mode: &str) -> Self {
         let title = toolbar_title(path.as_ref());
         Self {
             height_px: TOOLBAR_HEIGHT as u16,
@@ -102,7 +106,7 @@ impl ToolbarContract {
                     "grid",
                     "view-as-icons",
                     ToolbarControlKind::SegmentedButton,
-                    ControlState::new(34, true, true),
+                    ControlState::new(34, true, mode == "icon"),
                 ),
                 control(
                     "view",
@@ -110,7 +114,7 @@ impl ToolbarContract {
                     "list",
                     "view-as-list",
                     ToolbarControlKind::SegmentedButton,
-                    ControlState::new(34, true, false),
+                    ControlState::new(34, true, mode == "list"),
                 ),
                 control(
                     "view",
@@ -118,7 +122,7 @@ impl ToolbarContract {
                     "columns",
                     "view-as-columns",
                     ToolbarControlKind::SegmentedButton,
-                    ControlState::new(34, true, false),
+                    ControlState::new(34, true, mode == "column"),
                 ),
                 control(
                     "view",
@@ -126,7 +130,7 @@ impl ToolbarContract {
                     "gallery",
                     "view-as-gallery",
                     ToolbarControlKind::SegmentedButton,
-                    ControlState::new(34, true, false),
+                    ControlState::new(34, true, mode == "gallery"),
                 ),
                 control(
                     "arrange",
@@ -402,6 +406,19 @@ mod tests {
         ));
         assert!(contract.as_tsv().contains(
             "control\tsearch\tsearch-field\tSearch\tmachine-search\tsearch-field\t232px\tenabled=true\tselected=false"
+        ));
+    }
+
+    #[test]
+    fn finder_for_view_mode_selects_visible_view_segment() {
+        let contract = ToolbarContract::finder_for_view_mode("/tmp/gfm", "list");
+        let tsv = contract.as_tsv();
+
+        assert!(tsv.contains(
+            "control\tview\ticon-view\tgrid\tview-as-icons\tsegmented-button\t34px\tenabled=true\tselected=false"
+        ));
+        assert!(tsv.contains(
+            "control\tview\tlist-view\tlist\tview-as-list\tsegmented-button\t34px\tenabled=true\tselected=true"
         ));
     }
 

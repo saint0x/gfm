@@ -20552,6 +20552,12 @@ fn native_app_launch_selects_list_view_contract_from_binary() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("\tinitial-view=list\t"), "{stdout}");
+    assert!(stdout.contains(
+        "\ncontrol\tview\ticon-view\tgrid\tview-as-icons\tsegmented-button\t34px\tenabled=true\tselected=false"
+    ), "{stdout}");
+    assert!(stdout.contains(
+        "\ncontrol\tview\tlist-view\tlist\tview-as-list\tsegmented-button\t34px\tenabled=true\tselected=true"
+    ), "{stdout}");
     assert!(stdout.contains("\nlist-view\t"), "{stdout}");
     assert!(stdout.contains("\ttotal=2\t"), "{stdout}");
     assert!(stdout.contains("Visible.txt"), "{stdout}");

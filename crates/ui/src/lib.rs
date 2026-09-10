@@ -967,7 +967,7 @@ impl WindowLifecycleContract {
     }
 
     fn effective_toolbar_contract(&self) -> ToolbarContract {
-        ToolbarContract::finder_default(&self.initial_path)
+        ToolbarContract::finder_for_view_mode(&self.initial_path, self.initial_view.mode())
     }
 
     fn effective_menu_contract(&self) -> MenuContract {
@@ -1002,7 +1002,10 @@ fn open_main_window(
         cx.new(|_| RootView {
             bounds_subscription: None,
             session_writer: WindowSessionWriter::new(session_store),
-            toolbar: ToolbarContract::finder_default(&spec.initial_path),
+            toolbar: ToolbarContract::finder_for_view_mode(
+                &spec.initial_path,
+                spec.initial_view.mode(),
+            ),
             sidebar: spec.sidebar_contract.clone().unwrap_or_else(|| {
                 sidebar::SidebarContract::from_path_snapshot(
                     &spec.initial_path,
@@ -1374,6 +1377,12 @@ mod tests {
 
         assert_eq!(contract.initial_view, InitialViewContract::List(list_view));
         assert!(contract.as_tsv().contains("\tinitial-view=list\t"));
+        assert!(contract.as_tsv().contains(
+            "\ncontrol\tview\ticon-view\tgrid\tview-as-icons\tsegmented-button\t34px\tenabled=true\tselected=false"
+        ));
+        assert!(contract.as_tsv().contains(
+            "\ncontrol\tview\tlist-view\tlist\tview-as-list\tsegmented-button\t34px\tenabled=true\tselected=true"
+        ));
         assert_eq!(contract.initial_view.as_tsv(), spec.initial_view.as_tsv());
     }
 
