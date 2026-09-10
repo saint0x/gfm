@@ -11,8 +11,10 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 pub const OCR_EXTRACTOR_VERSION: u32 = 1;
 pub const OCR_CANDIDATE_QUEUE_SCHEMA_VERSION: u32 = 1;
 pub const OCR_RECOGNITION_CACHE_SCHEMA_VERSION: u32 = 1;
+pub const OCR_FAILURE_QUARANTINE_SCHEMA_VERSION: u32 = 1;
 static OCR_QUEUE_TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static OCR_CACHE_TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static OCR_FAILURE_TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OcrCandidateKind {
@@ -396,6 +398,289 @@ impl OcrRecognitionCache {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OcrFailureKind {
+    Empty,
+    Missing,
+    Unsupported,
+    Failed,
+    Unavailable,
+}
+
+impl OcrFailureKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Empty => "empty",
+            Self::Missing => "missing",
+            Self::Unsupported => "unsupported",
+            Self::Failed => "failed",
+            Self::Unavailable => "unavailable",
+        }
+    }
+
+    pub fn parse(input: &str) -> Option<Self> {
+        match input {
+            "empty" => Some(Self::Empty),
+            "missing" => Some(Self::Missing),
+            "unsupported" => Some(Self::Unsupported),
+            "failed" => Some(Self::Failed),
+            "unavailable" => Some(Self::Unavailable),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OcrFailureEntry {
+    pub candidate: OcrCandidate,
+    pub kind: OcrFailureKind,
+    pub reason: String,
+    pub failures: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OcrFailureDecision {
+    Allow,
+    Quarantined(OcrFailureEntry),
+}
+
+impl OcrFailureDecision {
+    pub fn as_tsv(&self) -> String {
+        match self {
+            Self::Allow => "ocr-quarantine\tallow".to_string(),
+            Self::Quarantined(entry) => format!(
+                "ocr-quarantine\tblocked\tpath={}\tkind={}\tfailure-kind={}\tfailures={}\treason={}",
+                escape_field(&entry.candidate.path.to_string_lossy()),
+                entry.candidate.kind.as_str(),
+                entry.kind.as_str(),
+                entry.failures,
+                escape_field(&entry.reason)
+            ),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OcrFailureQuarantine {
+    failure_threshold: u32,
+    entries: BTreeMap<String, OcrFailureEntry>,
+}
+
+impl OcrFailureQuarantine {
+    pub fn new(failure_threshold: u32) -> Self {
+        Self {
+            failure_threshold: failure_threshold.max(1),
+            entries: BTreeMap::new(),
+        }
+    }
+
+    pub fn before_recognize(&self, candidate: &OcrCandidate) -> OcrFailureDecision {
+        match self.entries.get(&candidate.queue_key()) {
+            Some(entry) if entry.failures >= self.failure_threshold => {
+                OcrFailureDecision::Quarantined(entry.clone())
+            }
+            _ => OcrFailureDecision::Allow,
+        }
+    }
+
+    pub fn record_failure(
+        &mut self,
+        candidate: OcrCandidate,
+        kind: OcrFailureKind,
+        reason: impl Into<String>,
+    ) -> OcrFailureDecision {
+        let key = candidate.queue_key();
+        let entry = self.entries.entry(key).or_insert_with(|| OcrFailureEntry {
+            candidate,
+            kind,
+            reason: String::new(),
+            failures: 0,
+        });
+        entry.kind = kind;
+        entry.reason = reason.into();
+        entry.failures = entry.failures.saturating_add(1);
+        if entry.failures >= self.failure_threshold {
+            OcrFailureDecision::Quarantined(entry.clone())
+        } else {
+            OcrFailureDecision::Allow
+        }
+    }
+
+    pub fn record_success(&mut self, candidate: &OcrCandidate) -> OcrFailureDecision {
+        self.entries.remove(&candidate.queue_key());
+        OcrFailureDecision::Allow
+    }
+
+    pub fn has_entry(&self, candidate: &OcrCandidate) -> bool {
+        self.entries.contains_key(&candidate.queue_key())
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub fn write(&self, path: impl AsRef<Path>) -> crate::Result<()> {
+        self.write_checked(path, || Ok(()))
+    }
+
+    pub fn write_checked(
+        &self,
+        path: impl AsRef<Path>,
+        mut check_control: impl FnMut() -> crate::Result<()>,
+    ) -> crate::Result<()> {
+        let path = path.as_ref();
+        check_control()?;
+        let parent = real_parent_or_cwd(path);
+        fs::create_dir_all(parent).map_err(|err| gfm_types::GfmError::io(parent, err))?;
+        check_control()?;
+        let temp = failure_quarantine_temp_path(path);
+        let result = (|| {
+            let file = File::create(&temp).map_err(|err| gfm_types::GfmError::io(&temp, err))?;
+            check_control()?;
+            let mut writer = BufWriter::new(file);
+            write_queue_line_checked(
+                &mut writer,
+                &temp,
+                "gfm-ocr-failure-quarantine-v1\n",
+                &mut check_control,
+            )?;
+            write_queue_line_checked(
+                &mut writer,
+                &temp,
+                &format!("schema_version\t{OCR_FAILURE_QUARANTINE_SCHEMA_VERSION}\n"),
+                &mut check_control,
+            )?;
+            write_queue_line_checked(
+                &mut writer,
+                &temp,
+                &format!("failure_threshold\t{}\n", self.failure_threshold),
+                &mut check_control,
+            )?;
+            for entry in self.entries.values() {
+                write_queue_line_checked(
+                    &mut writer,
+                    &temp,
+                    &format!("{}\n", entry.as_tsv()),
+                    &mut check_control,
+                )?;
+            }
+            check_control()?;
+            writer
+                .flush()
+                .map_err(|err| gfm_types::GfmError::io(&temp, err))?;
+            check_control()?;
+            writer
+                .get_ref()
+                .sync_all()
+                .map_err(|err| gfm_types::GfmError::io(&temp, err))?;
+            check_control()?;
+            fs::rename(&temp, path).map_err(|err| gfm_types::GfmError::io(path, err))?;
+            check_control()?;
+            Ok(())
+        })();
+        if result.is_err() {
+            let _ = fs::remove_file(&temp);
+        }
+        result
+    }
+
+    pub fn read(path: impl AsRef<Path>) -> crate::Result<Self> {
+        Self::read_checked(path, || Ok(()))
+    }
+
+    pub fn read_checked(
+        path: impl AsRef<Path>,
+        mut check_control: impl FnMut() -> crate::Result<()>,
+    ) -> crate::Result<Self> {
+        let path = path.as_ref();
+        check_control()?;
+        let file = File::open(path).map_err(|err| gfm_types::GfmError::io(path, err))?;
+        check_control()?;
+        let mut lines = BufReader::new(file).lines();
+        let header = lines
+            .next()
+            .transpose()
+            .map_err(|err| gfm_types::GfmError::io(path, err))?
+            .ok_or_else(|| queue_format_error(path, "missing OCR failure quarantine header"))?;
+        if header != "gfm-ocr-failure-quarantine-v1" {
+            return Err(queue_format_error(
+                path,
+                "unsupported OCR failure quarantine header",
+            ));
+        }
+        let mut schema_version = None;
+        let mut failure_threshold = None;
+        let mut entries = BTreeMap::new();
+        for line in lines {
+            check_control()?;
+            let line = line.map_err(|err| gfm_types::GfmError::io(path, err))?;
+            check_control()?;
+            let mut parts = line.split('\t');
+            match parts.next() {
+                Some("schema_version") => {
+                    schema_version = Some(parse_u32(parts.next(), path, "schema_version")?);
+                }
+                Some("failure_threshold") => {
+                    failure_threshold = Some(parse_u32(parts.next(), path, "failure_threshold")?);
+                }
+                Some("ocr-failure") => {
+                    let entry = parse_failure_row(parts, path)?;
+                    entries.insert(entry.candidate.queue_key(), entry);
+                }
+                Some("") | None => {}
+                Some(_) => {
+                    return Err(queue_format_error(
+                        path,
+                        "unknown OCR failure quarantine row",
+                    ));
+                }
+            }
+        }
+        if schema_version != Some(OCR_FAILURE_QUARANTINE_SCHEMA_VERSION) {
+            return Err(queue_format_error(
+                path,
+                "unsupported OCR failure quarantine schema version",
+            ));
+        }
+        Ok(Self {
+            failure_threshold: failure_threshold
+                .ok_or_else(|| queue_format_error(path, "missing failure_threshold"))?
+                .max(1),
+            entries,
+        })
+    }
+}
+
+impl Default for OcrFailureQuarantine {
+    fn default() -> Self {
+        Self::new(2)
+    }
+}
+
+impl OcrFailureEntry {
+    pub fn as_tsv(&self) -> String {
+        format!(
+            "ocr-failure\tpath={}\tkind={}\tversion={}\tlen={}\tmodified-ns={}\tfailure-kind={}\tfailures={}\treason={}",
+            escape_field(&self.candidate.path.to_string_lossy()),
+            self.candidate.kind.as_str(),
+            self.candidate.fingerprint.extractor_version,
+            self.candidate.fingerprint.len,
+            self.candidate
+                .fingerprint
+                .modified_ns
+                .map(|value| value.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.kind.as_str(),
+            self.failures,
+            escape_field(&self.reason)
+        )
+    }
+}
+
 pub fn ocr_candidate_for_record(record: &FileRecord) -> Option<OcrCandidate> {
     if record.kind != FileKind::File || !path_is_screenshot_image(&record.path) {
         return None;
@@ -537,6 +822,64 @@ fn parse_recognition_row<'a>(
     })
 }
 
+fn parse_failure_row<'a>(
+    parts: impl Iterator<Item = &'a str>,
+    path: &Path,
+) -> crate::Result<OcrFailureEntry> {
+    let mut candidate_path = None;
+    let mut kind = None;
+    let mut version = None;
+    let mut len = None;
+    let mut modified_ns = None;
+    let mut failure_kind = None;
+    let mut failures = None;
+    let mut reason = None;
+    for part in parts {
+        let Some((key, value)) = part.split_once('=') else {
+            return Err(queue_format_error(path, "invalid OCR failure field"));
+        };
+        match key {
+            "path" => candidate_path = Some(PathBuf::from(unescape_field(value))),
+            "kind" => {
+                kind = Some(
+                    OcrCandidateKind::parse(value)
+                        .ok_or_else(|| queue_format_error(path, "unsupported OCR failure kind"))?,
+                );
+            }
+            "version" => version = Some(parse_u32(Some(value), path, "version")?),
+            "len" => len = Some(parse_u64(Some(value), path, "len")?),
+            "modified-ns" => modified_ns = Some(parse_optional_u128(value, path, "modified-ns")?),
+            "failure-kind" => {
+                failure_kind = Some(OcrFailureKind::parse(value).ok_or_else(|| {
+                    queue_format_error(path, "unsupported OCR failure failure-kind")
+                })?);
+            }
+            "failures" => failures = Some(parse_u32(Some(value), path, "failures")?),
+            "reason" => reason = Some(unescape_field(value)),
+            _ => return Err(queue_format_error(path, "unknown OCR failure field")),
+        }
+    }
+    Ok(OcrFailureEntry {
+        candidate: OcrCandidate {
+            path: candidate_path
+                .ok_or_else(|| queue_format_error(path, "missing OCR failure path"))?,
+            kind: kind.ok_or_else(|| queue_format_error(path, "missing OCR failure kind"))?,
+            fingerprint: ExtractionFingerprint {
+                extractor_version: version
+                    .ok_or_else(|| queue_format_error(path, "missing OCR failure version"))?,
+                len: len.ok_or_else(|| queue_format_error(path, "missing OCR failure len"))?,
+                modified_ns: modified_ns
+                    .ok_or_else(|| queue_format_error(path, "missing OCR failure modified-ns"))?,
+            },
+        },
+        kind: failure_kind
+            .ok_or_else(|| queue_format_error(path, "missing OCR failure failure-kind"))?,
+        reason: reason.ok_or_else(|| queue_format_error(path, "missing OCR failure reason"))?,
+        failures: failures
+            .ok_or_else(|| queue_format_error(path, "missing OCR failure failures"))?,
+    })
+}
+
 fn escape_field(value: &str) -> String {
     value
         .replace('\\', "\\\\")
@@ -664,6 +1007,16 @@ fn recognition_cache_temp_path(path: &Path) -> PathBuf {
         .map(|name| name.to_os_string())
         .unwrap_or_else(|| "ocr-recognition-cache".into());
     let sequence = OCR_CACHE_TEMP_FILE_SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed);
+    temp_name.push(format!(".{}.{}.tmp", std::process::id(), sequence));
+    path.with_file_name(temp_name)
+}
+
+fn failure_quarantine_temp_path(path: &Path) -> PathBuf {
+    let mut temp_name = path
+        .file_name()
+        .map(|name| name.to_os_string())
+        .unwrap_or_else(|| "ocr-failure-quarantine".into());
+    let sequence = OCR_FAILURE_TEMP_FILE_SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed);
     temp_name.push(format!(".{}.{}.tmp", std::process::id(), sequence));
     path.with_file_name(temp_name)
 }

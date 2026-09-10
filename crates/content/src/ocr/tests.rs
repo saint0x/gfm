@@ -353,3 +353,130 @@ fn recognition_cache_write_cancellation_preserves_existing_store() {
     assert_eq!(fs::read_to_string(&store).unwrap(), "existing");
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn failure_quarantine_blocks_after_threshold_and_round_trips() {
+    let root = std::env::temp_dir().join(format!("gfm-ocr-failure-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    let store = root.join("ocr-failure.tsv");
+    let candidate = OcrCandidate {
+        path: root.join("Screen\tshot\nDraft\r.png"),
+        kind: OcrCandidateKind::ScreenshotImage,
+        fingerprint: ExtractionFingerprint {
+            extractor_version: OCR_EXTRACTOR_VERSION,
+            len: 12,
+            modified_ns: Some(34),
+        },
+    };
+    let mut quarantine = OcrFailureQuarantine::new(2);
+
+    assert_eq!(
+        quarantine.before_recognize(&candidate),
+        OcrFailureDecision::Allow
+    );
+    assert_eq!(
+        quarantine.record_failure(candidate.clone(), OcrFailureKind::Failed, "vision\tfailed"),
+        OcrFailureDecision::Allow
+    );
+    let blocked = quarantine.record_failure(
+        candidate.clone(),
+        OcrFailureKind::Unavailable,
+        "vision\nunavailable",
+    );
+    assert!(matches!(blocked, OcrFailureDecision::Quarantined(_)));
+    quarantine.write(&store).unwrap();
+    let text = fs::read_to_string(&store).unwrap();
+    let reloaded = OcrFailureQuarantine::read(&store).unwrap();
+
+    assert!(text.contains("gfm-ocr-failure-quarantine-v1"));
+    assert!(text.contains("Screen\\tshot\\nDraft\\r.png"), "{text}");
+    assert!(text.contains("failure-kind=unavailable"), "{text}");
+    assert!(text.contains("reason=vision\\nunavailable"), "{text}");
+    assert!(matches!(
+        reloaded.before_recognize(&candidate),
+        OcrFailureDecision::Quarantined(_)
+    ));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn failure_quarantine_success_removes_candidate_entry() {
+    let candidate = OcrCandidate {
+        path: PathBuf::from("/tmp/Screenshot.png"),
+        kind: OcrCandidateKind::ScreenshotImage,
+        fingerprint: ExtractionFingerprint {
+            extractor_version: OCR_EXTRACTOR_VERSION,
+            len: 1,
+            modified_ns: None,
+        },
+    };
+    let mut quarantine = OcrFailureQuarantine::new(1);
+
+    quarantine.record_failure(candidate.clone(), OcrFailureKind::Missing, "missing");
+    assert!(quarantine.has_entry(&candidate));
+    assert!(matches!(
+        quarantine.before_recognize(&candidate),
+        OcrFailureDecision::Quarantined(_)
+    ));
+
+    assert_eq!(
+        quarantine.record_success(&candidate),
+        OcrFailureDecision::Allow
+    );
+    assert_eq!(
+        quarantine.before_recognize(&candidate),
+        OcrFailureDecision::Allow
+    );
+    assert!(!quarantine.has_entry(&candidate));
+}
+
+#[test]
+fn failure_quarantine_temp_paths_are_unique_within_process() {
+    let first = failure_quarantine_temp_path(Path::new("/tmp/ocr-failure.tsv"));
+    let second = failure_quarantine_temp_path(Path::new("/tmp/ocr-failure.tsv"));
+
+    assert_ne!(first, second);
+    assert_eq!(first.parent(), Some(Path::new("/tmp")));
+    assert!(first
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(".tmp")));
+}
+
+#[test]
+fn failure_quarantine_write_cancellation_preserves_existing_store() {
+    let root = std::env::temp_dir().join(format!("gfm-ocr-failure-cancel-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).unwrap();
+    let store = root.join("ocr-failure.tsv");
+    fs::write(&store, "existing").unwrap();
+    let mut quarantine = OcrFailureQuarantine::new(1);
+    quarantine.record_failure(
+        OcrCandidate {
+            path: root.join("Screenshot.png"),
+            kind: OcrCandidateKind::ScreenshotImage,
+            fingerprint: ExtractionFingerprint {
+                extractor_version: OCR_EXTRACTOR_VERSION,
+                len: 1,
+                modified_ns: None,
+            },
+        },
+        OcrFailureKind::Failed,
+        "failed",
+    );
+
+    let mut checks = 0;
+    let result = quarantine.write_checked(&store, || {
+        checks += 1;
+        if checks >= 3 {
+            Err(gfm_types::GfmError::Cancelled)
+        } else {
+            Ok(())
+        }
+    });
+
+    assert!(matches!(result, Err(gfm_types::GfmError::Cancelled)));
+    assert_eq!(fs::read_to_string(&store).unwrap(), "existing");
+    fs::remove_dir_all(root).unwrap();
+}
