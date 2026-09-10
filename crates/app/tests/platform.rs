@@ -3157,6 +3157,63 @@ fn reports_fileprovider_progress_from_binary() {
 }
 
 #[test]
+fn fileprovider_read_routes_persist_runtime_progress_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-fileprovider-read-runtime-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let downloaded = root.join("Downloaded.md");
+    let downloading = root.join("Downloading.icloud-downloading.md");
+    let progress = root.join("progress.gfmprogress");
+    let catalog = root.join("payloads.gfmjobs");
+    std::fs::write(&downloaded, "downloaded").unwrap();
+    std::fs::write(&downloading, "downloading").unwrap();
+    xattr::set(&downloading, "com.apple.fileprovider.state", b"downloading").unwrap();
+
+    let state_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .arg("fileprovider-state")
+        .arg(&downloaded)
+        .output()
+        .unwrap();
+    assert!(
+        state_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&state_output.stderr)
+    );
+    let state_stdout = String::from_utf8(state_output.stdout).unwrap();
+    assert!(state_stdout.starts_with("fileprovider-state\t"));
+
+    let progress_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .arg("fileprovider-progress")
+        .arg(&downloading)
+        .output()
+        .unwrap();
+    assert!(
+        progress_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&progress_output.stderr)
+    );
+    let progress_stdout = String::from_utf8(progress_output.stdout).unwrap();
+    assert!(progress_stdout.starts_with("fileprovider-progress\t"));
+
+    let catalog_text = std::fs::read_to_string(&catalog).unwrap();
+    assert_platform_payload_catalog(&catalog_text, 1, "fileprovider state", &downloaded);
+    assert_platform_payload_catalog(&catalog_text, 2, "fileprovider progress", &downloading);
+
+    let progress_text = std::fs::read_to_string(&progress).unwrap();
+    assert_platform_runtime_progress(&progress_text, 1, "fileprovider state", "completed:read");
+    assert_platform_runtime_progress(&progress_text, 2, "fileprovider progress", "completed:read");
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn publishes_fileprovider_progress_to_runtime_job_store_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-fileprovider-progress-job-{}",
@@ -9356,6 +9413,32 @@ fn mark_evicted_fixture(path: impl AsRef<std::path::Path>) {
 
 fn assert_worker_admitted(stderr: &str, worker: &str, path: &std::path::Path) {
     assert!(worker_admission_count(stderr, worker, path) > 0, "{stderr}");
+}
+
+fn assert_platform_payload_catalog(
+    catalog_text: &str,
+    id: u64,
+    label: &str,
+    payload_path: &std::path::Path,
+) {
+    assert!(
+        catalog_text.lines().any(|line| line.starts_with(&format!(
+            "payload\t{id}\toperation\t{label}\t{}\t",
+            payload_path.display()
+        )) && line
+            .contains(&format!("\tvisible:{label}:adaptive"))),
+        "{catalog_text}"
+    );
+}
+
+fn assert_platform_runtime_progress(progress_text: &str, id: u64, label: &str, detail: &str) {
+    assert!(
+        progress_text.lines().any(|line| line
+            .starts_with(&format!("progress\t{id}\tvisible\tvisible\t{label}\t"))
+            && line.contains("\tcompleted\t3\t3\t")
+            && line.contains(detail)),
+        "{progress_text}"
+    );
 }
 
 fn assert_downloaded_materialization_source(stdout: &str) {

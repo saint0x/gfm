@@ -3472,7 +3472,7 @@ fn sidebar_cloud_state(state: CloudStorageState) -> SidebarCloudState {
 fn run_fileprovider_read<T>(
     path: PathBuf,
     worker: &'static str,
-    read: impl FnOnce(PathBuf, &Cancellation) -> Result<T> + Send + 'static,
+    read: impl Fn(PathBuf, &Cancellation) -> Result<T> + Send + Sync + 'static,
 ) -> Result<T>
 where
     T: Send + 'static,
@@ -3480,13 +3480,50 @@ where
     let access_report = PlatformAccessReport::new_checked(path, AccessIntent::Read, || Ok(()))?;
     access_report.preflight_volume(worker)?;
     let volume = access_report.volume();
-    run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
-        cancellation.check()?;
-        let path = access_report.path.clone();
-        let _access = access_report.access_checked(worker, || cancellation.check())?;
-        cancellation.check()?;
-        read(path, &cancellation)
+    scheduled_platform_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Operation,
+            worker,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            access_report.path.clone(),
+            move |cancellation, runtime| {
+                cancellation.check()?;
+                runtime
+                    .resize_checked(3, "fileprovider-read:preflight", || cancellation.check())?;
+                let path = access_report.path.clone();
+                let _access = access_report.access_checked(worker, || cancellation.check())?;
+                platform_runtime_phase(&runtime, 1, "fileprovider-read:read", &cancellation)?;
+                let report = read(path, &cancellation)?;
+                platform_runtime_phase(&runtime, 2, "fileprovider-read:complete", &cancellation)?;
+                runtime.remember_completion_detail("completed:read".to_string())?;
+                platform_runtime_phase(&runtime, 3, "fileprovider-read:reported", &cancellation)?;
+                Ok(report)
+            },
+        )?,
+        worker,
+    )
+}
+
+fn platform_runtime_phase(
+    runtime: &RuntimeJobHandle,
+    completed_units: u64,
+    detail: &'static str,
+    cancellation: &Cancellation,
+) -> Result<()> {
+    runtime.progress_checked(JobProgressState::Running, completed_units, detail, || {
+        cancellation.check()
     })
+}
+
+fn scheduled_platform_result<T>(
+    outcome: crate::runtime::ScheduledTaskOutcome<T>,
+    label: &'static str,
+) -> Result<T> {
+    outcome
+        .result
+        .ok_or_else(|| GfmError::Format(format!("{label} deferred before visible run")))
 }
 
 fn fileprovider_domain_enumeration_report(
