@@ -4540,6 +4540,67 @@ fn background_content_indexer_merges_recognized_ocr_text_into_searchable_content
 }
 
 #[test]
+fn background_content_indexer_merges_recognized_pdf_ocr_text_into_searchable_content() {
+    let root = unique_temp_dir("gfm-background-content-pdf-ocr-merge-root");
+    let segments = unique_temp_dir("gfm-background-content-pdf-ocr-merge-segments");
+    let content = unique_temp_path("gfm-background-content-pdf-ocr-merge", "gfmcontent");
+    let ocr_cache = unique_temp_path("gfm-background-content-pdf-ocr-merge", "gfmocr-cache");
+    let pdf_path = root.join("scan.pdf");
+    fs::write(&pdf_path, image_only_pdf()).unwrap();
+
+    let snapshot = Indexer::default().build(&root).unwrap();
+    let pdf_record = snapshot
+        .records
+        .iter()
+        .find(|record| record.path == pdf_path)
+        .unwrap();
+    let extraction = gfm_content::Extractor::default()
+        .extract_path_report(&pdf_record.path)
+        .unwrap();
+    let candidate = gfm_content::ocr_candidate_for_extraction(&extraction).unwrap();
+    assert_eq!(candidate.kind, OcrCandidateKind::ImageOnlyPdf);
+    OcrRecognitionCache::new([OcrRecognition {
+        candidate,
+        text: "recognized pdf receipt needlephrase".to_string(),
+    }])
+    .write(&ocr_cache)
+    .unwrap();
+    let mut quarantine = ExtractionQuarantine::new(2);
+    let report = BackgroundContentIndexer::default()
+        .run_incremental_and_compact_with_quarantine(
+            QuarantineContentIndexRequest {
+                snapshot: &snapshot,
+                previous_records: &[],
+                previous_content_path: None,
+                segment_dir: &segments,
+                content_path: &content,
+                ocr_queue_path: None,
+                ocr_recognition_cache_path: Some(&ocr_cache),
+                cancellation: &Cancellation::default(),
+            },
+            &mut quarantine,
+        )
+        .unwrap();
+    let mut searchable = LiveIndex::from_records(snapshot.records.clone());
+    searchable
+        .load_content_postings_cancellable(&content, &Cancellation::default())
+        .unwrap();
+    let hits = searchable
+        .search_cancellable("needlephrase", 10, &Cancellation::default())
+        .unwrap();
+
+    assert_eq!(report.indexed, 1);
+    assert_eq!(report.ocr_candidates, 0);
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].record.path, pdf_path);
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(segments).unwrap();
+    fs::remove_file(content).unwrap();
+    fs::remove_file(ocr_cache).unwrap();
+}
+
+#[test]
 fn background_content_indexer_incrementally_updates_existing_archive() {
     let root = unique_temp_dir("gfm-background-content-incremental-root");
     let segments = unique_temp_dir("gfm-background-content-incremental-segments");
