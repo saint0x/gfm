@@ -424,6 +424,63 @@ fn writes_parity_capture_plan_from_binary() {
 }
 
 #[test]
+fn parity_capture_matrix_refuses_unreachable_review_before_capturing_from_binary() {
+    let root = unique_temp_dir("gfm-cli-parity-capture-matrix-review-preflight");
+    let fixture_root = root.join("fixtures");
+    let offline = root.join("offline-review");
+    fs::create_dir_all(&fixture_root).unwrap();
+    fs::create_dir_all(&offline).unwrap();
+    fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+
+    let plan = root.join("capture-plan.tsv");
+    let artifacts = root.join("artifacts");
+    let review_root = offline.join("review");
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .args([
+            "parity-capture-matrix",
+            review_root.to_str().unwrap(),
+            plan.to_str().unwrap(),
+            fixture_root.to_str().unwrap(),
+            artifacts.to_str().unwrap(),
+            "25A354",
+            "macbookpro18,3",
+            "studio-display-p3",
+            "0.1.0",
+            "2026-09-09T00:00:00Z",
+            "codex",
+            "codex",
+            "macos-25A354-default",
+            "dark",
+            "2x",
+            "display-p3",
+            "active",
+            "40",
+            "70",
+            "1040",
+            "720",
+            root.join("Missing.app").to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stdout.contains("parity-capture-matrix\t"), "{stdout}");
+    assert!(
+        stderr.contains(
+            "parity capture matrix review volume access blocked: unreachable volume network"
+        ),
+        "{stderr}"
+    );
+    assert!(!plan.exists());
+    assert!(!artifacts.exists());
+    assert!(!review_root.exists());
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn benchmark_workspace_routes_refuse_unreachable_volume_before_materializing_from_binary() {
     let offline = unique_temp_dir("gfm-cli-gate-workspace-preflight-offline");
     fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();

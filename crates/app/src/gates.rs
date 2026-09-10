@@ -15,17 +15,17 @@ use gfm_jobs::{Cancellation, JobPayloadKind, JobProgressState, Priority};
 use gfm_mac::{AccessIntent, VolumeDiscoveryReport};
 use gfm_testkit::{
     capture_parity_screenshot_checked, diff_rgba_files, evaluate_pixel_threshold,
-    inspect_macrobench_workspace_capacity, materialize_macrobench_fixture_report,
-    materialize_parity_fixture, parse_parity_gate_manifest, read_governed_mask_file,
-    read_mask_file, run_large_sidecar_gate, run_macrobench, run_macrobench_report, run_parity_gate,
-    run_regression_gate, run_search_typing_benchmark, run_search_typing_session_benchmark,
-    verify_macrobench_artifacts, write_parity_review_bundle, ColorProfile, DisplayScale,
-    LargeSidecarGateOptions, MacOsParityProfile, MacrobenchOptions, MacrobenchScale,
-    MacrobenchStage, ParityAppearance, ParityCaptureMatrixOptions,
-    ParityCapturePairManifestOptions, ParityCaptureTarget, ParityFixtureOptions,
-    ParityFixtureScale, ParityFocusState, ParityGateInput, ParityScreenshotCaptureOptions,
-    ParitySurface, PixelDiffOptions, PixelDriftThreshold, PixelSize, RegressionGateOptions,
-    SearchTypingBenchmarkOptions,
+    execute_parity_capture_matrix_checked, inspect_macrobench_workspace_capacity,
+    materialize_macrobench_fixture_report, materialize_parity_fixture, parse_parity_gate_manifest,
+    read_governed_mask_file, read_mask_file, run_large_sidecar_gate, run_macrobench,
+    run_macrobench_report, run_parity_gate, run_regression_gate, run_search_typing_benchmark,
+    run_search_typing_session_benchmark, verify_macrobench_artifacts, write_parity_review_bundle,
+    ColorProfile, DisplayScale, LargeSidecarGateOptions, MacOsParityProfile, MacrobenchOptions,
+    MacrobenchScale, MacrobenchStage, ParityAppearance, ParityCaptureMatrixExecutionOptions,
+    ParityCaptureMatrixOptions, ParityCapturePairManifestOptions, ParityCaptureTarget,
+    ParityFixtureOptions, ParityFixtureScale, ParityFocusState, ParityGateInput,
+    ParityScreenshotCaptureOptions, ParitySurface, PixelDiffOptions, PixelDriftThreshold,
+    PixelSize, RegressionGateOptions, SearchTypingBenchmarkOptions,
 };
 use gfm_types::{GfmError, Result};
 use std::fs;
@@ -289,6 +289,52 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                     .map(|row| row.surface.as_str())
                     .unwrap_or("-")
             );
+        }
+        "parity-capture-matrix" => {
+            let review_root =
+                required_path(args.next(), "parity-capture-matrix requires a review root")?;
+            let matrix = parity_capture_matrix_options(args)?;
+            let options = ParityCaptureMatrixExecutionOptions {
+                matrix,
+                review_root,
+            };
+            let access_reports = parity_capture_matrix_execution_access_reports(&options)?;
+            let payload_path = options.matrix.fixture_root.clone();
+            let report = run_gate_access_task(
+                access_reports,
+                payload_path,
+                "parity capture matrix",
+                move |cancellation| {
+                    cancellation.check()?;
+                    execute_parity_capture_matrix_checked(&options, || cancellation.check())
+                },
+            )?;
+            let violations: usize = report.rows.iter().map(|row| row.violations).sum();
+            let passed = report.rows.iter().all(|row| row.passed);
+            println!(
+                "parity-capture-matrix\tplan={}\treview-root={}\trows={}\tviolations={}\tpassed={}",
+                escape_gate_tsv_path(&report.plan_path),
+                escape_gate_tsv_path(&report.review_root),
+                report.rows.len(),
+                violations,
+                passed
+            );
+            for row in &report.rows {
+                println!(
+                    "matrix-row\t{}\tscenario={}\tmanifest={}\treview={}\tpassed={}\tviolations={}",
+                    row.surface.as_str(),
+                    escape_gate_tsv_field(&row.scenario),
+                    escape_gate_tsv_path(&row.manifest_path),
+                    escape_gate_tsv_path(&row.review_dir),
+                    row.passed,
+                    row.violations
+                );
+            }
+            if !passed {
+                return Err(GfmError::Format(format!(
+                    "parity capture matrix captured {violations} violation(s)"
+                )));
+            }
         }
         "parity-capture-manifest" => {
             let options = parity_capture_manifest_options(args)?;
@@ -1018,6 +1064,21 @@ fn parity_capture_matrix_access_reports(
             || Ok(()),
         )?,
     ]))
+}
+
+fn parity_capture_matrix_execution_access_reports(
+    options: &ParityCaptureMatrixExecutionOptions,
+) -> Result<GateAccessReports> {
+    let mut entries = parity_capture_matrix_access_reports(&options.matrix)?.entries;
+    entries.push(GateAccessReport::new_checked(
+        checked_write_probe_path(&options.review_root, "parity capture matrix review", || {
+            Ok(())
+        })?,
+        AccessIntent::Write,
+        "parity capture matrix review",
+        || Ok(()),
+    )?);
+    Ok(GateAccessReports::new(entries))
 }
 
 fn parity_capture_manifest_access_reports(

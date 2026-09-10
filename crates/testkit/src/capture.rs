@@ -1,5 +1,6 @@
 use crate::{
-    ColorProfile, DisplayScale, ParityAppearance, ParityFocusState, ParitySurface, ParityViewMode,
+    run_parity_gate_manifest, write_parity_review_bundle, ColorProfile, DisplayScale,
+    ParityAppearance, ParityFocusState, ParityReviewBundle, ParitySurface, ParityViewMode,
     PixelSize,
 };
 use gfm_types::{GfmError, Result};
@@ -124,6 +125,31 @@ pub struct ParityCaptureMatrixRow {
 pub struct ParityCaptureMatrixReport {
     pub plan_path: PathBuf,
     pub rows: Vec<ParityCaptureMatrixRow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParityCaptureMatrixExecutionOptions {
+    pub matrix: ParityCaptureMatrixOptions,
+    pub review_root: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParityCaptureMatrixExecutionRow {
+    pub surface: ParitySurface,
+    pub scenario: String,
+    pub finder_output: PathBuf,
+    pub gfm_output: PathBuf,
+    pub manifest_path: PathBuf,
+    pub review_dir: PathBuf,
+    pub passed: bool,
+    pub violations: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ParityCaptureMatrixExecutionReport {
+    pub plan_path: PathBuf,
+    pub review_root: PathBuf,
+    pub rows: Vec<ParityCaptureMatrixExecutionRow>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -310,6 +336,99 @@ pub fn write_parity_capture_matrix_plan_checked(
         plan_path: options.plan_path.clone(),
         rows,
     })
+}
+
+pub fn execute_parity_capture_matrix(
+    options: &ParityCaptureMatrixExecutionOptions,
+) -> Result<ParityCaptureMatrixExecutionReport> {
+    execute_parity_capture_matrix_checked(options, || Ok(()))
+}
+
+pub fn execute_parity_capture_matrix_checked(
+    options: &ParityCaptureMatrixExecutionOptions,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<ParityCaptureMatrixExecutionReport> {
+    execute_parity_capture_matrix_with_capture(options, &mut check_control, |capture, check| {
+        capture_parity_screenshot_checked(capture, check)
+    })
+}
+
+fn execute_parity_capture_matrix_with_capture(
+    options: &ParityCaptureMatrixExecutionOptions,
+    check_control: &mut impl FnMut() -> Result<()>,
+    mut capture: impl FnMut(
+        &ParityScreenshotCaptureOptions,
+        &mut dyn FnMut() -> Result<()>,
+    ) -> Result<ParityScreenshotCaptureReport>,
+) -> Result<ParityCaptureMatrixExecutionReport> {
+    check_control()?;
+    validate_capture_matrix_execution_options(options)?;
+    check_control()?;
+    fs::create_dir_all(&options.review_root)
+        .map_err(|err| GfmError::io(&options.review_root, err))?;
+    let plan = write_parity_capture_matrix_plan_checked(&options.matrix, &mut *check_control)?;
+    let mut rows = Vec::with_capacity(plan.rows.len());
+    for row in &plan.rows {
+        let finder = matrix_capture_options(
+            &options.matrix,
+            ParityCaptureTarget::Finder,
+            &row.scenario,
+            row.view_mode,
+            row.finder_output.clone(),
+            row.finder_provenance.clone(),
+        );
+        let gfm = matrix_capture_options(
+            &options.matrix,
+            ParityCaptureTarget::Gfm,
+            &row.scenario,
+            row.view_mode,
+            row.gfm_output.clone(),
+            row.gfm_provenance.clone(),
+        );
+        capture(&finder, check_control)?;
+        check_control()?;
+        capture(&gfm, check_control)?;
+        check_control()?;
+        let mask_path = row.mask_path.is_file().then(|| row.mask_path.clone());
+        write_parity_capture_pair_manifest_checked(
+            &ParityCapturePairManifestOptions {
+                manifest_path: row.manifest_path.clone(),
+                surface: row.surface,
+                finder,
+                gfm,
+                mask_path,
+            },
+            &mut *check_control,
+        )?;
+        check_control()?;
+        let mut gate = run_parity_gate_manifest(&row.manifest_path)?;
+        gate.manifest_path = Some(row.manifest_path.clone());
+        let review_dir = options.review_root.join(row.surface.as_str());
+        let bundle = write_parity_review_bundle(gate, &review_dir)?;
+        rows.push(execution_row_from_bundle(row, &bundle));
+        check_control()?;
+    }
+    Ok(ParityCaptureMatrixExecutionReport {
+        plan_path: plan.plan_path,
+        review_root: options.review_root.clone(),
+        rows,
+    })
+}
+
+fn execution_row_from_bundle(
+    row: &ParityCaptureMatrixRow,
+    bundle: &ParityReviewBundle,
+) -> ParityCaptureMatrixExecutionRow {
+    ParityCaptureMatrixExecutionRow {
+        surface: row.surface,
+        scenario: row.scenario.clone(),
+        finder_output: row.finder_output.clone(),
+        gfm_output: row.gfm_output.clone(),
+        manifest_path: row.manifest_path.clone(),
+        review_dir: bundle.output_dir.clone(),
+        passed: bundle.report.passed(),
+        violations: bundle.report.violations(),
+    }
 }
 
 fn validate_capture_options(options: &ParityScreenshotCaptureOptions) -> Result<()> {
@@ -515,6 +634,18 @@ fn validate_capture_matrix_options(options: &ParityCaptureMatrixOptions) -> Resu
         gfm_app: None,
     };
     validate_capture_metadata(&probe)
+}
+
+fn validate_capture_matrix_execution_options(
+    options: &ParityCaptureMatrixExecutionOptions,
+) -> Result<()> {
+    validate_capture_matrix_options(&options.matrix)?;
+    if options.review_root.as_os_str().is_empty() {
+        return Err(GfmError::Format(
+            "parity capture matrix review root cannot be empty".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 fn build_capture_matrix_rows(
@@ -1327,6 +1458,88 @@ mod tests {
     }
 
     #[test]
+    fn executes_capture_matrix_into_gate_manifests_and_review_bundles() {
+        let root = unique_temp_dir("gfm-parity-capture-matrix-execute");
+        let fixture_root = root.join("fixtures");
+        write_capture_matrix_fixture_manifest(&fixture_root);
+        let options = ParityCaptureMatrixExecutionOptions {
+            matrix: ParityCaptureMatrixOptions {
+                plan_path: root.join("capture-plan.tsv"),
+                fixture_root: fixture_root.clone(),
+                artifact_root: root.join("artifacts"),
+                macos_build: "25A354".to_string(),
+                hardware_profile: "macbookpro18,3".to_string(),
+                display_profile: "studio-display-p3".to_string(),
+                app_version: "0.1.0".to_string(),
+                captured_at: "2026-09-09T00:00:00Z".to_string(),
+                expires_at: Some("2026-09-27T00:00:00Z".to_string()),
+                reviewer: "codex".to_string(),
+                signer: "codex".to_string(),
+                approved_mask_set: "macos-25A354-default".to_string(),
+                appearance: ParityAppearance::Dark,
+                scale: DisplayScale::Two,
+                color_profile: ColorProfile::DisplayP3,
+                focus: ParityFocusState::Active,
+                window_origin_x: 40,
+                window_origin_y: 70,
+                window_size: PixelSize::new(2, 1),
+                gfm_app: PathBuf::from("/Applications/GFM.app"),
+            },
+            review_root: root.join("review"),
+        };
+
+        let report = execute_parity_capture_matrix_with_capture(
+            &options,
+            &mut || Ok(()),
+            |capture, check| {
+                check()?;
+                write_synthetic_capture_png(&capture.output_png, capture.window_size);
+                let region = CaptureRegion {
+                    x: capture.window_origin_x,
+                    y: capture.window_origin_y,
+                    width: capture.window_size.width,
+                    height: capture.window_size.height,
+                };
+                write_capture_provenance(capture, &region)?;
+                Ok(ParityScreenshotCaptureReport {
+                    target: capture.target,
+                    fixture_root: capture.fixture_root.clone(),
+                    output_png: capture.output_png.clone(),
+                    provenance_tsv: capture.provenance_tsv.clone(),
+                    window_region: region,
+                    prepare_command: vec!["synthetic-prepare".to_string()],
+                    capture_command: vec!["synthetic-capture".to_string()],
+                })
+            },
+        )
+        .unwrap();
+
+        assert_eq!(report.rows.len(), ParitySurface::ALL.len());
+        assert!(report.rows.iter().all(|row| row.passed));
+        assert!(report.rows.iter().all(|row| row.violations == 0));
+        let toolbar = report
+            .rows
+            .iter()
+            .find(|row| row.surface == ParitySurface::Toolbar)
+            .unwrap();
+        assert!(toolbar.manifest_path.exists());
+        assert!(toolbar.review_dir.join("review.md").exists());
+        assert!(toolbar
+            .review_dir
+            .join("visual-diffs")
+            .join("000-toolbar-diff.png")
+            .exists());
+        assert!(fs::read_to_string(&toolbar.manifest_path)
+            .unwrap()
+            .contains("\nentry\ttoolbar\t"));
+        assert!(fs::read_to_string(report.plan_path)
+            .unwrap()
+            .contains("\ntoolbar\ttoolbar\ticon\t"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn actual_gfm_capture_rejects_missing_app_bundle_as_missing() {
         let root = unique_temp_dir("gfm-parity-capture-missing-app");
         let mut options = sample_options(
@@ -1456,6 +1669,39 @@ mod tests {
             window_size: PixelSize::new(1040, 720),
             gfm_app: None,
         }
+    }
+
+    fn write_capture_matrix_fixture_manifest(fixture_root: &Path) {
+        fs::create_dir_all(fixture_root).unwrap();
+        let mut manifest = "scenario\troot\tfinder-view\tfiles\tdirectories\n".to_string();
+        let mut scenarios = std::collections::BTreeSet::new();
+        for surface in ParitySurface::ALL {
+            let (scenario, view_mode) = capture_target_for_surface(surface);
+            if scenarios.insert(scenario) {
+                fs::create_dir_all(fixture_root.join(scenario)).unwrap();
+                manifest.push_str(&format!(
+                    "{scenario}\t{scenario}\t{}\t0\t0\n",
+                    view_mode.as_str()
+                ));
+            }
+        }
+        fs::write(fixture_root.join("manifest.tsv"), manifest).unwrap();
+    }
+
+    fn write_synthetic_capture_png(path: &Path, size: PixelSize) {
+        let image = crate::RgbaImage {
+            size,
+            bytes: (0..size.pixel_count().unwrap())
+                .flat_map(|_| [32, 34, 38, 255])
+                .collect(),
+        };
+        let diff = crate::diff_rgba(
+            &image.bytes,
+            &image.bytes,
+            &crate::PixelDiffOptions::strict(size),
+        )
+        .unwrap();
+        crate::write_visual_diff_png(path, &image, &image, &diff).unwrap();
     }
 
     fn unique_temp_dir(prefix: &str) -> PathBuf {

@@ -7,12 +7,14 @@ mod parity_profile;
 mod pixel;
 
 pub use capture::{
-    capture_parity_screenshot, capture_parity_screenshot_checked, plan_parity_capture_commands,
+    capture_parity_screenshot, capture_parity_screenshot_checked, execute_parity_capture_matrix,
+    execute_parity_capture_matrix_checked, plan_parity_capture_commands,
     write_parity_capture_matrix_plan, write_parity_capture_matrix_plan_checked,
     write_parity_capture_pair_manifest, write_parity_capture_pair_manifest_checked, CaptureRegion,
-    ParityCaptureMatrixOptions, ParityCaptureMatrixReport, ParityCaptureMatrixRow,
-    ParityCapturePairManifestOptions, ParityCaptureTarget, ParityScreenshotCaptureOptions,
-    ParityScreenshotCaptureReport,
+    ParityCaptureMatrixExecutionOptions, ParityCaptureMatrixExecutionReport,
+    ParityCaptureMatrixExecutionRow, ParityCaptureMatrixOptions, ParityCaptureMatrixReport,
+    ParityCaptureMatrixRow, ParityCapturePairManifestOptions, ParityCaptureTarget,
+    ParityScreenshotCaptureOptions, ParityScreenshotCaptureReport,
 };
 pub use gates::{
     evaluate_regression_gate, run_large_sidecar_gate, run_regression_gate,
