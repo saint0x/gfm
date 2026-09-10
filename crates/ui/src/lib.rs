@@ -848,6 +848,8 @@ impl WindowLifecycleContract {
                 .map(DialogSurface::as_str)
                 .unwrap_or("none")
         )];
+        lines.push(self.effective_titlebar_contract().as_tsv());
+        lines.push(self.effective_toolbar_contract().as_tsv());
         lines.push(self.effective_sidebar_contract().as_tsv());
         lines.extend(
             self.progress_surfaces
@@ -890,6 +892,27 @@ impl WindowLifecycleContract {
                 self.sidebar_volumes.clone(),
             )
         })
+    }
+
+    fn effective_titlebar_contract(&self) -> TitlebarContract {
+        TitlebarContract {
+            title: self.title.clone(),
+            height_px: 54,
+            traffic_light_x_px: 20,
+            traffic_light_y_px: 20,
+            material: if self.transparent_titlebar {
+                TitlebarMaterialPolicy::TransparentSystemTitlebar
+            } else {
+                TitlebarMaterialPolicy::OpaqueSystemTitlebar
+            },
+            focus_policy: TitlebarFocusPolicy::SystemActiveInactive,
+            full_screen_policy: FullScreenPolicy::NativeMacosZoomAndFullScreen,
+            tabbing_identifier: self.tabbing_identifier.clone(),
+        }
+    }
+
+    fn effective_toolbar_contract(&self) -> ToolbarContract {
+        ToolbarContract::finder_default(&self.initial_path)
     }
 }
 
@@ -1191,6 +1214,13 @@ mod tests {
 
         assert!(output.starts_with(
             "window\tGFM\t/tmp/gfm\t1040x720\tmin=640x420\ttransparent-titlebar=true\tactivate=true\ttabs=gfm-main-window\tsidebar-home=available\tsidebar-icloud=missing\tinitial-view=icon\tpermission-dialog=none\n"
+        ));
+        assert!(output.contains(
+            "\ntitlebar\tGFM\theight=54\ttraffic-light=20x20\tmaterial=transparent-system-titlebar\tfocus=system-active-inactive\tfull-screen=native-macos-zoom-and-full-screen\ttabs=gfm-main-window\n"
+        ));
+        assert!(output.contains("\ntoolbar\theight=54\ttraffic-light-gutter=96\n"));
+        assert!(output.contains(
+            "control\tlocation\tpath-title\tgfm\tcurrent-folder-title\tpath-title\t220px\tenabled=true\tselected=false"
         ));
         assert!(output.contains(
             "sidebar\twidth=188\trow-height=28\tsection-header-height=26\tsections=Favorites,iCloud,Locations,Tags"

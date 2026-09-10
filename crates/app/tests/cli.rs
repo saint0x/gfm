@@ -20392,6 +20392,16 @@ fn native_app_launch_dispatches_without_operator_command_from_binary() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("window\tGFM\t"), "{stdout}");
     assert!(stdout.contains("transparent-titlebar=true"), "{stdout}");
+    assert!(stdout.contains("\ntitlebar\tGFM\t"), "{stdout}");
+    assert!(stdout.contains("\ntoolbar\theight=54\t"), "{stdout}");
+    assert!(
+        stdout.contains("control\tlocation\tpath-title\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("current-folder-title\tpath-title"),
+        "{stdout}"
+    );
     assert!(stdout.contains("icon-view\t"), "{stdout}");
     assert!(stdout.contains("\ttotal=1\t"), "{stdout}");
     assert!(stdout.contains("Visible.txt"), "{stdout}");
