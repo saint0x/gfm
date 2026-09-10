@@ -99,6 +99,7 @@ pub struct AppLaunchSpec {
     pub sidebar_contract: Option<SidebarContract>,
     pub initial_view: InitialViewContract,
     pub initial_icon_view: IconViewContract,
+    pub context_menus: Vec<ContextMenuContract>,
     pub progress_surfaces: Vec<OperationProgressContract>,
     pub operation_conflicts: Vec<OperationConflictContract>,
     pub provider_conflicts: Vec<ProviderConflictContract>,
@@ -538,6 +539,21 @@ impl AppLaunchSpec {
                 )));
             }
         }
+        let mut context_menu_surfaces = BTreeSet::new();
+        for menu in &self.context_menus {
+            if menu.items.is_empty() {
+                return Err(GfmError::Format(format!(
+                    "native app context menu `{}` must expose at least one item",
+                    menu.surface.as_str()
+                )));
+            }
+            if !context_menu_surfaces.insert(menu.surface.as_str()) {
+                return Err(GfmError::Format(format!(
+                    "native app context menu `{}` is duplicated",
+                    menu.surface.as_str()
+                )));
+            }
+        }
         for conflict in &self.operation_conflicts {
             if conflict.dialog.surface != DialogSurface::Conflict {
                 return Err(GfmError::Format(
@@ -657,6 +673,11 @@ impl AppLaunchSpec {
         self
     }
 
+    pub fn with_context_menus(mut self, context_menus: Vec<ContextMenuContract>) -> Self {
+        self.context_menus = context_menus;
+        self
+    }
+
     pub fn with_progress_surfaces(mut self, surfaces: Vec<OperationProgressContract>) -> Self {
         self.progress_surfaces = surfaces;
         self
@@ -743,6 +764,22 @@ fn concrete_permission_value(value: &str) -> bool {
     !trimmed.is_empty() && trimmed != "none"
 }
 
+fn finder_default_context_menus() -> Vec<ContextMenuContract> {
+    [
+        ContextMenuInput::new(ContextSurface::File),
+        ContextMenuInput::new(ContextSurface::Folder),
+        ContextMenuInput::new(ContextSurface::Selection).with_selection_count(2),
+        ContextMenuInput::new(ContextSurface::SearchResult),
+        ContextMenuInput::empty_space(),
+        ContextMenuInput::new(ContextSurface::Sidebar),
+        ContextMenuInput::new(ContextSurface::Volume).with_ejectable(true),
+        ContextMenuInput::new(ContextSurface::Trash),
+    ]
+    .into_iter()
+    .map(ContextMenuContract::finder_default)
+    .collect()
+}
+
 impl Default for AppLaunchSpec {
     fn default() -> Self {
         Self {
@@ -764,6 +801,7 @@ impl Default for AppLaunchSpec {
                 IconViewOptions::default(),
             )),
             initial_icon_view: IconViewContract::from_records(&[], IconViewOptions::default()),
+            context_menus: finder_default_context_menus(),
             progress_surfaces: Vec::new(),
             operation_conflicts: Vec::new(),
             provider_conflicts: Vec::new(),
@@ -791,6 +829,7 @@ pub struct WindowLifecycleContract {
     pub sidebar_volumes: Vec<SidebarVolumeSpec>,
     pub sidebar_contract: Option<SidebarContract>,
     pub initial_view: InitialViewContract,
+    pub context_menus: Vec<ContextMenuContract>,
     pub progress_surfaces: Vec<OperationProgressContract>,
     pub operation_conflicts: Vec<OperationConflictContract>,
     pub provider_conflicts: Vec<ProviderConflictContract>,
@@ -818,6 +857,7 @@ impl WindowLifecycleContract {
             sidebar_volumes: spec.sidebar_volumes.clone(),
             sidebar_contract: spec.sidebar_contract.clone(),
             initial_view: spec.initial_view.clone(),
+            context_menus: spec.context_menus.clone(),
             progress_surfaces: spec.progress_surfaces.clone(),
             operation_conflicts: spec.operation_conflicts.clone(),
             provider_conflicts: spec.provider_conflicts.clone(),
@@ -852,6 +892,7 @@ impl WindowLifecycleContract {
         lines.push(self.effective_toolbar_contract().as_tsv());
         lines.push(self.effective_menu_contract().as_tsv());
         lines.push(self.effective_sidebar_contract().as_tsv());
+        lines.extend(self.context_menus.iter().map(|menu| menu.as_tsv()));
         lines.extend(
             self.progress_surfaces
                 .iter()
@@ -956,6 +997,7 @@ fn open_main_window(
                 )
             }),
             initial_view: spec.initial_view,
+            context_menus: spec.context_menus,
             progress_surfaces: spec.progress_surfaces,
             operation_conflicts: spec.operation_conflicts,
             provider_conflicts: spec.provider_conflicts,
@@ -1027,6 +1069,7 @@ struct RootView {
     session_writer: WindowSessionWriter,
     sidebar: SidebarContract,
     initial_view: InitialViewContract,
+    context_menus: Vec<ContextMenuContract>,
     progress_surfaces: Vec<OperationProgressContract>,
     operation_conflicts: Vec<OperationConflictContract>,
     provider_conflicts: Vec<ProviderConflictContract>,
@@ -1060,6 +1103,7 @@ impl Render for RootView {
                     .child(sidebar::render(&self.sidebar))
                     .child(render_initial_view(&self.initial_view)),
             );
+        root = root.child(render_context_menu_state(&self.context_menus));
         if let Some(dialog) = &self.permission_dialog {
             root = root.child(dialog::render_permission_onboarding(
                 dialog,
@@ -1108,6 +1152,14 @@ impl Render for RootView {
         }
         root
     }
+}
+
+fn render_context_menu_state(context_menus: &[ContextMenuContract]) -> impl IntoElement {
+    let mut state = div().id("context-menu-contracts").invisible();
+    for menu in context_menus {
+        state = state.child(div().id("context-menu-contract").child(menu.as_tsv()));
+    }
+    state
 }
 
 fn render_initial_view(contract: &InitialViewContract) -> impl IntoElement {
@@ -1194,6 +1246,7 @@ mod tests {
         assert_eq!(contract.tabbing_identifier, "gfm-main-window");
         assert!(contract.sidebar_volumes.is_empty());
         assert_eq!(contract.initial_view.mode(), "icon");
+        assert_eq!(contract.context_menus.len(), 8);
         assert!(contract.progress_surfaces.is_empty());
         assert_eq!(contract.permission_dialog, None);
         assert_eq!(contract.permission_onboarding, None);
@@ -1233,7 +1286,41 @@ mod tests {
         assert!(output.contains(
             "sidebar\twidth=188\trow-height=28\tsection-header-height=26\tsections=Favorites,iCloud,Locations,Tags"
         ));
+        assert!(output.contains("\ncontext-menu\tsurface=file\tselection=1\titems="));
+        assert!(output.contains(
+            "item\topen-with\tOpen With\tgfm::OpenWith\tsubmenu\tenabled=true\tdestructive=false"
+        ));
+        assert!(output.contains("\ncontext-menu\tsurface=empty\tselection=0\titems="));
+        assert!(output.contains(
+            "item\tpaste-item\tPaste Item\tgfm::PasteItem\tcommand\tenabled=true\tdestructive=false"
+        ));
+        assert!(output.contains("\ncontext-menu\tsurface=volume\tselection=1\titems=4"));
+        assert!(output.contains("item\teject\tEject\tgfm::Eject\tcommand\tenabled=true"));
+        assert!(output.contains("\ncontext-menu\tsurface=trash\tselection=1\titems=5"));
+        assert!(output.contains(
+            "item\tdelete-immediately\tDelete Immediately...\tgfm::DeleteImmediately\tcommand\tenabled=true\tdestructive=true"
+        ));
         assert!(output.contains("row\tLocations\tcomputer\tComputer\tcomputer\tlocation\t-"));
+    }
+
+    #[test]
+    fn lifecycle_contract_tracks_context_menu_surfaces() {
+        let context_menus = vec![
+            ContextMenuContract::finder_default(ContextMenuInput::new(ContextSurface::File)),
+            ContextMenuContract::finder_default(
+                ContextMenuInput::empty_space().with_clipboard_items(false),
+            ),
+        ];
+        let spec = AppLaunchSpec::new("/tmp/gfm").with_context_menus(context_menus.clone());
+        let contract = WindowLifecycleContract::from_spec(&spec).unwrap();
+        let output = contract.as_tsv();
+
+        assert_eq!(contract.context_menus, context_menus);
+        assert!(output.contains("\ncontext-menu\tsurface=file\tselection=1\titems="));
+        assert!(output.contains("\ncontext-menu\tsurface=empty\tselection=0\titems=8"));
+        assert!(output.contains(
+            "item\tpaste-item\tPaste Item\tgfm::PasteItem\tcommand\tenabled=false\tdestructive=false"
+        ));
     }
 
     #[test]

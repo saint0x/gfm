@@ -20414,6 +20414,44 @@ fn native_app_launch_dispatches_without_operator_command_from_binary() {
         stdout.contains("command\tEdit\tCopy\tsystem::Copy\tcmd-c\tsystem"),
         "{stdout}"
     );
+    assert!(
+        stdout.contains("\ncontext-menu\tsurface=file\tselection=1\titems="),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "item\topen-with\tOpen With\tgfm::OpenWith\tsubmenu\tenabled=true\tdestructive=false"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\ncontext-menu\tsurface=empty\tselection=0\titems="),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "item\tpaste-item\tPaste Item\tgfm::PasteItem\tcommand\tenabled=true\tdestructive=false"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\ncontext-menu\tsurface=volume\tselection=1\titems=4"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("item\teject\tEject\tgfm::Eject\tcommand\tenabled=true"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\ncontext-menu\tsurface=trash\tselection=1\titems=5"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "item\tdelete-immediately\tDelete Immediately...\tgfm::DeleteImmediately\tcommand\tenabled=true\tdestructive=true"
+        ),
+        "{stdout}"
+    );
     assert!(stdout.contains("icon-view\t"), "{stdout}");
     assert!(stdout.contains("\ttotal=1\t"), "{stdout}");
     assert!(stdout.contains("Visible.txt"), "{stdout}");
