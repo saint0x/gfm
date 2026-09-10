@@ -2002,7 +2002,7 @@ fn native_initial_view_contract(
         | NativeInitialViewMode::Column
         | NativeInitialViewMode::Gallery => {
             let page = read_directory_with_access(path, "native app initial view")?;
-            Ok(native_directory_initial_view_contract(mode, path, &page))
+            native_directory_initial_view_contract(mode, path, &page)
         }
         NativeInitialViewMode::Search => native_search_initial_view_contract(path),
         NativeInitialViewMode::Trash => native_trash_initial_view_contract(path),
@@ -2013,29 +2013,62 @@ fn native_directory_initial_view_contract(
     mode: NativeInitialViewMode,
     path: &Path,
     page: &DirectoryPage,
-) -> InitialViewContract {
+) -> Result<InitialViewContract> {
+    let selected = native_selected_file_ids_from_env(page)?;
     match mode {
-        NativeInitialViewMode::Icon => InitialViewContract::Icon(IconViewContract::from_records(
-            &page.entries,
-            IconViewOptions::default(),
-        )),
-        NativeInitialViewMode::List => InitialViewContract::List(ListViewContract::from_records(
-            &page.entries,
-            ListViewOptions::default(),
-        )),
-        NativeInitialViewMode::Column => {
-            InitialViewContract::Column(ColumnViewContract::from_sources(
-                vec![ColumnSource::new(path.to_path_buf(), page.entries.clone())],
-                ColumnViewOptions::default(),
-            ))
+        NativeInitialViewMode::Icon => {
+            Ok(InitialViewContract::Icon(IconViewContract::from_records(
+                &page.entries,
+                IconViewOptions::default().with_selected(selected.iter().copied()),
+            )))
         }
-        NativeInitialViewMode::Gallery => InitialViewContract::Gallery(
-            GalleryViewContract::from_records(&page.entries, GalleryViewOptions::default()),
-        ),
+        NativeInitialViewMode::List => {
+            Ok(InitialViewContract::List(ListViewContract::from_records(
+                &page.entries,
+                ListViewOptions::default().with_selected(selected.iter().copied()),
+            )))
+        }
+        NativeInitialViewMode::Column => Ok(InitialViewContract::Column(
+            ColumnViewContract::from_sources(
+                vec![ColumnSource::new(path.to_path_buf(), page.entries.clone())
+                    .with_selected(selected.first().copied())],
+                ColumnViewOptions::default(),
+            ),
+        )),
+        NativeInitialViewMode::Gallery => Ok(InitialViewContract::Gallery(
+            GalleryViewContract::from_records(
+                &page.entries,
+                GalleryViewOptions::default().with_selected(selected.first().copied()),
+            ),
+        )),
         NativeInitialViewMode::Search | NativeInitialViewMode::Trash => {
             unreachable!("non-directory native view modes are handled before directory rendering")
         }
     }
+}
+
+fn native_selected_file_ids_from_env(page: &DirectoryPage) -> Result<Vec<gfm_types::FileId>> {
+    let Some(value) = env::var_os("GFM_NATIVE_SELECTED_PATH") else {
+        return Ok(Vec::new());
+    };
+    let selected_path = PathBuf::from(value);
+    if selected_path.as_os_str().is_empty() {
+        return Err(GfmError::Format(
+            "GFM_NATIVE_SELECTED_PATH must not be empty".to_string(),
+        ));
+    }
+    let selected = page
+        .entries
+        .iter()
+        .find(|record| record.path == selected_path)
+        .map(|record| record.id)
+        .ok_or_else(|| {
+            GfmError::Format(format!(
+                "GFM_NATIVE_SELECTED_PATH `{}` is not visible in native app initial view",
+                selected_path.display()
+            ))
+        })?;
+    Ok(vec![selected])
 }
 
 fn native_search_initial_view_contract(path: &Path) -> Result<InitialViewContract> {

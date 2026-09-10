@@ -20580,6 +20580,101 @@ fn native_app_launch_selects_list_view_contract_from_binary() {
 }
 
 #[test]
+fn native_app_launch_selects_list_view_item_from_binary() {
+    let root = unique_temp_dir("gfm-cli-native-launch-list-selection");
+    let selected = root.join("Visible.txt");
+    fs::write(&selected, "hello").unwrap();
+    fs::write(root.join("Another.md"), "notes").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .current_dir(&root)
+        .env("GFM_NATIVE_LAUNCH_CONTRACT", "1")
+        .env("GFM_NATIVE_VIEW_MODE", "list")
+        .env("GFM_NATIVE_SELECTED_PATH", &selected)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let selected_row = stdout
+        .lines()
+        .find(|line| line.starts_with("row\t") && line.contains("Visible.txt"))
+        .unwrap_or_else(|| panic!("{stdout}"));
+    assert!(selected_row.contains("\tselected=true\t"), "{stdout}");
+    assert!(stdout.contains("\tinitial-view=list\t"), "{stdout}");
+    assert!(stdout.contains("\nlist-view\t"), "{stdout}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn native_app_launch_selects_gallery_preview_from_binary() {
+    let root = unique_temp_dir("gfm-cli-native-launch-gallery-selection");
+    let selected = root.join("Visible.pdf");
+    fs::write(&selected, "pdf-ish").unwrap();
+    fs::write(root.join("Another.md"), "notes").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .current_dir(&root)
+        .env("GFM_NATIVE_LAUNCH_CONTRACT", "1")
+        .env("GFM_NATIVE_VIEW_MODE", "gallery")
+        .env("GFM_NATIVE_SELECTED_PATH", &selected)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("\tinitial-view=gallery\t"), "{stdout}");
+    assert!(stdout.contains("\ngallery-view\t"), "{stdout}");
+    assert!(
+        stdout.contains("\npreview\t")
+            && stdout.contains("\tpdf-preview\tVisible.pdf")
+            && stdout.contains("\nmetadata\t"),
+        "{stdout}"
+    );
+    let filmstrip_row = stdout
+        .lines()
+        .find(|line| line.starts_with("filmstrip\t") && line.contains("Visible.pdf"))
+        .unwrap_or_else(|| panic!("{stdout}"));
+    assert!(filmstrip_row.contains("\tselected=true"), "{stdout}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn native_app_launch_rejects_non_visible_selected_path_from_binary() {
+    let root = unique_temp_dir("gfm-cli-native-launch-selection-missing");
+    fs::write(root.join("Visible.txt"), "hello").unwrap();
+    let missing = root.join("Missing.txt");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .current_dir(&root)
+        .env("GFM_NATIVE_LAUNCH_CONTRACT", "1")
+        .env("GFM_NATIVE_VIEW_MODE", "list")
+        .env("GFM_NATIVE_SELECTED_PATH", &missing)
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("GFM_NATIVE_SELECTED_PATH")
+            && stderr.contains("is not visible in native app initial view"),
+        "{stderr}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn native_app_launch_selects_search_results_contract_from_binary() {
     let root = unique_temp_dir("gfm-cli-native-launch-search-view");
     fs::create_dir_all(root.join("Folder")).unwrap();
