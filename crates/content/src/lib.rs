@@ -46,7 +46,7 @@ use structured::extract_structured_checked;
 
 pub const TEXT_EXTRACTOR_VERSION: u32 = 4;
 pub const PDF_EXTRACTOR_VERSION: u32 = 3;
-pub const OFFICE_EXTRACTOR_VERSION: u32 = 4;
+pub const OFFICE_EXTRACTOR_VERSION: u32 = 5;
 pub const RICH_EXTRACTOR_VERSION: u32 = 6;
 pub const ARCHIVE_EXTRACTOR_VERSION: u32 = 6;
 pub const STRUCTURED_EXTRACTOR_VERSION: u32 = 3;

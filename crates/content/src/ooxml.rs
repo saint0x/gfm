@@ -4,6 +4,7 @@ use std::io::{Cursor, Read};
 use zip::ZipArchive;
 
 const OOXML_ENTRY_READ_CHUNK_BYTES: usize = 64 * 1024;
+const OLE_COMPOUND_FILE_MAGIC: &[u8; 8] = b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OoxmlKind {
@@ -19,6 +20,7 @@ pub(crate) enum OoxmlExtractStatus {
     TooLarge,
     TooManyEntries,
     EntryTooLarge,
+    Encrypted,
     Corrupt,
 }
 
@@ -41,6 +43,9 @@ pub(crate) fn extract_ooxml_checked(
     check_control()?;
     if bytes.len() as u64 > policy.max_office_bytes {
         return Ok((OoxmlExtractStatus::TooLarge, None));
+    }
+    if is_ole_compound_file(bytes) {
+        return Ok((OoxmlExtractStatus::Encrypted, None));
     }
     let Ok(mut archive) = ZipArchive::new(Cursor::new(bytes)) else {
         return Ok((OoxmlExtractStatus::Corrupt, None));
@@ -95,6 +100,10 @@ pub(crate) fn extract_ooxml_checked(
             text,
         }),
     ))
+}
+
+fn is_ole_compound_file(bytes: &[u8]) -> bool {
+    bytes.starts_with(OLE_COMPOUND_FILE_MAGIC)
 }
 
 fn read_ooxml_entry_checked(
@@ -257,6 +266,17 @@ mod tests {
         let (status, doc) = extract_ooxml(&bytes, OoxmlKind::Docx, &policy);
 
         assert_eq!(status, OoxmlExtractStatus::EntryTooLarge);
+        assert!(doc.is_none());
+    }
+
+    #[test]
+    fn reports_encrypted_ooxml_compound_file_without_zip_parse() {
+        let mut bytes = OLE_COMPOUND_FILE_MAGIC.to_vec();
+        bytes.extend_from_slice(b"EncryptedPackage");
+
+        let (status, doc) = extract_ooxml(&bytes, OoxmlKind::Docx, &ExtractionPolicy::default());
+
+        assert_eq!(status, OoxmlExtractStatus::Encrypted);
         assert!(doc.is_none());
     }
 

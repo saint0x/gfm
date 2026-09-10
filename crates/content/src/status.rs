@@ -23,6 +23,7 @@ pub(crate) fn ooxml_report_status(status: OoxmlExtractStatus) -> ExtractionStatu
         OoxmlExtractStatus::TooLarge => ExtractionStatus::Skipped("too-large"),
         OoxmlExtractStatus::TooManyEntries => ExtractionStatus::Skipped("too-many-entries"),
         OoxmlExtractStatus::EntryTooLarge => ExtractionStatus::Skipped("entry-too-large"),
+        OoxmlExtractStatus::Encrypted => ExtractionStatus::Quarantined("encrypted-office"),
         OoxmlExtractStatus::Corrupt => ExtractionStatus::Quarantined("corrupt-office"),
     }
 }
