@@ -296,6 +296,31 @@ fn extracts_single_stream_archive_metadata_through_public_report_path() {
 }
 
 #[test]
+fn quarantines_encrypted_zip_archive_without_reporting_corruption() {
+    let root = unique_temp_dir("gfm-content-encrypted-zip");
+    let path = root.join("locked.zip");
+    fs::write(
+        &path,
+        encrypted_zip_package(&[("docs/secret.txt", "payload")]),
+    )
+    .unwrap();
+    let mut quarantine = ExtractionQuarantine::new(1);
+
+    let report = Extractor::default().extract_path_report(&path).unwrap();
+    let decision = quarantine.record_report(&report);
+
+    assert_eq!(report.format, ExtractionFormat::Archive);
+    assert_eq!(
+        report.status,
+        ExtractionStatus::Quarantined("encrypted-archive")
+    );
+    assert!(report.document.is_none());
+    assert!(matches!(decision, QuarantineDecision::Quarantined(_)));
+    assert!(decision.as_tsv().contains("\treason=encrypted-archive\t"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn classifies_unsupported_archive_formats_as_archive_without_reading_payloads() {
     for extension in ["rar", "7z"] {
         let root = unique_temp_dir(&format!("gfm-content-unsupported-archive-{extension}"));
@@ -793,6 +818,34 @@ fn quarantines_encrypted_ooxml_without_reporting_corruption() {
     assert_eq!(
         report.fingerprint.extractor_version,
         OFFICE_EXTRACTOR_VERSION
+    );
+    assert!(report.document.is_none());
+    assert!(matches!(decision, QuarantineDecision::Quarantined(_)));
+    assert!(decision.as_tsv().contains("\treason=encrypted-office\t"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn quarantines_encrypted_ooxml_zip_entry_without_reporting_corruption() {
+    let root = unique_temp_dir("gfm-content-encrypted-ooxml-zip");
+    let path = root.join("locked.docx");
+    fs::write(
+        &path,
+        encrypted_zip_package(&[(
+            "word/document.xml",
+            "<w:document><w:body><w:p><w:r><w:t>secret</w:t></w:r></w:p></w:body></w:document>",
+        )]),
+    )
+    .unwrap();
+    let mut quarantine = ExtractionQuarantine::new(1);
+
+    let report = Extractor::default().extract_path_report(&path).unwrap();
+    let decision = quarantine.record_report(&report);
+
+    assert_eq!(report.format, ExtractionFormat::Office);
+    assert_eq!(
+        report.status,
+        ExtractionStatus::Quarantined("encrypted-office")
     );
     assert!(report.document.is_none());
     assert!(matches!(decision, QuarantineDecision::Quarantined(_)));
@@ -1621,6 +1674,22 @@ endobj
 
 fn ooxml_package(parts: &[(&str, &str)]) -> Vec<u8> {
     zip_package(parts)
+}
+
+fn encrypted_zip_package(parts: &[(&str, &str)]) -> Vec<u8> {
+    let mut bytes = zip_package(parts);
+    set_zip_encrypted_flags(&mut bytes);
+    bytes
+}
+
+fn set_zip_encrypted_flags(bytes: &mut [u8]) {
+    for index in 0..bytes.len().saturating_sub(10) {
+        if bytes[index..].starts_with(b"PK\x03\x04") {
+            bytes[index + 6] |= 1;
+        } else if bytes[index..].starts_with(b"PK\x01\x02") {
+            bytes[index + 8] |= 1;
+        }
+    }
 }
 
 fn legacy_office_bytes() -> Vec<u8> {

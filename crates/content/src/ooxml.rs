@@ -1,6 +1,7 @@
 use crate::{normalize_text_checked, ContentDocument, ExtractionPolicy};
 use gfm_types::Result;
 use std::io::{Cursor, Read};
+use zip::result::ZipError;
 use zip::ZipArchive;
 
 const OOXML_ENTRY_READ_CHUNK_BYTES: usize = 64 * 1024;
@@ -59,8 +60,12 @@ pub(crate) fn extract_ooxml_checked(
     let mut saw_required_part = false;
     for index in 0..archive.len() {
         check_control()?;
-        let Ok(file) = archive.by_index(index) else {
-            return Ok((OoxmlExtractStatus::Corrupt, None));
+        let file = match archive.by_index(index) {
+            Ok(file) => file,
+            Err(error) if zip_error_is_password_required(&error) => {
+                return Ok((OoxmlExtractStatus::Encrypted, None));
+            }
+            Err(_) => return Ok((OoxmlExtractStatus::Corrupt, None)),
         };
         let name = file.name().to_string();
         if is_required_package_part(kind, &name) {
@@ -110,6 +115,10 @@ pub(crate) fn extract_ooxml_checked(
 
 fn is_ole_compound_file(bytes: &[u8]) -> bool {
     bytes.starts_with(OLE_COMPOUND_FILE_MAGIC)
+}
+
+fn zip_error_is_password_required(error: &ZipError) -> bool {
+    matches!(error, ZipError::UnsupportedArchive(reason) if *reason == ZipError::PASSWORD_REQUIRED)
 }
 
 fn is_required_package_part(kind: OoxmlKind, name: &str) -> bool {
@@ -295,6 +304,19 @@ mod tests {
     }
 
     #[test]
+    fn reports_encrypted_ooxml_zip_entry_without_reporting_corruption() {
+        let bytes = encrypted_package(&[(
+            "word/document.xml",
+            "<w:document><w:body><w:p><w:r><w:t>secret</w:t></w:r></w:p></w:body></w:document>",
+        )]);
+
+        let (status, doc) = extract_ooxml(&bytes, OoxmlKind::Docx, &ExtractionPolicy::default());
+
+        assert_eq!(status, OoxmlExtractStatus::Encrypted);
+        assert!(doc.is_none());
+    }
+
+    #[test]
     fn quarantines_ooxml_zip_missing_required_package_part_as_corrupt() {
         let bytes = package(&[("docs/payload.txt", "not an office package")]);
 
@@ -371,5 +393,21 @@ mod tests {
             writer.write_all(text.as_bytes()).unwrap();
         }
         writer.finish().unwrap().into_inner()
+    }
+
+    fn encrypted_package(parts: &[(&str, &str)]) -> Vec<u8> {
+        let mut bytes = package(parts);
+        set_zip_encrypted_flags(&mut bytes);
+        bytes
+    }
+
+    fn set_zip_encrypted_flags(bytes: &mut [u8]) {
+        for index in 0..bytes.len().saturating_sub(10) {
+            if bytes[index..].starts_with(b"PK\x03\x04") {
+                bytes[index + 6] |= 1;
+            } else if bytes[index..].starts_with(b"PK\x01\x02") {
+                bytes[index + 8] |= 1;
+            }
+        }
     }
 }

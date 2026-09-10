@@ -4,6 +4,7 @@ use flate2::read::GzDecoder;
 use gfm_types::Result;
 use std::io::{Cursor, Read};
 use xz2::read::XzDecoder;
+use zip::result::ZipError;
 use zip::ZipArchive;
 
 const ARCHIVE_DECODE_CHUNK_BYTES: usize = 256 * 1024;
@@ -44,6 +45,7 @@ pub(crate) enum ArchiveExtractStatus {
     Unsupported,
     TooLarge,
     TooManyEntries,
+    Encrypted,
     Corrupt,
 }
 
@@ -124,8 +126,12 @@ fn extract_zip_metadata_checked(
     let mut text = String::new();
     for index in 0..archive.len() {
         check_control()?;
-        let Ok(file) = archive.by_index(index) else {
-            return Ok((ArchiveExtractStatus::Corrupt, None));
+        let file = match archive.by_index(index) {
+            Ok(file) => file,
+            Err(error) if zip_error_is_password_required(&error) => {
+                return Ok((ArchiveExtractStatus::Encrypted, None));
+            }
+            Err(_) => return Ok((ArchiveExtractStatus::Corrupt, None)),
         };
         push_entry_metadata(
             &mut text,
@@ -150,6 +156,10 @@ fn extract_zip_metadata_checked(
             text,
         }),
     ))
+}
+
+fn zip_error_is_password_required(error: &ZipError) -> bool {
+    matches!(error, ZipError::UnsupportedArchive(reason) if *reason == ZipError::PASSWORD_REQUIRED)
 }
 
 fn extract_tar_gz_metadata_checked(
@@ -653,6 +663,17 @@ mod tests {
     }
 
     #[test]
+    fn encrypted_zip_entry_quarantines_archive_without_reporting_corruption() {
+        let bytes = encrypted_zip_file(&[("docs/secret.txt", "payload")]);
+
+        let (status, doc) =
+            extract_archive_metadata(&bytes, ArchiveKind::Zip, &ExtractionPolicy::default());
+
+        assert_eq!(status, ArchiveExtractStatus::Encrypted);
+        assert!(doc.is_none());
+    }
+
+    #[test]
     fn checked_zip_extraction_can_cancel_while_normalizing_metadata() {
         let name = format!("{}.txt", "zipneedle".repeat(4096));
         let bytes = zip_file(&[(name.as_str(), "body")]);
@@ -685,6 +706,22 @@ mod tests {
             writer.write_all(text.as_bytes()).unwrap();
         }
         writer.finish().unwrap().into_inner()
+    }
+
+    fn encrypted_zip_file(parts: &[(&str, &str)]) -> Vec<u8> {
+        let mut bytes = zip_file(parts);
+        set_zip_encrypted_flags(&mut bytes);
+        bytes
+    }
+
+    fn set_zip_encrypted_flags(bytes: &mut [u8]) {
+        for index in 0..bytes.len().saturating_sub(10) {
+            if bytes[index..].starts_with(b"PK\x03\x04") {
+                bytes[index + 6] |= 1;
+            } else if bytes[index..].starts_with(b"PK\x01\x02") {
+                bytes[index + 8] |= 1;
+            }
+        }
     }
 
     fn tar_gz_file(parts: &[(&str, &str)]) -> Vec<u8> {

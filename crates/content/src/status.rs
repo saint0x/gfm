@@ -35,6 +35,7 @@ pub(crate) fn archive_report_status(status: ArchiveExtractStatus) -> ExtractionS
         ArchiveExtractStatus::Unsupported => ExtractionStatus::Skipped("unsupported-archive"),
         ArchiveExtractStatus::TooLarge => ExtractionStatus::Skipped("too-large"),
         ArchiveExtractStatus::TooManyEntries => ExtractionStatus::Skipped("too-many-entries"),
+        ArchiveExtractStatus::Encrypted => ExtractionStatus::Quarantined("encrypted-archive"),
         ArchiveExtractStatus::Corrupt => ExtractionStatus::Quarantined("corrupt-archive"),
     }
 }
