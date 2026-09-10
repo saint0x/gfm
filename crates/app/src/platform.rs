@@ -4598,14 +4598,37 @@ fn run_fileprovider_invalidation_scan(
     let access_reports = fileprovider_snapshot_access_reports(&state_path, &paths, WORKER)?;
     access_reports.preflight_volumes(WORKER)?;
     let volume = access_reports.first_volume();
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _access = access_reports.access_checked(WORKER, || cancellation.check())?;
-        cancellation.check()?;
-        evaluate_fileprovider_state_invalidation_checked(&state_path, paths, WORKER, || {
-            cancellation.check()
-        })
-    })
+    scheduled_platform_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Operation,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            state_path.clone(),
+            move |cancellation, runtime| {
+                cancellation.check()?;
+                runtime
+                    .resize_checked(3, "fileprovider-scan:preflight", || cancellation.check())?;
+                let _access = access_reports.access_checked(WORKER, || cancellation.check())?;
+                platform_runtime_phase(&runtime, 1, "fileprovider-scan:evaluate", &cancellation)?;
+                let report = evaluate_fileprovider_state_invalidation_checked(
+                    &state_path,
+                    paths.clone(),
+                    WORKER,
+                    || cancellation.check(),
+                )?;
+                platform_runtime_phase(&runtime, 2, "fileprovider-scan:complete", &cancellation)?;
+                runtime.remember_completion_detail(format!(
+                    "completed:changed:{}",
+                    report.changes.len()
+                ))?;
+                platform_runtime_phase(&runtime, 3, "fileprovider-scan:reported", &cancellation)?;
+                Ok(report)
+            },
+        )?,
+        WORKER,
+    )
 }
 
 fn run_fileprovider_observed_invalidation(
@@ -4616,9 +4639,52 @@ fn run_fileprovider_observed_invalidation(
     let access_reports = fileprovider_observed_event_access_reports(&state_path, &event, worker)?;
     access_reports.preflight_volumes(worker)?;
     let volume = access_reports.first_volume();
-    run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
-        evaluate_fileprovider_observed_invalidation(&state_path, event, worker, &cancellation)
-    })
+    scheduled_platform_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Operation,
+            worker,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            state_path.clone(),
+            move |cancellation, runtime| {
+                cancellation.check()?;
+                runtime.resize_checked(3, "fileprovider-observed:preflight", || {
+                    cancellation.check()
+                })?;
+                platform_runtime_phase(
+                    &runtime,
+                    1,
+                    "fileprovider-observed:evaluate",
+                    &cancellation,
+                )?;
+                let observed = evaluate_fileprovider_observed_invalidation(
+                    &state_path,
+                    event.clone(),
+                    worker,
+                    &cancellation,
+                )?;
+                platform_runtime_phase(
+                    &runtime,
+                    2,
+                    "fileprovider-observed:complete",
+                    &cancellation,
+                )?;
+                runtime.remember_completion_detail(format!(
+                    "completed:paths:{}",
+                    observed.report.changes.len()
+                ))?;
+                platform_runtime_phase(
+                    &runtime,
+                    3,
+                    "fileprovider-observed:reported",
+                    &cancellation,
+                )?;
+                Ok(observed)
+            },
+        )?,
+        worker,
+    )
 }
 
 fn evaluate_fileprovider_state_invalidation_checked(

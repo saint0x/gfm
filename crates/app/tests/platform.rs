@@ -5057,11 +5057,15 @@ fn persists_fileprovider_invalidation_scan_from_binary() {
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     let state = root.join("fileprovider-state.tsv");
+    let catalog = root.join("payloads.gfmjobs");
+    let progress = root.join("progress.gfmprogress");
     let evicted = root.join("Remote.icloud-placeholder");
     std::fs::write(&evicted, "placeholder").unwrap();
     mark_evicted_fixture(&evicted);
 
     let first = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
         .arg("fileprovider-invalidation-scan")
         .arg(&state)
         .arg(&evicted)
@@ -5080,6 +5084,8 @@ fn persists_fileprovider_invalidation_scan_from_binary() {
     assert!(state.is_file());
 
     let second = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
         .arg("fileprovider-invalidation-scan")
         .arg(&state)
         .arg(&evicted)
@@ -5094,6 +5100,23 @@ fn persists_fileprovider_invalidation_scan_from_binary() {
     assert!(second_stdout
         .starts_with("fileprovider-state-invalidation\tinitialized=false\tchanged=0\t"));
     assert!(!second_stdout.contains("\nfileprovider-invalidation\t"));
+
+    let catalog_text = std::fs::read_to_string(&catalog).unwrap();
+    assert_platform_payload_catalog(&catalog_text, 1, "fileprovider invalidation scan", &state);
+    assert_platform_payload_catalog(&catalog_text, 2, "fileprovider invalidation scan", &state);
+    let progress_text = std::fs::read_to_string(&progress).unwrap();
+    assert_platform_runtime_progress(
+        &progress_text,
+        1,
+        "fileprovider invalidation scan",
+        "completed:changed:1",
+    );
+    assert_platform_runtime_progress(
+        &progress_text,
+        2,
+        "fileprovider invalidation scan",
+        "completed:changed:0",
+    );
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -5581,6 +5604,8 @@ fn reports_fileprovider_invalidation_event_from_binary() {
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     let state = root.join("fileprovider-state.tsv");
+    let catalog = root.join("payloads.gfmjobs");
+    let progress = root.join("progress.gfmprogress");
     let item = root.join("Remote.icloud-placeholder");
     let untouched = root.join("Untouched.icloud-placeholder");
     std::fs::write(&item, "placeholder").unwrap();
@@ -5598,6 +5623,8 @@ fn reports_fileprovider_invalidation_event_from_binary() {
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
         .arg("fileprovider-invalidation-event")
         .arg(&state)
         .arg("metadata")
@@ -5623,6 +5650,15 @@ fn reports_fileprovider_invalidation_event_from_binary() {
     assert_eq!(
         state_text.matches("Untouched.icloud-placeholder").count(),
         1
+    );
+    let catalog_text = std::fs::read_to_string(&catalog).unwrap();
+    assert_platform_payload_catalog(&catalog_text, 1, "fileprovider invalidation event", &state);
+    let progress_text = std::fs::read_to_string(&progress).unwrap();
+    assert_platform_runtime_progress(
+        &progress_text,
+        1,
+        "fileprovider invalidation event",
+        "completed:paths:1",
     );
 
     let _ = std::fs::remove_dir_all(root);
