@@ -156,26 +156,23 @@ impl SearchIndex {
     }
 
     pub(super) fn content_proximity_ids(&self, proximity: &QueryProximity) -> Vec<FileId> {
-        let postings: Option<Vec<_>> = proximity
-            .terms
-            .iter()
-            .map(|term| self.content_terms.get(term))
-            .collect();
-        let Some(mut postings) = postings else {
-            return Vec::new();
-        };
-        let Some((rarest_index, _)) = postings
-            .iter()
-            .enumerate()
-            .min_by_key(|(_, positions)| positions.len())
+        let Some((anchor_term, rarest)) =
+            rarest_content_term_postings(&proximity.terms, &self.content_terms)
         else {
             return Vec::new();
         };
-        let rarest = postings.swap_remove(rarest_index);
         rarest
             .keys()
             .copied()
-            .filter(|id| postings.iter().all(|positions| positions.contains_key(id)))
+            .filter(|id| {
+                proximity.terms.iter().all(|term| {
+                    term == anchor_term
+                        || self
+                            .content_terms
+                            .get(term)
+                            .is_some_and(|positions| positions.contains_key(id))
+                })
+            })
             .filter(|id| self.content_matches_proximity(*id, proximity))
             .collect()
     }
@@ -211,14 +208,23 @@ impl SearchIndex {
 }
 
 fn rarest_content_postings<'a>(
-    terms: &[String],
+    terms: &'a [String],
     postings: &'a BTreeMap<String, BTreeMap<FileId, Vec<u32>>>,
 ) -> Option<&'a BTreeMap<FileId, Vec<u32>>> {
+    rarest_content_term_postings(terms, postings).map(|(_, ids)| ids)
+}
+
+fn rarest_content_term_postings<'a>(
+    terms: &'a [String],
+    postings: &'a BTreeMap<String, BTreeMap<FileId, Vec<u32>>>,
+) -> Option<(&'a String, &'a BTreeMap<FileId, Vec<u32>>)> {
     let mut rarest = None;
     for term in terms {
         let ids = postings.get(term)?;
-        if rarest.is_none_or(|current: &BTreeMap<FileId, Vec<u32>>| ids.len() < current.len()) {
-            rarest = Some(ids);
+        if rarest.is_none_or(|(_, current): (&String, &BTreeMap<FileId, Vec<u32>>)| {
+            ids.len() < current.len()
+        }) {
+            rarest = Some((term, ids));
         }
     }
     rarest
@@ -258,6 +264,24 @@ mod tests {
         let terms = vec!["common".to_string(), "rare".to_string()];
         let rarest = rarest_content_postings(&terms, &postings).unwrap();
 
+        assert_eq!(rarest, postings.get("rare").unwrap());
+    }
+
+    #[test]
+    fn rarest_content_term_postings_returns_anchor_term_and_postings() {
+        let first = FileId::new(VolumeId(1), 1);
+        let second = FileId::new(VolumeId(1), 2);
+        let mut postings = BTreeMap::new();
+        postings.insert(
+            "common".to_string(),
+            BTreeMap::from([(first, vec![0]), (second, vec![2])]),
+        );
+        postings.insert("rare".to_string(), BTreeMap::from([(second, vec![2])]));
+
+        let terms = vec!["common".to_string(), "rare".to_string()];
+        let (term, rarest) = rarest_content_term_postings(&terms, &postings).unwrap();
+
+        assert_eq!(term, "rare");
         assert_eq!(rarest, postings.get("rare").unwrap());
     }
 
