@@ -67,6 +67,8 @@ GFM is a multi-crate Rust workspace with strict ownership boundaries.
 
 No UI render/update path performs blocking filesystem work. No performance-critical search, ranking, scheduling, virtualization, storage, or operation orchestration path is outsourced to a generic black box. Dependencies exist for platform access and standards compliance; GFM owns the contracts.
 
+Internal architecture notes live in `docs/`, starting with [search-storage.md](docs/search-storage.md).
+
 ## Toolchain
 
 GFM is macOS-only. Development and CI builds use GPUI's supported runtime-shader path, so the native app compiles on machines with Apple's Command Line Tools even when the standalone `metal` and `metallib` executables from full Xcode are not installed. The app still renders through Metal; this only changes when GPUI shader source is compiled.
