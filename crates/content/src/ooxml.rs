@@ -56,12 +56,16 @@ pub(crate) fn extract_ooxml_checked(
 
     let mut text = String::new();
     let mut extracted_parts = 0usize;
+    let mut saw_required_part = false;
     for index in 0..archive.len() {
         check_control()?;
         let Ok(file) = archive.by_index(index) else {
             return Ok((OoxmlExtractStatus::Corrupt, None));
         };
         let name = file.name().to_string();
+        if is_required_package_part(kind, &name) {
+            saw_required_part = true;
+        }
         if !is_text_part(kind, &name) {
             continue;
         }
@@ -85,10 +89,12 @@ pub(crate) fn extract_ooxml_checked(
 
     let text = normalize_text_checked(text.trim(), &mut check_control)?;
     if text.is_empty() {
-        let status = if extracted_parts == 0 {
-            OoxmlExtractStatus::Unsupported
-        } else {
+        let status = if saw_required_part {
             OoxmlExtractStatus::Extracted
+        } else if extracted_parts == 0 {
+            OoxmlExtractStatus::Corrupt
+        } else {
+            OoxmlExtractStatus::Unsupported
         };
         return Ok((status, None));
     }
@@ -104,6 +110,14 @@ pub(crate) fn extract_ooxml_checked(
 
 fn is_ole_compound_file(bytes: &[u8]) -> bool {
     bytes.starts_with(OLE_COMPOUND_FILE_MAGIC)
+}
+
+fn is_required_package_part(kind: OoxmlKind, name: &str) -> bool {
+    match kind {
+        OoxmlKind::Docx => name == "word/document.xml",
+        OoxmlKind::Xlsx => name == "xl/workbook.xml",
+        OoxmlKind::Pptx => name == "ppt/presentation.xml",
+    }
 }
 
 fn read_ooxml_entry_checked(
@@ -277,6 +291,26 @@ mod tests {
         let (status, doc) = extract_ooxml(&bytes, OoxmlKind::Docx, &ExtractionPolicy::default());
 
         assert_eq!(status, OoxmlExtractStatus::Encrypted);
+        assert!(doc.is_none());
+    }
+
+    #[test]
+    fn quarantines_ooxml_zip_missing_required_package_part_as_corrupt() {
+        let bytes = package(&[("docs/payload.txt", "not an office package")]);
+
+        let (status, doc) = extract_ooxml(&bytes, OoxmlKind::Docx, &ExtractionPolicy::default());
+
+        assert_eq!(status, OoxmlExtractStatus::Corrupt);
+        assert!(doc.is_none());
+    }
+
+    #[test]
+    fn treats_ooxml_with_required_package_part_but_no_text_as_empty_extracted_document() {
+        let bytes = package(&[("word/document.xml", "<w:document><w:body /></w:document>")]);
+
+        let (status, doc) = extract_ooxml(&bytes, OoxmlKind::Docx, &ExtractionPolicy::default());
+
+        assert_eq!(status, OoxmlExtractStatus::Extracted);
         assert!(doc.is_none());
     }
 

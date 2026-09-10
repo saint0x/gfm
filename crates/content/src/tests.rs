@@ -773,6 +773,33 @@ fn quarantines_encrypted_ooxml_without_reporting_corruption() {
 }
 
 #[test]
+fn quarantines_malformed_ooxml_package_without_required_part() {
+    for extension in ["docx", "xlsx", "pptx"] {
+        let root = unique_temp_dir(&format!("gfm-content-malformed-office-{extension}"));
+        let path = root.join(format!("not-office.{extension}"));
+        fs::write(
+            &path,
+            ooxml_package(&[("docs/payload.txt", "not actually an office package")]),
+        )
+        .unwrap();
+        let mut quarantine = ExtractionQuarantine::new(1);
+
+        let report = Extractor::default().extract_path_report(&path).unwrap();
+        let decision = quarantine.record_report(&report);
+
+        assert_eq!(report.format, ExtractionFormat::Office);
+        assert_eq!(
+            report.status,
+            ExtractionStatus::Quarantined("corrupt-office")
+        );
+        assert!(report.document.is_none());
+        assert!(matches!(decision, QuarantineDecision::Quarantined(_)));
+        assert!(decision.as_tsv().contains("\treason=corrupt-office\t"));
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
 fn applies_office_byte_budget_to_legacy_office() {
     let root = unique_temp_dir("gfm-content-legacy-office-budget");
     let path = root.join("large.DOC");
