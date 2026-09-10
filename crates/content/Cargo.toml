@@ -5,9 +5,11 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+bzip2 = "0.6"
 flate2 = "1.1"
 gfm-types = { path = "../types" }
 plist = "1.7"
+xz2 = { version = "0.1", features = ["static"] }
 zip = { version = "4.3.0", default-features = false, features = ["deflate"] }
 
 [lints]

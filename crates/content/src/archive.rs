@@ -1,7 +1,9 @@
 use crate::{normalize_text_checked, ContentDocument, ExtractionPolicy};
+use bzip2::read::BzDecoder;
 use flate2::read::GzDecoder;
 use gfm_types::Result;
 use std::io::{Cursor, Read};
+use xz2::read::XzDecoder;
 use zip::ZipArchive;
 
 const ARCHIVE_DECODE_CHUNK_BYTES: usize = 256 * 1024;
@@ -9,7 +11,9 @@ const ARCHIVE_DECODE_CHUNK_BYTES: usize = 256 * 1024;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ArchiveKind {
     Tar,
+    TarBz2,
     TarGz,
+    TarXz,
     Zip,
 }
 
@@ -41,7 +45,19 @@ pub(crate) fn extract_archive_metadata_checked(
     check_control()?;
     match kind {
         ArchiveKind::Tar => extract_tar_metadata_checked(bytes, policy, check_control),
+        ArchiveKind::TarBz2 => extract_compressed_tar_metadata_checked(
+            BzDecoder::new(Cursor::new(bytes)),
+            bytes.len(),
+            policy,
+            check_control,
+        ),
         ArchiveKind::TarGz => extract_tar_gz_metadata_checked(bytes, policy, check_control),
+        ArchiveKind::TarXz => extract_compressed_tar_metadata_checked(
+            XzDecoder::new(Cursor::new(bytes)),
+            bytes.len(),
+            policy,
+            check_control,
+        ),
         ArchiveKind::Zip => extract_zip_metadata_checked(bytes, policy, check_control),
     }
 }
@@ -96,13 +112,29 @@ fn extract_zip_metadata_checked(
 fn extract_tar_gz_metadata_checked(
     bytes: &[u8],
     policy: &ExtractionPolicy,
-    mut check_control: impl FnMut() -> Result<()>,
+    check_control: impl FnMut() -> Result<()>,
 ) -> Result<(ArchiveExtractStatus, Option<ContentDocument>)> {
+    extract_compressed_tar_metadata_checked(
+        GzDecoder::new(Cursor::new(bytes)),
+        bytes.len(),
+        policy,
+        check_control,
+    )
+}
+
+fn extract_compressed_tar_metadata_checked<R>(
+    mut decoder: R,
+    compressed_len: usize,
+    policy: &ExtractionPolicy,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<(ArchiveExtractStatus, Option<ContentDocument>)>
+where
+    R: Read,
+{
     check_control()?;
-    if bytes.len() as u64 > policy.max_archive_bytes {
+    if compressed_len as u64 > policy.max_archive_bytes {
         return Ok((ArchiveExtractStatus::TooLarge, None));
     }
-    let mut decoder = GzDecoder::new(bytes);
     let mut decoded = Vec::new();
     let limit = policy.max_archive_bytes.saturating_add(1);
     let mut reader = decoder.by_ref().take(limit);
@@ -324,10 +356,12 @@ fn floor_char_boundary(text: &str, mut index: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bzip2::write::BzEncoder;
     use flate2::{write::GzEncoder, Compression};
     use gfm_types::GfmError;
     use std::cell::Cell;
     use std::io::{Cursor, Write};
+    use xz2::write::XzEncoder;
     use zip::write::SimpleFileOptions;
 
     #[test]
@@ -360,6 +394,28 @@ mod tests {
 
         assert_eq!(status, ArchiveExtractStatus::Extracted);
         assert!(doc.unwrap().text.contains("docs/targz-needle.txt"));
+    }
+
+    #[test]
+    fn extracts_bzip2_compressed_tar_entry_metadata() {
+        let bytes = tar_bz2_file(&[("docs/tarbz2-needle.txt", "body")]);
+
+        let (status, doc) =
+            extract_archive_metadata(&bytes, ArchiveKind::TarBz2, &ExtractionPolicy::default());
+
+        assert_eq!(status, ArchiveExtractStatus::Extracted);
+        assert!(doc.unwrap().text.contains("docs/tarbz2-needle.txt"));
+    }
+
+    #[test]
+    fn extracts_xz_compressed_tar_entry_metadata() {
+        let bytes = tar_xz_file(&[("docs/tarxz-needle.txt", "body")]);
+
+        let (status, doc) =
+            extract_archive_metadata(&bytes, ArchiveKind::TarXz, &ExtractionPolicy::default());
+
+        assert_eq!(status, ArchiveExtractStatus::Extracted);
+        assert!(doc.unwrap().text.contains("docs/tarxz-needle.txt"));
     }
 
     #[test]
@@ -439,6 +495,28 @@ mod tests {
     }
 
     #[test]
+    fn corrupt_compressed_tar_metadata_quarantines_archive() {
+        let truncated_bzip = &tar_bz2_file(&[("docs/corrupt-bz2-needle.txt", "body")])[..12];
+        let truncated_xz = &tar_xz_file(&[("docs/corrupt-xz-needle.txt", "body")])[..12];
+
+        let (bzip_status, bzip_doc) = extract_archive_metadata(
+            truncated_bzip,
+            ArchiveKind::TarBz2,
+            &ExtractionPolicy::default(),
+        );
+        let (xz_status, xz_doc) = extract_archive_metadata(
+            truncated_xz,
+            ArchiveKind::TarXz,
+            &ExtractionPolicy::default(),
+        );
+
+        assert_eq!(bzip_status, ArchiveExtractStatus::Corrupt);
+        assert_eq!(xz_status, ArchiveExtractStatus::Corrupt);
+        assert!(bzip_doc.is_none());
+        assert!(xz_doc.is_none());
+    }
+
+    #[test]
     fn checked_zip_extraction_can_cancel_while_normalizing_metadata() {
         let name = format!("{}.txt", "zipneedle".repeat(4096));
         let bytes = zip_file(&[(name.as_str(), "body")]);
@@ -475,6 +553,18 @@ mod tests {
 
     fn tar_gz_file(parts: &[(&str, &str)]) -> Vec<u8> {
         let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&tar_file(parts)).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    fn tar_bz2_file(parts: &[(&str, &str)]) -> Vec<u8> {
+        let mut encoder = BzEncoder::new(Vec::new(), bzip2::Compression::default());
+        encoder.write_all(&tar_file(parts)).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    fn tar_xz_file(parts: &[(&str, &str)]) -> Vec<u8> {
+        let mut encoder = XzEncoder::new(Vec::new(), 6);
         encoder.write_all(&tar_file(parts)).unwrap();
         encoder.finish().unwrap()
     }

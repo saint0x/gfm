@@ -1,4 +1,5 @@
 use super::*;
+use bzip2::write::BzEncoder;
 use flate2::{
     write::{GzEncoder, ZlibEncoder},
     Compression,
@@ -8,6 +9,7 @@ use std::fs;
 use std::io::{Cursor, Write};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
+use xz2::write::XzEncoder;
 use zip::write::SimpleFileOptions;
 
 #[test]
@@ -217,6 +219,51 @@ fn extraction_report_checked_can_cancel_while_decoding_tar_gz_archive() {
     });
 
     assert!(matches!(result, Err(GfmError::Cancelled)));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn extracts_bzip2_and_xz_tar_metadata_through_public_report_path() {
+    let root = unique_temp_dir("gfm-content-compressed-tar-archives");
+    let tar_bz2 = root.join("bundle.tbz2");
+    let tar_xz = root.join("bundle.txz");
+    fs::write(
+        &tar_bz2,
+        tar_bz2_package(&[("docs/tbz2-public-needle.txt", "body")]),
+    )
+    .unwrap();
+    fs::write(
+        &tar_xz,
+        tar_xz_package(&[("docs/txz-public-needle.txt", "body")]),
+    )
+    .unwrap();
+
+    let extractor = Extractor::default();
+    let bzip = extractor.extract_path_report(&tar_bz2).unwrap();
+    let xz = extractor.extract_path_report(&tar_xz).unwrap();
+
+    assert_eq!(bzip.format, ExtractionFormat::Archive);
+    assert_eq!(xz.format, ExtractionFormat::Archive);
+    assert_eq!(bzip.status, ExtractionStatus::Extracted);
+    assert_eq!(xz.status, ExtractionStatus::Extracted);
+    assert_eq!(
+        bzip.fingerprint.extractor_version,
+        ARCHIVE_EXTRACTOR_VERSION
+    );
+    assert_eq!(xz.fingerprint.extractor_version, ARCHIVE_EXTRACTOR_VERSION);
+    assert!(bzip
+        .document
+        .as_ref()
+        .unwrap()
+        .text
+        .contains("docs/tbz2-public-needle.txt"));
+    assert!(xz
+        .document
+        .as_ref()
+        .unwrap()
+        .text
+        .contains("docs/txz-public-needle.txt"));
+
     fs::remove_dir_all(root).unwrap();
 }
 
@@ -1373,6 +1420,18 @@ fn ooxml_package(parts: &[(&str, &str)]) -> Vec<u8> {
 
 fn tar_gz_package(parts: &[(&str, &str)]) -> Vec<u8> {
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(&tar_package(parts)).unwrap();
+    encoder.finish().unwrap()
+}
+
+fn tar_bz2_package(parts: &[(&str, &str)]) -> Vec<u8> {
+    let mut encoder = BzEncoder::new(Vec::new(), bzip2::Compression::default());
+    encoder.write_all(&tar_package(parts)).unwrap();
+    encoder.finish().unwrap()
+}
+
+fn tar_xz_package(parts: &[(&str, &str)]) -> Vec<u8> {
+    let mut encoder = XzEncoder::new(Vec::new(), 6);
     encoder.write_all(&tar_package(parts)).unwrap();
     encoder.finish().unwrap()
 }

@@ -125,7 +125,7 @@ The index is compact and incremental:
 - binary-signature and control-byte classification before content extraction
 - bounded PDF text-stream extraction with PDF-specific byte, page, and object budgets
 - bounded OOXML extraction for DOCX, XLSX, and PPTX with ZIP entry, XML part, and text-output budgets
-- bounded HTML, RTF, MIME multipart email, and ZIP/TAR/TAR.GZ archive-metadata extraction policies, including PAX and GNU TAR long-name headers
+- bounded HTML, RTF, MIME multipart email, and ZIP/TAR/TAR.GZ/TAR.BZ2/TAR.XZ archive-metadata extraction policies, including PAX and GNU TAR long-name headers
 - structured JSON, CSV, XML plist, and binary plist extraction for searchable keys, cells, and values
 - format-scoped extractor versioning so parser upgrades invalidate only the affected content-cache family
 - incremental content indexing that tombstones changed/deleted file IDs, re-extracts only new or content-modified records, checks cancellation before each record-level extraction/insertion step, and keeps archive compaction cancellable through segment planning, merge, materialization, and publish boundaries

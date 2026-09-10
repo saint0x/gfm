@@ -74,6 +74,15 @@ pub(crate) fn archive_kind(path: &Path) -> Option<ArchiveKind> {
     if file_name.ends_with(".tar.gz") || file_name.ends_with(".tgz") {
         return Some(ArchiveKind::TarGz);
     }
+    if file_name.ends_with(".tar.bz2")
+        || file_name.ends_with(".tbz")
+        || file_name.ends_with(".tbz2")
+    {
+        return Some(ArchiveKind::TarBz2);
+    }
+    if file_name.ends_with(".tar.xz") || file_name.ends_with(".txz") {
+        return Some(ArchiveKind::TarXz);
+    }
     match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
         "tar" => Some(ArchiveKind::Tar),
         "zip" => Some(ArchiveKind::Zip),
