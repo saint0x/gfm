@@ -7101,6 +7101,19 @@
       "times": 1
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_NATIVE_LAUNCH_CONTRACT": "1",
+        "GFM_FILEPROVIDER_CONFLICT_PATH": "tmp/gfm-fozzy-conflict.icloud-conflict.md"
+      },
+      "args": [
+        "tmp/gfm-fozzy-native-launch-fixture"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [

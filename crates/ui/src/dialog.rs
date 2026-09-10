@@ -1313,6 +1313,88 @@ pub fn render_operation_conflict(conflict: &OperationConflictContract) -> impl I
     )
 }
 
+pub fn render_provider_conflict(conflict: &ProviderConflictContract) -> impl IntoElement {
+    let mut affected = div()
+        .id("provider-conflict-affected")
+        .flex()
+        .flex_col()
+        .gap(px(5.0));
+    for path in conflict.affected_paths.iter().take(4) {
+        affected = affected.child(
+            div()
+                .id("provider-conflict-affected-path")
+                .text_size(px(11.0))
+                .line_height(px(15.0))
+                .text_color(rgb(0xc7c7cc))
+                .child(path.clone()),
+        );
+    }
+    if conflict.affected_paths.len() > 4 {
+        affected = affected.child(
+            div()
+                .id("provider-conflict-more")
+                .text_size(px(11.0))
+                .text_color(rgb(0x9a9aa0))
+                .child(format!(
+                    "{} more conflicts",
+                    conflict.affected_paths.len() - 4
+                )),
+        );
+    }
+
+    render_sheet_content(
+        "provider-conflict-sheet",
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(12.0))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(10.0))
+                    .child(
+                        div()
+                            .w(px(28.0))
+                            .h(px(28.0))
+                            .rounded(px(6.0))
+                            .bg(rgb(0xff9f0a)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.0))
+                            .child(
+                                div()
+                                    .id("provider-conflict-title")
+                                    .text_size(px(16.0))
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(rgb(0xf2f2f2))
+                                    .child(conflict.dialog.title),
+                            )
+                            .child(
+                                div()
+                                    .id("provider-conflict-path")
+                                    .text_size(px(12.0))
+                                    .text_color(rgb(0xb6b6bd))
+                                    .child(conflict.path.clone()),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .id("provider-conflict-reason")
+                    .text_size(px(12.0))
+                    .line_height(px(17.0))
+                    .text_color(rgb(0xc7c7cc))
+                    .child(conflict.reason.clone()),
+            )
+            .child(affected)
+            .child(render_buttons(&conflict.dialog)),
+    )
+}
+
 pub fn render_permission(
     contract: &DialogContract,
     access: Option<&super::PermissionAccessContract>,

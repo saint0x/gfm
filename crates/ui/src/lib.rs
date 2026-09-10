@@ -100,6 +100,7 @@ pub struct AppLaunchSpec {
     pub initial_icon_view: IconViewContract,
     pub progress_surfaces: Vec<OperationProgressContract>,
     pub operation_conflicts: Vec<OperationConflictContract>,
+    pub provider_conflicts: Vec<ProviderConflictContract>,
     pub permission_dialog: Option<DialogContract>,
     pub permission_prompt: Option<PermissionPromptKind>,
     pub permission_onboarding: Option<PermissionOnboardingContract>,
@@ -548,6 +549,18 @@ impl AppLaunchSpec {
                 ));
             }
         }
+        for conflict in &self.provider_conflicts {
+            if conflict.dialog.surface != DialogSurface::Conflict {
+                return Err(GfmError::Format(
+                    "native app FileProvider conflict must use the conflict surface".to_string(),
+                ));
+            }
+            if conflict.dialog.presentation != DialogPresentation::WindowSheet {
+                return Err(GfmError::Format(
+                    "native app FileProvider conflict must be a window sheet".to_string(),
+                ));
+            }
+        }
         if let Some(dialog) = &self.permission_dialog {
             if dialog.surface != DialogSurface::Permission {
                 return Err(GfmError::Format(
@@ -648,6 +661,11 @@ impl AppLaunchSpec {
         self
     }
 
+    pub fn with_provider_conflicts(mut self, conflicts: Vec<ProviderConflictContract>) -> Self {
+        self.provider_conflicts = conflicts;
+        self
+    }
+
     pub fn with_permission_refresh(mut self, refresh: PermissionRefreshContract) -> Self {
         self.permission_refresh = Some(refresh);
         self
@@ -741,6 +759,7 @@ impl Default for AppLaunchSpec {
             initial_icon_view: IconViewContract::from_records(&[], IconViewOptions::default()),
             progress_surfaces: Vec::new(),
             operation_conflicts: Vec::new(),
+            provider_conflicts: Vec::new(),
             permission_dialog: None,
             permission_prompt: None,
             permission_onboarding: None,
@@ -766,6 +785,7 @@ pub struct WindowLifecycleContract {
     pub initial_view: InitialViewContract,
     pub progress_surfaces: Vec<OperationProgressContract>,
     pub operation_conflicts: Vec<OperationConflictContract>,
+    pub provider_conflicts: Vec<ProviderConflictContract>,
     pub permission_dialog: Option<DialogSurface>,
     pub permission_prompt: Option<PermissionPromptKind>,
     pub permission_onboarding: Option<PermissionOnboardingContract>,
@@ -791,6 +811,7 @@ impl WindowLifecycleContract {
             initial_view: spec.initial_view.clone(),
             progress_surfaces: spec.progress_surfaces.clone(),
             operation_conflicts: spec.operation_conflicts.clone(),
+            provider_conflicts: spec.provider_conflicts.clone(),
             permission_dialog: spec.permission_dialog.as_ref().map(|dialog| dialog.surface),
             permission_prompt: spec.permission_prompt,
             permission_onboarding: spec.permission_onboarding.clone(),
@@ -825,6 +846,11 @@ impl WindowLifecycleContract {
         );
         lines.extend(
             self.operation_conflicts
+                .iter()
+                .map(|conflict| conflict.as_tsv()),
+        );
+        lines.extend(
+            self.provider_conflicts
                 .iter()
                 .map(|conflict| conflict.as_tsv()),
         );
@@ -882,6 +908,7 @@ fn open_main_window(
             initial_view: spec.initial_view,
             progress_surfaces: spec.progress_surfaces,
             operation_conflicts: spec.operation_conflicts,
+            provider_conflicts: spec.provider_conflicts,
             permission_dialog: spec.permission_dialog,
             permission_onboarding: spec.permission_onboarding,
             permission_access: spec.permission_access,
@@ -952,6 +979,7 @@ struct RootView {
     initial_view: InitialViewContract,
     progress_surfaces: Vec<OperationProgressContract>,
     operation_conflicts: Vec<OperationConflictContract>,
+    provider_conflicts: Vec<ProviderConflictContract>,
     permission_dialog: Option<DialogContract>,
     permission_onboarding: Option<PermissionOnboardingContract>,
     permission_access: Option<PermissionAccessContract>,
@@ -1013,6 +1041,11 @@ impl Render for RootView {
         for conflict in &self.operation_conflicts {
             root = root
                 .child(dialog::render_operation_conflict(conflict))
+                .child(div().invisible().child(conflict.as_tsv()));
+        }
+        for conflict in &self.provider_conflicts {
+            root = root
+                .child(dialog::render_provider_conflict(conflict))
                 .child(div().invisible().child(conflict.as_tsv()));
         }
         if let Some(refresh) = &self.permission_refresh {
@@ -1894,6 +1927,25 @@ mod tests {
         assert!(contract.as_tsv().contains(
             "\noperation-conflict-row\t0\toperation=copy\tsource=/tmp/source\ttarget=/tmp/target\tkind=file\t"
         ));
+    }
+
+    #[test]
+    fn lifecycle_contract_tracks_provider_conflict_surfaces() {
+        let conflict = ProviderConflictContract::from_input(ProviderConflictInput::new(
+            "/Users/me/iCloud/Conflict.md",
+            true,
+            vec!["/Users/me/iCloud/Conflict.md".to_string()],
+            true,
+            true,
+            "conflict-requires-user-resolution",
+        ));
+        let spec = AppLaunchSpec::new("/tmp/gfm").with_provider_conflicts(vec![conflict.clone()]);
+        let contract = WindowLifecycleContract::from_spec(&spec).unwrap();
+
+        assert_eq!(contract.provider_conflicts, vec![conflict]);
+        assert!(contract
+            .as_tsv()
+            .contains("\nprovider-conflict\tpath=/Users/me/iCloud/Conflict.md\tconflict=true\t"));
     }
 
     #[test]

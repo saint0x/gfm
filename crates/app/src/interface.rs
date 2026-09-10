@@ -226,19 +226,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "ui-fileprovider-conflict-contract requires a FileProvider path",
             )?;
             let report = read_ui_fileprovider_conflict(path)?;
-            let contract = ProviderConflictContract::from_input(ProviderConflictInput::new(
-                report.path.display().to_string(),
-                report.has_unresolved_conflict,
-                report
-                    .affected_paths
-                    .iter()
-                    .map(|path| path.display().to_string())
-                    .collect(),
-                report.reveal_command == CloudCommandState::Enabled,
-                report.block_operations,
-                report.reason,
-            ));
-            println!("{}", contract.as_tsv());
+            println!("{}", provider_conflict_contract(report).as_tsv());
         }
         "ui-operation-conflict-contract" => {
             let operation = parse_conflict_contract_operation(args)?;
@@ -1811,6 +1799,29 @@ fn read_ui_fileprovider_conflict(path: PathBuf) -> Result<FileProviderConflictRe
     )
 }
 
+fn provider_conflict_contract(report: FileProviderConflictReport) -> ProviderConflictContract {
+    ProviderConflictContract::from_input(ProviderConflictInput::new(
+        report.path.display().to_string(),
+        report.has_unresolved_conflict,
+        report
+            .affected_paths
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect(),
+        report.reveal_command == CloudCommandState::Enabled,
+        report.block_operations,
+        report.reason,
+    ))
+}
+
+fn native_fileprovider_conflict_from_env() -> Result<Option<ProviderConflictContract>> {
+    let Some(path) = env::var_os("GFM_FILEPROVIDER_CONFLICT_PATH") else {
+        return Ok(None);
+    };
+    let report = read_ui_fileprovider_conflict(PathBuf::from(path))?;
+    Ok(Some(provider_conflict_contract(report)))
+}
+
 #[cfg(test)]
 fn preflight_ui_fileprovider_read_checked(
     path: &Path,
@@ -1867,6 +1878,9 @@ fn app_launch_spec_checked(
         if let Some(conflict) = OperationConflictContract::from_inputs(conflict_inputs) {
             spec = spec.with_operation_conflicts(vec![conflict]);
         }
+    }
+    if let Some(provider_conflict) = native_fileprovider_conflict_from_env()? {
+        spec = spec.with_provider_conflicts(vec![provider_conflict]);
     }
     let refresh = crate::permission_refresh::refresh_permission_state(
         crate::permission_refresh::PermissionRefreshAudience::Ui,

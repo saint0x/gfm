@@ -20526,6 +20526,42 @@ fn native_app_launch_selects_trash_view_contract_from_binary() {
 }
 
 #[test]
+fn native_app_launch_renders_fileprovider_conflict_surface_from_binary() {
+    let root = unique_temp_dir("gfm-cli-native-launch-provider-conflict");
+    let conflict = root.join("Conflict.icloud-conflict.md");
+    fs::write(&conflict, "conflict").unwrap();
+    xattr::set(&conflict, "com.apple.fileprovider.state", b"conflict").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .current_dir(&root)
+        .env("GFM_NATIVE_LAUNCH_CONTRACT", "1")
+        .env("GFM_FILEPROVIDER_CONFLICT_PATH", conflict.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_worker_admitted(&stderr, "ui fileprovider conflict", &conflict);
+    assert!(
+        stdout.contains("\nprovider-conflict\tpath=") && stdout.contains("\tconflict=true\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "\treveal=true\toperations-blocked=true\treason=conflict-requires-user-resolution"
+        ),
+        "{stdout}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn native_app_launch_rejects_unknown_initial_view_mode_from_binary() {
     let root = unique_temp_dir("gfm-cli-native-launch-bad-view");
     fs::write(root.join("Visible.txt"), "hello").unwrap();
