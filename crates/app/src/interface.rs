@@ -32,7 +32,7 @@ use gfm_ui::{
     SidebarVolumeEventKind, SidebarVolumeInvalidation, SidebarVolumeKind, SidebarVolumeMountState,
     SidebarVolumeSpec, TitlebarContract, ToolbarContract, TrashEntryMetadata, TrashViewContract,
     TrashViewOptions, VirtualSurface, VirtualizationContract, WindowLifecycleContract,
-    WindowSessionContract, WindowSessionStore,
+    WindowPlacement, WindowSessionContract, WindowSessionStore,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
@@ -40,11 +40,20 @@ use std::fs;
 use std::io::{self, BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
+pub(crate) fn run_native_app(path: Option<String>) -> Result<()> {
+    let spec = app_launch_spec(path)?;
+    if env::var_os("GFM_NATIVE_LAUNCH_CONTRACT").is_some() {
+        println!("{}", WindowLifecycleContract::from_spec(&spec)?.as_tsv());
+        println!("{}", spec.initial_icon_view.as_tsv());
+        return Ok(());
+    }
+    gfm_ui::run_native(spec)
+}
+
 pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Result<bool> {
     match command {
         "app" => {
-            let spec = app_launch_spec(args.next())?;
-            gfm_ui::run_native(spec)?;
+            run_native_app(args.next())?;
         }
         "ui-contract" => {
             let spec = app_launch_spec(args.next())?;
@@ -1858,6 +1867,9 @@ fn app_launch_spec_checked(
         .unwrap_or_default()
         .with_sidebar_path_snapshot(SidebarPathSnapshot::discover())
         .with_sidebar_volumes(native_sidebar_volumes_checked(&mut check_control)?);
+    if let Some(placement) = capture_launch_placement_from_env()? {
+        spec = spec.with_launch_placement(placement);
+    }
     check_control()?;
     if let Some(store) = crate::runtime::runtime_progress_store() {
         let payloads = crate::runtime::runtime_payload_catalog()
@@ -1904,8 +1916,62 @@ fn app_launch_spec_checked(
     if permission_access_requires_surface(&access) {
         spec = spec.with_permission_access(access);
     }
+    if admission.can_touch_filesystem {
+        let page = read_directory_with_access(&spec.initial_path, "native app initial icon view")?;
+        spec = spec.with_initial_icon_view(IconViewContract::from_records(
+            &page.entries,
+            IconViewOptions::default(),
+        ));
+    }
     check_control()?;
     Ok(spec)
+}
+
+fn capture_launch_placement_from_env() -> Result<Option<WindowPlacement>> {
+    let fields = [
+        ("GFM_CAPTURE_WINDOW_X", env::var_os("GFM_CAPTURE_WINDOW_X")),
+        ("GFM_CAPTURE_WINDOW_Y", env::var_os("GFM_CAPTURE_WINDOW_Y")),
+        (
+            "GFM_CAPTURE_WINDOW_WIDTH",
+            env::var_os("GFM_CAPTURE_WINDOW_WIDTH"),
+        ),
+        (
+            "GFM_CAPTURE_WINDOW_HEIGHT",
+            env::var_os("GFM_CAPTURE_WINDOW_HEIGHT"),
+        ),
+    ];
+    if fields.iter().all(|(_, value)| value.is_none()) {
+        return Ok(None);
+    }
+    if fields.iter().any(|(_, value)| value.is_none()) {
+        return Err(GfmError::Format(
+            "GFM capture window placement requires x, y, width, and height".to_string(),
+        ));
+    }
+    let [(_, Some(x)), (_, Some(y)), (_, Some(width)), (_, Some(height))] = fields else {
+        unreachable!("all capture placement fields were checked above");
+    };
+    let parse = |name: &str, value: &std::ffi::OsString| -> Result<f32> {
+        value
+            .to_str()
+            .ok_or_else(|| {
+                GfmError::Format(format!("{name} must be valid UTF-8 for native app capture"))
+            })?
+            .parse::<f32>()
+            .map_err(|_| GfmError::Format(format!("{name} must be numeric for native app capture")))
+    };
+    let placement = WindowPlacement {
+        x: parse("GFM_CAPTURE_WINDOW_X", &x)?,
+        y: parse("GFM_CAPTURE_WINDOW_Y", &y)?,
+        width: parse("GFM_CAPTURE_WINDOW_WIDTH", &width)?,
+        height: parse("GFM_CAPTURE_WINDOW_HEIGHT", &height)?,
+    };
+    if !placement.is_valid() {
+        return Err(GfmError::Format(
+            "GFM capture window placement is invalid".to_string(),
+        ));
+    }
+    Ok(Some(placement))
 }
 
 fn permission_onboarding_contract_inputs_checked(

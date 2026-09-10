@@ -20334,6 +20334,96 @@ fn ui_progress_surfaces_refuse_unreachable_store_before_reading_from_binary() {
 }
 
 #[test]
+fn native_app_launch_dispatches_without_operator_command_from_binary() {
+    let root = unique_temp_dir("gfm-cli-native-launch-default");
+    fs::write(root.join("Visible.txt"), "hello").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .current_dir(&root)
+        .env("GFM_NATIVE_LAUNCH_CONTRACT", "1")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("window\tGFM\t"), "{stdout}");
+    assert!(stdout.contains("transparent-titlebar=true"), "{stdout}");
+    assert!(stdout.contains("icon-view\t"), "{stdout}");
+    assert!(stdout.contains("\ttotal=1\t"), "{stdout}");
+    assert!(stdout.contains("Visible.txt"), "{stdout}");
+    assert!(!stdout.contains("Usage:"), "{stdout}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn native_app_launch_dispatches_existing_path_arg_from_binary() {
+    let root = unique_temp_dir("gfm-cli-native-launch-path");
+    let fixture = root.join("fixture");
+    fs::create_dir_all(&fixture).unwrap();
+    fs::write(fixture.join("Back Target.md"), "back").unwrap();
+    fs::write(fixture.join("Forward Target.md"), "forward").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .current_dir(&root)
+        .env("GFM_NATIVE_LAUNCH_CONTRACT", "1")
+        .arg(fixture.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains(&format!("window\tGFM\t{}", fixture.display())),
+        "{stdout}"
+    );
+    assert!(stdout.contains("icon-view\t"), "{stdout}");
+    assert!(stdout.contains("\ttotal=2\t"), "{stdout}");
+    assert!(stdout.contains("Back Target.md"), "{stdout}");
+    assert!(stdout.contains("Forward Target.md"), "{stdout}");
+    assert!(!stdout.contains("Usage:"), "{stdout}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn native_app_launch_applies_capture_window_placement_from_binary() {
+    let root = unique_temp_dir("gfm-cli-native-launch-capture-placement");
+    fs::write(root.join("Visible.txt"), "hello").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .current_dir(&root)
+        .env("GFM_NATIVE_LAUNCH_CONTRACT", "1")
+        .env("GFM_CAPTURE_WINDOW_X", "40")
+        .env("GFM_CAPTURE_WINDOW_Y", "70")
+        .env("GFM_CAPTURE_WINDOW_WIDTH", "800")
+        .env("GFM_CAPTURE_WINDOW_HEIGHT", "500")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("window\tGFM\t"), "{stdout}");
+    assert!(stdout.contains("\t800x500\t"), "{stdout}");
+    assert!(stdout.contains("icon-view\t"), "{stdout}");
+    assert!(stdout.contains("Visible.txt"), "{stdout}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn ui_payload_catalog_refuses_unreachable_volume_before_metadata_probe_from_binary() {
     let root = unique_temp_dir("gfm-cli-ui-payload-catalog-unreachable");
     let progress_root = unique_temp_dir("gfm-cli-ui-payload-progress-local");

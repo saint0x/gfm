@@ -45,6 +45,7 @@ fn main() {
 fn run() -> Result<()> {
     let mut args = env::args().skip(1);
     match args.next().as_deref() {
+        None => interface::run_native_app(None)?,
         Some(command) if interface::run(command, &mut args)? => {}
         Some(command) if search::run(command, &mut args)? => {}
         Some(command) if archive::run(command, &mut args)? => {}
@@ -156,9 +157,17 @@ fn run() -> Result<()> {
         Some("register-app") => packaging::register_app(&mut args)?,
         Some("notarize-app") => packaging::notarize_app(&mut args)?,
         Some(command) if operation::run(command, &mut args)? => {}
+        Some(path) if is_native_launch_path_arg(path) => {
+            interface::run_native_app(Some(path.to_string()))?;
+        }
         _ => print_usage(),
     }
     Ok(())
+}
+
+fn is_native_launch_path_arg(value: &str) -> bool {
+    let path = Path::new(value);
+    path.is_absolute() || path.exists()
 }
 
 pub(crate) fn required_path(value: Option<String>, message: &str) -> Result<PathBuf> {

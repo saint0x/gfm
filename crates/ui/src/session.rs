@@ -139,10 +139,9 @@ pub struct WindowSessionContract {
 
 impl WindowSessionContract {
     pub fn from_spec(spec: &AppLaunchSpec, store: &WindowSessionStore, ordinal: u32) -> Self {
-        let placement = store
-            .load_window_bounds()
-            .ok()
-            .flatten()
+        let placement = spec
+            .launch_placement
+            .or_else(|| store.load_window_bounds().ok().flatten())
             .map(|placement| placement.cascade(ordinal))
             .filter(|placement| placement.is_valid());
 

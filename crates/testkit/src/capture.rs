@@ -773,7 +773,7 @@ fn prepare_capture_command(options: &ParityScreenshotCaptureOptions) -> Result<V
             Ok(vec![
                 "/usr/bin/osascript".to_string(),
                 "-e".to_string(),
-                gfm_prepare_script(app, &options.fixture_root),
+                gfm_prepare_script(app, options),
             ])
         }
     }
@@ -802,18 +802,46 @@ fn finder_view_mode_script(view_mode: ParityViewMode) -> &'static str {
     }
 }
 
-fn gfm_prepare_script(app: &Path, fixture_root: &Path) -> String {
+fn gfm_prepare_script(app: &Path, options: &ParityScreenshotCaptureOptions) -> String {
     let app_name = app
         .file_stem()
         .and_then(|name| name.to_str())
         .filter(|name| !name.trim().is_empty())
         .unwrap_or("GFM");
+    let fallback_executable_name = app_name.to_ascii_lowercase();
+    let executable_path = app_executable_path(app).unwrap_or_else(|| {
+        app.join("Contents")
+            .join("MacOS")
+            .join(&fallback_executable_name)
+    });
+    let executable_name = executable_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(&fallback_executable_name);
     format!(
-        "do shell script \"open -a \" & quoted form of \"{}\" & \" --args \" & quoted form of \"{}\"\ntry\n  tell application \"{}\" to activate\nend try\ndelay 0.35",
-        applescript_string(app),
-        applescript_string(fixture_root),
-        applescript_string_value(app_name)
+        "do shell script \"GFM_CAPTURE_WINDOW_X={} GFM_CAPTURE_WINDOW_Y={} GFM_CAPTURE_WINDOW_WIDTH={} GFM_CAPTURE_WINDOW_HEIGHT={} \" & quoted form of \"{}\" & \" \" & quoted form of \"{}\" & \" >/dev/null 2>&1 &\"\ntell application \"System Events\"\n  repeat 30 times\n    if exists process \"{}\" then\n      try\n        set visible of (first process whose name is \"{}\") to true\n        set frontmost of (first process whose name is \"{}\") to true\n      end try\n      if (count of windows of (first process whose name is \"{}\")) > 0 then exit repeat\n    end if\n    delay 0.1\n  end repeat\nend tell\ndelay 0.5",
+        options.window_origin_x,
+        options.window_origin_y,
+        options.window_size.width,
+        options.window_size.height,
+        applescript_string(&executable_path),
+        applescript_string(&options.fixture_root),
+        applescript_string_value(executable_name),
+        applescript_string_value(executable_name),
+        applescript_string_value(executable_name),
+        applescript_string_value(executable_name)
     )
+}
+
+fn app_executable_path(app: &Path) -> Option<PathBuf> {
+    let macos = app.join("Contents").join("MacOS");
+    std::fs::read_dir(macos)
+        .ok()?
+        .filter_map(|entry| entry.ok())
+        .find_map(|entry| {
+            let path = entry.path();
+            path.is_file().then_some(path)
+        })
 }
 
 fn screencapture_command(region: &CaptureRegion, output_png: &Path) -> Vec<String> {
@@ -1074,12 +1102,18 @@ mod tests {
         let (prepare, capture) = plan_parity_capture_commands(&options).unwrap();
 
         assert_eq!(prepare[0], "/usr/bin/osascript");
-        assert!(prepare[2].contains("open -a"));
-        assert!(prepare[2].contains("/Applications/GFM.app"));
+        assert!(prepare[2].contains("do shell script \"GFM_CAPTURE_WINDOW_X=40"));
+        assert!(prepare[2].contains("/Applications/GFM.app/Contents/MacOS/gfm"));
         assert!(prepare[2].contains(root.to_str().unwrap()));
-        assert!(prepare[2].contains("try"));
-        assert!(prepare[2].contains("tell application \"GFM\" to activate"));
-        assert!(prepare[2].contains("delay 0.35"));
+        assert!(prepare[2].contains("System Events"));
+        assert!(prepare[2].contains("repeat 30 times"));
+        assert!(prepare[2].contains("count of windows"));
+        assert!(prepare[2].contains("GFM_CAPTURE_WINDOW_X=40"));
+        assert!(prepare[2].contains("GFM_CAPTURE_WINDOW_Y=70"));
+        assert!(prepare[2].contains("GFM_CAPTURE_WINDOW_WIDTH=1040"));
+        assert!(prepare[2].contains("GFM_CAPTURE_WINDOW_HEIGHT=720"));
+        assert!(prepare[2].contains("frontmost"));
+        assert!(prepare[2].contains("delay 0.5"));
         assert_eq!(capture[0], "/usr/sbin/screencapture");
         assert_eq!(capture[3], "40,70,1040,720");
         fs::remove_dir_all(root).unwrap();

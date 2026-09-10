@@ -7035,6 +7035,32 @@
       "times": 1
     },
     {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-native-launch-fixture/Back Target.md",
+      "data": "back\n"
+    },
+    {
+      "type": "fs_write",
+      "path": "tmp/gfm-fozzy-native-launch-fixture/Forward Target.md",
+      "data": "forward\n"
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_NATIVE_LAUNCH_CONTRACT": "1",
+        "GFM_CAPTURE_WINDOW_X": "40",
+        "GFM_CAPTURE_WINDOW_Y": "70",
+        "GFM_CAPTURE_WINDOW_WIDTH": "800",
+        "GFM_CAPTURE_WINDOW_HEIGHT": "500"
+      },
+      "args": [
+        "tmp/gfm-fozzy-native-launch-fixture"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [

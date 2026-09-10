@@ -93,8 +93,10 @@ pub struct AppLaunchSpec {
     pub transparent_titlebar: bool,
     pub activate_on_launch: bool,
     pub tabbing_identifier: String,
+    pub launch_placement: Option<WindowPlacement>,
     pub sidebar_paths: SidebarPathSnapshot,
     pub sidebar_volumes: Vec<SidebarVolumeSpec>,
+    pub initial_icon_view: IconViewContract,
     pub progress_surfaces: Vec<OperationProgressContract>,
     pub operation_conflicts: Vec<OperationConflictContract>,
     pub permission_dialog: Option<DialogContract>,
@@ -426,6 +428,13 @@ impl AppLaunchSpec {
                 "native app tabbing identifier must not be empty".to_string(),
             ));
         }
+        if let Some(placement) = self.launch_placement {
+            if !placement.is_valid() {
+                return Err(GfmError::Format(
+                    "native app launch placement is invalid".to_string(),
+                ));
+            }
+        }
         let mut sidebar_volume_ids = BTreeSet::new();
         for volume in &self.sidebar_volumes {
             if volume.id.trim().is_empty() {
@@ -529,6 +538,18 @@ impl AppLaunchSpec {
         self
     }
 
+    pub fn with_launch_placement(mut self, placement: WindowPlacement) -> Self {
+        self.width = placement.width;
+        self.height = placement.height;
+        self.launch_placement = Some(placement);
+        self
+    }
+
+    pub fn with_initial_icon_view(mut self, icon_view: IconViewContract) -> Self {
+        self.initial_icon_view = icon_view;
+        self
+    }
+
     pub fn with_progress_surfaces(mut self, surfaces: Vec<OperationProgressContract>) -> Self {
         self.progress_surfaces = surfaces;
         self
@@ -622,8 +643,10 @@ impl Default for AppLaunchSpec {
             transparent_titlebar: true,
             activate_on_launch: true,
             tabbing_identifier: "gfm-main-window".to_string(),
+            launch_placement: None,
             sidebar_paths: SidebarPathSnapshot::default(),
             sidebar_volumes: Vec::new(),
+            initial_icon_view: IconViewContract::from_records(&[], IconViewOptions::default()),
             progress_surfaces: Vec::new(),
             operation_conflicts: Vec::new(),
             permission_dialog: None,
@@ -761,7 +784,7 @@ fn open_main_window(
                 spec.sidebar_paths.clone(),
                 spec.sidebar_volumes.clone(),
             ),
-            icon_view: IconViewContract::from_records(&[], IconViewOptions::default()),
+            icon_view: spec.initial_icon_view,
             progress_surfaces: spec.progress_surfaces,
             operation_conflicts: spec.operation_conflicts,
             permission_dialog: spec.permission_dialog,
