@@ -86,4 +86,4 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 48. Expand `PLAN.md` when architectural decisions change materially.
 49. Keep `README.md` written as the completed product contract.
 50. Keep this file limited to unfinished work only.
-51. Add internal architecture docs for storage format, search ranking, operation recovery, macOS bridges, parity harness, and performance budgets.
+51. Add internal architecture docs for macOS bridges and the parity harness.
