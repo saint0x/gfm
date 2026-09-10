@@ -7,8 +7,8 @@ use crate::{
     platform::current_host_job_scheduling_pressure,
     required_path,
     runtime::{
-        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path,
-        run_volume_task_cancellable, RuntimeJobHandle, ScheduledTaskOutcome,
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path, RuntimeJobHandle,
+        ScheduledTaskOutcome,
     },
 };
 use gfm_jobs::{Cancellation, JobPayloadKind, JobProgressState, Priority};
@@ -76,17 +76,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let options = macrobench_options(args.next(), args.next(), "macrobench-report")?;
             let workspace = options.workspace.clone();
             let access_reports = macrobench_report_access_reports(&workspace, &output_dir)?;
-            access_reports.preflight_volumes()?;
-            let volume = access_reports.first_volume();
-            let (report, artifacts) = run_volume_task_cancellable(
-                volume,
-                Priority::Visible,
+            let (report, artifacts) = run_gate_access_task(
+                access_reports,
+                workspace,
                 "macrobench report workspace",
                 move |cancellation| {
                     cancellation.check()?;
-                    let _access = access_reports.access_checked(|| cancellation.check())?;
-                    cancellation.check()?;
-                    let report = run_macrobench_report(&options, output_dir)?;
+                    let report = run_macrobench_report(&options, output_dir.clone())?;
                     cancellation.check()?;
                     Ok(report)
                 },
@@ -116,17 +112,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "macrobench-report-verify requires a minimum materialized file count",
             )?;
             let access_reports = macrobench_report_verify_access_reports(&output_dir)?;
-            access_reports.preflight_volumes()?;
-            let volume = access_reports.first_volume();
-            let verification = run_volume_task_cancellable(
-                volume,
-                Priority::Visible,
+            let verification = run_gate_access_task(
+                access_reports,
+                output_dir.clone(),
                 "macrobench report verifier",
                 move |cancellation| {
                     cancellation.check()?;
-                    let _access = access_reports.access_checked(|| cancellation.check())?;
-                    cancellation.check()?;
-                    verify_macrobench_artifacts(output_dir, min_files)
+                    verify_macrobench_artifacts(output_dir.clone(), min_files)
                 },
             )?;
             println!(
@@ -243,15 +235,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "parity-capture" => {
             let options = parity_capture_options(args)?;
             let access_reports = parity_capture_access_reports(&options)?;
-            access_reports.preflight_volumes()?;
-            let volume = access_reports.first_volume();
-            let report = run_volume_task_cancellable(
-                volume,
-                Priority::Visible,
+            let payload_path = options.fixture_root.clone();
+            let report = run_gate_access_task(
+                access_reports,
+                payload_path,
                 "parity capture",
                 move |cancellation| {
-                    cancellation.check()?;
-                    let _access = access_reports.access_checked(|| cancellation.check())?;
                     cancellation.check()?;
                     capture_parity_screenshot_checked(&options, || cancellation.check())
                 },
@@ -273,15 +262,12 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "parity-capture-plan" => {
             let options = parity_capture_matrix_options(args)?;
             let access_reports = parity_capture_matrix_access_reports(&options)?;
-            access_reports.preflight_volumes()?;
-            let volume = access_reports.first_volume();
-            let report = run_volume_task_cancellable(
-                volume,
-                Priority::Visible,
+            let payload_path = options.fixture_root.clone();
+            let report = run_gate_access_task(
+                access_reports,
+                payload_path,
                 "parity capture plan",
                 move |cancellation| {
-                    cancellation.check()?;
-                    let _access = access_reports.access_checked(|| cancellation.check())?;
                     cancellation.check()?;
                     gfm_testkit::write_parity_capture_matrix_plan_checked(&options, || {
                         cancellation.check()
@@ -307,21 +293,17 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
         "parity-capture-manifest" => {
             let options = parity_capture_manifest_options(args)?;
             let access_reports = parity_capture_manifest_access_reports(&options)?;
-            access_reports.preflight_volumes()?;
-            let volume = access_reports.first_volume();
             let manifest_path = options.manifest_path.clone();
-            let report = run_volume_task_cancellable(
-                volume,
-                Priority::Visible,
+            let report = run_gate_access_task(
+                access_reports,
+                manifest_path.clone(),
                 "parity capture manifest",
                 move |cancellation| {
-                    cancellation.check()?;
-                    let _access = access_reports.access_checked(|| cancellation.check())?;
                     cancellation.check()?;
                     gfm_testkit::write_parity_capture_pair_manifest_checked(&options, || {
                         cancellation.check()
                     })?;
-                    Ok(options)
+                    Ok(options.clone())
                 },
             )?;
             println!(
@@ -349,15 +331,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let mask_path = args.next().map(PathBuf::from);
             let access_reports =
                 pixel_diff_access_reports(&expected, &actual, mask_path.as_deref())?;
-            access_reports.preflight_volumes()?;
-            let volume = access_reports.first_volume();
-            let report = run_volume_task_cancellable(
-                volume,
-                Priority::Visible,
+            let report = run_gate_access_task(
+                access_reports,
+                expected.clone(),
                 "pixel diff",
                 move |cancellation| {
-                    cancellation.check()?;
-                    let _access = access_reports.access_checked(|| cancellation.check())?;
                     cancellation.check()?;
                     let masks = mask_path
                         .as_ref()
@@ -365,7 +343,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         .transpose()?
                         .unwrap_or_default();
                     let options = PixelDiffOptions::strict(size).with_masks(masks);
-                    diff_rgba_files(expected, actual, &options)
+                    diff_rgba_files(expected.clone(), actual.clone(), &options)
                 },
             )?;
             println!(
@@ -423,15 +401,11 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let mask_path = args.next().map(PathBuf::from);
             let access_reports =
                 pixel_diff_access_reports(&expected, &actual, mask_path.as_deref())?;
-            access_reports.preflight_volumes()?;
-            let volume = access_reports.first_volume();
-            let report = run_volume_task_cancellable(
-                volume,
-                Priority::Visible,
+            let report = run_gate_access_task(
+                access_reports,
+                expected.clone(),
                 "pixel threshold",
                 move |cancellation| {
-                    cancellation.check()?;
-                    let _access = access_reports.access_checked(|| cancellation.check())?;
                     cancellation.check()?;
                     let masks = mask_path
                         .as_ref()
@@ -439,7 +413,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                         .transpose()?
                         .unwrap_or_default();
                     let options = PixelDiffOptions::strict(size).with_governed_masks(masks);
-                    diff_rgba_files(expected, actual, &options)
+                    diff_rgba_files(expected.clone(), actual.clone(), &options)
                 },
             )?;
             let threshold = PixelDriftThreshold::finder_strict(surface);
@@ -472,16 +446,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "parity gate",
                 || Ok(()),
             )?;
-            manifest_access.preflight_volume()?;
-            let volume = manifest_access.volume();
+            let access_reports = GateAccessReports::new(vec![manifest_access]);
             let manifest_for_worker = manifest.clone();
-            let report = run_volume_task_cancellable(
-                volume,
-                Priority::Visible,
+            let report = run_gate_access_task(
+                access_reports,
+                manifest.clone(),
                 "parity gate",
                 move |cancellation| {
-                    cancellation.check()?;
-                    let _access = manifest_access.access_checked(|| cancellation.check())?;
                     cancellation.check()?;
                     let inputs = read_parity_manifest_inputs_checked(&manifest_for_worker, || {
                         cancellation.check()
@@ -536,17 +507,13 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let output_dir =
                 required_path(args.next(), "parity-review requires an output directory")?;
             let access_reports = parity_review_access_reports(&manifest, &output_dir)?;
-            access_reports.preflight_volumes()?;
-            let volume = access_reports.first_volume();
             let manifest_for_worker = manifest.clone();
             let output_dir_for_worker = output_dir.clone();
-            let bundle = run_volume_task_cancellable(
-                volume,
-                Priority::Visible,
+            let bundle = run_gate_access_task(
+                access_reports,
+                manifest.clone(),
                 "parity review",
                 move |cancellation| {
-                    cancellation.check()?;
-                    let _access = access_reports.access_checked(|| cancellation.check())?;
                     cancellation.check()?;
                     let inputs = read_parity_manifest_inputs_checked(&manifest_for_worker, || {
                         cancellation.check()
@@ -1240,6 +1207,41 @@ where
                 gate_runtime_phase(&runtime, 2, "gate-workspace:complete", &cancellation)?;
                 runtime.remember_completion_detail("completed:workspace".to_string())?;
                 gate_runtime_phase(&runtime, 3, "gate-workspace:reported", &cancellation)?;
+                Ok(result)
+            },
+        )?,
+        worker,
+    )
+}
+
+fn run_gate_access_task<T>(
+    access_reports: GateAccessReports,
+    payload_path: PathBuf,
+    worker: &'static str,
+    work: impl Fn(Cancellation) -> Result<T> + Send + Sync + 'static,
+) -> Result<T>
+where
+    T: Send + 'static,
+{
+    access_reports.preflight_volumes()?;
+    let volume = access_reports.first_volume();
+    visible_scheduled_gate_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Operation,
+            worker,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            payload_path,
+            move |cancellation, runtime| {
+                cancellation.check()?;
+                runtime.resize_checked(3, "gate-access:preflight", || cancellation.check())?;
+                let _access = access_reports.access_checked(|| cancellation.check())?;
+                gate_runtime_phase(&runtime, 1, "gate-access:run", &cancellation)?;
+                let result = work(cancellation.clone())?;
+                gate_runtime_phase(&runtime, 2, "gate-access:complete", &cancellation)?;
+                runtime.remember_completion_detail("completed:gate".to_string())?;
+                gate_runtime_phase(&runtime, 3, "gate-access:reported", &cancellation)?;
                 Ok(result)
             },
         )?,
