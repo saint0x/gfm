@@ -236,6 +236,39 @@ impl PreviewScheduler {
         Ok(decisions)
     }
 
+    pub fn schedule_with_pressure(
+        &mut self,
+        pressure: SchedulingPressure,
+        viewport: Viewport,
+        tasks: impl IntoIterator<Item = PreviewTask>,
+    ) -> Vec<PreviewTaskDecision> {
+        self.schedule_with_pressure_checked(pressure, viewport, tasks, || Ok(()))
+            .expect("infallible pressure-aware preview scheduling failed")
+    }
+
+    pub fn schedule_with_pressure_checked(
+        &mut self,
+        pressure: SchedulingPressure,
+        viewport: Viewport,
+        tasks: impl IntoIterator<Item = PreviewTask>,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Vec<PreviewTaskDecision>> {
+        let mut staged = self.clone();
+        let mut decisions =
+            staged.adapt_to_pressure_mutating_checked(pressure, false, &mut check_control)?;
+        check_control()?;
+        decisions.extend(staged.schedule_mutating_checked(
+            viewport,
+            tasks,
+            false,
+            &mut check_control,
+        )?);
+        check_control()?;
+        cancel_removed_original_tokens(&self.inflight, &decisions);
+        *self = staged;
+        Ok(decisions)
+    }
+
     fn schedule_mutating_checked(
         &mut self,
         viewport: Viewport,
@@ -1061,6 +1094,88 @@ mod tests {
         assert!(!visible_cancel.is_cancelled());
         assert!(first_prefetch_cancel.is_cancelled());
         assert!(second_prefetch_cancel.is_cancelled());
+    }
+
+    #[test]
+    fn schedule_with_pressure_drops_prefetch_before_admission() {
+        let policy = PreviewSchedulingPolicy {
+            max_visible: 4,
+            max_prefetch: 4,
+            cancel_offscreen: false,
+        };
+        let mut scheduler = PreviewScheduler::new(policy).unwrap();
+        let visible = task(1, Rect::new(0, 0, 20, 20));
+        let prefetch = task(2, Rect::new(0, 120, 20, 20));
+        let decisions = scheduler.schedule_with_pressure(
+            SchedulingPressure {
+                io: JobIoPressure::Saturated,
+                ..SchedulingPressure::default()
+            },
+            Viewport::new(Rect::new(0, 0, 100, 100), 100),
+            [visible.clone(), prefetch.clone()],
+        );
+
+        assert_eq!(
+            scheduler.policy(),
+            PreviewSchedulingPolicy {
+                max_visible: 4,
+                max_prefetch: 0,
+                cancel_offscreen: true,
+            }
+        );
+        assert_eq!(
+            decisions,
+            vec![PreviewTaskDecision::Scheduled {
+                key: visible.key.clone(),
+                priority: PreviewPriority::Visible,
+            }]
+        );
+        assert!(scheduler.cancellation_for(&visible.key).is_some());
+        assert!(scheduler.cancellation_for(&prefetch.key).is_none());
+    }
+
+    #[test]
+    fn checked_schedule_with_pressure_preserves_state_when_cancelled() {
+        let policy = PreviewSchedulingPolicy {
+            max_visible: 4,
+            max_prefetch: 4,
+            cancel_offscreen: false,
+        };
+        let mut scheduler = PreviewScheduler::new(policy).unwrap();
+        let existing = task(1, Rect::new(0, 120, 20, 20));
+        scheduler.schedule(
+            Viewport::new(Rect::new(0, 0, 100, 100), 100),
+            [existing.clone()],
+        );
+        let cancellation = scheduler
+            .cancellation_for(&existing.key)
+            .expect("prefetch task is inflight before combined pressure scheduling");
+        let mut checks = 0usize;
+
+        let err = scheduler
+            .schedule_with_pressure_checked(
+                SchedulingPressure {
+                    io: JobIoPressure::Saturated,
+                    ..SchedulingPressure::default()
+                },
+                Viewport::new(Rect::new(0, 0, 100, 100), 100),
+                [task(2, Rect::new(0, 0, 20, 20))],
+                || {
+                    checks += 1;
+                    if checks > 4 {
+                        Err(GfmError::Cancelled)
+                    } else {
+                        Ok(())
+                    }
+                },
+            )
+            .expect_err("combined pressure scheduling should be cancellable");
+
+        assert!(matches!(err, GfmError::Cancelled));
+        assert_eq!(scheduler.policy(), policy);
+        assert_eq!(scheduler.inflight_len(), 1);
+        assert!(!cancellation.is_cancelled());
+        assert!(scheduler.cancellation_for(&existing.key).is_some());
     }
 
     #[test]

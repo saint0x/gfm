@@ -268,7 +268,7 @@ gfm/
 - Owns icon and thumbnail generation.
 - Integrates Quick Look where possible.
 - Enforces budgets so thumbnails never block navigation.
-- Provides a bounded memory/disk preview cache with atomic disk writes, duplicate request coalescing for icon/thumbnail/Quick Look/text previews, visible-window prioritization and offscreen cancellation, untrusted-file preview security decisions, and invalidation policy for content, metadata, tag, iCloud, and removal events.
+- Provides a bounded memory/disk preview cache with atomic disk writes, duplicate request coalescing for icon/thumbnail/Quick Look/text previews, pressure-aware visible-window prioritization, atomic pressure-and-batch admission, offscreen cancellation, untrusted-file preview security decisions, and invalidation policy for content, metadata, tag, iCloud, and removal events.
 
 `jobs`
 
@@ -285,7 +285,7 @@ gfm/
 - Retries adaptive scheduled repair, maintenance, and rebuild producers through the isolated jobs worker with capped retry policy, persistent attempt journal entries, runtime metadata updates, and a deterministic operator probe for validating transient retry behavior.
 - Admits foreground copy, move, rename, delete, trash, and restore actions through the volume-isolated worker path before they enter the operation engine; command-line routes remain internal operator/test harnesses, not the product file-manager UI.
 - Admits interactive live content extraction/search jobs through the same volume-isolated worker path before they crawl, extract, and snippet candidate files.
-- Admits Quick Look preview and thumbnail generation jobs through the same volume-isolated worker path before producing preview contracts, with structured cancellation checks before security classification, scheduling, cache-policy decisions, and native preview/thumbnail planning; adaptive preview scheduling keeps selected-item Quick Look visible while letting background thumbnail generation defer under saturated IO, critical thermal state, low power, or active-user pressure.
+- Admits Quick Look preview and thumbnail generation jobs through the same volume-isolated worker path before producing preview contracts, with structured cancellation checks before security classification, pressure-and-batch scheduling, cache-policy decisions, and native preview/thumbnail planning; adaptive preview scheduling keeps selected-item Quick Look visible while letting background thumbnail generation defer under saturated IO, critical thermal state, low power, or active-user pressure.
 - Persists background content indexing job volume identity and resumes that job through the same isolated, journaled, capped-retry worker path.
 - Admits sidecar repair, persistent index repair, and diagnostics index rebuild jobs through volume-isolated worker admission before scanning, rebuilding, quarantining, or publishing repaired archives.
 - Applies the jobs-layer adaptive scheduling policy to background content indexing so saturated I/O or critical thermal pressure defers heavy extraction, while elevated pressure, low power, or active user input throttles worker admission instead of competing with visible work.

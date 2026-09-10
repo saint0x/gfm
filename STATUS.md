@@ -71,7 +71,7 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 
 43. Bind adaptive dependency-aware fair scheduling into remaining producer-specific foreground, preview, thumbnail, repair, and maintenance launch paths that do not yet consume pressure-derived class quotas.
 44. Complete automatic persistent job progress restoration and GPUI progress-surface integration across remaining specialized producers.
-45. Bind thermal, battery, IO pressure, and user-activity adaptive scheduling into remaining foreground, preview, and thumbnail producers.
+45. Bind thermal, battery, IO pressure, and user-activity adaptive scheduling into remaining foreground producers and the native Quick Look/thumbnail execution surfaces that still sit beyond preview admission contracts.
 
 ## Preview And Thumbnails
 
