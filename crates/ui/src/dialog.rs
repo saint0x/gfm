@@ -800,6 +800,22 @@ impl OperationConflictContract {
         }));
         lines.join("\n")
     }
+
+    pub fn visible_summary(&self) -> String {
+        if self.blocks_operation {
+            format!("Choose how to resolve {}.", self.target)
+        } else {
+            format!("{} is resolved with {}.", self.target, self.selected_policy)
+        }
+    }
+
+    pub fn visible_policy_summary(&self) -> String {
+        if self.available_policies.is_empty() {
+            "No available resolution".to_string()
+        } else {
+            format!("Available: {}", self.available_policies.join(", "))
+        }
+    }
 }
 
 fn operation_conflict_actions(
@@ -1195,6 +1211,105 @@ pub fn render_progress(progress: &OperationProgressContract) -> impl IntoElement
             )
             .child(detail)
             .child(render_buttons(&progress.dialog)),
+    )
+}
+
+pub fn render_operation_conflict(conflict: &OperationConflictContract) -> impl IntoElement {
+    let mut rows = div()
+        .id("operation-conflict-review")
+        .flex()
+        .flex_col()
+        .gap(px(6.0));
+    for row in conflict.review_rows.iter().take(4) {
+        rows = rows.child(
+            div()
+                .id("operation-conflict-row")
+                .p(px(8.0))
+                .rounded(px(6.0))
+                .bg(rgb(0x242426))
+                .child(
+                    div()
+                        .text_size(px(12.0))
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_color(rgb(0xf2f2f2))
+                        .child(format!("{} {}", row.operation, row.target_kind)),
+                )
+                .child(
+                    div()
+                        .mt(px(3.0))
+                        .text_size(px(11.0))
+                        .line_height(px(15.0))
+                        .text_color(rgb(0xc7c7cc))
+                        .child(format!("{} -> {}", row.source, row.target)),
+                )
+                .child(
+                    div()
+                        .mt(px(3.0))
+                        .text_size(px(11.0))
+                        .text_color(rgb(0x9a9aa0))
+                        .child(format!("policy: {}", row.selected_policy)),
+                ),
+        );
+    }
+    if conflict.review_rows.len() > 4 {
+        rows = rows.child(
+            div()
+                .id("operation-conflict-more")
+                .text_size(px(11.0))
+                .text_color(rgb(0x9a9aa0))
+                .child(format!("{} more items", conflict.review_rows.len() - 4)),
+        );
+    }
+
+    render_sheet_content(
+        "conflict-sheet",
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(12.0))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(10.0))
+                    .child(
+                        div()
+                            .w(px(28.0))
+                            .h(px(28.0))
+                            .rounded(px(6.0))
+                            .bg(rgb(0xff9f0a)),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(2.0))
+                            .child(
+                                div()
+                                    .id("operation-conflict-title")
+                                    .text_size(px(16.0))
+                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .text_color(rgb(0xf2f2f2))
+                                    .child(conflict.dialog.title),
+                            )
+                            .child(
+                                div()
+                                    .id("operation-conflict-target")
+                                    .text_size(px(12.0))
+                                    .text_color(rgb(0xb6b6bd))
+                                    .child(conflict.visible_summary()),
+                            ),
+                    ),
+            )
+            .child(
+                div()
+                    .id("operation-conflict-policies")
+                    .text_size(px(12.0))
+                    .text_color(rgb(0xc7c7cc))
+                    .child(conflict.visible_policy_summary()),
+            )
+            .child(rows)
+            .child(render_buttons(&conflict.dialog)),
     )
 }
 
@@ -1705,6 +1820,50 @@ mod tests {
         assert!(contract.as_tsv().contains(
             "\noperation-conflict-row\t0\toperation=copy\tsource=/tmp/source\ttarget=/tmp/target\tkind=file\t"
         ));
+    }
+
+    #[test]
+    fn operation_conflict_visible_text_uses_blocking_state_and_policies() {
+        let contract = OperationConflictContract::from_input(OperationConflictInput::new(
+            "copy",
+            OperationConflictPaths::new("/tmp/source", "/tmp/target"),
+            "file",
+            "fail",
+            vec!["replace".to_string(), "keep-both".to_string()],
+            true,
+            "destination-conflict-requires-user-resolution",
+        ));
+
+        assert_eq!(
+            contract.visible_summary(),
+            "Choose how to resolve /tmp/target."
+        );
+        assert_eq!(
+            contract.visible_policy_summary(),
+            "Available: replace, keep-both"
+        );
+    }
+
+    #[test]
+    fn operation_conflict_visible_text_reports_resolved_state() {
+        let contract = OperationConflictContract::from_input(OperationConflictInput::new(
+            "copy",
+            OperationConflictPaths::new("/tmp/source", "/tmp/target"),
+            "file",
+            "keep-both",
+            vec!["replace".to_string(), "keep-both".to_string()],
+            false,
+            "destination-conflict-resolved-by-keep-both",
+        ));
+
+        assert_eq!(
+            contract.visible_summary(),
+            "/tmp/target is resolved with keep-both."
+        );
+        assert_eq!(
+            contract.visible_policy_summary(),
+            "Available: replace, keep-both"
+        );
     }
 
     #[test]

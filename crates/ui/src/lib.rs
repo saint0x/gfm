@@ -916,7 +916,7 @@ impl Render for RootView {
         }
         for conflict in &self.operation_conflicts {
             root = root
-                .child(dialog::render(&conflict.dialog))
+                .child(dialog::render_operation_conflict(conflict))
                 .child(div().invisible().child(conflict.as_tsv()));
         }
         if let Some(refresh) = &self.permission_refresh {
