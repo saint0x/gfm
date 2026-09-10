@@ -132,6 +132,13 @@ impl InitialViewContract {
         }
     }
 
+    pub fn search_query(&self) -> Option<&str> {
+        match self {
+            Self::SearchResults(contract) => Some(&contract.query),
+            _ => None,
+        }
+    }
+
     pub fn as_tsv(&self) -> String {
         match self {
             Self::Icon(contract) => contract.as_tsv(),
@@ -967,7 +974,11 @@ impl WindowLifecycleContract {
     }
 
     fn effective_toolbar_contract(&self) -> ToolbarContract {
-        ToolbarContract::finder_for_view_mode(&self.initial_path, self.initial_view.mode())
+        ToolbarContract::finder_for_view_mode_with_search(
+            &self.initial_path,
+            self.initial_view.mode(),
+            self.initial_view.search_query(),
+        )
     }
 
     fn effective_menu_contract(&self) -> MenuContract {
@@ -1002,9 +1013,10 @@ fn open_main_window(
         cx.new(|_| RootView {
             bounds_subscription: None,
             session_writer: WindowSessionWriter::new(session_store),
-            toolbar: ToolbarContract::finder_for_view_mode(
+            toolbar: ToolbarContract::finder_for_view_mode_with_search(
                 &spec.initial_path,
                 spec.initial_view.mode(),
+                spec.initial_view.search_query(),
             ),
             sidebar: spec.sidebar_contract.clone().unwrap_or_else(|| {
                 sidebar::SidebarContract::from_path_snapshot(
@@ -1407,6 +1419,21 @@ mod tests {
 
         assert_eq!(trash_contract.initial_view.mode(), "trash");
         assert!(trash_contract.as_tsv().contains("\tinitial-view=trash\t"));
+    }
+
+    #[test]
+    fn lifecycle_contract_tracks_toolbar_search_query() {
+        let search =
+            SearchResultsContract::from_batches(Vec::new(), SearchResultsOptions::new("needle"));
+        let spec = AppLaunchSpec::new("/tmp/gfm")
+            .with_initial_view(InitialViewContract::SearchResults(search));
+        let contract = WindowLifecycleContract::from_spec(&spec).unwrap();
+        let tsv = contract.as_tsv();
+
+        assert!(tsv.contains("\tinitial-view=search\t"));
+        assert!(tsv.contains(
+            "\ncontrol\tsearch\tsearch-field\tneedle\tmachine-search\tsearch-field\t232px\tenabled=true\tselected=true"
+        ));
     }
 
     #[test]

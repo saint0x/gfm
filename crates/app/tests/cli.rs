@@ -20594,6 +20594,9 @@ fn native_app_launch_selects_search_results_contract_from_binary() {
         stdout.contains("\nsearch-results\tquery=Needle\t"),
         "{stdout}"
     );
+    assert!(stdout.contains(
+        "\ncontrol\tsearch\tsearch-field\tNeedle\tmachine-search\tsearch-field\t232px\tenabled=true\tselected=true"
+    ), "{stdout}");
     assert!(stdout.contains("\ttotal=2\t"), "{stdout}");
     assert!(stdout.contains("Needle.md"), "{stdout}");
     assert!(stdout.contains("Needle-notes.txt"), "{stdout}");

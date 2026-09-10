@@ -69,7 +69,18 @@ impl ToolbarContract {
     }
 
     pub fn finder_for_view_mode(path: impl AsRef<Path>, mode: &str) -> Self {
+        Self::finder_for_view_mode_with_search(path, mode, None)
+    }
+
+    pub fn finder_for_view_mode_with_search(
+        path: impl AsRef<Path>,
+        mode: &str,
+        search_query: Option<&str>,
+    ) -> Self {
         let title = toolbar_title(path.as_ref());
+        let search_label = search_query
+            .filter(|query| mode == "search" && !query.is_empty())
+            .unwrap_or("Search");
         Self {
             height_px: TOOLBAR_HEIGHT as u16,
             traffic_light_gutter_px: TRAFFIC_LIGHT_GUTTER as u16,
@@ -167,10 +178,10 @@ impl ToolbarContract {
                 control(
                     "search",
                     "search-field",
-                    "Search",
+                    search_label,
                     "machine-search",
                     ToolbarControlKind::SearchField,
-                    ControlState::new(SEARCH_WIDTH as u16, true, false),
+                    ControlState::new(SEARCH_WIDTH as u16, true, mode == "search"),
                 ),
             ],
         }
@@ -419,6 +430,17 @@ mod tests {
         ));
         assert!(tsv.contains(
             "control\tview\tlist-view\tlist\tview-as-list\tsegmented-button\t34px\tenabled=true\tselected=true"
+        ));
+    }
+
+    #[test]
+    fn finder_for_view_mode_renders_active_search_query() {
+        let contract =
+            ToolbarContract::finder_for_view_mode_with_search("/tmp/gfm", "search", Some("Needle"));
+        let tsv = contract.as_tsv();
+
+        assert!(tsv.contains(
+            "control\tsearch\tsearch-field\tNeedle\tmachine-search\tsearch-field\t232px\tenabled=true\tselected=true"
         ));
     }
 
