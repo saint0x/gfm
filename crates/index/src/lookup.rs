@@ -2057,6 +2057,23 @@ mod tests {
     }
 
     #[test]
+    fn lookup_cache_hot_hits_compact_stale_recency_entries() {
+        let mut cache = LookupCache::new(2);
+        cache.insert("first".to_string(), vec![1]);
+        cache.insert("second".to_string(), vec![2]);
+
+        for _ in 0..32 {
+            assert_eq!(cache.get("first"), Some(vec![1]));
+        }
+
+        assert!(cache.order.len() <= 8, "{:?}", cache.order);
+        cache.insert("third".to_string(), vec![3]);
+        assert_eq!(cache.get("first"), Some(vec![1]));
+        assert_eq!(cache.get("second"), None);
+        assert_eq!(cache.get("third"), Some(vec![3]));
+    }
+
+    #[test]
     fn sidecar_session_empty_zero_limit_and_empty_scope_skip_cache_work() {
         let fixture = SidecarFixture::new("empty-query");
         let session = fixture.session();
@@ -2483,8 +2500,15 @@ mod tests {
 #[derive(Debug)]
 struct LookupCache<V> {
     capacity: usize,
-    order: VecDeque<String>,
-    values: HashMap<String, V>,
+    next_generation: u64,
+    order: VecDeque<(u64, String)>,
+    values: HashMap<String, LookupCacheEntry<V>>,
+}
+
+#[derive(Debug)]
+struct LookupCacheEntry<V> {
+    generation: u64,
+    value: V,
 }
 
 #[derive(Debug)]
@@ -2528,14 +2552,21 @@ impl<V: Clone> LookupCache<V> {
     fn new(capacity: usize) -> Self {
         Self {
             capacity,
+            next_generation: 0,
             order: VecDeque::with_capacity(capacity),
             values: HashMap::new(),
         }
     }
 
     fn get(&mut self, key: &str) -> Option<V> {
-        let value = self.values.get(key).cloned()?;
-        refresh_string_recency(&mut self.order, key);
+        let generation = next_lookup_generation(&mut self.next_generation);
+        let value = {
+            let entry = self.values.get_mut(key)?;
+            entry.generation = generation;
+            entry.value.clone()
+        };
+        self.order.push_back((generation, key.to_string()));
+        self.compact_stale_order_if_needed();
         Some(value)
     }
 
@@ -2543,18 +2574,41 @@ impl<V: Clone> LookupCache<V> {
         if self.capacity == 0 {
             return;
         }
-        if self.values.contains_key(&key) {
-            refresh_string_recency(&mut self.order, &key);
-        } else {
-            self.order.push_back(key.clone());
-        }
-        self.values.insert(key, value);
+        let generation = next_lookup_generation(&mut self.next_generation);
+        self.order.push_back((generation, key.clone()));
+        self.values
+            .insert(key, LookupCacheEntry { generation, value });
+        self.evict_over_capacity();
+        self.compact_stale_order_if_needed();
+    }
+
+    fn evict_over_capacity(&mut self) {
         while self.values.len() > self.capacity {
             let Some(expired) = self.order.pop_front() else {
                 break;
             };
-            self.values.remove(&expired);
+            if self
+                .values
+                .get(&expired.1)
+                .is_some_and(|entry| entry.generation == expired.0)
+            {
+                self.values.remove(&expired.1);
+            }
         }
+    }
+
+    fn compact_stale_order_if_needed(&mut self) {
+        let max_order = self.capacity.saturating_mul(4).max(self.capacity + 1);
+        if self.order.len() <= max_order {
+            return;
+        }
+        let mut live = self
+            .values
+            .iter()
+            .map(|(key, entry)| (entry.generation, key.clone()))
+            .collect::<Vec<_>>();
+        live.sort_by_key(|(generation, _)| *generation);
+        self.order = live.into_iter().collect();
     }
 
     fn clear(&mut self) {
@@ -2567,12 +2621,8 @@ impl<V: Clone> LookupCache<V> {
     }
 }
 
-fn refresh_string_recency(order: &mut VecDeque<String>, key: &str) {
-    let Some(index) = order.iter().position(|candidate| candidate == key) else {
-        return;
-    };
-    let Some(key) = order.remove(index) else {
-        return;
-    };
-    order.push_back(key);
+fn next_lookup_generation(next_generation: &mut u64) -> u64 {
+    let generation = *next_generation;
+    *next_generation = next_generation.wrapping_add(1);
+    generation
 }
