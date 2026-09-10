@@ -3576,13 +3576,51 @@ fn run_fileprovider_operation(
     let access_report = PlatformAccessReport::new_checked(path, AccessIntent::Operate, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let path = access_report.path.clone();
-        let _access = access_report.access_checked(WORKER, || cancellation.check())?;
-        cancellation.check()?;
-        FileProviderOperationReport::execute_checked(path, operation, || cancellation.check())
-    })
+    scheduled_platform_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Operation,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            access_report.path.clone(),
+            move |cancellation, runtime| {
+                cancellation.check()?;
+                runtime.resize_checked(3, "fileprovider-operation:preflight", || {
+                    cancellation.check()
+                })?;
+                let path = access_report.path.clone();
+                let _access = access_report.access_checked(WORKER, || cancellation.check())?;
+                platform_runtime_phase(
+                    &runtime,
+                    1,
+                    "fileprovider-operation:execute",
+                    &cancellation,
+                )?;
+                let report = FileProviderOperationReport::execute_checked(path, operation, || {
+                    cancellation.check()
+                })?;
+                platform_runtime_phase(
+                    &runtime,
+                    2,
+                    "fileprovider-operation:complete",
+                    &cancellation,
+                )?;
+                runtime.remember_completion_detail(format!(
+                    "completed:operation:{}",
+                    operation.as_str()
+                ))?;
+                platform_runtime_phase(
+                    &runtime,
+                    3,
+                    "fileprovider-operation:reported",
+                    &cancellation,
+                )?;
+                Ok(report)
+            },
+        )?,
+        WORKER,
+    )
 }
 
 fn run_volume_operation(
@@ -3609,17 +3647,38 @@ fn run_volume_operation(
     }
     access_report.preflight_mounted_reachable(WORKER)?;
     let volume = access_report.volume();
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let path = access_report.path.clone();
-        access_report.preflight_volume(WORKER)?;
-        let _access = access_report.access_checked(WORKER, || cancellation.check())?;
-        cancellation.check()?;
-        if cancel_after_access {
-            cancellation.cancel();
-        }
-        VolumeOperationReport::execute_checked(path, operation, || cancellation.check())
-    })
+    scheduled_platform_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Operation,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            access_report.path.clone(),
+            move |cancellation, runtime| {
+                cancellation.check()?;
+                runtime.resize_checked(3, "volume-operation:preflight", || cancellation.check())?;
+                let path = access_report.path.clone();
+                access_report.preflight_volume(WORKER)?;
+                let _access = access_report.access_checked(WORKER, || cancellation.check())?;
+                platform_runtime_phase(&runtime, 1, "volume-operation:execute", &cancellation)?;
+                if cancel_after_access {
+                    cancellation.cancel();
+                }
+                let report = VolumeOperationReport::execute_checked(path, operation, || {
+                    cancellation.check()
+                })?;
+                platform_runtime_phase(&runtime, 2, "volume-operation:complete", &cancellation)?;
+                runtime.remember_completion_detail(format!(
+                    "completed:operation:{}",
+                    operation.as_str()
+                ))?;
+                platform_runtime_phase(&runtime, 3, "volume-operation:reported", &cancellation)?;
+                Ok(report)
+            },
+        )?,
+        WORKER,
+    )
 }
 
 fn run_native_icon(path: PathBuf) -> Result<NativeIconDescriptor> {

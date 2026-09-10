@@ -3825,6 +3825,78 @@ fn refuses_fileprovider_operations_without_native_provider_from_binary() {
 }
 
 #[test]
+fn platform_operation_routes_persist_runtime_progress_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-platform-operation-runtime-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let catalog = root.join("payloads.gfmjobs");
+    let progress = root.join("progress.gfmprogress");
+    let evicted = root.join("Remote.icloud-placeholder");
+    let volume_root = root.join("removable");
+    std::fs::write(&evicted, "placeholder").unwrap();
+    mark_evicted_fixture(&evicted);
+    std::fs::create_dir_all(&volume_root).unwrap();
+    std::fs::write(volume_root.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+
+    let fileprovider_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .arg("fileprovider-operation")
+        .arg("download")
+        .arg(&evicted)
+        .output()
+        .unwrap();
+    assert!(
+        fileprovider_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&fileprovider_output.stderr)
+    );
+    let fileprovider_stdout = String::from_utf8(fileprovider_output.stdout).unwrap();
+    assert!(fileprovider_stdout.starts_with("fileprovider-operation\t"));
+    assert!(fileprovider_stdout.contains("\toperation=download\tdisposition=refused\t"));
+
+    let volume_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .arg("volume-operation")
+        .arg("eject")
+        .arg(&volume_root)
+        .output()
+        .unwrap();
+    assert!(
+        volume_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&volume_output.stderr)
+    );
+    let volume_stdout = String::from_utf8(volume_output.stdout).unwrap();
+    assert!(volume_stdout.starts_with("volume-operation\teject\t"));
+    assert!(volume_stdout.contains("\tdisposition=refused\t"));
+
+    let catalog_text = std::fs::read_to_string(&catalog).unwrap();
+    assert_platform_payload_catalog(&catalog_text, 1, "fileprovider operation", &evicted);
+    assert_platform_payload_catalog(&catalog_text, 2, "volume operation", &volume_root);
+
+    let progress_text = std::fs::read_to_string(&progress).unwrap();
+    assert_platform_runtime_progress(
+        &progress_text,
+        1,
+        "fileprovider operation",
+        "completed:operation:download",
+    );
+    assert_platform_runtime_progress(
+        &progress_text,
+        2,
+        "volume operation",
+        "completed:operation:eject",
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn reports_fileprovider_invalidation_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-fileprovider-invalidation-{}",
