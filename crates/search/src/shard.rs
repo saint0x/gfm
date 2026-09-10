@@ -682,16 +682,18 @@ fn partition_content_postings_by_volume(
                 .or_default()
                 .push(positions.clone());
         }
-        let volumes = ids_by_volume
-            .keys()
-            .chain(positions_by_volume.keys())
-            .copied()
-            .collect::<BTreeSet<_>>();
-        for volume in volumes {
+        for (volume, ids) in ids_by_volume {
             by_volume.entry(volume).or_default().push(ContentPosting {
                 term: posting.term.clone(),
-                ids: ids_by_volume.remove(&volume).unwrap_or_default(),
+                ids,
                 positions: positions_by_volume.remove(&volume).unwrap_or_default(),
+            });
+        }
+        for (volume, positions) in positions_by_volume {
+            by_volume.entry(volume).or_default().push(ContentPosting {
+                term: posting.term.clone(),
+                ids: Vec::new(),
+                positions,
             });
         }
     }
