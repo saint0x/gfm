@@ -43,18 +43,24 @@ pub(crate) fn token_prefixes(term: &str) -> impl Iterator<Item = String> + '_ {
 }
 
 pub(crate) fn substring_grams(value: &str) -> Vec<String> {
-    let mut starts = value
+    let mut offsets = [0usize; SUBSTRING_GRAM_CHARS + 1];
+    let mut offset_count = 0usize;
+    let mut grams = Vec::new();
+
+    for offset in value
         .char_indices()
         .map(|(index, _)| index)
-        .collect::<Vec<_>>();
-    starts.push(value.len());
-    if starts.len() <= SUBSTRING_GRAM_CHARS {
-        return Vec::new();
+        .chain(std::iter::once(value.len()))
+    {
+        offsets[offset_count] = offset;
+        offset_count += 1;
+        if offset_count == offsets.len() {
+            grams.push(value[offsets[0]..offsets[SUBSTRING_GRAM_CHARS]].to_string());
+            offsets.copy_within(1.., 0);
+            offset_count -= 1;
+        }
     }
-    let mut grams = starts
-        .windows(SUBSTRING_GRAM_CHARS + 1)
-        .map(|window| value[window[0]..window[SUBSTRING_GRAM_CHARS]].to_string())
-        .collect::<Vec<_>>();
+
     grams.sort();
     grams.dedup();
     grams
@@ -62,4 +68,28 @@ pub(crate) fn substring_grams(value: &str) -> Vec<String> {
 
 pub(crate) fn is_substring_gram(value: &str) -> bool {
     value.chars().count() == SUBSTRING_GRAM_CHARS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn substring_grams_stream_character_windows_without_boundary_vector() {
+        assert_eq!(substring_grams("ab"), Vec::<String>::new());
+        assert_eq!(substring_grams("abc"), vec!["abc"]);
+        assert_eq!(
+            substring_grams("abca"),
+            vec!["abc".to_string(), "bca".to_string()]
+        );
+    }
+
+    #[test]
+    fn substring_grams_preserve_unicode_windows_and_deduplicate() {
+        assert_eq!(
+            substring_grams("åβçå"),
+            vec!["åβç".to_string(), "βçå".to_string()]
+        );
+        assert_eq!(substring_grams("aaaa"), vec!["aaa"]);
+    }
 }
