@@ -96,6 +96,7 @@ pub struct AppLaunchSpec {
     pub launch_placement: Option<WindowPlacement>,
     pub sidebar_paths: SidebarPathSnapshot,
     pub sidebar_volumes: Vec<SidebarVolumeSpec>,
+    pub initial_view: InitialViewContract,
     pub initial_icon_view: IconViewContract,
     pub progress_surfaces: Vec<OperationProgressContract>,
     pub operation_conflicts: Vec<OperationConflictContract>,
@@ -104,6 +105,34 @@ pub struct AppLaunchSpec {
     pub permission_onboarding: Option<PermissionOnboardingContract>,
     pub permission_access: Option<PermissionAccessContract>,
     pub permission_refresh: Option<PermissionRefreshContract>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum InitialViewContract {
+    Icon(IconViewContract),
+    List(ListViewContract),
+    Column(ColumnViewContract),
+    Gallery(GalleryViewContract),
+}
+
+impl InitialViewContract {
+    pub fn mode(&self) -> &'static str {
+        match self {
+            Self::Icon(_) => "icon",
+            Self::List(_) => "list",
+            Self::Column(_) => "column",
+            Self::Gallery(_) => "gallery",
+        }
+    }
+
+    pub fn as_tsv(&self) -> String {
+        match self {
+            Self::Icon(contract) => contract.as_tsv(),
+            Self::List(contract) => contract.as_tsv(),
+            Self::Column(contract) => contract.as_tsv(),
+            Self::Gallery(contract) => contract.as_tsv(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -590,7 +619,16 @@ impl AppLaunchSpec {
     }
 
     pub fn with_initial_icon_view(mut self, icon_view: IconViewContract) -> Self {
+        self.initial_view = InitialViewContract::Icon(icon_view.clone());
         self.initial_icon_view = icon_view;
+        self
+    }
+
+    pub fn with_initial_view(mut self, view: InitialViewContract) -> Self {
+        if let InitialViewContract::Icon(icon_view) = &view {
+            self.initial_icon_view = icon_view.clone();
+        }
+        self.initial_view = view;
         self
     }
 
@@ -690,6 +728,10 @@ impl Default for AppLaunchSpec {
             launch_placement: None,
             sidebar_paths: SidebarPathSnapshot::default(),
             sidebar_volumes: Vec::new(),
+            initial_view: InitialViewContract::Icon(IconViewContract::from_records(
+                &[],
+                IconViewOptions::default(),
+            )),
             initial_icon_view: IconViewContract::from_records(&[], IconViewOptions::default()),
             progress_surfaces: Vec::new(),
             operation_conflicts: Vec::new(),
@@ -715,6 +757,7 @@ pub struct WindowLifecycleContract {
     pub tabbing_identifier: String,
     pub sidebar_paths: SidebarPathSnapshot,
     pub sidebar_volumes: Vec<SidebarVolumeSpec>,
+    pub initial_view: InitialViewContract,
     pub progress_surfaces: Vec<OperationProgressContract>,
     pub operation_conflicts: Vec<OperationConflictContract>,
     pub permission_dialog: Option<DialogSurface>,
@@ -739,6 +782,7 @@ impl WindowLifecycleContract {
             tabbing_identifier: spec.tabbing_identifier.clone(),
             sidebar_paths: spec.sidebar_paths.clone(),
             sidebar_volumes: spec.sidebar_volumes.clone(),
+            initial_view: spec.initial_view.clone(),
             progress_surfaces: spec.progress_surfaces.clone(),
             operation_conflicts: spec.operation_conflicts.clone(),
             permission_dialog: spec.permission_dialog.as_ref().map(|dialog| dialog.surface),
@@ -751,7 +795,7 @@ impl WindowLifecycleContract {
 
     pub fn as_tsv(&self) -> String {
         let mut lines = vec![format!(
-            "window\t{}\t{}\t{}x{}\tmin={}x{}\ttransparent-titlebar={}\tactivate={}\ttabs={}\tsidebar-home={}\tsidebar-icloud={}\tpermission-dialog={}",
+            "window\t{}\t{}\t{}x{}\tmin={}x{}\ttransparent-titlebar={}\tactivate={}\ttabs={}\tsidebar-home={}\tsidebar-icloud={}\tinitial-view={}\tpermission-dialog={}",
             escape_contract_field(&self.title),
             escape_contract_field(&self.initial_path.display().to_string()),
             self.width,
@@ -763,6 +807,7 @@ impl WindowLifecycleContract {
             escape_contract_field(&self.tabbing_identifier),
             self.sidebar_paths.home_state.as_str(),
             self.sidebar_paths.icloud_drive_state.as_str(),
+            self.initial_view.mode(),
             self.permission_dialog
                 .map(DialogSurface::as_str)
                 .unwrap_or("none")
@@ -828,7 +873,7 @@ fn open_main_window(
                 spec.sidebar_paths.clone(),
                 spec.sidebar_volumes.clone(),
             ),
-            icon_view: spec.initial_icon_view,
+            initial_view: spec.initial_view,
             progress_surfaces: spec.progress_surfaces,
             operation_conflicts: spec.operation_conflicts,
             permission_dialog: spec.permission_dialog,
@@ -898,7 +943,7 @@ struct RootView {
     bounds_subscription: Option<Subscription>,
     session_writer: WindowSessionWriter,
     sidebar: SidebarContract,
-    icon_view: IconViewContract,
+    initial_view: InitialViewContract,
     progress_surfaces: Vec<OperationProgressContract>,
     operation_conflicts: Vec<OperationConflictContract>,
     permission_dialog: Option<DialogContract>,
@@ -929,7 +974,7 @@ impl Render for RootView {
                     .flex_1()
                     .w_full()
                     .child(sidebar::render(&self.sidebar))
-                    .child(div().flex_1().h_full().child(icon::render(&self.icon_view))),
+                    .child(render_initial_view(&self.initial_view)),
             );
         if let Some(dialog) = &self.permission_dialog {
             root = root.child(dialog::render_permission_onboarding(
@@ -973,6 +1018,16 @@ impl Render for RootView {
             );
         }
         root
+    }
+}
+
+fn render_initial_view(contract: &InitialViewContract) -> impl IntoElement {
+    let view = div().flex_1().h_full().min_w(px(0.0));
+    match contract {
+        InitialViewContract::Icon(contract) => view.child(icon::render(contract)),
+        InitialViewContract::List(contract) => view.child(list::render(contract)),
+        InitialViewContract::Column(contract) => view.child(column::render(contract)),
+        InitialViewContract::Gallery(contract) => view.child(gallery::render(contract)),
     }
 }
 
@@ -1047,6 +1102,7 @@ mod tests {
         assert!(contract.transparent_titlebar);
         assert_eq!(contract.tabbing_identifier, "gfm-main-window");
         assert!(contract.sidebar_volumes.is_empty());
+        assert_eq!(contract.initial_view.mode(), "icon");
         assert!(contract.progress_surfaces.is_empty());
         assert_eq!(contract.permission_dialog, None);
         assert_eq!(contract.permission_onboarding, None);
@@ -1071,8 +1127,21 @@ mod tests {
 
         assert_eq!(
             contract.as_tsv(),
-            "window\tGFM\t/tmp/gfm\t1040x720\tmin=640x420\ttransparent-titlebar=true\tactivate=true\ttabs=gfm-main-window\tsidebar-home=available\tsidebar-icloud=missing\tpermission-dialog=none"
+            "window\tGFM\t/tmp/gfm\t1040x720\tmin=640x420\ttransparent-titlebar=true\tactivate=true\ttabs=gfm-main-window\tsidebar-home=available\tsidebar-icloud=missing\tinitial-view=icon\tpermission-dialog=none"
         );
+    }
+
+    #[test]
+    fn lifecycle_contract_tracks_selected_initial_view() {
+        let list_view =
+            ListViewContract::from_records(&[], ListViewOptions::default().with_viewport_rows(8));
+        let spec = AppLaunchSpec::new("/tmp/gfm")
+            .with_initial_view(InitialViewContract::List(list_view.clone()));
+        let contract = WindowLifecycleContract::from_spec(&spec).unwrap();
+
+        assert_eq!(contract.initial_view, InitialViewContract::List(list_view));
+        assert!(contract.as_tsv().contains("\tinitial-view=list\t"));
+        assert_eq!(contract.initial_view.as_tsv(), spec.initial_view.as_tsv());
     }
 
     #[test]
@@ -1087,7 +1156,7 @@ mod tests {
         assert!(window.contains("GFM\\tWindow\\nTitle\\r\t"), "{tsv}");
         assert!(window.contains("\t/tmp/Window\\tPath\\nRoot\\r\t"), "{tsv}");
         assert!(window.contains("\ttabs=gfm\\tmain\\nwindow\\r\t"), "{tsv}");
-        assert_eq!(window.split('\t').count(), 11, "{tsv}");
+        assert_eq!(window.split('\t').count(), 12, "{tsv}");
     }
 
     #[test]

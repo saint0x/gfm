@@ -21,18 +21,19 @@ use gfm_types::{DirectoryPage, FileEvent, FileEventKind, FileKind, GfmError, Res
 use gfm_ui::{
     AppLaunchSpec, ColumnSource, ColumnViewContract, ColumnViewOptions, ContextMenuContract,
     ContextMenuInput, ContextSurface, DialogContract, DialogSurface, GalleryViewContract,
-    GalleryViewOptions, IconViewContract, IconViewOptions, ListViewContract, ListViewOptions,
-    MenuContract, OperationConflictContract, OperationConflictInput, OperationConflictPaths,
-    OperationProgressContract, OperationProgressInput, OperationProgressPayloadKind,
-    OperationProgressState, PermissionAccessContract, PermissionOnboardingContract,
-    PermissionOnboardingScopeContract, PermissionPromptKind, PermissionRefreshChangeContract,
-    PermissionRefreshContract, ProviderConflictContract, ProviderConflictInput, SearchResultsBatch,
-    SearchResultsContract, SearchResultsOptions, SearchResultsStage, SidebarCloudInvalidation,
-    SidebarCloudState, SidebarContract, SidebarPathSnapshot, SidebarPathState,
-    SidebarVolumeEventKind, SidebarVolumeInvalidation, SidebarVolumeKind, SidebarVolumeMountState,
-    SidebarVolumeSpec, TitlebarContract, ToolbarContract, TrashEntryMetadata, TrashViewContract,
-    TrashViewOptions, VirtualSurface, VirtualizationContract, WindowLifecycleContract,
-    WindowPlacement, WindowSessionContract, WindowSessionStore,
+    GalleryViewOptions, IconViewContract, IconViewOptions, InitialViewContract, ListViewContract,
+    ListViewOptions, MenuContract, OperationConflictContract, OperationConflictInput,
+    OperationConflictPaths, OperationProgressContract, OperationProgressInput,
+    OperationProgressPayloadKind, OperationProgressState, PermissionAccessContract,
+    PermissionOnboardingContract, PermissionOnboardingScopeContract, PermissionPromptKind,
+    PermissionRefreshChangeContract, PermissionRefreshContract, ProviderConflictContract,
+    ProviderConflictInput, SearchResultsBatch, SearchResultsContract, SearchResultsOptions,
+    SearchResultsStage, SidebarCloudInvalidation, SidebarCloudState, SidebarContract,
+    SidebarPathSnapshot, SidebarPathState, SidebarVolumeEventKind, SidebarVolumeInvalidation,
+    SidebarVolumeKind, SidebarVolumeMountState, SidebarVolumeSpec, TitlebarContract,
+    ToolbarContract, TrashEntryMetadata, TrashViewContract, TrashViewOptions, VirtualSurface,
+    VirtualizationContract, WindowLifecycleContract, WindowPlacement, WindowSessionContract,
+    WindowSessionStore,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
@@ -44,7 +45,7 @@ pub(crate) fn run_native_app(path: Option<String>) -> Result<()> {
     let spec = app_launch_spec(path)?;
     if env::var_os("GFM_NATIVE_LAUNCH_CONTRACT").is_some() {
         println!("{}", WindowLifecycleContract::from_spec(&spec)?.as_tsv());
-        println!("{}", spec.initial_icon_view.as_tsv());
+        println!("{}", spec.initial_view.as_tsv());
         return Ok(());
     }
     gfm_ui::run_native(spec)
@@ -1862,6 +1863,7 @@ fn app_launch_spec_checked(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<AppLaunchSpec> {
     check_control()?;
+    let initial_view_mode = native_initial_view_mode_from_env()?;
     let mut spec = path
         .map(AppLaunchSpec::new)
         .unwrap_or_default()
@@ -1918,14 +1920,87 @@ fn app_launch_spec_checked(
         spec = spec.with_permission_access(access);
     }
     if admission.can_touch_filesystem && !permission_surface_required {
-        let page = read_directory_with_access(&spec.initial_path, "native app initial icon view")?;
-        spec = spec.with_initial_icon_view(IconViewContract::from_records(
-            &page.entries,
-            IconViewOptions::default(),
+        let page = read_directory_with_access(&spec.initial_path, "native app initial view")?;
+        let initial_path = spec.initial_path.clone();
+        spec = spec.with_initial_view(native_initial_view_contract(
+            initial_view_mode,
+            &initial_path,
+            &page,
         ));
+    } else if initial_view_mode != NativeInitialViewMode::Icon {
+        spec = spec.with_initial_view(native_empty_initial_view_contract(initial_view_mode));
     }
     check_control()?;
     Ok(spec)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeInitialViewMode {
+    Icon,
+    List,
+    Column,
+    Gallery,
+}
+
+fn native_initial_view_mode_from_env() -> Result<NativeInitialViewMode> {
+    let Some(value) = env::var_os("GFM_NATIVE_VIEW_MODE") else {
+        return Ok(NativeInitialViewMode::Icon);
+    };
+    let value = value.to_string_lossy();
+    match value.as_ref() {
+        "icon" => Ok(NativeInitialViewMode::Icon),
+        "list" => Ok(NativeInitialViewMode::List),
+        "column" => Ok(NativeInitialViewMode::Column),
+        "gallery" => Ok(NativeInitialViewMode::Gallery),
+        other => Err(GfmError::Format(format!(
+            "native app view mode `{other}` is invalid; expected icon, list, column, or gallery"
+        ))),
+    }
+}
+
+fn native_initial_view_contract(
+    mode: NativeInitialViewMode,
+    path: &Path,
+    page: &DirectoryPage,
+) -> InitialViewContract {
+    match mode {
+        NativeInitialViewMode::Icon => InitialViewContract::Icon(IconViewContract::from_records(
+            &page.entries,
+            IconViewOptions::default(),
+        )),
+        NativeInitialViewMode::List => InitialViewContract::List(ListViewContract::from_records(
+            &page.entries,
+            ListViewOptions::default(),
+        )),
+        NativeInitialViewMode::Column => {
+            InitialViewContract::Column(ColumnViewContract::from_sources(
+                vec![ColumnSource::new(path.to_path_buf(), page.entries.clone())],
+                ColumnViewOptions::default(),
+            ))
+        }
+        NativeInitialViewMode::Gallery => InitialViewContract::Gallery(
+            GalleryViewContract::from_records(&page.entries, GalleryViewOptions::default()),
+        ),
+    }
+}
+
+fn native_empty_initial_view_contract(mode: NativeInitialViewMode) -> InitialViewContract {
+    match mode {
+        NativeInitialViewMode::Icon => InitialViewContract::Icon(IconViewContract::from_records(
+            &[],
+            IconViewOptions::default(),
+        )),
+        NativeInitialViewMode::List => InitialViewContract::List(ListViewContract::from_records(
+            &[],
+            ListViewOptions::default(),
+        )),
+        NativeInitialViewMode::Column => InitialViewContract::Column(
+            ColumnViewContract::from_sources(Vec::new(), ColumnViewOptions::default()),
+        ),
+        NativeInitialViewMode::Gallery => InitialViewContract::Gallery(
+            GalleryViewContract::from_records(&[], GalleryViewOptions::default()),
+        ),
+    }
 }
 
 fn capture_launch_placement_from_env() -> Result<Option<WindowPlacement>> {

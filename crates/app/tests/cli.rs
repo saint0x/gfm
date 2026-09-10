@@ -20395,6 +20395,59 @@ fn native_app_launch_dispatches_existing_path_arg_from_binary() {
 }
 
 #[test]
+fn native_app_launch_selects_list_view_contract_from_binary() {
+    let root = unique_temp_dir("gfm-cli-native-launch-list-view");
+    fs::write(root.join("Visible.txt"), "hello").unwrap();
+    fs::write(root.join("Another.md"), "notes").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .current_dir(&root)
+        .env("GFM_NATIVE_LAUNCH_CONTRACT", "1")
+        .env("GFM_NATIVE_VIEW_MODE", "list")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("\tinitial-view=list\t"), "{stdout}");
+    assert!(stdout.contains("\nlist-view\t"), "{stdout}");
+    assert!(stdout.contains("\ttotal=2\t"), "{stdout}");
+    assert!(stdout.contains("Visible.txt"), "{stdout}");
+    assert!(stdout.contains("Another.md"), "{stdout}");
+    assert!(!stdout.contains("\nicon-view\t"), "{stdout}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn native_app_launch_rejects_unknown_initial_view_mode_from_binary() {
+    let root = unique_temp_dir("gfm-cli-native-launch-bad-view");
+    fs::write(root.join("Visible.txt"), "hello").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .current_dir(&root)
+        .env("GFM_NATIVE_LAUNCH_CONTRACT", "1")
+        .env("GFM_NATIVE_VIEW_MODE", "cover-flow")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            "native app view mode `cover-flow` is invalid; expected icon, list, column, or gallery"
+        ),
+        "{stderr}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn native_app_launch_applies_capture_window_placement_from_binary() {
     let root = unique_temp_dir("gfm-cli-native-launch-capture-placement");
     fs::write(root.join("Visible.txt"), "hello").unwrap();
