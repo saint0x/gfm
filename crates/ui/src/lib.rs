@@ -113,6 +113,8 @@ pub enum InitialViewContract {
     List(ListViewContract),
     Column(ColumnViewContract),
     Gallery(GalleryViewContract),
+    SearchResults(SearchResultsContract),
+    Trash(TrashViewContract),
 }
 
 impl InitialViewContract {
@@ -122,6 +124,8 @@ impl InitialViewContract {
             Self::List(_) => "list",
             Self::Column(_) => "column",
             Self::Gallery(_) => "gallery",
+            Self::SearchResults(_) => "search",
+            Self::Trash(_) => "trash",
         }
     }
 
@@ -131,6 +135,8 @@ impl InitialViewContract {
             Self::List(contract) => contract.as_tsv(),
             Self::Column(contract) => contract.as_tsv(),
             Self::Gallery(contract) => contract.as_tsv(),
+            Self::SearchResults(contract) => contract.as_tsv(),
+            Self::Trash(contract) => contract.as_tsv(),
         }
     }
 }
@@ -1028,6 +1034,8 @@ fn render_initial_view(contract: &InitialViewContract) -> impl IntoElement {
         InitialViewContract::List(contract) => view.child(list::render(contract)),
         InitialViewContract::Column(contract) => view.child(column::render(contract)),
         InitialViewContract::Gallery(contract) => view.child(gallery::render(contract)),
+        InitialViewContract::SearchResults(contract) => view.child(results::render(contract)),
+        InitialViewContract::Trash(contract) => view.child(trash::render(contract)),
     }
 }
 
@@ -1142,6 +1150,29 @@ mod tests {
         assert_eq!(contract.initial_view, InitialViewContract::List(list_view));
         assert!(contract.as_tsv().contains("\tinitial-view=list\t"));
         assert_eq!(contract.initial_view.as_tsv(), spec.initial_view.as_tsv());
+    }
+
+    #[test]
+    fn lifecycle_contract_tracks_search_and_trash_initial_views() {
+        let search =
+            SearchResultsContract::from_batches(Vec::new(), SearchResultsOptions::new("needle"));
+        let search_spec = AppLaunchSpec::new("/tmp/gfm")
+            .with_initial_view(InitialViewContract::SearchResults(search.clone()));
+        let search_contract = WindowLifecycleContract::from_spec(&search_spec).unwrap();
+
+        assert_eq!(
+            search_contract.initial_view,
+            InitialViewContract::SearchResults(search)
+        );
+        assert!(search_contract.as_tsv().contains("\tinitial-view=search\t"));
+
+        let trash = TrashViewContract::from_records(&[], TrashViewOptions::default());
+        let trash_spec =
+            AppLaunchSpec::new("/tmp/gfm").with_initial_view(InitialViewContract::Trash(trash));
+        let trash_contract = WindowLifecycleContract::from_spec(&trash_spec).unwrap();
+
+        assert_eq!(trash_contract.initial_view.mode(), "trash");
+        assert!(trash_contract.as_tsv().contains("\tinitial-view=trash\t"));
     }
 
     #[test]

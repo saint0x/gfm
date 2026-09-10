@@ -7074,6 +7074,33 @@
       "times": 1
     },
     {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_NATIVE_LAUNCH_CONTRACT": "1",
+        "GFM_NATIVE_VIEW_MODE": "search",
+        "GFM_NATIVE_SEARCH_QUERY": "Target"
+      },
+      "args": [
+        "tmp/gfm-fozzy-native-launch-fixture"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
+      "type": "proc_when",
+      "cmd": "target/aarch64-apple-darwin/debug/gfm",
+      "env": {
+        "GFM_NATIVE_LAUNCH_CONTRACT": "1",
+        "GFM_NATIVE_VIEW_MODE": "trash"
+      },
+      "args": [
+        "tmp/gfm-fozzy-native-launch-fixture"
+      ],
+      "exit_code": 0,
+      "times": 1
+    },
+    {
       "type": "proc_spawn",
       "cmd": "target/aarch64-apple-darwin/debug/gfm",
       "args": [

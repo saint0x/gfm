@@ -20424,6 +20424,108 @@ fn native_app_launch_selects_list_view_contract_from_binary() {
 }
 
 #[test]
+fn native_app_launch_selects_search_results_contract_from_binary() {
+    let root = unique_temp_dir("gfm-cli-native-launch-search-view");
+    fs::create_dir_all(root.join("Folder")).unwrap();
+    fs::write(root.join("Needle.md"), "needle").unwrap();
+    fs::write(root.join("Folder").join("Needle-notes.txt"), "needle").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .current_dir(&root)
+        .env("GFM_NATIVE_LAUNCH_CONTRACT", "1")
+        .env("GFM_NATIVE_VIEW_MODE", "search")
+        .env("GFM_NATIVE_SEARCH_QUERY", "Needle")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stdout.contains("\tinitial-view=search\t"), "{stdout}");
+    assert!(
+        stdout.contains("\nsearch-results\tquery=Needle\t"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\ttotal=2\t"), "{stdout}");
+    assert!(stdout.contains("Needle.md"), "{stdout}");
+    assert!(stdout.contains("Needle-notes.txt"), "{stdout}");
+    assert!(!stdout.contains("\nicon-view\t"), "{stdout}");
+    assert!(
+        stderr.contains(&format!(
+            "security-worker-admission\tworker=ui search\tpath={}\tintent=index",
+            root.display()
+        )),
+        "{stderr}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn native_app_launch_search_view_requires_query_from_binary() {
+    let root = unique_temp_dir("gfm-cli-native-launch-search-missing-query");
+    fs::write(root.join("Needle.md"), "needle").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .current_dir(&root)
+        .env("GFM_NATIVE_LAUNCH_CONTRACT", "1")
+        .env("GFM_NATIVE_VIEW_MODE", "search")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("native app search view requires GFM_NATIVE_SEARCH_QUERY"),
+        "{stderr}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn native_app_launch_selects_trash_view_contract_from_binary() {
+    let root = unique_temp_dir("gfm-cli-native-launch-trash-view");
+    let metadata = root.join("restore.tsv");
+    fs::write(root.join("Note.txt"), "note").unwrap();
+    fs::write(
+        &metadata,
+        "Note.txt\t/Users/me/Documents/Note.txt\t2026-09-10T19:00:00Z\ttrue\ttrue\t\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .current_dir(&root)
+        .env("GFM_NATIVE_LAUNCH_CONTRACT", "1")
+        .env("GFM_NATIVE_VIEW_MODE", "trash")
+        .env("GFM_NATIVE_TRASH_METADATA", metadata.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("\tinitial-view=trash\t"), "{stdout}");
+    assert!(stdout.contains("\ntrash-view\t"), "{stdout}");
+    assert!(stdout.contains("\ttotal=2\t"), "{stdout}");
+    assert!(stdout.contains("Note.txt"), "{stdout}");
+    assert!(
+        stdout.contains("original=/Users/me/Documents/Note.txt\tdeleted-at=2026-09-10T19:00:00Z"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("\nicon-view\t"), "{stdout}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn native_app_launch_rejects_unknown_initial_view_mode_from_binary() {
     let root = unique_temp_dir("gfm-cli-native-launch-bad-view");
     fs::write(root.join("Visible.txt"), "hello").unwrap();
@@ -20439,7 +20541,7 @@ fn native_app_launch_rejects_unknown_initial_view_mode_from_binary() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains(
-            "native app view mode `cover-flow` is invalid; expected icon, list, column, or gallery"
+            "native app view mode `cover-flow` is invalid; expected icon, list, column, gallery, search, or trash"
         ),
         "{stderr}"
     );

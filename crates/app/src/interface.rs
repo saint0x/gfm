@@ -677,36 +677,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             let viewport_rows = optional_u16(args.next(), "viewport-rows", 24)?;
             let scroll_row = optional_u32(args.next(), "scroll-row", 0)?;
-            let access_report =
-                InterfaceAccessReport::new_checked(root.clone(), AccessIntent::Index, || Ok(()))?;
-            access_report.preflight_volume("ui search")?;
-            eprintln!(
-                "{}",
-                access_report.as_tsv("ui-search-volume-access", "ui search")
-            );
-            let volume = access_report.volume();
-            let query_for_worker = query.clone();
-            let batches = crate::runtime::run_volume_task_cancellable(
-                volume,
-                Priority::Visible,
-                "ui search",
-                move |cancellation| {
-                    cancellation.check()?;
-                    let _access =
-                        access_report.access_checked("ui search", || cancellation.check())?;
-                    cancellation.check()?;
-                    let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
-                    let session = snapshot.query_session();
-                    let batches = session
-                        .stream_search(&query_for_worker, 50)?
-                        .into_iter()
-                        .map(|batch| {
-                            SearchResultsBatch::new(search_results_stage(batch.stage), batch.hits)
-                        })
-                        .collect();
-                    Ok(batches)
-                },
-            )?;
+            let batches = ui_search_results_batches(root, query.clone())?;
             let options = SearchResultsOptions::new(query)
                 .with_viewport_rows(viewport_rows)
                 .with_scroll_row(scroll_row);
@@ -1920,13 +1891,11 @@ fn app_launch_spec_checked(
         spec = spec.with_permission_access(access);
     }
     if admission.can_touch_filesystem && !permission_surface_required {
-        let page = read_directory_with_access(&spec.initial_path, "native app initial view")?;
         let initial_path = spec.initial_path.clone();
         spec = spec.with_initial_view(native_initial_view_contract(
             initial_view_mode,
             &initial_path,
-            &page,
-        ));
+        )?);
     } else if initial_view_mode != NativeInitialViewMode::Icon {
         spec = spec.with_initial_view(native_empty_initial_view_contract(initial_view_mode));
     }
@@ -1940,6 +1909,8 @@ enum NativeInitialViewMode {
     List,
     Column,
     Gallery,
+    Search,
+    Trash,
 }
 
 fn native_initial_view_mode_from_env() -> Result<NativeInitialViewMode> {
@@ -1952,13 +1923,32 @@ fn native_initial_view_mode_from_env() -> Result<NativeInitialViewMode> {
         "list" => Ok(NativeInitialViewMode::List),
         "column" => Ok(NativeInitialViewMode::Column),
         "gallery" => Ok(NativeInitialViewMode::Gallery),
+        "search" => Ok(NativeInitialViewMode::Search),
+        "trash" => Ok(NativeInitialViewMode::Trash),
         other => Err(GfmError::Format(format!(
-            "native app view mode `{other}` is invalid; expected icon, list, column, or gallery"
+            "native app view mode `{other}` is invalid; expected icon, list, column, gallery, search, or trash"
         ))),
     }
 }
 
 fn native_initial_view_contract(
+    mode: NativeInitialViewMode,
+    path: &Path,
+) -> Result<InitialViewContract> {
+    match mode {
+        NativeInitialViewMode::Icon
+        | NativeInitialViewMode::List
+        | NativeInitialViewMode::Column
+        | NativeInitialViewMode::Gallery => {
+            let page = read_directory_with_access(path, "native app initial view")?;
+            Ok(native_directory_initial_view_contract(mode, path, &page))
+        }
+        NativeInitialViewMode::Search => native_search_initial_view_contract(path),
+        NativeInitialViewMode::Trash => native_trash_initial_view_contract(path),
+    }
+}
+
+fn native_directory_initial_view_contract(
     mode: NativeInitialViewMode,
     path: &Path,
     page: &DirectoryPage,
@@ -1981,7 +1971,46 @@ fn native_initial_view_contract(
         NativeInitialViewMode::Gallery => InitialViewContract::Gallery(
             GalleryViewContract::from_records(&page.entries, GalleryViewOptions::default()),
         ),
+        NativeInitialViewMode::Search | NativeInitialViewMode::Trash => {
+            unreachable!("non-directory native view modes are handled before directory rendering")
+        }
     }
+}
+
+fn native_search_initial_view_contract(path: &Path) -> Result<InitialViewContract> {
+    let query = native_search_query_from_env()?;
+    let batches = ui_search_results_batches(path.to_path_buf(), query.clone())?;
+    Ok(InitialViewContract::SearchResults(
+        SearchResultsContract::from_batches(batches, SearchResultsOptions::new(query)),
+    ))
+}
+
+fn native_search_query_from_env() -> Result<String> {
+    let Some(value) = env::var_os("GFM_NATIVE_SEARCH_QUERY") else {
+        return Err(GfmError::Format(
+            "native app search view requires GFM_NATIVE_SEARCH_QUERY".to_string(),
+        ));
+    };
+    let value = value.to_string_lossy().trim().to_string();
+    if value.is_empty() {
+        return Err(GfmError::Format(
+            "native app search view requires a non-empty GFM_NATIVE_SEARCH_QUERY".to_string(),
+        ));
+    }
+    Ok(value)
+}
+
+fn native_trash_initial_view_contract(path: &Path) -> Result<InitialViewContract> {
+    let page = read_directory_with_access(path, "native app initial trash view")?;
+    let metadata = env::var_os("GFM_NATIVE_TRASH_METADATA")
+        .map(PathBuf::from)
+        .map(|path| read_trash_restore_metadata(path.as_path()))
+        .transpose()?
+        .unwrap_or_default();
+    Ok(InitialViewContract::Trash(TrashViewContract::from_records(
+        &page.entries,
+        TrashViewOptions::default().with_metadata(metadata),
+    )))
 }
 
 fn native_empty_initial_view_contract(mode: NativeInitialViewMode) -> InitialViewContract {
@@ -1999,6 +2028,18 @@ fn native_empty_initial_view_contract(mode: NativeInitialViewMode) -> InitialVie
         ),
         NativeInitialViewMode::Gallery => InitialViewContract::Gallery(
             GalleryViewContract::from_records(&[], GalleryViewOptions::default()),
+        ),
+        NativeInitialViewMode::Search => {
+            let query = env::var_os("GFM_NATIVE_SEARCH_QUERY")
+                .map(|value| value.to_string_lossy().to_string())
+                .unwrap_or_default();
+            InitialViewContract::SearchResults(SearchResultsContract::from_batches(
+                Vec::new(),
+                SearchResultsOptions::new(query),
+            ))
+        }
+        NativeInitialViewMode::Trash => InitialViewContract::Trash(
+            TrashViewContract::from_records(&[], TrashViewOptions::default()),
         ),
     }
 }
@@ -2393,6 +2434,35 @@ fn parse_package_traversal_mode(value: Option<&str>) -> Result<PackageTraversalM
             "package traversal mode must be opaque or traverse; got `{other}`"
         ))),
     }
+}
+
+fn ui_search_results_batches(root: PathBuf, query: String) -> Result<Vec<SearchResultsBatch>> {
+    let access_report =
+        InterfaceAccessReport::new_checked(root.clone(), AccessIntent::Index, || Ok(()))?;
+    access_report.preflight_volume("ui search")?;
+    eprintln!(
+        "{}",
+        access_report.as_tsv("ui-search-volume-access", "ui search")
+    );
+    let volume = access_report.volume();
+    crate::runtime::run_volume_task_cancellable(
+        volume,
+        Priority::Visible,
+        "ui search",
+        move |cancellation| {
+            cancellation.check()?;
+            let _access = access_report.access_checked("ui search", || cancellation.check())?;
+            cancellation.check()?;
+            let snapshot = Indexer::default().build_cancellable(root, &cancellation)?;
+            let session = snapshot.query_session();
+            let batches = session
+                .stream_search(&query, 50)?
+                .into_iter()
+                .map(|batch| SearchResultsBatch::new(search_results_stage(batch.stage), batch.hits))
+                .collect();
+            Ok(batches)
+        },
+    )
 }
 
 fn read_trash_restore_metadata(path: &Path) -> Result<BTreeMap<String, TrashEntryMetadata>> {
