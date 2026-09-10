@@ -4503,40 +4503,63 @@ fn run_preview_cache_fileprovider_invalidation(
     let volume = cache_access_report
         .volume()
         .or_else(|| path_access_report.volume());
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _cache_access =
-            cache_access_report.access_checked(CACHE_WORKER, || cancellation.check())?;
-        cancellation.check()?;
-        let _path_access = path_access_report.access_checked(WORKER, || cancellation.check())?;
-        cancellation.check()?;
-        let record = record_for_path_checked(&path, None, false, || cancellation.check())?;
-        cancellation.check()?;
-        let report =
-            FileProviderInvalidationReport::evaluate_checked(path.clone(), previous, || {
-                cancellation.check()
-            })?;
-        let key = PreviewRequestKey::new(record.id, path, kind);
-        cancellation.check()?;
-        let mut cache =
-            PreviewCache::new_cancellable(PreviewCacheConfig::new(cache_root), &cancellation)?;
-        let invalidation_keys =
-            cache.invalidation_keys_for_path_checked(&key.path, key.clone(), || {
-                cancellation.check()
-            })?;
-        cancellation.check()?;
-        let event = preview_invalidation_for_fileprovider(&report);
-        let mut reports = Vec::with_capacity(invalidation_keys.len());
-        for invalidation_key in invalidation_keys {
-            cancellation.check()?;
-            reports.push(
-                cache
-                    .apply_invalidation_cancellable(&invalidation_key, event, &cancellation)?
-                    .as_tsv(),
-            );
-        }
-        Ok(reports.join("\n"))
-    })
+    scheduled_platform_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Preview,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            cache_root.clone(),
+            move |cancellation, runtime| {
+                cancellation.check()?;
+                runtime.resize_checked(4, "preview-cache:preflight", || cancellation.check())?;
+                let _cache_access =
+                    cache_access_report.access_checked(CACHE_WORKER, || cancellation.check())?;
+                let _path_access =
+                    path_access_report.access_checked(WORKER, || cancellation.check())?;
+                platform_runtime_phase(&runtime, 1, "preview-cache:record", &cancellation)?;
+                let record = record_for_path_checked(&path, None, false, || cancellation.check())?;
+                let report = FileProviderInvalidationReport::evaluate_checked(
+                    path.clone(),
+                    previous,
+                    || cancellation.check(),
+                )?;
+                let key = PreviewRequestKey::new(record.id, path.clone(), kind);
+                platform_runtime_phase(&runtime, 2, "preview-cache:keys", &cancellation)?;
+                let mut cache = PreviewCache::new_cancellable(
+                    PreviewCacheConfig::new(cache_root.clone()),
+                    &cancellation,
+                )?;
+                let invalidation_keys =
+                    cache.invalidation_keys_for_path_checked(&key.path, key.clone(), || {
+                        cancellation.check()
+                    })?;
+                let event = preview_invalidation_for_fileprovider(&report);
+                let mut reports = Vec::with_capacity(invalidation_keys.len());
+                for invalidation_key in invalidation_keys {
+                    cancellation.check()?;
+                    reports.push(
+                        cache
+                            .apply_invalidation_cancellable(
+                                &invalidation_key,
+                                event,
+                                &cancellation,
+                            )?
+                            .as_tsv(),
+                    );
+                }
+                platform_runtime_phase(&runtime, 3, "preview-cache:invalidate", &cancellation)?;
+                runtime.remember_completion_detail(format!(
+                    "completed:invalidated:{}",
+                    reports.len()
+                ))?;
+                platform_runtime_phase(&runtime, 4, "preview-cache:reported", &cancellation)?;
+                Ok(reports.join("\n"))
+            },
+        )?,
+        WORKER,
+    )
 }
 
 fn run_preview_cache_fileprovider_observed_invalidation(

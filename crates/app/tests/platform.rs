@@ -4055,6 +4055,8 @@ fn reports_preview_cache_fileprovider_invalidation_from_binary() {
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     let cache = root.join("cache");
+    let catalog = root.join("payloads.gfmjobs");
+    let progress = root.join("progress.gfmprogress");
     let evicted = root.join("Remote.icloud-placeholder");
     std::fs::write(&evicted, "placeholder").unwrap();
     mark_evicted_fixture(&evicted);
@@ -4080,6 +4082,8 @@ fn reports_preview_cache_fileprovider_invalidation_from_binary() {
         .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
         .arg("preview-cache-fileprovider-invalidation")
         .arg(&cache)
         .arg("downloaded")
@@ -4111,6 +4115,17 @@ fn reports_preview_cache_fileprovider_invalidation_from_binary() {
             .count(),
         2,
         "{stdout}"
+    );
+
+    let catalog_text = std::fs::read_to_string(&catalog).unwrap();
+    assert_platform_payload_catalog_kind(&catalog_text, 1, "preview", "preview cache", &cache);
+    let progress_text = std::fs::read_to_string(&progress).unwrap();
+    assert_platform_runtime_progress_units(
+        &progress_text,
+        1,
+        "preview cache",
+        4,
+        "completed:invalidated:2",
     );
 
     let _ = std::fs::remove_dir_all(root);
@@ -9586,10 +9601,20 @@ fn assert_platform_payload_catalog_kind(
 }
 
 fn assert_platform_runtime_progress(progress_text: &str, id: u64, label: &str, detail: &str) {
+    assert_platform_runtime_progress_units(progress_text, id, label, 3, detail);
+}
+
+fn assert_platform_runtime_progress_units(
+    progress_text: &str,
+    id: u64,
+    label: &str,
+    total_units: u64,
+    detail: &str,
+) {
     assert!(
         progress_text.lines().any(|line| line
             .starts_with(&format!("progress\t{id}\tvisible\tvisible\t{label}\t"))
-            && line.contains("\tcompleted\t3\t3\t")
+            && line.contains(&format!("\tcompleted\t{total_units}\t{total_units}\t"))
             && line.contains(detail)),
         "{progress_text}"
     );
