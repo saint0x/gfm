@@ -26,7 +26,14 @@ impl ArchiveKind {
     pub(crate) const fn supports_metadata(self) -> bool {
         matches!(
             self,
-            Self::Tar | Self::TarBz2 | Self::TarGz | Self::TarXz | Self::Zip
+            Self::Bzip2
+                | Self::Gzip
+                | Self::Tar
+                | Self::TarBz2
+                | Self::TarGz
+                | Self::TarXz
+                | Self::Xz
+                | Self::Zip
         )
     }
 }
@@ -58,11 +65,21 @@ pub(crate) fn extract_archive_metadata_checked(
 ) -> Result<(ArchiveExtractStatus, Option<ContentDocument>)> {
     check_control()?;
     match kind {
-        ArchiveKind::Bzip2
-        | ArchiveKind::Gzip
-        | ArchiveKind::Rar
-        | ArchiveKind::SevenZip
-        | ArchiveKind::Xz => Ok((ArchiveExtractStatus::Unsupported, None)),
+        ArchiveKind::Bzip2 => extract_compressed_stream_metadata_checked(
+            BzDecoder::new(Cursor::new(bytes)),
+            bytes.len(),
+            "bzip2-stream",
+            policy,
+            check_control,
+        ),
+        ArchiveKind::Gzip => extract_compressed_stream_metadata_checked(
+            GzDecoder::new(Cursor::new(bytes)),
+            bytes.len(),
+            "gzip-stream",
+            policy,
+            check_control,
+        ),
+        ArchiveKind::Rar | ArchiveKind::SevenZip => Ok((ArchiveExtractStatus::Unsupported, None)),
         ArchiveKind::Tar => extract_tar_metadata_checked(bytes, policy, check_control),
         ArchiveKind::TarBz2 => extract_compressed_tar_metadata_checked(
             BzDecoder::new(Cursor::new(bytes)),
@@ -74,6 +91,13 @@ pub(crate) fn extract_archive_metadata_checked(
         ArchiveKind::TarXz => extract_compressed_tar_metadata_checked(
             XzDecoder::new(Cursor::new(bytes)),
             bytes.len(),
+            policy,
+            check_control,
+        ),
+        ArchiveKind::Xz => extract_compressed_stream_metadata_checked(
+            XzDecoder::new(Cursor::new(bytes)),
+            bytes.len(),
+            "xz-stream",
             policy,
             check_control,
         ),
@@ -139,6 +163,51 @@ fn extract_tar_gz_metadata_checked(
         policy,
         check_control,
     )
+}
+
+fn extract_compressed_stream_metadata_checked<R>(
+    mut decoder: R,
+    compressed_len: usize,
+    label: &str,
+    policy: &ExtractionPolicy,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<(ArchiveExtractStatus, Option<ContentDocument>)>
+where
+    R: Read,
+{
+    check_control()?;
+    if compressed_len as u64 > policy.max_archive_bytes {
+        return Ok((ArchiveExtractStatus::TooLarge, None));
+    }
+    let mut decoded_len = 0usize;
+    let limit = usize::try_from(policy.max_archive_bytes).unwrap_or(usize::MAX);
+    let mut buffer = [0_u8; ARCHIVE_DECODE_CHUNK_BYTES];
+    loop {
+        check_control()?;
+        let read = match decoder.read(&mut buffer) {
+            Ok(read) => read,
+            Err(_) => return Ok((ArchiveExtractStatus::Corrupt, None)),
+        };
+        check_control()?;
+        if read == 0 {
+            break;
+        }
+        decoded_len = decoded_len.saturating_add(read);
+        if decoded_len > limit {
+            return Ok((ArchiveExtractStatus::TooLarge, None));
+        }
+    }
+    if decoded_len == 0 {
+        return Ok((ArchiveExtractStatus::Unsupported, None));
+    }
+    let text = format!("{label} decompressed {decoded_len} bytes");
+    Ok((
+        ArchiveExtractStatus::Extracted,
+        Some(ContentDocument {
+            bytes_read: compressed_len,
+            text,
+        }),
+    ))
 }
 
 fn extract_compressed_tar_metadata_checked<R>(
@@ -438,6 +507,27 @@ mod tests {
     }
 
     #[test]
+    fn extracts_single_stream_compressed_metadata() {
+        let gzip = gzip_stream("gzip body");
+        let bzip = bzip2_stream("bzip2 body");
+        let xz = xz_stream("xz body");
+
+        let (gzip_status, gzip_doc) =
+            extract_archive_metadata(&gzip, ArchiveKind::Gzip, &ExtractionPolicy::default());
+        let (bzip_status, bzip_doc) =
+            extract_archive_metadata(&bzip, ArchiveKind::Bzip2, &ExtractionPolicy::default());
+        let (xz_status, xz_doc) =
+            extract_archive_metadata(&xz, ArchiveKind::Xz, &ExtractionPolicy::default());
+
+        assert_eq!(gzip_status, ArchiveExtractStatus::Extracted);
+        assert_eq!(bzip_status, ArchiveExtractStatus::Extracted);
+        assert_eq!(xz_status, ArchiveExtractStatus::Extracted);
+        assert_eq!(gzip_doc.unwrap().text, "gzip-stream decompressed 9 bytes");
+        assert_eq!(bzip_doc.unwrap().text, "bzip2-stream decompressed 10 bytes");
+        assert_eq!(xz_doc.unwrap().text, "xz-stream decompressed 7 bytes");
+    }
+
+    #[test]
     fn extracts_pax_tar_long_path_metadata() {
         let path = "deep/archive/path/with/pax-long-name-needle.txt";
         let bytes = tar_file_with_pax_path(path, "body");
@@ -536,6 +626,33 @@ mod tests {
     }
 
     #[test]
+    fn corrupt_single_stream_compressed_metadata_quarantines_archive() {
+        let truncated_gzip = &gzip_stream("body")[..4];
+        let truncated_bzip = &bzip2_stream("body")[..12];
+        let truncated_xz = &xz_stream("body")[..12];
+
+        let (gzip_status, gzip_doc) = extract_archive_metadata(
+            truncated_gzip,
+            ArchiveKind::Gzip,
+            &ExtractionPolicy::default(),
+        );
+        let (bzip_status, bzip_doc) = extract_archive_metadata(
+            truncated_bzip,
+            ArchiveKind::Bzip2,
+            &ExtractionPolicy::default(),
+        );
+        let (xz_status, xz_doc) =
+            extract_archive_metadata(truncated_xz, ArchiveKind::Xz, &ExtractionPolicy::default());
+
+        assert_eq!(gzip_status, ArchiveExtractStatus::Corrupt);
+        assert_eq!(bzip_status, ArchiveExtractStatus::Corrupt);
+        assert_eq!(xz_status, ArchiveExtractStatus::Corrupt);
+        assert!(gzip_doc.is_none());
+        assert!(bzip_doc.is_none());
+        assert!(xz_doc.is_none());
+    }
+
+    #[test]
     fn checked_zip_extraction_can_cancel_while_normalizing_metadata() {
         let name = format!("{}.txt", "zipneedle".repeat(4096));
         let bytes = zip_file(&[(name.as_str(), "body")]);
@@ -585,6 +702,24 @@ mod tests {
     fn tar_xz_file(parts: &[(&str, &str)]) -> Vec<u8> {
         let mut encoder = XzEncoder::new(Vec::new(), 6);
         encoder.write_all(&tar_file(parts)).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    fn gzip_stream(text: &str) -> Vec<u8> {
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(text.as_bytes()).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    fn bzip2_stream(text: &str) -> Vec<u8> {
+        let mut encoder = BzEncoder::new(Vec::new(), bzip2::Compression::default());
+        encoder.write_all(text.as_bytes()).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    fn xz_stream(text: &str) -> Vec<u8> {
+        let mut encoder = XzEncoder::new(Vec::new(), 6);
+        encoder.write_all(text.as_bytes()).unwrap();
         encoder.finish().unwrap()
     }
 

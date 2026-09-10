@@ -268,8 +268,36 @@ fn extracts_bzip2_and_xz_tar_metadata_through_public_report_path() {
 }
 
 #[test]
+fn extracts_single_stream_archive_metadata_through_public_report_path() {
+    let root = unique_temp_dir("gfm-content-compressed-stream-archives");
+    let gzip = root.join("payload.gz");
+    let bzip = root.join("payload.bz2");
+    let xz = root.join("payload.xz");
+    fs::write(&gzip, gzip_stream("gzip public body")).unwrap();
+    fs::write(&bzip, bzip2_stream("bzip public body")).unwrap();
+    fs::write(&xz, xz_stream("xz public body")).unwrap();
+
+    let extractor = Extractor::default();
+    let gzip = extractor.extract_path_report(&gzip).unwrap();
+    let bzip = extractor.extract_path_report(&bzip).unwrap();
+    let xz = extractor.extract_path_report(&xz).unwrap();
+
+    assert_eq!(gzip.format, ExtractionFormat::Archive);
+    assert_eq!(bzip.format, ExtractionFormat::Archive);
+    assert_eq!(xz.format, ExtractionFormat::Archive);
+    assert_eq!(gzip.status, ExtractionStatus::Extracted);
+    assert_eq!(bzip.status, ExtractionStatus::Extracted);
+    assert_eq!(xz.status, ExtractionStatus::Extracted);
+    assert!(gzip.document.unwrap().text.contains("gzip-stream"));
+    assert!(bzip.document.unwrap().text.contains("bzip2-stream"));
+    assert!(xz.document.unwrap().text.contains("xz-stream"));
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn classifies_unsupported_archive_formats_as_archive_without_reading_payloads() {
-    for extension in ["rar", "7z", "gz", "bz2", "xz"] {
+    for extension in ["rar", "7z"] {
         let root = unique_temp_dir(&format!("gfm-content-unsupported-archive-{extension}"));
         let path = root.join(format!("payload.{extension}"));
         fs::write(&path, b"unsupported archive payload with ignored needle").unwrap();
@@ -1616,6 +1644,24 @@ fn tar_bz2_package(parts: &[(&str, &str)]) -> Vec<u8> {
 fn tar_xz_package(parts: &[(&str, &str)]) -> Vec<u8> {
     let mut encoder = XzEncoder::new(Vec::new(), 6);
     encoder.write_all(&tar_package(parts)).unwrap();
+    encoder.finish().unwrap()
+}
+
+fn gzip_stream(text: &str) -> Vec<u8> {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(text.as_bytes()).unwrap();
+    encoder.finish().unwrap()
+}
+
+fn bzip2_stream(text: &str) -> Vec<u8> {
+    let mut encoder = BzEncoder::new(Vec::new(), bzip2::Compression::default());
+    encoder.write_all(text.as_bytes()).unwrap();
+    encoder.finish().unwrap()
+}
+
+fn xz_stream(text: &str) -> Vec<u8> {
+    let mut encoder = XzEncoder::new(Vec::new(), 6);
+    encoder.write_all(text.as_bytes()).unwrap();
     encoder.finish().unwrap()
 }
 
