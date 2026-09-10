@@ -850,6 +850,7 @@ impl WindowLifecycleContract {
         )];
         lines.push(self.effective_titlebar_contract().as_tsv());
         lines.push(self.effective_toolbar_contract().as_tsv());
+        lines.push(self.effective_menu_contract().as_tsv());
         lines.push(self.effective_sidebar_contract().as_tsv());
         lines.extend(
             self.progress_surfaces
@@ -913,6 +914,10 @@ impl WindowLifecycleContract {
 
     fn effective_toolbar_contract(&self) -> ToolbarContract {
         ToolbarContract::finder_default(&self.initial_path)
+    }
+
+    fn effective_menu_contract(&self) -> MenuContract {
+        MenuContract::finder_default()
     }
 }
 
@@ -1222,6 +1227,9 @@ mod tests {
         assert!(output.contains(
             "control\tlocation\tpath-title\tgfm\tcurrent-folder-title\tpath-title\t220px\tenabled=true\tselected=false"
         ));
+        assert!(output.contains("\nmenus\tGFM,File,Edit,View,Go,Window,Help\tservices=true\n"));
+        assert!(output.contains("command\tFile\tNew Window\tgfm::NewWindow\tcmd-n\tglobal"));
+        assert!(output.contains("command\tEdit\tCopy\tsystem::Copy\tcmd-c\tsystem"));
         assert!(output.contains(
             "sidebar\twidth=188\trow-height=28\tsection-header-height=26\tsections=Favorites,iCloud,Locations,Tags"
         ));

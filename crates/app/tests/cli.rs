@@ -20402,6 +20402,18 @@ fn native_app_launch_dispatches_without_operator_command_from_binary() {
         stdout.contains("current-folder-title\tpath-title"),
         "{stdout}"
     );
+    assert!(
+        stdout.contains("\nmenus\tGFM,File,Edit,View,Go,Window,Help\tservices=true\n"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("command\tFile\tNew Window\tgfm::NewWindow\tcmd-n\tglobal"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("command\tEdit\tCopy\tsystem::Copy\tcmd-c\tsystem"),
+        "{stdout}"
+    );
     assert!(stdout.contains("icon-view\t"), "{stdout}");
     assert!(stdout.contains("\ttotal=1\t"), "{stdout}");
     assert!(stdout.contains("Visible.txt"), "{stdout}");
