@@ -60,7 +60,7 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 
 ## File Operations
 
-37. Finish Finder-compatible copy preservation edge behavior for remaining clonefile/APFS edge cases, locked files, quarantine propagation, Finder-specific package exceptions, cross-volume metadata degradation UX, and captured Finder baselines.
+37. Finish Finder-compatible copy preservation edge behavior for remaining clonefile/APFS edge cases, locked files, Finder-specific package exceptions, cross-volume metadata degradation UX presentation, and captured Finder baselines.
 38. Finish native GPUI operation pause/resume progress-surface binding, recovery UX, Finder-compatible Pause/Resume/Stop progress sheets, and captured Finder baselines.
 39. Finish conflict UI/state machine binding, Finder-parity sheet presentation, per-item review table, keyboard/focus behavior, and captured Finder baselines.
 40. Finish direct platform Trash item identity, Put Back parity, collision sheets, native destructive delete sheets, native Empty Trash confirmation/policy binding, and captured Finder baselines.

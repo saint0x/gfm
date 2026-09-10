@@ -893,6 +893,9 @@ fn metadata_degradation_kind_name(kind: OperationMetadataDegradationKind) -> &'s
         OperationMetadataDegradationKind::Ownership => "ownership",
         OperationMetadataDegradationKind::CreatedTime => "created-time",
         OperationMetadataDegradationKind::ExtendedAttribute => "extended-attribute",
+        OperationMetadataDegradationKind::FinderInfo => "finder-info",
+        OperationMetadataDegradationKind::ResourceFork => "resource-fork",
+        OperationMetadataDegradationKind::Quarantine => "quarantine",
         OperationMetadataDegradationKind::AccessControlList => "access-control-list",
         OperationMetadataDegradationKind::FileFlags => "file-flags",
         OperationMetadataDegradationKind::SymlinkTimes => "symlink-times",
@@ -2072,6 +2075,27 @@ mod tests {
             operation_progress_event_line(&event).as_deref(),
             Some(
                 "operation-metadata-degradation\tpath=/Volumes/Backup/dir\\talias\\r.txt\tkind=hard-link-topology\tdetail=hard-link topology was not preserved\\nvolume lacks links\\rretry"
+            )
+        );
+    }
+
+    #[test]
+    fn operation_progress_event_reports_typed_finder_metadata_degradation() {
+        let event = OperationProgressEvent {
+            phase: OperationProgressPhase::MetadataDegraded,
+            progress: OperationProgress::default(),
+            throughput: None,
+            metadata_degradation: Some(OperationMetadataDegradation {
+                path: PathBuf::from("/tmp/App.app"),
+                kind: OperationMetadataDegradationKind::FinderInfo,
+                detail: "extended attribute com.apple.FinderInfo was not preserved".to_string(),
+            }),
+        };
+
+        assert_eq!(
+            operation_progress_event_line(&event).as_deref(),
+            Some(
+                "operation-metadata-degradation\tpath=/tmp/App.app\tkind=finder-info\tdetail=extended attribute com.apple.FinderInfo was not preserved"
             )
         );
     }

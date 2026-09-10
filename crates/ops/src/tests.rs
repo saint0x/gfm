@@ -5,7 +5,9 @@ use crate::journal::{append_journal, now_nanos};
 use crate::preserve::acl_copy_unsupported;
 #[cfg(target_vendor = "apple")]
 use crate::preserve::file_flag_preservation_unsupported;
-use crate::preserve::{time_preservation_unsupported, xattr_copy_unsupported};
+use crate::preserve::{
+    time_preservation_unsupported, xattr_copy_unsupported, xattr_degradation_kind,
+};
 use crate::progress::ProgressTracker;
 use crate::target::path_exists_or_symlink;
 use crate::transfer::{
@@ -788,6 +790,26 @@ fn copy_preserves_xattrs_when_host_supports_them() {
     );
 
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn finder_visible_xattr_failures_are_classified_for_operation_diagnostics() {
+    assert_eq!(
+        xattr_degradation_kind(std::ffi::OsStr::new("com.apple.FinderInfo")),
+        OperationMetadataDegradationKind::FinderInfo
+    );
+    assert_eq!(
+        xattr_degradation_kind(std::ffi::OsStr::new("com.apple.ResourceFork")),
+        OperationMetadataDegradationKind::ResourceFork
+    );
+    assert_eq!(
+        xattr_degradation_kind(std::ffi::OsStr::new("com.apple.quarantine")),
+        OperationMetadataDegradationKind::Quarantine
+    );
+    assert_eq!(
+        xattr_degradation_kind(std::ffi::OsStr::new("user.gfm.test")),
+        OperationMetadataDegradationKind::ExtendedAttribute
+    );
 }
 
 #[test]

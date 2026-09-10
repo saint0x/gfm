@@ -364,7 +364,7 @@ Every file record needs stable identity beyond path:
 - size fields: logical, physical, allocated, directory aggregate if available.
 - timestamps: created, modified, changed, accessed, indexed.
 - permissions and ownership.
-- extended attributes summary.
+- extended attributes summary, with FinderInfo, resource fork, quarantine, and generic xattr degradation reported separately during copy preservation.
 - tags and Finder comments.
 - content hash only when explicitly needed.
 
@@ -654,7 +654,7 @@ Scheduler properties:
 - Diagnostics index rebuild consumes explicit runtime pressure signals and adapts its action before scanning filesystem trees, rebuilding record archives, or publishing content archives.
 - Operation dependencies.
 - Priority inheritance from visible UI.
-- Exact preflight item/byte totals and completion-backed progress aggregation.
+- Exact preflight item/byte totals, completion-backed progress aggregation, and typed metadata degradation reporting for FinderInfo, resource forks, quarantine, ACLs, flags, timestamps, ownership, symlink times, generic xattrs, and hard-link topology.
 - Cancellation checkpoints in planning and recursive execution.
 - Pause/resume where semantically safe.
 - Explicit capped retry for classified transient and offline-volume failed work, with non-retryable permission, missing-file, corrupt-file, and permanent failures surfaced without retry churn.

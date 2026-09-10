@@ -212,7 +212,7 @@ pub(crate) fn preserve_xattrs(from: &Path, to: &Path) -> Result<MetadataPreserva
             Err(err) if xattr_copy_unsupported(&err) => {
                 report.degraded(
                     from,
-                    OperationMetadataDegradationKind::ExtendedAttribute,
+                    xattr_degradation_kind(&name),
                     format!(
                         "extended attribute {} could not be read: {err}",
                         name.to_string_lossy()
@@ -227,7 +227,7 @@ pub(crate) fn preserve_xattrs(from: &Path, to: &Path) -> Result<MetadataPreserva
             Err(err) if xattr_copy_unsupported(&err) => {
                 report.degraded(
                     to,
-                    OperationMetadataDegradationKind::ExtendedAttribute,
+                    xattr_degradation_kind(&name),
                     format!(
                         "extended attribute {} was not preserved: {err}",
                         name.to_string_lossy()
@@ -238,6 +238,15 @@ pub(crate) fn preserve_xattrs(from: &Path, to: &Path) -> Result<MetadataPreserva
         }
     }
     Ok(report)
+}
+
+pub(crate) fn xattr_degradation_kind(name: &std::ffi::OsStr) -> OperationMetadataDegradationKind {
+    match name.to_string_lossy().as_ref() {
+        "com.apple.FinderInfo" => OperationMetadataDegradationKind::FinderInfo,
+        "com.apple.ResourceFork" => OperationMetadataDegradationKind::ResourceFork,
+        "com.apple.quarantine" => OperationMetadataDegradationKind::Quarantine,
+        _ => OperationMetadataDegradationKind::ExtendedAttribute,
+    }
 }
 
 pub(crate) fn xattr_copy_unsupported(err: &io::Error) -> bool {
