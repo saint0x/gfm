@@ -1,7 +1,7 @@
 use crate::{IndexSnapshot, LiveIndex};
 use gfm_content::{
     extractor_version_for_path, ExtractionFingerprint, ExtractionQuarantine, Extractor,
-    OcrCandidate,
+    OcrCandidate, OcrCandidateQueue,
 };
 use gfm_jobs::Cancellation;
 use gfm_store::{
@@ -63,6 +63,7 @@ pub struct QuarantineContentIndexRequest<'a> {
     pub previous_content_path: Option<&'a Path>,
     pub segment_dir: &'a Path,
     pub content_path: &'a Path,
+    pub ocr_queue_path: Option<&'a Path>,
     pub cancellation: &'a Cancellation,
 }
 
@@ -206,6 +207,7 @@ pub struct ContentIndexJobSpec {
     pub segment_dir: PathBuf,
     pub records_path: PathBuf,
     pub content_path: PathBuf,
+    pub ocr_queue_path: Option<PathBuf>,
     pub volume: Option<VolumeId>,
     pub batch_size: usize,
 }
@@ -222,9 +224,15 @@ impl ContentIndexJobSpec {
             segment_dir: segment_dir.into(),
             records_path: records_path.into(),
             content_path: content_path.into(),
+            ocr_queue_path: None,
             volume: None,
             batch_size: ContentIndexOptions::default().batch_size,
         }
+    }
+
+    pub fn with_ocr_queue_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.ocr_queue_path = Some(path.into());
+        self
     }
 
     pub fn with_volume(mut self, volume: VolumeId) -> Self {
@@ -263,6 +271,9 @@ impl ContentIndexJobSpec {
             line!(writer, "segment_dir\t{}", escape_path(&self.segment_dir));
             line!(writer, "records_path\t{}", escape_path(&self.records_path));
             line!(writer, "content_path\t{}", escape_path(&self.content_path));
+            if let Some(path) = &self.ocr_queue_path {
+                line!(writer, "ocr_queue_path\t{}", escape_path(path));
+            }
             if let Some(volume) = self.volume {
                 line!(writer, "volume_id\t{}", volume.0);
             }
@@ -308,6 +319,7 @@ impl ContentIndexJobSpec {
         let mut segment_dir = None;
         let mut records_path = None;
         let mut content_path = None;
+        let mut ocr_queue_path = None;
         let mut volume = None;
         let mut batch_size = None;
         for (line_index, line) in lines.enumerate() {
@@ -326,6 +338,7 @@ impl ContentIndexJobSpec {
                 "segment_dir" => segment_dir = Some(PathBuf::from(unescape(value)?)),
                 "records_path" => records_path = Some(PathBuf::from(unescape(value)?)),
                 "content_path" => content_path = Some(PathBuf::from(unescape(value)?)),
+                "ocr_queue_path" => ocr_queue_path = Some(PathBuf::from(unescape(value)?)),
                 "volume_id" => {
                     volume = Some(VolumeId(value.parse().map_err(|err| {
                         GfmError::Format(format!("invalid content job volume id `{value}`: {err}"))
@@ -351,6 +364,7 @@ impl ContentIndexJobSpec {
             segment_dir: required_field(segment_dir, "segment_dir", path)?,
             records_path: required_field(records_path, "records_path", path)?,
             content_path: required_field(content_path, "content_path", path)?,
+            ocr_queue_path,
             volume,
             batch_size: required_field(batch_size, "batch_size", path)?,
         })
@@ -582,6 +596,11 @@ impl BackgroundContentIndexer {
             || request.cancellation.check(),
         )?
         .len();
+        publish_ocr_candidates_checked(
+            request.ocr_queue_path,
+            &report.ocr_queue,
+            request.cancellation,
+        )?;
         Ok(report)
     }
 
@@ -725,6 +744,21 @@ pub(crate) fn read_previous_content_postings_cancellable(
             format!("content postings metadata unavailable: {err}"),
         )),
     }
+}
+
+fn publish_ocr_candidates_checked(
+    path: Option<&Path>,
+    candidates: &[OcrCandidate],
+    cancellation: &Cancellation,
+) -> Result<()> {
+    let Some(path) = path else {
+        return Ok(());
+    };
+    cancellation.check()?;
+    OcrCandidateQueue::new(candidates.iter().cloned())
+        .write_checked(path, || cancellation.check())?;
+    cancellation.check()?;
+    Ok(())
 }
 
 fn required_field<T>(value: Option<T>, field: &str, path: &Path) -> Result<T> {

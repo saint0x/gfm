@@ -4438,6 +4438,49 @@ fn background_content_indexer_reports_ocr_candidates_without_blocking_primary_co
 }
 
 #[test]
+fn background_content_indexer_publishes_ocr_queue_after_compaction() {
+    let root = unique_temp_dir("gfm-background-content-ocr-publish-root");
+    let segments = unique_temp_dir("gfm-background-content-ocr-publish-segments");
+    let content = unique_temp_path("gfm-background-content-ocr-publish", "gfmcontent");
+    let ocr_queue = unique_temp_path("gfm-background-content-ocr-publish", "gfmocr");
+    fs::write(root.join("note.md"), "primary publishabletoken").unwrap();
+    fs::write(root.join("scan.pdf"), image_only_pdf()).unwrap();
+    fs::write(root.join("Screenshot 2026-08-24.png"), b"\x89PNG\r\n\x1a\n").unwrap();
+
+    let snapshot = Indexer::default().build(&root).unwrap();
+    let mut quarantine = ExtractionQuarantine::new(2);
+    let report = BackgroundContentIndexer::default()
+        .run_incremental_and_compact_with_quarantine(
+            QuarantineContentIndexRequest {
+                snapshot: &snapshot,
+                previous_records: &[],
+                previous_content_path: None,
+                segment_dir: &segments,
+                content_path: &content,
+                ocr_queue_path: Some(&ocr_queue),
+                cancellation: &Cancellation::default(),
+            },
+            &mut quarantine,
+        )
+        .unwrap();
+    let queue = OcrCandidateQueue::read(&ocr_queue).unwrap();
+
+    assert_eq!(report.ocr_candidates, 2);
+    assert_eq!(queue.len(), 2);
+    assert!(queue
+        .candidates()
+        .any(|candidate| candidate.kind == OcrCandidateKind::ImageOnlyPdf));
+    assert!(queue
+        .candidates()
+        .any(|candidate| candidate.kind == OcrCandidateKind::ScreenshotImage));
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(segments).unwrap();
+    fs::remove_file(content).unwrap();
+    fs::remove_file(ocr_queue).unwrap();
+}
+
+#[test]
 fn background_content_indexer_incrementally_updates_existing_archive() {
     let root = unique_temp_dir("gfm-background-content-incremental-root");
     let segments = unique_temp_dir("gfm-background-content-incremental-segments");
@@ -4562,6 +4605,7 @@ fn background_content_indexer_persists_extraction_quarantine() {
                 previous_content_path: None,
                 segment_dir: &segments,
                 content_path: &content,
+                ocr_queue_path: None,
                 cancellation: &cancellation,
             },
             &mut quarantine,
@@ -4575,6 +4619,7 @@ fn background_content_indexer_persists_extraction_quarantine() {
                 previous_content_path: Some(&content),
                 segment_dir: &segments,
                 content_path: &content,
+                ocr_queue_path: None,
                 cancellation: &cancellation,
             },
             &mut quarantine,
@@ -4588,6 +4633,7 @@ fn background_content_indexer_persists_extraction_quarantine() {
                 previous_content_path: Some(&content),
                 segment_dir: &segments,
                 content_path: &content,
+                ocr_queue_path: None,
                 cancellation: &cancellation,
             },
             &mut quarantine,
@@ -4873,6 +4919,7 @@ fn content_index_job_spec_round_trips() {
         segment_dir: PathBuf::from("/tmp/segments"),
         records_path: PathBuf::from("/tmp/records.gfmidx"),
         content_path: PathBuf::from("/tmp/content.gfmcontent"),
+        ocr_queue_path: Some(PathBuf::from("/tmp/content.gfmocr")),
         volume: Some(VolumeId(42)),
         batch_size: 17,
     };
@@ -4902,6 +4949,7 @@ fn content_index_job_spec_checked_write_preserves_existing_file_when_cancelled_b
         segment_dir: PathBuf::from("/tmp/segments"),
         records_path: PathBuf::from("/tmp/records.gfmidx"),
         content_path: PathBuf::from("/tmp/content.gfmcontent"),
+        ocr_queue_path: None,
         volume: Some(VolumeId(42)),
         batch_size: 17,
     };
@@ -4942,6 +4990,7 @@ fn content_index_job_spec_reads_legacy_without_volume() {
     let read = ContentIndexJobSpec::read(&path).unwrap();
 
     assert_eq!(read.root, PathBuf::from("/tmp/root"));
+    assert_eq!(read.ocr_queue_path, None);
     assert_eq!(read.volume, None);
     assert_eq!(read.batch_size, 8);
     fs::remove_file(path).unwrap();

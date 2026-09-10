@@ -4,9 +4,11 @@ use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 pub const OCR_EXTRACTOR_VERSION: u32 = 1;
 pub const OCR_CANDIDATE_QUEUE_SCHEMA_VERSION: u32 = 1;
+static OCR_QUEUE_TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OcrCandidateKind {
@@ -106,6 +108,9 @@ impl OcrCandidateQueue {
         mut check_control: impl FnMut() -> crate::Result<()>,
     ) -> crate::Result<()> {
         let path = path.as_ref();
+        check_control()?;
+        let parent = real_parent_or_cwd(path);
+        fs::create_dir_all(parent).map_err(|err| gfm_types::GfmError::io(parent, err))?;
         check_control()?;
         let temp = queue_temp_path(path);
         let result = (|| {
@@ -380,16 +385,16 @@ fn queue_temp_path(path: &Path) -> PathBuf {
         .file_name()
         .map(|name| name.to_os_string())
         .unwrap_or_else(|| "ocr-candidates".into());
-    let suffix = format!(
-        ".tmp.{}.{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or(0)
-    );
-    temp_name.push(suffix);
+    let sequence = OCR_QUEUE_TEMP_FILE_SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed);
+    temp_name.push(format!(".{}.{}.tmp", std::process::id(), sequence));
     path.with_file_name(temp_name)
+}
+
+fn real_parent_or_cwd(path: &Path) -> &Path {
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    }
 }
 
 #[cfg(test)]
@@ -514,6 +519,41 @@ mod tests {
         assert!(text.contains("Screen\\tshot\\nDraft\\r.png"), "{text}");
         assert_eq!(candidates, vec![pdf, screenshot]);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn candidate_queue_write_creates_parent_directory() {
+        let root =
+            std::env::temp_dir().join(format!("gfm-ocr-queue-parent-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let store = root.join("nested").join("ocr.tsv");
+        let queue = OcrCandidateQueue::new([OcrCandidate {
+            path: root.join("Screenshot.png"),
+            kind: OcrCandidateKind::ScreenshotImage,
+            fingerprint: ExtractionFingerprint {
+                extractor_version: OCR_EXTRACTOR_VERSION,
+                len: 1,
+                modified_ns: None,
+            },
+        }]);
+
+        queue.write(&store).unwrap();
+
+        assert_eq!(OcrCandidateQueue::read(&store).unwrap().len(), 1);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn candidate_queue_temp_paths_are_unique_within_process() {
+        let first = queue_temp_path(Path::new("/tmp/ocr.tsv"));
+        let second = queue_temp_path(Path::new("/tmp/ocr.tsv"));
+
+        assert_ne!(first, second);
+        assert_eq!(first.parent(), Some(Path::new("/tmp")));
+        assert!(first
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.ends_with(".tmp")));
     }
 
     #[test]

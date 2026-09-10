@@ -613,13 +613,15 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 args.next(),
                 "index-content-background requires a content path",
             )?;
+            let ocr_queue = content.with_extension("gfmocr");
             let pressure = parse_optional_scheduling_pressure_or_else(
                 args,
                 current_host_job_scheduling_pressure,
             )?;
             eprintln!("{}", scheduling_pressure_tsv(pressure));
             let journal = JobJournal::new(default_job_journal_path());
-            let mut spec = ContentIndexJobSpec::new(&root, segment_dir, records, content);
+            let mut spec = ContentIndexJobSpec::new(&root, segment_dir, records, content)
+                .with_ocr_queue_path(ocr_queue);
             let spec_path = default_content_job_path();
             let deferred_spec_access =
                 if pressure.decide(Priority::Background, 1, 1).action == SchedulingAction::Defer {
@@ -2533,6 +2535,55 @@ mod tests {
     }
 
     #[test]
+    fn content_job_reports_refuse_unreachable_ocr_queue_before_write_probe() {
+        let root = unique_temp_dir("gfm-content-job-report-ocr-root");
+        let offline = unique_temp_dir("gfm-content-job-report-ocr-offline");
+        fs::write(offline.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
+        let ocr_queue = offline.join(format!(
+            "{}.gfmocr",
+            "background-content-ocr-queue-unavailable".repeat(8)
+        ));
+        let spec = ContentIndexJobSpec::new(
+            root.join("input"),
+            root.join("segments"),
+            root.join("records.gfmidx"),
+            root.join("content.gfmcontent"),
+        )
+        .with_ocr_queue_path(ocr_queue.clone());
+        let spec_path = root.join("job.tsv");
+        let journal_path = root.join("journal.tsv");
+
+        let err = match ContentJobAccessReports::for_spec_checked(
+            &spec,
+            &spec_path,
+            Some(&journal_path),
+            || Ok(()),
+        ) {
+            Ok(_) => {
+                panic!(
+                    "unreachable background content OCR queue was admitted before volume preflight"
+                )
+            }
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string().contains(
+                "background content index volume access blocked: unreachable volume network"
+            ),
+            "{err}"
+        );
+        assert!(
+            !err.to_string()
+                .contains("content write path metadata unavailable"),
+            "{err}"
+        );
+        assert!(!ocr_queue.exists());
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(offline).unwrap();
+    }
+
+    #[test]
     fn extraction_quarantine_reports_refuse_unreachable_store_before_write_probe() {
         let root = unique_temp_dir("gfm-extraction-quarantine-unreachable-before-probe-root");
         let offline = unique_temp_dir("gfm-extraction-quarantine-unreachable-before-probe-store");
@@ -3341,7 +3392,9 @@ impl ContentJobAccessReports {
         mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<Self> {
         let quarantine_path = default_extraction_quarantine_path();
-        let mut entries = Vec::with_capacity(6 + usize::from(journal_path.is_some()));
+        let mut entries = Vec::with_capacity(
+            6 + usize::from(spec.ocr_queue_path.is_some()) + usize::from(journal_path.is_some()),
+        );
         check_control()?;
         entries.push(ForegroundContentIndexAccessReports::entry_checked(
             spec.root.clone(),
@@ -3358,6 +3411,20 @@ impl ContentJobAccessReports {
             check_control()?;
             let path =
                 checked_write_probe_path(path, "background content index", &mut check_control)?;
+            check_control()?;
+            entries.push(ForegroundContentIndexAccessReports::entry_checked(
+                path,
+                AccessIntent::Write,
+                &mut check_control,
+            )?);
+        }
+        if let Some(ocr_queue_path) = &spec.ocr_queue_path {
+            check_control()?;
+            let path = checked_write_probe_path(
+                ocr_queue_path,
+                "background content index",
+                &mut check_control,
+            )?;
             check_control()?;
             entries.push(ForegroundContentIndexAccessReports::entry_checked(
                 path,
@@ -3789,6 +3856,7 @@ pub(crate) fn run_content_job(
                     previous_content_path: Some(&job_spec.content_path),
                     segment_dir: &job_spec.segment_dir,
                     content_path: &job_spec.content_path,
+                    ocr_queue_path: job_spec.ocr_queue_path.as_deref(),
                     cancellation: &cancellation,
                 };
                 let report = worker.run_incremental_and_compact_with_quarantine(
