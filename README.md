@@ -67,7 +67,7 @@ GFM is a multi-crate Rust workspace with strict ownership boundaries.
 
 No UI render/update path performs blocking filesystem work. No performance-critical search, ranking, scheduling, virtualization, storage, or operation orchestration path is outsourced to a generic black box. Dependencies exist for platform access and standards compliance; GFM owns the contracts.
 
-Internal architecture notes live in `docs/`, starting with [search-storage.md](docs/search-storage.md), [search-ranking.md](docs/search-ranking.md), [operation-recovery.md](docs/operation-recovery.md), and [performance-budgets.md](docs/performance-budgets.md).
+Internal architecture notes live in `docs/`: [search-storage.md](docs/search-storage.md), [search-ranking.md](docs/search-ranking.md), [operation-recovery.md](docs/operation-recovery.md), [macos-bridges.md](docs/macos-bridges.md), [parity-harness.md](docs/parity-harness.md), and [performance-budgets.md](docs/performance-budgets.md).
 
 ## Toolchain
 
