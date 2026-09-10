@@ -11,6 +11,7 @@ pub(crate) fn pdf_report_status(status: PdfExtractStatus) -> ExtractionStatus {
         PdfExtractStatus::TooLarge => ExtractionStatus::Skipped("too-large"),
         PdfExtractStatus::TooManyPages => ExtractionStatus::Skipped("too-many-pages"),
         PdfExtractStatus::TooManyObjects => ExtractionStatus::Skipped("too-many-objects"),
+        PdfExtractStatus::ImageOnly => ExtractionStatus::Skipped("image-only-pdf"),
         PdfExtractStatus::Encrypted => ExtractionStatus::Quarantined("encrypted-pdf"),
         PdfExtractStatus::Corrupt => ExtractionStatus::Quarantined("corrupt-pdf"),
     }

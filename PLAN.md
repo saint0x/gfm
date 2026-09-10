@@ -422,7 +422,7 @@ This avoids treating every rename as delete-plus-create when the platform expose
    - Pluggable extractors.
    - Large binary files excluded by default.
    - Chunked content with per-file byte budgets.
-   - PDF extraction is policy-bounded separately from plain text, with byte, page, and object caps plus corrupt-file isolation before wider sandboxed extractor coverage lands.
+   - PDF extraction is policy-bounded separately from plain text, with byte, page, and object caps plus image-only detection and corrupt-file isolation before wider sandboxed extractor coverage lands.
    - DOCX/XLSX/PPTX extraction reads bounded OOXML ZIP packages, selected XML content parts, and capped decoded text output without blocking unrelated content indexing.
    - Legacy DOC/XLS/PPT files are classified as Office content, fingerprinted with the Office extractor version, and skipped with an explicit `legacy-office` reason under the Office byte budget until sandboxed binary workers can parse them safely.
    - Password-protected OOXML files backed by OLE compound containers are detected before ZIP parsing and quarantined as `encrypted-office`, preserving corrupt-package quarantine for genuinely malformed ZIP/XML inputs.

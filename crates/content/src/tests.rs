@@ -546,6 +546,25 @@ fn skips_pdf_when_page_budget_is_exceeded() {
 }
 
 #[test]
+fn reports_image_only_pdf_without_indexing_empty_text() {
+    let root = unique_temp_dir("gfm-content-image-only-pdf");
+    let path = root.join("scan.pdf");
+    fs::write(&path, image_only_pdf()).unwrap();
+
+    let report = Extractor::default().extract_path_report(&path).unwrap();
+
+    assert_eq!(report.format, ExtractionFormat::Pdf);
+    assert_eq!(report.status, ExtractionStatus::Skipped("image-only-pdf"));
+    assert_eq!(report.fingerprint.extractor_version, PDF_EXTRACTOR_VERSION);
+    assert!(report.document.is_none());
+    assert!(report
+        .fingerprint
+        .cache_key(&path)
+        .starts_with(&format!("v{PDF_EXTRACTOR_VERSION}:")));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn reports_versioned_pdf_extraction_fingerprints() {
     let root = unique_temp_dir("gfm-content-pdf-report");
     let path = root.join("brief.pdf");
@@ -1528,6 +1547,21 @@ fn multi_page_pdf(pages: usize) -> Vec<u8> {
     }
     pdf.extend(b"%%EOF");
     pdf
+}
+
+fn image_only_pdf() -> Vec<u8> {
+    b"%PDF-1.4
+1 0 obj
+<< /Type /Page /Resources << /XObject << /Im0 2 0 R >> >> >>
+endobj
+2 0 obj
+<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length 12 >>
+stream
+abcdefghijkl
+endstream
+endobj
+%%EOF"
+        .to_vec()
 }
 
 fn ooxml_package(parts: &[(&str, &str)]) -> Vec<u8> {

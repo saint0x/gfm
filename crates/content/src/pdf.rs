@@ -12,6 +12,7 @@ pub(crate) enum PdfExtractStatus {
     TooLarge,
     TooManyPages,
     TooManyObjects,
+    ImageOnly,
     Encrypted,
     Corrupt,
 }
@@ -81,6 +82,9 @@ pub(crate) fn extract_pdf_checked(
 
     let text = normalize_text_checked(text.trim(), &mut check_control)?;
     if text.is_empty() {
+        if has_image_xobject(bytes) {
+            return Ok((PdfExtractStatus::ImageOnly, None));
+        }
         return Ok((PdfExtractStatus::Unsupported, None));
     }
 
@@ -379,6 +383,15 @@ fn has_encryption_dictionary(bytes: &[u8]) -> bool {
         .any(|window| window == b"/Encrypt")
 }
 
+fn has_image_xobject(bytes: &[u8]) -> bool {
+    bytes
+        .windows(b"/Subtype /Image".len())
+        .any(|window| window == b"/Subtype /Image")
+        || bytes
+            .windows(b"/Subtype/Image".len())
+            .any(|window| window == b"/Subtype/Image")
+}
+
 fn find_from(haystack: &[u8], needle: &[u8], start: usize) -> Option<usize> {
     if needle.is_empty() || start >= haystack.len() {
         return None;
@@ -429,6 +442,26 @@ endobj";
         let (status, doc) = extract_pdf(pdf, &ExtractionPolicy::default());
 
         assert_eq!(status, PdfExtractStatus::Unsupported);
+        assert!(doc.is_none());
+    }
+
+    #[test]
+    fn classifies_image_only_pdf_without_ocr_text() {
+        let pdf = b"%PDF-1.4
+1 0 obj
+<< /Type /Page /Resources << /XObject << /Im0 2 0 R >> >> >>
+endobj
+2 0 obj
+<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Length 12 >>
+stream
+abcdefghijkl
+endstream
+endobj
+%%EOF";
+
+        let (status, doc) = extract_pdf(pdf, &ExtractionPolicy::default());
+
+        assert_eq!(status, PdfExtractStatus::ImageOnly);
         assert!(doc.is_none());
     }
 
