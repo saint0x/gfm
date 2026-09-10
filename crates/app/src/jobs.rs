@@ -5,7 +5,7 @@ use crate::access::{
 use crate::platform::{current_host_job_scheduling_pressure, scheduling_pressure_tsv};
 use crate::runtime::{
     default_job_journal_path, run_scheduled_volume_task_cancellable_with_runtime_and_payload_path,
-    run_volume_task_cancellable,
+    RuntimeJobHandle, ScheduledTaskOutcome,
 };
 use crate::{
     parse_optional_scheduling_pressure_or_else, parse_u64_arg, parse_usize_arg, required_path,
@@ -242,27 +242,44 @@ fn run_jobs_recover(journal: PathBuf) -> Result<Vec<String>> {
         JobPathAccessReport::new_checked(journal.clone(), AccessIntent::Read, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _access = access_report.access_checked(WORKER, || cancellation.check())?;
-        cancellation.check()?;
-        let lines = JobJournal::new(journal)
-            .recoverable_checked(RetryPolicy { max_attempts: 2 }, || cancellation.check())?
-            .into_iter()
-            .map(|job| {
-                format!(
-                    "{}\t{}\t{}\tclass={}\tnext-delay-ms={}\t{}",
-                    job.id.value(),
-                    job.attempts,
-                    recovery_reason(job.reason),
-                    recovery_failure_class(job.failure_class),
-                    job.next_delay_ms,
-                    job.label
-                )
-            })
-            .collect();
-        Ok(lines)
-    })
+    visible_scheduled_jobs_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Repair,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            journal.clone(),
+            move |cancellation, runtime| {
+                let journal = journal.clone();
+                cancellation.check()?;
+                runtime.resize_checked(3, "jobs-recover:preflight", || cancellation.check())?;
+                let _access = access_report.access_checked(WORKER, || cancellation.check())?;
+                jobs_runtime_phase(&runtime, 1, "jobs-recover:read", &cancellation)?;
+                let lines: Vec<String> = JobJournal::new(journal)
+                    .recoverable_checked(RetryPolicy { max_attempts: 2 }, || cancellation.check())?
+                    .into_iter()
+                    .map(|job| {
+                        format!(
+                            "{}\t{}\t{}\tclass={}\tnext-delay-ms={}\t{}",
+                            job.id.value(),
+                            job.attempts,
+                            recovery_reason(job.reason),
+                            recovery_failure_class(job.failure_class),
+                            job.next_delay_ms,
+                            job.label
+                        )
+                    })
+                    .collect();
+                jobs_runtime_phase(&runtime, 2, "jobs-recover:complete", &cancellation)?;
+                runtime
+                    .remember_completion_detail(format!("completed:recoverable:{}", lines.len()))?;
+                jobs_runtime_phase(&runtime, 3, "jobs-recover:reported", &cancellation)?;
+                Ok(lines)
+            },
+        )?,
+        WORKER,
+    )
 }
 
 #[derive(Clone)]
@@ -399,21 +416,38 @@ fn run_jobs_payload_catalog(path: PathBuf) -> Result<Vec<String>> {
     let access_report = JobPathAccessReport::write_target_checked(&path, WORKER, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _access = access_report.access_checked(WORKER, || cancellation.check())?;
-        cancellation.check()?;
-        let catalog = JobPayloadCatalog::new(&path);
-        let records = sample_payload_catalog_records();
-        catalog.write_all_checked(&records, || cancellation.check())?;
-        cancellation.check()?;
-        let lines = catalog
-            .read_checked(|| cancellation.check())?
-            .into_iter()
-            .map(|record| record.as_tsv())
-            .collect();
-        Ok(lines)
-    })
+    visible_scheduled_jobs_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Operation,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            path.clone(),
+            move |cancellation, runtime| {
+                let path = path.clone();
+                cancellation.check()?;
+                runtime
+                    .resize_checked(3, "jobs-payload-catalog:preflight", || cancellation.check())?;
+                let _access = access_report.access_checked(WORKER, || cancellation.check())?;
+                jobs_runtime_phase(&runtime, 1, "jobs-payload-catalog:write", &cancellation)?;
+                let catalog = JobPayloadCatalog::new(&path);
+                let records = sample_payload_catalog_records();
+                catalog.write_all_checked(&records, || cancellation.check())?;
+                jobs_runtime_phase(&runtime, 2, "jobs-payload-catalog:read", &cancellation)?;
+                let lines: Vec<String> = catalog
+                    .read_checked(|| cancellation.check())?
+                    .into_iter()
+                    .map(|record| record.as_tsv())
+                    .collect();
+                runtime
+                    .remember_completion_detail(format!("completed:payloads:{}", lines.len()))?;
+                jobs_runtime_phase(&runtime, 3, "jobs-payload-catalog:reported", &cancellation)?;
+                Ok(lines)
+            },
+        )?,
+        WORKER,
+    )
 }
 
 fn run_jobs_progress_snapshot(path: PathBuf) -> Result<Vec<String>> {
@@ -421,22 +455,45 @@ fn run_jobs_progress_snapshot(path: PathBuf) -> Result<Vec<String>> {
     let access_report = JobPathAccessReport::write_target_checked(&path, WORKER, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _access = access_report.access_checked(WORKER, || cancellation.check())?;
-        cancellation.check()?;
-        let store = JobProgressStore::new(&path);
-        for snapshot in sample_progress_snapshots() {
-            store.upsert_checked(snapshot, || cancellation.check())?;
-        }
-        cancellation.check()?;
-        let lines = store
-            .restorable_checked(|| cancellation.check())?
-            .into_iter()
-            .map(|snapshot| snapshot.as_tsv())
-            .collect();
-        Ok(lines)
-    })
+    visible_scheduled_jobs_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Operation,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            path.clone(),
+            move |cancellation, runtime| {
+                let path = path.clone();
+                cancellation.check()?;
+                runtime.resize_checked(3, "jobs-progress-snapshot:preflight", || {
+                    cancellation.check()
+                })?;
+                let _access = access_report.access_checked(WORKER, || cancellation.check())?;
+                jobs_runtime_phase(&runtime, 1, "jobs-progress-snapshot:write", &cancellation)?;
+                let store = JobProgressStore::new(&path);
+                for snapshot in sample_progress_snapshots() {
+                    store.upsert_checked(snapshot, || cancellation.check())?;
+                }
+                jobs_runtime_phase(&runtime, 2, "jobs-progress-snapshot:read", &cancellation)?;
+                let lines: Vec<String> = store
+                    .restorable_checked(|| cancellation.check())?
+                    .into_iter()
+                    .map(|snapshot| snapshot.as_tsv())
+                    .collect();
+                runtime
+                    .remember_completion_detail(format!("completed:snapshots:{}", lines.len()))?;
+                jobs_runtime_phase(
+                    &runtime,
+                    3,
+                    "jobs-progress-snapshot:reported",
+                    &cancellation,
+                )?;
+                Ok(lines)
+            },
+        )?,
+        WORKER,
+    )
 }
 
 fn run_jobs_progress_restore(path: PathBuf, updated_ms: u64) -> Result<Vec<String>> {
@@ -444,17 +501,36 @@ fn run_jobs_progress_restore(path: PathBuf, updated_ms: u64) -> Result<Vec<Strin
     let access_report = JobPathAccessReport::write_target_checked(&path, WORKER, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _access = access_report.access_checked(WORKER, || cancellation.check())?;
-        cancellation.check()?;
-        let lines = JobProgressStore::new(&path)
-            .restore_interrupted_checked(updated_ms, || cancellation.check())?
-            .into_iter()
-            .map(|snapshot| snapshot.as_tsv())
-            .collect();
-        Ok(lines)
-    })
+    visible_scheduled_jobs_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Operation,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            path.clone(),
+            move |cancellation, runtime| {
+                let path = path.clone();
+                cancellation.check()?;
+                runtime.resize_checked(3, "jobs-progress-restore:preflight", || {
+                    cancellation.check()
+                })?;
+                let _access = access_report.access_checked(WORKER, || cancellation.check())?;
+                jobs_runtime_phase(&runtime, 1, "jobs-progress-restore:restore", &cancellation)?;
+                let lines: Vec<String> = JobProgressStore::new(&path)
+                    .restore_interrupted_checked(updated_ms, || cancellation.check())?
+                    .into_iter()
+                    .map(|snapshot| snapshot.as_tsv())
+                    .collect();
+                jobs_runtime_phase(&runtime, 2, "jobs-progress-restore:complete", &cancellation)?;
+                runtime
+                    .remember_completion_detail(format!("completed:restored:{}", lines.len()))?;
+                jobs_runtime_phase(&runtime, 3, "jobs-progress-restore:reported", &cancellation)?;
+                Ok(lines)
+            },
+        )?,
+        WORKER,
+    )
 }
 
 fn run_jobs_progress_control(
@@ -467,27 +543,49 @@ fn run_jobs_progress_control(
     let access_report = JobPathAccessReport::write_target_checked(&path, WORKER, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _access = access_report.access_checked(WORKER, || cancellation.check())?;
-        cancellation.check()?;
-        let snapshot = JobProgressStore::new(&path).apply_command_checked(
-            gfm_jobs::JobId::from_raw(job_id),
-            command,
-            updated_ms,
-            || cancellation.check(),
-        )?;
-        Ok(vec![
-            format!(
-                "progress-control\t{}\tjob={}\tstate={}\tdetail={}",
-                command.as_str(),
-                snapshot.id.value(),
-                snapshot.state.as_str(),
-                snapshot.detail
-            ),
-            snapshot.as_tsv(),
-        ])
-    })
+    visible_scheduled_jobs_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Operation,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            path.clone(),
+            move |cancellation, runtime| {
+                let path = path.clone();
+                cancellation.check()?;
+                runtime.resize_checked(3, "jobs-progress-control:preflight", || {
+                    cancellation.check()
+                })?;
+                let _access = access_report.access_checked(WORKER, || cancellation.check())?;
+                jobs_runtime_phase(&runtime, 1, "jobs-progress-control:apply", &cancellation)?;
+                let snapshot = JobProgressStore::new(&path).apply_command_checked(
+                    gfm_jobs::JobId::from_raw(job_id),
+                    command,
+                    updated_ms,
+                    || cancellation.check(),
+                )?;
+                jobs_runtime_phase(&runtime, 2, "jobs-progress-control:complete", &cancellation)?;
+                runtime.remember_completion_detail(format!(
+                    "completed:{}:job:{}",
+                    command.as_str(),
+                    snapshot.id.value()
+                ))?;
+                jobs_runtime_phase(&runtime, 3, "jobs-progress-control:reported", &cancellation)?;
+                Ok(vec![
+                    format!(
+                        "progress-control\t{}\tjob={}\tstate={}\tdetail={}",
+                        command.as_str(),
+                        snapshot.id.value(),
+                        snapshot.state.as_str(),
+                        snapshot.detail
+                    ),
+                    snapshot.as_tsv(),
+                ])
+            },
+        )?,
+        WORKER,
+    )
 }
 
 fn run_jobs_payload_restore_plan(
@@ -499,37 +597,94 @@ fn run_jobs_payload_restore_plan(
     let access_reports = JobPathAccessReports::payload_restore(&catalog_path, &progress_path)?;
     access_reports.preflight_volumes(WORKER)?;
     let volume = access_reports.first_volume();
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _access = access_reports.access_checked(WORKER, || cancellation.check())?;
-        cancellation.check()?;
-        let store = JobProgressStore::new(&progress_path);
-        let restored = store.restore_interrupted_checked(updated_ms, || cancellation.check())?;
-        cancellation.check()?;
-        let payloads = JobPayloadCatalog::new(&catalog_path)
-            .read_for_ids_checked(restored.iter().map(|snapshot| snapshot.id), || {
-                cancellation.check()
-            })?
-            .into_iter()
-            .map(|record| (record.id, record))
-            .collect::<HashMap<_, _>>();
-        let lines = restored
-            .into_iter()
-            .map(|snapshot| {
-                if let Some(payload) = payloads.get(&snapshot.id) {
-                    format!("restore\t{}\t{}", snapshot.state.as_str(), payload.as_tsv())
-                } else {
-                    format!(
-                        "missing-payload\t{}\t{}\t{}",
-                        snapshot.id.value(),
-                        snapshot.state.as_str(),
-                        snapshot.label
-                    )
-                }
-            })
-            .collect();
-        Ok(lines)
+    visible_scheduled_jobs_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Operation,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            progress_path.clone(),
+            move |cancellation, runtime| {
+                let catalog_path = catalog_path.clone();
+                let progress_path = progress_path.clone();
+                cancellation.check()?;
+                runtime.resize_checked(3, "jobs-payload-restore-plan:preflight", || {
+                    cancellation.check()
+                })?;
+                let _access = access_reports.access_checked(WORKER, || cancellation.check())?;
+                jobs_runtime_phase(
+                    &runtime,
+                    1,
+                    "jobs-payload-restore-plan:restore",
+                    &cancellation,
+                )?;
+                let store = JobProgressStore::new(&progress_path);
+                let restored =
+                    store.restore_interrupted_checked(updated_ms, || cancellation.check())?;
+                jobs_runtime_phase(
+                    &runtime,
+                    2,
+                    "jobs-payload-restore-plan:payloads",
+                    &cancellation,
+                )?;
+                let payloads = JobPayloadCatalog::new(&catalog_path)
+                    .read_for_ids_checked(restored.iter().map(|snapshot| snapshot.id), || {
+                        cancellation.check()
+                    })?
+                    .into_iter()
+                    .map(|record| (record.id, record))
+                    .collect::<HashMap<_, _>>();
+                let lines: Vec<String> = restored
+                    .into_iter()
+                    .map(|snapshot| {
+                        if let Some(payload) = payloads.get(&snapshot.id) {
+                            format!("restore\t{}\t{}", snapshot.state.as_str(), payload.as_tsv())
+                        } else {
+                            format!(
+                                "missing-payload\t{}\t{}\t{}",
+                                snapshot.id.value(),
+                                snapshot.state.as_str(),
+                                snapshot.label
+                            )
+                        }
+                    })
+                    .collect();
+                runtime.remember_completion_detail(format!(
+                    "completed:restore-plan:{}",
+                    lines.len()
+                ))?;
+                jobs_runtime_phase(
+                    &runtime,
+                    3,
+                    "jobs-payload-restore-plan:reported",
+                    &cancellation,
+                )?;
+                Ok(lines)
+            },
+        )?,
+        WORKER,
+    )
+}
+
+fn jobs_runtime_phase(
+    runtime: &RuntimeJobHandle,
+    completed_units: u64,
+    detail: &'static str,
+    cancellation: &Cancellation,
+) -> Result<()> {
+    runtime.progress_checked(JobProgressState::Running, completed_units, detail, || {
+        cancellation.check()
     })
+}
+
+fn visible_scheduled_jobs_result<T>(
+    outcome: ScheduledTaskOutcome<T>,
+    label: &'static str,
+) -> Result<T> {
+    outcome
+        .result
+        .ok_or_else(|| GfmError::Format(format!("{label} deferred before visible run")))
 }
 
 #[cfg(test)]
