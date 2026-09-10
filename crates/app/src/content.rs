@@ -614,6 +614,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "index-content-background requires a content path",
             )?;
             let ocr_queue = content.with_extension("gfmocr");
+            let ocr_recognition_cache = content.with_extension("gfmocr-cache");
             let pressure = parse_optional_scheduling_pressure_or_else(
                 args,
                 current_host_job_scheduling_pressure,
@@ -621,7 +622,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             eprintln!("{}", scheduling_pressure_tsv(pressure));
             let journal = JobJournal::new(default_job_journal_path());
             let mut spec = ContentIndexJobSpec::new(&root, segment_dir, records, content)
-                .with_ocr_queue_path(ocr_queue);
+                .with_ocr_queue_path(ocr_queue)
+                .with_ocr_recognition_cache_path(ocr_recognition_cache);
             let spec_path = default_content_job_path();
             let deferred_spec_access =
                 if pressure.decide(Priority::Background, 1, 1).action == SchedulingAction::Defer {
@@ -3393,7 +3395,9 @@ impl ContentJobAccessReports {
     ) -> Result<Self> {
         let quarantine_path = default_extraction_quarantine_path();
         let mut entries = Vec::with_capacity(
-            6 + usize::from(spec.ocr_queue_path.is_some()) + usize::from(journal_path.is_some()),
+            6 + usize::from(spec.ocr_queue_path.is_some())
+                + usize::from(spec.ocr_recognition_cache_path.is_some())
+                + usize::from(journal_path.is_some()),
         );
         check_control()?;
         entries.push(ForegroundContentIndexAccessReports::entry_checked(
@@ -3431,6 +3435,21 @@ impl ContentJobAccessReports {
                 AccessIntent::Write,
                 &mut check_control,
             )?);
+        }
+        if let Some(ocr_recognition_cache_path) = &spec.ocr_recognition_cache_path {
+            check_control()?;
+            if optional_recovery_store_exists_checked(
+                ocr_recognition_cache_path,
+                "background content index OCR cache",
+                &mut check_control,
+            )? {
+                check_control()?;
+                entries.push(ForegroundContentIndexAccessReports::entry_checked(
+                    ocr_recognition_cache_path.clone(),
+                    AccessIntent::Read,
+                    &mut check_control,
+                )?);
+            }
         }
         if let Some(journal_path) = journal_path {
             check_control()?;
@@ -3857,6 +3876,7 @@ pub(crate) fn run_content_job(
                     segment_dir: &job_spec.segment_dir,
                     content_path: &job_spec.content_path,
                     ocr_queue_path: job_spec.ocr_queue_path.as_deref(),
+                    ocr_recognition_cache_path: job_spec.ocr_recognition_cache_path.as_deref(),
                     cancellation: &cancellation,
                 };
                 let report = worker.run_incremental_and_compact_with_quarantine(

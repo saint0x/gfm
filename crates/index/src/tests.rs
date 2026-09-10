@@ -1,7 +1,8 @@
 use super::*;
 use crate::content::read_previous_content_postings_cancellable;
 use gfm_content::{
-    ExtractionQuarantine, OcrCandidateKind, OcrCandidateQueue, OCR_EXTRACTOR_VERSION,
+    ExtractionQuarantine, OcrCandidateKind, OcrCandidateQueue, OcrRecognition, OcrRecognitionCache,
+    OCR_EXTRACTOR_VERSION,
 };
 use gfm_fs::FinderMetadataReport;
 use gfm_jobs::Cancellation;
@@ -4458,6 +4459,7 @@ fn background_content_indexer_publishes_ocr_queue_after_compaction() {
                 segment_dir: &segments,
                 content_path: &content,
                 ocr_queue_path: Some(&ocr_queue),
+                ocr_recognition_cache_path: None,
                 cancellation: &Cancellation::default(),
             },
             &mut quarantine,
@@ -4478,6 +4480,63 @@ fn background_content_indexer_publishes_ocr_queue_after_compaction() {
     fs::remove_dir_all(segments).unwrap();
     fs::remove_file(content).unwrap();
     fs::remove_file(ocr_queue).unwrap();
+}
+
+#[test]
+fn background_content_indexer_merges_recognized_ocr_text_into_searchable_content() {
+    let root = unique_temp_dir("gfm-background-content-ocr-merge-root");
+    let segments = unique_temp_dir("gfm-background-content-ocr-merge-segments");
+    let content = unique_temp_path("gfm-background-content-ocr-merge", "gfmcontent");
+    let ocr_cache = unique_temp_path("gfm-background-content-ocr-merge", "gfmocr-cache");
+    let screenshot_path = root.join("Screenshot 2026-08-24.png");
+    fs::write(&screenshot_path, b"\x89PNG\r\n\x1a\n").unwrap();
+
+    let snapshot = Indexer::default().build(&root).unwrap();
+    let screenshot_record = snapshot
+        .records
+        .iter()
+        .find(|record| record.path == screenshot_path)
+        .unwrap();
+    let candidate = gfm_content::ocr_candidate_for_record(screenshot_record).unwrap();
+    OcrRecognitionCache::new([OcrRecognition {
+        candidate,
+        text: "recognized invoice alphaomega".to_string(),
+    }])
+    .write(&ocr_cache)
+    .unwrap();
+    let mut quarantine = ExtractionQuarantine::new(2);
+    let report = BackgroundContentIndexer::default()
+        .run_incremental_and_compact_with_quarantine(
+            QuarantineContentIndexRequest {
+                snapshot: &snapshot,
+                previous_records: &[],
+                previous_content_path: None,
+                segment_dir: &segments,
+                content_path: &content,
+                ocr_queue_path: None,
+                ocr_recognition_cache_path: Some(&ocr_cache),
+                cancellation: &Cancellation::default(),
+            },
+            &mut quarantine,
+        )
+        .unwrap();
+    let mut searchable = LiveIndex::from_records(snapshot.records.clone());
+    searchable
+        .load_content_postings_cancellable(&content, &Cancellation::default())
+        .unwrap();
+    let hits = searchable
+        .search_cancellable("alphaomega", 10, &Cancellation::default())
+        .unwrap();
+
+    assert_eq!(report.indexed, 1);
+    assert_eq!(report.ocr_candidates, 0);
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].record.path, screenshot_path);
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(segments).unwrap();
+    fs::remove_file(content).unwrap();
+    fs::remove_file(ocr_cache).unwrap();
 }
 
 #[test]
@@ -4606,6 +4665,7 @@ fn background_content_indexer_persists_extraction_quarantine() {
                 segment_dir: &segments,
                 content_path: &content,
                 ocr_queue_path: None,
+                ocr_recognition_cache_path: None,
                 cancellation: &cancellation,
             },
             &mut quarantine,
@@ -4620,6 +4680,7 @@ fn background_content_indexer_persists_extraction_quarantine() {
                 segment_dir: &segments,
                 content_path: &content,
                 ocr_queue_path: None,
+                ocr_recognition_cache_path: None,
                 cancellation: &cancellation,
             },
             &mut quarantine,
@@ -4634,6 +4695,7 @@ fn background_content_indexer_persists_extraction_quarantine() {
                 segment_dir: &segments,
                 content_path: &content,
                 ocr_queue_path: None,
+                ocr_recognition_cache_path: None,
                 cancellation: &cancellation,
             },
             &mut quarantine,
@@ -4920,6 +4982,7 @@ fn content_index_job_spec_round_trips() {
         records_path: PathBuf::from("/tmp/records.gfmidx"),
         content_path: PathBuf::from("/tmp/content.gfmcontent"),
         ocr_queue_path: Some(PathBuf::from("/tmp/content.gfmocr")),
+        ocr_recognition_cache_path: Some(PathBuf::from("/tmp/content.gfmocr-cache")),
         volume: Some(VolumeId(42)),
         batch_size: 17,
     };
@@ -4950,6 +5013,7 @@ fn content_index_job_spec_checked_write_preserves_existing_file_when_cancelled_b
         records_path: PathBuf::from("/tmp/records.gfmidx"),
         content_path: PathBuf::from("/tmp/content.gfmcontent"),
         ocr_queue_path: None,
+        ocr_recognition_cache_path: None,
         volume: Some(VolumeId(42)),
         batch_size: 17,
     };
@@ -4991,6 +5055,7 @@ fn content_index_job_spec_reads_legacy_without_volume() {
 
     assert_eq!(read.root, PathBuf::from("/tmp/root"));
     assert_eq!(read.ocr_queue_path, None);
+    assert_eq!(read.ocr_recognition_cache_path, None);
     assert_eq!(read.volume, None);
     assert_eq!(read.batch_size, 8);
     fs::remove_file(path).unwrap();

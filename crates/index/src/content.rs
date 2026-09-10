@@ -1,7 +1,7 @@
 use crate::{IndexSnapshot, LiveIndex};
 use gfm_content::{
     extractor_version_for_path, ExtractionFingerprint, ExtractionQuarantine, Extractor,
-    OcrCandidate, OcrCandidateQueue,
+    OcrCandidate, OcrCandidateQueue, OcrRecognitionCache,
 };
 use gfm_jobs::Cancellation;
 use gfm_store::{
@@ -64,6 +64,7 @@ pub struct QuarantineContentIndexRequest<'a> {
     pub segment_dir: &'a Path,
     pub content_path: &'a Path,
     pub ocr_queue_path: Option<&'a Path>,
+    pub ocr_recognition_cache_path: Option<&'a Path>,
     pub cancellation: &'a Cancellation,
 }
 
@@ -208,6 +209,7 @@ pub struct ContentIndexJobSpec {
     pub records_path: PathBuf,
     pub content_path: PathBuf,
     pub ocr_queue_path: Option<PathBuf>,
+    pub ocr_recognition_cache_path: Option<PathBuf>,
     pub volume: Option<VolumeId>,
     pub batch_size: usize,
 }
@@ -225,6 +227,7 @@ impl ContentIndexJobSpec {
             records_path: records_path.into(),
             content_path: content_path.into(),
             ocr_queue_path: None,
+            ocr_recognition_cache_path: None,
             volume: None,
             batch_size: ContentIndexOptions::default().batch_size,
         }
@@ -232,6 +235,11 @@ impl ContentIndexJobSpec {
 
     pub fn with_ocr_queue_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.ocr_queue_path = Some(path.into());
+        self
+    }
+
+    pub fn with_ocr_recognition_cache_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.ocr_recognition_cache_path = Some(path.into());
         self
     }
 
@@ -273,6 +281,9 @@ impl ContentIndexJobSpec {
             line!(writer, "content_path\t{}", escape_path(&self.content_path));
             if let Some(path) = &self.ocr_queue_path {
                 line!(writer, "ocr_queue_path\t{}", escape_path(path));
+            }
+            if let Some(path) = &self.ocr_recognition_cache_path {
+                line!(writer, "ocr_recognition_cache_path\t{}", escape_path(path));
             }
             if let Some(volume) = self.volume {
                 line!(writer, "volume_id\t{}", volume.0);
@@ -320,6 +331,7 @@ impl ContentIndexJobSpec {
         let mut records_path = None;
         let mut content_path = None;
         let mut ocr_queue_path = None;
+        let mut ocr_recognition_cache_path = None;
         let mut volume = None;
         let mut batch_size = None;
         for (line_index, line) in lines.enumerate() {
@@ -339,6 +351,9 @@ impl ContentIndexJobSpec {
                 "records_path" => records_path = Some(PathBuf::from(unescape(value)?)),
                 "content_path" => content_path = Some(PathBuf::from(unescape(value)?)),
                 "ocr_queue_path" => ocr_queue_path = Some(PathBuf::from(unescape(value)?)),
+                "ocr_recognition_cache_path" => {
+                    ocr_recognition_cache_path = Some(PathBuf::from(unescape(value)?));
+                }
                 "volume_id" => {
                     volume = Some(VolumeId(value.parse().map_err(|err| {
                         GfmError::Format(format!("invalid content job volume id `{value}`: {err}"))
@@ -365,6 +380,7 @@ impl ContentIndexJobSpec {
             records_path: required_field(records_path, "records_path", path)?,
             content_path: required_field(content_path, "content_path", path)?,
             ocr_queue_path,
+            ocr_recognition_cache_path,
             volume,
             batch_size: required_field(batch_size, "batch_size", path)?,
         })
@@ -443,6 +459,7 @@ impl BackgroundContentIndexer {
             output_dir,
             cancellation,
             None,
+            None,
         )
     }
 
@@ -453,6 +470,7 @@ impl BackgroundContentIndexer {
         output_dir: impl AsRef<Path>,
         cancellation: &Cancellation,
         mut quarantine: Option<&mut ExtractionQuarantine>,
+        ocr_cache: Option<&OcrRecognitionCache>,
     ) -> Result<ContentIndexReport> {
         let output_dir = output_dir.as_ref();
         fs::create_dir_all(output_dir).map_err(|err| gfm_types::GfmError::io(output_dir, err))?;
@@ -497,12 +515,17 @@ impl BackgroundContentIndexer {
             ));
             let mut live = LiveIndex::from_records(records.to_vec());
             let batch = match quarantine.as_deref_mut() {
-                Some(quarantine) => live.index_content_with_quarantine_cancellable(
+                Some(quarantine) => live.index_content_with_quarantine_and_ocr_cache_cancellable(
                     &self.extractor,
                     quarantine,
+                    ocr_cache,
                     cancellation,
                 )?,
-                None => live.index_content_batch_cancellable(&self.extractor, cancellation)?,
+                None => live.index_content_batch_with_ocr_cache_cancellable(
+                    &self.extractor,
+                    ocr_cache,
+                    cancellation,
+                )?,
             };
             report.indexed += batch.indexed;
             report.skipped += batch.skipped;
@@ -577,12 +600,17 @@ impl BackgroundContentIndexer {
         request: QuarantineContentIndexRequest<'_>,
         quarantine: &mut ExtractionQuarantine,
     ) -> Result<ContentIndexReport> {
+        let ocr_cache = read_ocr_recognition_cache_cancellable(
+            request.ocr_recognition_cache_path,
+            request.cancellation,
+        )?;
         let mut report = self.run_incremental_to_segments_with_quarantine(
             request.snapshot,
             request.previous_records,
             request.segment_dir,
             request.cancellation,
             Some(quarantine),
+            ocr_cache.as_ref(),
         )?;
         request.cancellation.check()?;
         let base_postings = read_previous_content_postings_cancellable(
@@ -743,6 +771,25 @@ pub(crate) fn read_previous_content_postings_cancellable(
             path,
             format!("content postings metadata unavailable: {err}"),
         )),
+    }
+}
+
+fn read_ocr_recognition_cache_cancellable(
+    path: Option<&Path>,
+    cancellation: &Cancellation,
+) -> Result<Option<OcrRecognitionCache>> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    cancellation.check()?;
+    match fs::metadata(path) {
+        Ok(metadata) if metadata.is_file() => {
+            cancellation.check()?;
+            OcrRecognitionCache::read_checked(path, || cancellation.check()).map(Some)
+        }
+        Ok(_) => Ok(None),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(gfm_types::GfmError::io(path, err)),
     }
 }
 

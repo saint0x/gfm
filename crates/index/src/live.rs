@@ -5,7 +5,8 @@ use crate::{
 };
 use gfm_content::{
     ocr_candidate_for_extraction, ocr_candidate_for_record, ExtractionFingerprint,
-    ExtractionQuarantine, ExtractionStatus, Extractor, QuarantineDecision,
+    ExtractionQuarantine, ExtractionStatus, Extractor, OcrCandidate, OcrRecognitionCache,
+    QuarantineDecision,
 };
 use gfm_jobs::Cancellation;
 use gfm_search::{
@@ -627,6 +628,15 @@ impl LiveIndex {
         extractor: &Extractor,
         cancellation: &Cancellation,
     ) -> Result<ContentIndexBatchReport> {
+        self.index_content_batch_with_ocr_cache_cancellable(extractor, None, cancellation)
+    }
+
+    pub fn index_content_batch_with_ocr_cache_cancellable(
+        &mut self,
+        extractor: &Extractor,
+        ocr_cache: Option<&OcrRecognitionCache>,
+        cancellation: &Cancellation,
+    ) -> Result<ContentIndexBatchReport> {
         let records: Vec<_> = self.index.records().cloned().collect();
         let mut report = ContentIndexBatchReport::default();
         for record in records {
@@ -636,17 +646,15 @@ impl LiveIndex {
                 continue;
             }
             if let Some(candidate) = ocr_candidate_for_record(&record) {
-                report.skipped += 1;
-                report.ocr_candidates += 1;
-                report.ocr_queue.push(candidate);
+                self.apply_ocr_candidate(record.id, candidate, ocr_cache, &mut report);
                 continue;
             }
             let extraction =
                 extractor.extract_path_report_checked(&record.path, || cancellation.check())?;
             cancellation.check()?;
             if let Some(candidate) = ocr_candidate_for_extraction(&extraction) {
-                report.ocr_candidates += 1;
-                report.ocr_queue.push(candidate);
+                self.apply_ocr_candidate(record.id, candidate, ocr_cache, &mut report);
+                continue;
             }
             if let Some(document) = extraction.document {
                 cancellation.check()?;
@@ -677,6 +685,21 @@ impl LiveIndex {
         quarantine: &mut ExtractionQuarantine,
         cancellation: &Cancellation,
     ) -> Result<ContentIndexBatchReport> {
+        self.index_content_with_quarantine_and_ocr_cache_cancellable(
+            extractor,
+            quarantine,
+            None,
+            cancellation,
+        )
+    }
+
+    pub fn index_content_with_quarantine_and_ocr_cache_cancellable(
+        &mut self,
+        extractor: &Extractor,
+        quarantine: &mut ExtractionQuarantine,
+        ocr_cache: Option<&OcrRecognitionCache>,
+        cancellation: &Cancellation,
+    ) -> Result<ContentIndexBatchReport> {
         let records: Vec<_> = self.index.records().cloned().collect();
         let mut report = ContentIndexBatchReport::default();
         for record in records {
@@ -686,9 +709,7 @@ impl LiveIndex {
                 continue;
             }
             if let Some(candidate) = ocr_candidate_for_record(&record) {
-                report.skipped += 1;
-                report.ocr_candidates += 1;
-                report.ocr_queue.push(candidate);
+                self.apply_ocr_candidate(record.id, candidate, ocr_cache, &mut report);
                 continue;
             }
 
@@ -709,8 +730,8 @@ impl LiveIndex {
             cancellation.check()?;
             let status = extraction.status.clone();
             if let Some(candidate) = ocr_candidate_for_extraction(&extraction) {
-                report.ocr_candidates += 1;
-                report.ocr_queue.push(candidate);
+                self.apply_ocr_candidate(record.id, candidate, ocr_cache, &mut report);
+                continue;
             }
             let decision = quarantine.record_report(&extraction);
             if let Some(document) = extraction.document {
@@ -726,6 +747,23 @@ impl LiveIndex {
             }
         }
         Ok(report)
+    }
+
+    fn apply_ocr_candidate(
+        &mut self,
+        id: FileId,
+        candidate: OcrCandidate,
+        ocr_cache: Option<&OcrRecognitionCache>,
+        report: &mut ContentIndexBatchReport,
+    ) {
+        if let Some(recognition) = ocr_cache.and_then(|cache| cache.get(&candidate)) {
+            self.index.insert_content(id, &recognition.text);
+            report.indexed += 1;
+        } else {
+            report.skipped += 1;
+            report.ocr_candidates += 1;
+            report.ocr_queue.push(candidate);
+        }
     }
 
     pub fn save_content_postings(&self, path: impl AsRef<Path>) -> Result<()> {
