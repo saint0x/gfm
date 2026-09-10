@@ -3687,15 +3687,34 @@ fn run_native_icon(path: PathBuf) -> Result<NativeIconDescriptor> {
     access_report.preflight_volume(WORKER)?;
     eprintln!("{}", access_report.volume_access_tsv(WORKER));
     let volume = access_report.volume();
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let record = access_report.record_checked(WORKER, &cancellation)?;
-        cancellation.check()?;
-        Ok(NativeIconDescriptor::for_record_on_volume(
-            &record,
-            access_report.descriptor().as_ref(),
-        ))
-    })
+    scheduled_platform_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Preview,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            access_report.path.clone(),
+            move |cancellation, runtime| {
+                cancellation.check()?;
+                runtime.resize_checked(3, "native-icon:preflight", || cancellation.check())?;
+                let record = access_report.record_checked(WORKER, &cancellation)?;
+                platform_runtime_phase(&runtime, 1, "native-icon:record", &cancellation)?;
+                let descriptor = NativeIconDescriptor::for_record_on_volume(
+                    &record,
+                    access_report.descriptor().as_ref(),
+                );
+                platform_runtime_phase(&runtime, 2, "native-icon:complete", &cancellation)?;
+                runtime.remember_completion_detail(format!(
+                    "completed:{}",
+                    descriptor.provider.as_str()
+                ))?;
+                platform_runtime_phase(&runtime, 3, "native-icon:reported", &cancellation)?;
+                Ok(descriptor)
+            },
+        )?,
+        WORKER,
+    )
 }
 
 fn run_native_icon_bridge(path: PathBuf) -> Result<NativeIconBridgeContract> {
@@ -3704,18 +3723,37 @@ fn run_native_icon_bridge(path: PathBuf) -> Result<NativeIconBridgeContract> {
     access_report.preflight_volume(WORKER)?;
     eprintln!("{}", access_report.volume_access_tsv(WORKER));
     let volume = access_report.volume();
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let record = access_report.record_checked(WORKER, &cancellation)?;
-        cancellation.check()?;
-        let host = current_host_profile()?;
-        cancellation.check()?;
-        Ok(NativeIconBridgeContract::for_record_on_host_with_volume(
-            &record,
-            &host,
-            access_report.descriptor().as_ref(),
-        ))
-    })
+    scheduled_platform_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Preview,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            access_report.path.clone(),
+            move |cancellation, runtime| {
+                cancellation.check()?;
+                runtime
+                    .resize_checked(3, "native-icon-bridge:preflight", || cancellation.check())?;
+                let record = access_report.record_checked(WORKER, &cancellation)?;
+                platform_runtime_phase(&runtime, 1, "native-icon-bridge:record", &cancellation)?;
+                let host = current_host_profile()?;
+                let contract = NativeIconBridgeContract::for_record_on_host_with_volume(
+                    &record,
+                    &host,
+                    access_report.descriptor().as_ref(),
+                );
+                platform_runtime_phase(&runtime, 2, "native-icon-bridge:complete", &cancellation)?;
+                runtime.remember_completion_detail(format!(
+                    "completed:{}",
+                    contract.decision.as_str()
+                ))?;
+                platform_runtime_phase(&runtime, 3, "native-icon-bridge:reported", &cancellation)?;
+                Ok(contract)
+            },
+        )?,
+        WORKER,
+    )
 }
 
 fn run_icon_preview(

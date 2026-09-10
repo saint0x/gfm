@@ -1804,6 +1804,78 @@ fn reports_native_icon_descriptor_from_binary() {
 }
 
 #[test]
+fn native_icon_routes_persist_runtime_progress_from_binary() {
+    let root = std::env::temp_dir().join(format!("gfm-native-icon-runtime-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let document = root.join("Report.PDF");
+    let catalog = root.join("payloads.gfmjobs");
+    let progress = root.join("progress.gfmprogress");
+    std::fs::write(&document, "pdf").unwrap();
+
+    let icon = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .arg("native-icon")
+        .arg(&document)
+        .output()
+        .unwrap();
+    assert!(
+        icon.status.success(),
+        "{}",
+        String::from_utf8_lossy(&icon.stderr)
+    );
+    let icon_stdout = String::from_utf8(icon.stdout).unwrap();
+    assert_eq!(
+        icon_stdout.trim(),
+        "native-icon\tdocument\tlaunchservices-document-icon\textension:pdf\tdocument:extension:pdf\tbadges="
+    );
+
+    let bridge = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .arg("native-icon-bridge")
+        .arg(&document)
+        .output()
+        .unwrap();
+    assert!(
+        bridge.status.success(),
+        "{}",
+        String::from_utf8_lossy(&bridge.stderr)
+    );
+    let bridge_stdout = String::from_utf8(bridge.stdout).unwrap();
+    assert!(bridge_stdout.starts_with(
+        "native-icon-bridge\tlaunchservices\tbackground-safe\tlaunchservices-document-icon\tdocument:extension:pdf\t"
+    ));
+
+    let catalog_text = std::fs::read_to_string(&catalog).unwrap();
+    assert_platform_payload_catalog_kind(&catalog_text, 1, "preview", "native icon", &document);
+    assert_platform_payload_catalog_kind(
+        &catalog_text,
+        2,
+        "preview",
+        "native icon bridge",
+        &document,
+    );
+
+    let progress_text = std::fs::read_to_string(&progress).unwrap();
+    assert_platform_runtime_progress(
+        &progress_text,
+        1,
+        "native icon",
+        "completed:launchservices-document-icon",
+    );
+    assert_platform_runtime_progress(
+        &progress_text,
+        2,
+        "native icon bridge",
+        "completed:use-native-bridge",
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn native_icon_refuses_unreachable_network_volume_before_record_read_from_binary() {
     let root = std::env::temp_dir().join(format!(
         "gfm-native-icon-unreachable-volume-{}",
@@ -9493,9 +9565,19 @@ fn assert_platform_payload_catalog(
     label: &str,
     payload_path: &std::path::Path,
 ) {
+    assert_platform_payload_catalog_kind(catalog_text, id, "operation", label, payload_path);
+}
+
+fn assert_platform_payload_catalog_kind(
+    catalog_text: &str,
+    id: u64,
+    kind: &str,
+    label: &str,
+    payload_path: &std::path::Path,
+) {
     assert!(
         catalog_text.lines().any(|line| line.starts_with(&format!(
-            "payload\t{id}\toperation\t{label}\t{}\t",
+            "payload\t{id}\t{kind}\t{label}\t{}\t",
             payload_path.display()
         )) && line
             .contains(&format!("\tvisible:{label}:adaptive"))),
