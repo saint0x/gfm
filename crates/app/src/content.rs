@@ -3262,6 +3262,43 @@ mod tests {
     }
 
     #[test]
+    fn ocr_worker_quarantines_repeated_corrupt_pdf_candidate() {
+        let root = unique_temp_dir("gfm-ocr-worker-repeated-corrupt-pdf");
+        let queue = root.join("ocr.gfmocrq");
+        let cache = root.join("ocr.gfmocrcache");
+        let quarantine = root.join("ocr.gfmocrfail");
+        let pdf = root.join("scan.pdf");
+        fs::write(&pdf, b"%PDF-1.4\nnot a loadable pdf\n").unwrap();
+        let fingerprint = ExtractionFingerprint::for_path(&pdf).unwrap();
+        let candidate = OcrCandidate {
+            path: pdf,
+            kind: OcrCandidateKind::ImageOnlyPdf,
+            fingerprint,
+        };
+        OcrCandidateQueue::new([candidate.clone()])
+            .write(&queue)
+            .unwrap();
+
+        let first = run_ocr_worker(queue.clone(), cache.clone(), Some(quarantine.clone())).unwrap();
+        let second =
+            run_ocr_worker(queue.clone(), cache.clone(), Some(quarantine.clone())).unwrap();
+        let third = run_ocr_worker(queue, cache.clone(), Some(quarantine.clone())).unwrap();
+        let failures = OcrFailureQuarantine::read(quarantine).unwrap();
+
+        assert!(first.contains("\tstatus=failed\t"), "{first}");
+        assert!(
+            second.contains(
+                "ocr-worker\tcandidates=1\tcached=0\trecognized=0\tquarantined=1\tempty=0\tmissing=0\tunsupported=0\tfailed=1\tunavailable=0"
+            ),
+            "{second}"
+        );
+        assert!(third.contains("ocr-quarantine\tblocked\t"), "{third}");
+        assert!(failures.has_entry(&candidate));
+        assert!(OcrRecognitionCache::read(cache).unwrap().is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn pdf_raster_status_maps_to_ocr_failure_status() {
         assert_eq!(
             pdf_raster_status_as_vision_status(PdfPageRasterizationStatus::Empty),

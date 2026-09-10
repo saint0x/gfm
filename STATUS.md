@@ -51,7 +51,7 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 31. Complete PDF extraction with sandboxed workers, compressed/encrypted PDF coverage, incremental updates, extractor-version invalidation, and corrupt-file quarantine.
 32. Complete Office legacy binary format strategy, protected/encrypted document handling, sandboxed workers, extractor-version invalidation, and corrupt-package quarantine.
 33. Complete extraction policy for richer archive formats and corrupt-input quarantine.
-34. Complete end-to-end image-only PDF OCR verification, including retry/backoff accounting under PDF page failures and corruption/missing-input quarantine reporting for rendered-page OCR.
+34. Complete image-only PDF OCR production verification with a real text-bearing scanned-PDF fixture recognized through PDFKit-rendered pages and Vision, plus rendered-page missing/unavailable edge-case quarantine.
 35. Complete hardened extraction-worker isolation with production read-deny Seatbelt feasibility, XPC/App Sandbox entitlement minimization, crash telemetry, and sandbox violation diagnostics.
 
 ## Storage Engine
