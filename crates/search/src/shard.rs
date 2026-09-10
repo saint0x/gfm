@@ -591,7 +591,18 @@ impl SearchLookup for VolumeScopedSearchLookup<'_> {
     }
 
     fn fuzzy_terms_bounded(&self, key: &str, limit: usize) -> Result<SearchLookupTerms> {
-        self.lookup.fuzzy_terms_bounded(key, limit)
+        self.lookup
+            .fuzzy_terms_for_volume_bounded(key, self.volume, limit)
+    }
+
+    fn fuzzy_terms_for_volume_bounded(
+        &self,
+        key: &str,
+        _volume: VolumeId,
+        limit: usize,
+    ) -> Result<SearchLookupTerms> {
+        self.lookup
+            .fuzzy_terms_for_volume_bounded(key, self.volume, limit)
     }
 
     fn cache_telemetry(&self) -> SearchLookupTelemetry {

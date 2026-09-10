@@ -206,6 +206,16 @@ pub trait SearchLookup: Sync {
         Err(unbounded_lookup_not_allowed("fuzzy_terms_bounded"))
     }
 
+    fn fuzzy_terms_for_volume_bounded(
+        &self,
+        key: &str,
+        volume: VolumeId,
+        limit: usize,
+    ) -> gfm_types::Result<SearchLookupTerms> {
+        let _ = volume;
+        self.fuzzy_terms_bounded(key, limit)
+    }
+
     fn cache_telemetry(&self) -> SearchLookupTelemetry {
         SearchLookupTelemetry::default()
     }
@@ -294,6 +304,15 @@ impl SearchLookup for EmptySearchLookup {
     fn fuzzy_terms_bounded(
         &self,
         _key: &str,
+        _limit: usize,
+    ) -> gfm_types::Result<SearchLookupTerms> {
+        Ok(SearchLookupTerms::new(Vec::new(), false))
+    }
+
+    fn fuzzy_terms_for_volume_bounded(
+        &self,
+        _key: &str,
+        _volume: VolumeId,
         _limit: usize,
     ) -> gfm_types::Result<SearchLookupTerms> {
         Ok(SearchLookupTerms::new(Vec::new(), false))

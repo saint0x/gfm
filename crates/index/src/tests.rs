@@ -1456,6 +1456,97 @@ fn search_archive_lookup_reads_volume_scoped_prefix_and_substring_ids() {
 }
 
 #[test]
+fn search_archive_lookup_filters_bounded_fuzzy_terms_by_volume() {
+    let prefixes = unique_temp_path("gfm-prefix-volume-fuzzy-lookup", "gfmprefix");
+    let substrings = unique_temp_path("gfm-substring-volume-fuzzy-lookup", "gfmsubstr");
+    let fuzzy = unique_temp_path("gfm-fuzzy-volume-fuzzy-lookup", "gfmfuzzy");
+    write_prefix_postings(
+        &prefixes,
+        &[
+            PrefixPosting {
+                prefix: "alpha".to_string(),
+                ids: vec![FileId::new(VolumeId(1), 10)],
+            },
+            PrefixPosting {
+                prefix: "project".to_string(),
+                ids: vec![FileId::new(VolumeId(2), 20)],
+            },
+        ],
+    )
+    .unwrap();
+    write_substring_postings(&substrings, &[]).unwrap();
+    write_fuzzy_postings(
+        &fuzzy,
+        &[FuzzyPosting {
+            key: "projet".to_string(),
+            terms: vec!["alpha".to_string(), "project".to_string()],
+        }],
+    )
+    .unwrap();
+
+    let lookup = SearchArchiveLookup::open(&prefixes, &substrings, &fuzzy).unwrap();
+    let first = lookup
+        .fuzzy_terms_for_volume_bounded("PROJET", VolumeId(2), 8)
+        .unwrap();
+    let second = lookup
+        .fuzzy_terms_for_volume_bounded("projet", VolumeId(2), 8)
+        .unwrap();
+
+    assert_eq!(first.terms, vec!["project".to_string()]);
+    assert!(!first.truncated);
+    assert_eq!(second.terms, first.terms);
+    assert_eq!(lookup.cache_entry_counts().unwrap().2, 1);
+    assert!(lookup.cache_telemetry().fuzzy_cache_hits >= 1);
+
+    fs::remove_file(prefixes).unwrap();
+    fs::remove_file(substrings).unwrap();
+    fs::remove_file(fuzzy).unwrap();
+}
+
+#[test]
+fn search_archive_lookup_does_not_cache_truncated_volume_fuzzy_terms() {
+    let prefixes = unique_temp_path("gfm-prefix-volume-fuzzy-partial", "gfmprefix");
+    let substrings = unique_temp_path("gfm-substring-volume-fuzzy-partial", "gfmsubstr");
+    let fuzzy = unique_temp_path("gfm-fuzzy-volume-fuzzy-partial", "gfmfuzzy");
+    write_prefix_postings(
+        &prefixes,
+        &[
+            PrefixPosting {
+                prefix: "alpha".to_string(),
+                ids: vec![FileId::new(VolumeId(1), 10)],
+            },
+            PrefixPosting {
+                prefix: "project".to_string(),
+                ids: vec![FileId::new(VolumeId(2), 20)],
+            },
+        ],
+    )
+    .unwrap();
+    write_substring_postings(&substrings, &[]).unwrap();
+    write_fuzzy_postings(
+        &fuzzy,
+        &[FuzzyPosting {
+            key: "projet".to_string(),
+            terms: vec!["alpha".to_string(), "project".to_string()],
+        }],
+    )
+    .unwrap();
+
+    let lookup = SearchArchiveLookup::open(&prefixes, &substrings, &fuzzy).unwrap();
+    let scoped = lookup
+        .fuzzy_terms_for_volume_bounded("projet", VolumeId(2), 1)
+        .unwrap();
+
+    assert!(scoped.truncated);
+    assert!(scoped.terms.is_empty());
+    assert_eq!(lookup.cache_entry_counts().unwrap().2, 0);
+
+    fs::remove_file(prefixes).unwrap();
+    fs::remove_file(substrings).unwrap();
+    fs::remove_file(fuzzy).unwrap();
+}
+
+#[test]
 fn live_index_applies_create_modify_and_remove_events() {
     let root = unique_temp_dir("gfm-live-root");
     let target = root.join("Needle.txt");

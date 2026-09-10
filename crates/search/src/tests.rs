@@ -2150,6 +2150,7 @@ fn sharded_search_volume_scope_uses_volume_specific_sidecar_lookup() {
         volume_prefix_calls: AtomicUsize::new(0),
         global_fuzzy_calls: AtomicUsize::new(0),
         bounded_fuzzy_calls: AtomicUsize::new(0),
+        volume_fuzzy_calls: AtomicUsize::new(0),
     };
 
     let report = index
@@ -2172,6 +2173,7 @@ fn sharded_search_volume_scope_uses_volume_specific_sidecar_lookup() {
     assert_eq!(lookup.volume_prefix_calls.load(Ordering::SeqCst), 1);
     assert_eq!(lookup.global_fuzzy_calls.load(Ordering::SeqCst), 0);
     assert!(lookup.bounded_fuzzy_calls.load(Ordering::SeqCst) > 0);
+    assert!(lookup.volume_fuzzy_calls.load(Ordering::SeqCst) > 0);
     assert_eq!(report.lookup.prefix_lookup_ids, 1);
 }
 
@@ -2185,6 +2187,7 @@ fn sharded_search_empty_volume_scope_does_not_query_sidecars() {
         volume_prefix_calls: AtomicUsize::new(0),
         global_fuzzy_calls: AtomicUsize::new(0),
         bounded_fuzzy_calls: AtomicUsize::new(0),
+        volume_fuzzy_calls: AtomicUsize::new(0),
     };
 
     let report = index
@@ -2249,6 +2252,7 @@ fn single_shard_search_direct_dispatch_keeps_volume_scoped_sidecar_lookup() {
         volume_prefix_calls: AtomicUsize::new(0),
         global_fuzzy_calls: AtomicUsize::new(0),
         bounded_fuzzy_calls: AtomicUsize::new(0),
+        volume_fuzzy_calls: AtomicUsize::new(0),
     };
 
     let report = index
@@ -2269,6 +2273,7 @@ fn single_shard_search_direct_dispatch_keeps_volume_scoped_sidecar_lookup() {
     assert_eq!(lookup.global_prefix_calls.load(Ordering::SeqCst), 0);
     assert_eq!(lookup.volume_prefix_calls.load(Ordering::SeqCst), 1);
     assert!(lookup.bounded_fuzzy_calls.load(Ordering::SeqCst) > 0);
+    assert!(lookup.volume_fuzzy_calls.load(Ordering::SeqCst) > 0);
 }
 
 #[test]
@@ -2888,6 +2893,7 @@ struct TrackingVolumeLookup {
     volume_prefix_calls: AtomicUsize,
     global_fuzzy_calls: AtomicUsize,
     bounded_fuzzy_calls: AtomicUsize,
+    volume_fuzzy_calls: AtomicUsize,
 }
 
 impl SearchLookup for TrackingVolumeLookup {
@@ -2954,6 +2960,17 @@ impl SearchLookup for TrackingVolumeLookup {
         _limit: usize,
     ) -> gfm_types::Result<SearchLookupTerms> {
         self.bounded_fuzzy_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(SearchLookupTerms::new(Vec::new(), false))
+    }
+
+    fn fuzzy_terms_for_volume_bounded(
+        &self,
+        _key: &str,
+        _volume: VolumeId,
+        _limit: usize,
+    ) -> gfm_types::Result<SearchLookupTerms> {
+        self.bounded_fuzzy_calls.fetch_add(1, Ordering::SeqCst);
+        self.volume_fuzzy_calls.fetch_add(1, Ordering::SeqCst);
         Ok(SearchLookupTerms::new(Vec::new(), false))
     }
 }

@@ -1189,6 +1189,53 @@ impl SearchArchiveLookup {
         Ok(SearchLookupIds::new(ids, truncated))
     }
 
+    fn fuzzy_terms_for_volume_bounded_cancellable(
+        &self,
+        key: &str,
+        volume: VolumeId,
+        limit: usize,
+        cancellation: &Cancellation,
+    ) -> Result<SearchLookupTerms> {
+        self.fuzzy_requests.fetch_add(1, Ordering::Relaxed);
+        if limit == 0 {
+            return Ok(SearchLookupTerms::new(Vec::new(), false));
+        }
+        let cache_key = volume_cache_key(&canonical_lookup_key(key), volume);
+        if let Some(mut terms) = self.fuzzy_cache_lock().get(&cache_key) {
+            self.fuzzy_hits.fetch_add(1, Ordering::Relaxed);
+            let truncated = terms.len() > limit;
+            terms.truncate(limit);
+            return Ok(SearchLookupTerms::new(terms, truncated));
+        }
+
+        cancellation.check()?;
+        self.fuzzy_misses.fetch_add(1, Ordering::Relaxed);
+        let (terms, source_truncated) = self
+            .fuzzy
+            .terms_for_limit_checked(key, limit, || cancellation.check())?;
+        let mut scoped = Vec::with_capacity(terms.len());
+        for term in terms {
+            cancellation.check()?;
+            let volume_ids =
+                self.prefixes
+                    .ids_for_volume_limit_checked(&term, volume, 1, || cancellation.check())?;
+            if !volume_ids.0.is_empty() {
+                scoped.push(term);
+                continue;
+            }
+            let global_ids = self
+                .prefixes
+                .ids_for_limit_checked(&term, 1, || cancellation.check())?;
+            if global_ids.0.is_empty() {
+                scoped.push(term);
+            }
+        }
+        if !source_truncated {
+            self.fuzzy_cache_lock().insert(cache_key, scoped.clone());
+        }
+        Ok(SearchLookupTerms::new(scoped, source_truncated))
+    }
+
     fn prefix_cache_lock(&self) -> MutexGuard<'_, LookupCache<Vec<FileId>>> {
         self.prefix_cache
             .lock()
@@ -1382,6 +1429,20 @@ impl SearchLookup for SearchArchiveLookup {
         Ok(SearchLookupTerms::new(terms, truncated))
     }
 
+    fn fuzzy_terms_for_volume_bounded(
+        &self,
+        key: &str,
+        volume: VolumeId,
+        limit: usize,
+    ) -> Result<SearchLookupTerms> {
+        self.fuzzy_terms_for_volume_bounded_cancellable(
+            key,
+            volume,
+            limit,
+            &Cancellation::default(),
+        )
+    }
+
     fn cache_telemetry(&self) -> SearchLookupTelemetry {
         SearchLookupTelemetry {
             prefix_lookup_requests: self.prefix_requests.load(Ordering::Relaxed),
@@ -1400,6 +1461,10 @@ impl SearchLookup for SearchArchiveLookup {
 
 fn volume_cache_key(term: &str, volume: VolumeId) -> String {
     format!("volume={}:{}", volume.0, term)
+}
+
+fn canonical_lookup_key(term: &str) -> String {
+    term.trim().to_ascii_lowercase()
 }
 
 pub fn query_sidecar_imports(
