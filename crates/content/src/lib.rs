@@ -24,7 +24,8 @@ use kind::{
 };
 pub use ocr::{
     ocr_candidate_for_extraction, ocr_candidate_for_record, OcrCandidate, OcrCandidateKind,
-    OcrCandidateQueue, OCR_CANDIDATE_QUEUE_SCHEMA_VERSION, OCR_EXTRACTOR_VERSION,
+    OcrCandidateQueue, OcrRecognition, OcrRecognitionCache, OCR_CANDIDATE_QUEUE_SCHEMA_VERSION,
+    OCR_EXTRACTOR_VERSION, OCR_RECOGNITION_CACHE_SCHEMA_VERSION,
 };
 use ooxml::extract_ooxml_checked;
 use pdf::extract_pdf_checked;
