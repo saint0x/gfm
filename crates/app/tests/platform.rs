@@ -2197,6 +2197,8 @@ fn reports_spotlight_reconciliation_from_binary() {
     std::fs::create_dir_all(&root).unwrap();
     let path = root.join("Primary.md");
     let fixture = root.join("spotlight.tsv");
+    let catalog = root.join("payloads.gfmjobs");
+    let progress = root.join("progress.gfmprogress");
     std::fs::write(&path, "spotlight body").unwrap();
     std::fs::write(
         &fixture,
@@ -2205,6 +2207,8 @@ fn reports_spotlight_reconciliation_from_binary() {
     .unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
         .arg("spotlight-reconcile")
         .arg(&path)
         .arg(&fixture)
@@ -2229,6 +2233,22 @@ fn reports_spotlight_reconciliation_from_binary() {
     assert!(stdout.contains(
         "field\tfinder-comment\tprimary=-\tspotlight=client handoff\tdecision=enrich-from-spotlight"
     ));
+    let catalog_text = std::fs::read_to_string(&catalog).unwrap();
+    assert_platform_payload_catalog_kind(
+        &catalog_text,
+        1,
+        "indexing",
+        "spotlight reconcile",
+        &path,
+    );
+    let progress_text = std::fs::read_to_string(&progress).unwrap();
+    assert_platform_runtime_progress_units(
+        &progress_text,
+        1,
+        "spotlight reconcile",
+        3,
+        "completed:fields:8",
+    );
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -6197,8 +6217,12 @@ fn reports_fileprovider_observer_probe_from_binary() {
         ),
     )
     .unwrap();
+    let catalog = root.join("payloads.gfmjobs");
+    let progress = root.join("progress.gfmprogress");
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
         .arg("fileprovider-observer-probe")
         .arg(&state)
         .arg(&root)
@@ -6225,6 +6249,16 @@ fn reports_fileprovider_observer_probe_from_binary() {
     assert!(stdout.contains("\tprevious=downloaded\tcurrent=evicted\tchanged=true\t"));
     let state_text = std::fs::read_to_string(&state).unwrap();
     assert!(state_text.contains("evicted\t"));
+    let catalog_text = std::fs::read_to_string(&catalog).unwrap();
+    assert_platform_payload_catalog(&catalog_text, 1, "fileprovider observer", &root);
+    let progress_text = std::fs::read_to_string(&progress).unwrap();
+    assert_platform_runtime_progress_units(
+        &progress_text,
+        1,
+        "fileprovider observer",
+        4,
+        "completed:paths:1",
+    );
 
     let _ = std::fs::remove_dir_all(root);
 }

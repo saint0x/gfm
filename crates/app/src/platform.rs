@@ -13,7 +13,7 @@ use crate::{
     runtime::{
         default_job_journal_path, preflight_runtime_job_state,
         run_scheduled_volume_task_cancellable_with_runtime_and_payload_path,
-        run_volume_task_cancellable, runtime_job_id_floor_checked, RuntimeJobHandle,
+        runtime_job_id_floor_checked, RuntimeJobHandle,
     },
 };
 use gfm_fs::record_for_path_checked;
@@ -469,24 +469,54 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             )?;
             println!(
                 "{}",
-                run_volume_task_cancellable(
-                    volume,
-                    Priority::Visible,
+                scheduled_platform_result(
+                    run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+                        Priority::Visible,
+                        JobPayloadKind::Preview,
+                        "preview cache fileprovider observer cache",
+                        current_host_job_scheduling_pressure(),
+                        || Ok(volume),
+                        cache_root.clone(),
+                        move |cancellation, runtime| {
+                            cancellation.check()?;
+                            runtime.resize_checked(
+                                3,
+                                "preview-observer-cache:preflight",
+                                || cancellation.check(),
+                            )?;
+                            let _cache_access = cache_access_report.access_checked(
+                                "preview cache fileprovider observer cache",
+                                || cancellation.check(),
+                            )?;
+                            platform_runtime_phase(
+                                &runtime,
+                                1,
+                                "preview-observer-cache:evaluate",
+                                &cancellation,
+                            )?;
+                            let report = observed_preview_cache_invalidation_tsv(
+                                &observed,
+                                &cache_root,
+                                kind,
+                                &cancellation,
+                            )?;
+                            platform_runtime_phase(
+                                &runtime,
+                                2,
+                                "preview-observer-cache:complete",
+                                &cancellation,
+                            )?;
+                            runtime.remember_completion_detail("completed:cache".to_string())?;
+                            platform_runtime_phase(
+                                &runtime,
+                                3,
+                                "preview-observer-cache:reported",
+                                &cancellation,
+                            )?;
+                            Ok(report)
+                        },
+                    )?,
                     "preview cache fileprovider observer cache",
-                    move |cancellation| {
-                        cancellation.check()?;
-                        let _cache_access = cache_access_report
-                            .access_checked("preview cache fileprovider observer cache", || {
-                                cancellation.check()
-                            })?;
-                        cancellation.check()?;
-                        observed_preview_cache_invalidation_tsv(
-                            &observed,
-                            &cache_root,
-                            kind,
-                            &cancellation,
-                        )
-                    },
                 )?
             );
         }
@@ -3553,16 +3583,44 @@ fn scheduled_platform_result<T>(
 fn fileprovider_domain_enumeration_report(
     cancel_before_native: bool,
 ) -> Result<FileProviderDomainEnumerationReport> {
-    run_volume_task_cancellable(
-        None,
-        Priority::Visible,
-        "fileprovider domain discovery",
-        move |cancellation| {
-            if cancel_before_native {
-                cancellation.cancel();
-            }
-            FileProviderDomainEnumerationReport::discover_checked(|| cancellation.check())
-        },
+    const WORKER: &str = "fileprovider domain discovery";
+    let payload_path = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    scheduled_platform_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Operation,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(None),
+            payload_path,
+            move |cancellation, runtime| {
+                runtime
+                    .resize_checked(2, "fileprovider-domains:discover", || cancellation.check())?;
+                if cancel_before_native {
+                    cancellation.cancel();
+                }
+                let report =
+                    FileProviderDomainEnumerationReport::discover_checked(|| cancellation.check())?;
+                platform_runtime_phase(
+                    &runtime,
+                    1,
+                    "fileprovider-domains:complete",
+                    &cancellation,
+                )?;
+                runtime.remember_completion_detail(format!(
+                    "completed:domains:{}",
+                    report.domains.len()
+                ))?;
+                platform_runtime_phase(
+                    &runtime,
+                    2,
+                    "fileprovider-domains:reported",
+                    &cancellation,
+                )?;
+                Ok(report)
+            },
+        )?,
+        WORKER,
     )
 }
 
@@ -4526,28 +4584,48 @@ fn run_spotlight_reconcile(
             .as_ref()
             .and_then(PlatformAccessReport::volume)
     });
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _path_access = path_access_report.access_checked(WORKER, || cancellation.check())?;
-        cancellation.check()?;
-        let record = record_for_path_checked(&path, None, false, || cancellation.check())?;
-        cancellation.check()?;
-        let snapshot = match (fixture_path, fixture_access_report) {
-            (Some(fixture_path), Some(fixture_access_report)) => {
-                let _fixture_access = fixture_access_report
-                    .access_checked(FIXTURE_WORKER, || cancellation.check())?;
+    scheduled_platform_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Indexing,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            path.clone(),
+            move |cancellation, runtime| {
                 cancellation.check()?;
-                let text =
-                    read_spotlight_fixture_text_checked(&fixture_path, || cancellation.check())?;
-                cancellation.check()?;
-                parse_spotlight_fixture(&path, &text)?
-            }
-            (None, None) => SpotlightMetadataReader.read_path(&path)?,
-            _ => unreachable!("fixture path and access report are created together"),
-        };
-        cancellation.check()?;
-        Ok(SpotlightReconciliationReport::reconcile(record, snapshot))
-    })
+                runtime
+                    .resize_checked(3, "spotlight-reconcile:preflight", || cancellation.check())?;
+                let _path_access =
+                    path_access_report.access_checked(WORKER, || cancellation.check())?;
+                platform_runtime_phase(&runtime, 1, "spotlight-reconcile:record", &cancellation)?;
+                let record = record_for_path_checked(&path, None, false, || cancellation.check())?;
+                let snapshot = match (fixture_path.as_ref(), fixture_access_report.as_ref()) {
+                    (Some(fixture_path), Some(fixture_access_report)) => {
+                        let _fixture_access = fixture_access_report
+                            .access_checked(FIXTURE_WORKER, || cancellation.check())?;
+                        cancellation.check()?;
+                        let text = read_spotlight_fixture_text_checked(fixture_path, || {
+                            cancellation.check()
+                        })?;
+                        cancellation.check()?;
+                        parse_spotlight_fixture(&path, &text)?
+                    }
+                    (None, None) => SpotlightMetadataReader.read_path(&path)?,
+                    _ => unreachable!("fixture path and access report are created together"),
+                };
+                platform_runtime_phase(&runtime, 2, "spotlight-reconcile:merge", &cancellation)?;
+                let report = SpotlightReconciliationReport::reconcile(record, snapshot);
+                runtime.remember_completion_detail(format!(
+                    "completed:fields:{}",
+                    report.fields.len()
+                ))?;
+                platform_runtime_phase(&runtime, 3, "spotlight-reconcile:reported", &cancellation)?;
+                Ok(report)
+            },
+        )?,
+        WORKER,
+    )
 }
 
 fn read_spotlight_fixture_text_checked(
@@ -4671,15 +4749,44 @@ fn run_preview_cache_fileprovider_observed_invalidation(
     let volume = cache_access_report
         .volume()
         .or_else(|| event_access_reports.first_volume());
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _cache_access =
-            cache_access_report.access_checked("preview cache root", || cancellation.check())?;
-        let observed =
-            evaluate_fileprovider_observed_invalidation(&state_path, event, WORKER, &cancellation)?;
-        cancellation.check()?;
-        observed_preview_cache_invalidation_tsv(&observed, &cache_root, kind, &cancellation)
-    })
+    scheduled_platform_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Preview,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            cache_root.clone(),
+            move |cancellation, runtime| {
+                cancellation.check()?;
+                runtime.resize_checked(3, "preview-observed:preflight", || cancellation.check())?;
+                let _cache_access = cache_access_report
+                    .access_checked("preview cache root", || cancellation.check())?;
+                platform_runtime_phase(&runtime, 1, "preview-observed:evaluate", &cancellation)?;
+                let observed = evaluate_fileprovider_observed_invalidation(
+                    &state_path,
+                    event.clone(),
+                    WORKER,
+                    &cancellation,
+                )?;
+                cancellation.check()?;
+                let report = observed_preview_cache_invalidation_tsv(
+                    &observed,
+                    &cache_root,
+                    kind,
+                    &cancellation,
+                )?;
+                platform_runtime_phase(&runtime, 2, "preview-observed:complete", &cancellation)?;
+                runtime.remember_completion_detail(format!(
+                    "completed:paths:{}",
+                    observed.paths.len()
+                ))?;
+                platform_runtime_phase(&runtime, 3, "preview-observed:reported", &cancellation)?;
+                Ok(report)
+            },
+        )?,
+        WORKER,
+    )
 }
 
 fn run_fileprovider_invalidation_scan(
@@ -5006,7 +5113,7 @@ pub(crate) fn run_fileprovider_observer_probe(
     state_path: &Path,
     root: &Path,
     target: &Path,
-    worker: &str,
+    worker: &'static str,
 ) -> Result<FileProviderObservedInvalidation> {
     let root_worker = format!("{worker} root");
     let target_worker = format!("{worker} target");
@@ -5029,52 +5136,77 @@ pub(crate) fn run_fileprovider_observer_probe(
         .volume()
         .or_else(|| target_access_report.volume())
         .or_else(|| state_access_reports.first_volume());
-    run_volume_task_cancellable(
-        volume,
-        Priority::Visible,
-        "fileprovider observer probe",
-        move |cancellation| {
-            cancellation.check()?;
-            let root_worker = format!("{worker_name} root");
-            let target_worker = format!("{worker_name} target");
-            let state_worker = format!("{worker_name} state");
-            cancellation.check()?;
-            let _root_access =
-                root_access_report.access_checked(&root_worker, || cancellation.check())?;
-            cancellation.check()?;
-            let _target_access =
-                target_access_report.access_checked(&target_worker, || cancellation.check())?;
-            cancellation.check()?;
-            let _state_access =
-                state_access_reports.access_checked(&state_worker, || cancellation.check())?;
-            cancellation.check()?;
-            let previous =
-                if fileprovider_state_file_exists_checked(&state_path, &state_worker, || {
+    scheduled_platform_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Operation,
+            worker,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            root.clone(),
+            move |cancellation, runtime| {
+                cancellation.check()?;
+                runtime.resize_checked(4, "fileprovider-observer:preflight", || {
                     cancellation.check()
-                })? {
-                    Some(FileProviderStateSnapshot::read_checked(
-                        &state_path,
-                        || cancellation.check(),
-                    )?)
-                } else {
-                    None
-                };
-            cancellation.check()?;
-            let previous_for_publish = previous.clone();
-            let mut observer =
-                FileProviderStateObserver::watch(&[WatchRoot::tree(&root)], previous)?;
-            cancellation.check()?;
-            write_fileprovider_observer_probe_target_checked(&target, || cancellation.check())?;
-            cancellation.check()?;
-            let observed = drain_fileprovider_observer_probe(&mut observer, &cancellation)?;
-            cancellation.check()?;
-            if fileprovider_snapshot_changed(previous_for_publish.as_ref(), observer.snapshot()) {
-                observer
-                    .snapshot()
-                    .write_checked(&state_path, || cancellation.check())?;
-            }
-            Ok(observed)
-        },
+                })?;
+                let root_worker = format!("{worker_name} root");
+                let target_worker = format!("{worker_name} target");
+                let state_worker = format!("{worker_name} state");
+                cancellation.check()?;
+                let _root_access =
+                    root_access_report.access_checked(&root_worker, || cancellation.check())?;
+                cancellation.check()?;
+                let _target_access =
+                    target_access_report.access_checked(&target_worker, || cancellation.check())?;
+                cancellation.check()?;
+                let _state_access =
+                    state_access_reports.access_checked(&state_worker, || cancellation.check())?;
+                platform_runtime_phase(&runtime, 1, "fileprovider-observer:state", &cancellation)?;
+                let previous =
+                    if fileprovider_state_file_exists_checked(&state_path, &state_worker, || {
+                        cancellation.check()
+                    })? {
+                        Some(FileProviderStateSnapshot::read_checked(
+                            &state_path,
+                            || cancellation.check(),
+                        )?)
+                    } else {
+                        None
+                    };
+                cancellation.check()?;
+                let previous_for_publish = previous.clone();
+                let mut observer =
+                    FileProviderStateObserver::watch(&[WatchRoot::tree(&root)], previous)?;
+                platform_runtime_phase(&runtime, 2, "fileprovider-observer:probe", &cancellation)?;
+                write_fileprovider_observer_probe_target_checked(&target, || cancellation.check())?;
+                cancellation.check()?;
+                let observed = drain_fileprovider_observer_probe(&mut observer, &cancellation)?;
+                platform_runtime_phase(
+                    &runtime,
+                    3,
+                    "fileprovider-observer:persist",
+                    &cancellation,
+                )?;
+                if fileprovider_snapshot_changed(previous_for_publish.as_ref(), observer.snapshot())
+                {
+                    observer
+                        .snapshot()
+                        .write_checked(&state_path, || cancellation.check())?;
+                }
+                runtime.remember_completion_detail(format!(
+                    "completed:paths:{}",
+                    observed.paths.len()
+                ))?;
+                platform_runtime_phase(
+                    &runtime,
+                    4,
+                    "fileprovider-observer:reported",
+                    &cancellation,
+                )?;
+                Ok(observed)
+            },
+        )?,
+        worker,
     )
 }
 
