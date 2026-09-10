@@ -1,6 +1,7 @@
 use gfm_types::SearchHit;
 use std::cmp::Reverse;
 
+#[cfg(test)]
 pub(crate) fn sort_hits(hits: &mut [SearchHit]) {
     hits.sort_by_cached_key(|hit| {
         (
@@ -12,10 +13,44 @@ pub(crate) fn sort_hits(hits: &mut [SearchHit]) {
     });
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct SearchHitSortKey {
+    score: Reverse<i64>,
+    name: String,
+    path: String,
+    id: gfm_types::FileId,
+}
+
+impl SearchHitSortKey {
+    fn from_hit(hit: &SearchHit) -> Self {
+        Self {
+            score: Reverse(hit.score),
+            name: hit.record.name.to_lowercase(),
+            path: hit.record.path.to_string_lossy().into_owned(),
+            id: hit.record.id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct KeyedSearchHit {
+    key: SearchHitSortKey,
+    hit: SearchHit,
+}
+
+impl KeyedSearchHit {
+    fn new(hit: SearchHit) -> Self {
+        Self {
+            key: SearchHitSortKey::from_hit(&hit),
+            hit,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct BoundedHitMerge {
     limit: usize,
-    hits: Vec<SearchHit>,
+    hits: Vec<KeyedSearchHit>,
     #[cfg(test)]
     max_retained_len: usize,
 }
@@ -34,7 +69,7 @@ impl BoundedHitMerge {
         if self.limit == 0 {
             return;
         }
-        self.hits.push(hit);
+        self.hits.push(KeyedSearchHit::new(hit));
         self.record_retained_len();
         if self.hits.len() > self.limit.saturating_mul(2) {
             self.trim();
@@ -52,11 +87,11 @@ impl BoundedHitMerge {
 
     pub(crate) fn into_sorted_hits(mut self) -> Vec<SearchHit> {
         self.trim();
-        self.hits
+        self.hits.into_iter().map(|keyed| keyed.hit).collect()
     }
 
     fn trim(&mut self) {
-        sort_hits(&mut self.hits);
+        self.hits.sort_by(|left, right| left.key.cmp(&right.key));
         self.hits.truncate(self.limit);
         self.record_retained_len();
     }
