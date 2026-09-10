@@ -1624,32 +1624,32 @@ fn query_sidecar_imports_with_content_postings_scoped(
     let mut prefix_candidates = prefix_terms.clone();
     let mut fuzzy_candidate_terms = BTreeSet::new();
     cancellation.check()?;
-    let fuzzy = sources
-        .lookup
-        .fuzzy_postings_bounded_cancellable(
-            fuzzy_keys,
-            budget.max_fuzzy_terms_per_key,
-            cancellation,
-        )?
-        .into_iter()
-        .map(|posting| {
-            let terms = posting
-                .terms
-                .into_iter()
-                .filter(|term| {
-                    fuzzy_candidate_terms.len() < budget.max_fuzzy_candidates_per_term
-                        && fuzzy_candidate_terms.insert(term.clone())
-                })
-                .collect::<Vec<_>>();
-            for term in &terms {
-                prefix_candidates.push(term.clone());
-            }
-            SearchFuzzyPosting {
-                key: posting.key,
-                terms,
-            }
-        })
-        .collect::<Vec<_>>();
+    let fuzzy = scoped_fuzzy_postings(
+        sources.lookup,
+        fuzzy_keys,
+        budget.max_fuzzy_terms_per_key,
+        scope,
+        cancellation,
+    )?
+    .into_iter()
+    .map(|posting| {
+        let terms = posting
+            .terms
+            .into_iter()
+            .filter(|term| {
+                fuzzy_candidate_terms.len() < budget.max_fuzzy_candidates_per_term
+                    && fuzzy_candidate_terms.insert(term.clone())
+            })
+            .collect::<Vec<_>>();
+        for term in &terms {
+            prefix_candidates.push(term.clone());
+        }
+        SearchFuzzyPosting {
+            key: posting.key,
+            terms,
+        }
+    })
+    .collect::<Vec<_>>();
 
     cancellation.check()?;
     let prefixes = scoped_prefix_postings(
@@ -1730,6 +1730,60 @@ fn scope_content_postings(
             (!posting.ids.is_empty() || !posting.positions.is_empty()).then_some(posting)
         })
         .collect()
+}
+
+fn scoped_fuzzy_postings(
+    lookup: &SearchArchiveLookup,
+    keys: Vec<String>,
+    limit: usize,
+    scope: &SearchVolumeScope,
+    cancellation: &Cancellation,
+) -> Result<Vec<SearchFuzzyPosting>> {
+    match scope {
+        SearchVolumeScope::All => {
+            lookup.fuzzy_postings_bounded_cancellable(keys, limit, cancellation)
+        }
+        SearchVolumeScope::Only(volumes) if volumes.is_empty() || limit == 0 => Ok(Vec::new()),
+        SearchVolumeScope::Only(volumes) => {
+            let mut selected = BTreeSet::new();
+            for key in keys {
+                cancellation.check()?;
+                if !key.is_empty() {
+                    selected.insert(key);
+                }
+            }
+            let mut postings = Vec::with_capacity(selected.len());
+            for key in selected {
+                cancellation.check()?;
+                let mut terms = BTreeSet::new();
+                let mut truncated = false;
+                for volume in volumes {
+                    cancellation.check()?;
+                    let remaining = limit.saturating_sub(terms.len());
+                    if remaining == 0 {
+                        truncated = true;
+                        break;
+                    }
+                    let scoped = lookup.fuzzy_terms_for_volume_bounded_cancellable(
+                        &key,
+                        *volume,
+                        remaining,
+                        cancellation,
+                    )?;
+                    truncated |= scoped.truncated;
+                    terms.extend(scoped.terms);
+                }
+                postings.push(SearchFuzzyPosting {
+                    key,
+                    terms: terms.into_iter().collect(),
+                });
+                if truncated {
+                    cancellation.check()?;
+                }
+            }
+            Ok(postings)
+        }
+    }
 }
 
 fn scoped_prefix_postings(
@@ -1937,7 +1991,7 @@ mod tests {
         fuzzy_postings_from_records, metadata_postings_from_records, prefix_postings_from_records,
         substring_postings_from_records, write_content_postings, write_fuzzy_postings,
         write_metadata_postings, write_prefix_postings, write_record_columns, write_records,
-        write_substring_postings,
+        write_substring_postings, FuzzyPosting, PrefixPosting,
     };
     use gfm_types::{ContentPositions, FileKind, GfmError, VolumeId};
     use std::fs;
@@ -2369,6 +2423,88 @@ mod tests {
         assert_eq!(cached.search.hits.len(), 1);
         assert_eq!(cached.result_cache_hits, 1);
         assert_eq!(cached.result_cache_misses, 0);
+    }
+
+    #[test]
+    fn scoped_sidecar_import_filters_fuzzy_terms_by_admitted_volume() {
+        let root = temp_dir("gfm-sidecar-scoped-fuzzy-import");
+        let metadata_path = root.join("metadata.gfmmeta");
+        let prefixes_path = root.join("prefixes.gfmprefix");
+        let substrings_path = root.join("substrings.gfmsubstr");
+        let fuzzy_path = root.join("fuzzy.gfmfuzzy");
+        let content_path = root.join("content.gfmcontent");
+        let admitted = FileId::new(VolumeId(8), 20);
+        let excluded = FileId::new(VolumeId(7), 10);
+
+        write_metadata_postings(&metadata_path, &[]).unwrap();
+        write_prefix_postings(
+            &prefixes_path,
+            &[
+                PrefixPosting {
+                    prefix: "alpha".to_string(),
+                    ids: vec![excluded],
+                },
+                PrefixPosting {
+                    prefix: "project".to_string(),
+                    ids: vec![admitted],
+                },
+            ],
+        )
+        .unwrap();
+        write_substring_postings(&substrings_path, &[]).unwrap();
+        write_fuzzy_postings(
+            &fuzzy_path,
+            &[FuzzyPosting {
+                key: "projet".to_string(),
+                terms: vec!["alpha".to_string(), "project".to_string()],
+            }],
+        )
+        .unwrap();
+        write_content_postings(&content_path, &[]).unwrap();
+
+        let metadata = MmapMetadataArchive::open(&metadata_path).unwrap();
+        let lookup =
+            SearchArchiveLookup::open(&prefixes_path, &substrings_path, &fuzzy_path).unwrap();
+        let parsed = SearchQuery::parse("projet");
+        assert!(parsed
+            .fuzzy_candidate_keys()
+            .contains(&"projet".to_string()));
+
+        let import = query_sidecar_imports_with_content_postings_scoped(
+            SidecarImportSources {
+                metadata: &metadata,
+                lookup: &lookup,
+            },
+            &parsed,
+            SidecarContentImport {
+                terms: Vec::new(),
+                postings: Vec::new(),
+            },
+            SearchLookupBudget::default(),
+            &SearchVolumeScope::only([VolumeId(8)]),
+            &Cancellation::default(),
+        )
+        .unwrap();
+
+        let projet = import
+            .fuzzy
+            .iter()
+            .find(|posting| posting.key == "projet")
+            .expect("scoped fuzzy import should include the matching delete key");
+        assert_eq!(projet.terms, vec!["project".to_string()]);
+        assert!(import
+            .fuzzy
+            .iter()
+            .all(|posting| !posting.terms.contains(&"alpha".to_string())));
+        let prefix_ids = import
+            .prefixes
+            .iter()
+            .flat_map(|posting| posting.ids.iter().copied())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(prefix_ids, BTreeSet::from([admitted]));
+        assert_eq!(import.report.candidate_ids, 1);
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
