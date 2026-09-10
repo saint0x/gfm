@@ -2,9 +2,11 @@ use crate::access::{
     preflight_access_scope_checked_with_volume_report, preflight_volume_access_scope_with_report,
     worker_admission_blocked_by_volume, worker_admission_with_volume_report, ScopedAccessGuard,
 };
+use crate::platform::current_host_job_scheduling_pressure;
 use crate::runtime::{
-    run_scheduled_volume_task_cancellable_with_volume_and_payload_path,
-    run_volume_task_cancellable, run_volume_task_cancellable_with_payload_path,
+    run_scheduled_volume_task_cancellable_with_runtime_and_payload_path,
+    run_scheduled_volume_task_cancellable_with_volume_and_payload_path, RuntimeJobHandle,
+    ScheduledTaskOutcome,
 };
 use crate::{
     config_store, config_write_probe_path_checked, existing_read_probe_path,
@@ -17,7 +19,7 @@ use gfm_diagnostics::{
     PersistentIndexRecoverySpec, RebuildSpec, StorageInspection,
 };
 use gfm_index::{PersistentIndexPlan, PersistentIndexRecovery};
-use gfm_jobs::{Priority, SchedulingAction};
+use gfm_jobs::{Cancellation, JobPayloadKind, JobProgressState, Priority, SchedulingAction};
 use gfm_mac::{AccessIntent, VolumeDiscoveryReport};
 use gfm_types::{GfmError, Result, VolumeId};
 use std::fs;
@@ -42,16 +44,36 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let access_reports = rebuild_access_reports(&spec)?;
             access_reports.preflight_volumes()?;
             let volume = access_reports.first_volume();
-            let report = run_volume_task_cancellable_with_payload_path(
+            let report = run_visible_diagnostics_job(
                 volume,
-                Priority::Visible,
+                JobPayloadKind::Indexing,
                 "index rebuild",
                 spec.records_path.clone(),
-                move |cancellation| {
+                move |cancellation, runtime| {
+                    let spec = spec.clone();
                     cancellation.check()?;
+                    runtime
+                        .resize_checked(3, "index-rebuild:preflight", || cancellation.check())?;
                     let _access = access_reports.access_checked(|| cancellation.check())?;
-                    cancellation.check()?;
-                    rebuild_index_cancellable(&spec, &cancellation)
+                    diagnostics_runtime_phase(&runtime, 1, "index-rebuild:scan", &cancellation)?;
+                    let report = rebuild_index_cancellable(&spec, &cancellation)?;
+                    diagnostics_runtime_phase(
+                        &runtime,
+                        2,
+                        "index-rebuild:complete",
+                        &cancellation,
+                    )?;
+                    runtime.remember_completion_detail(format!(
+                        "completed:records:{} inaccessible:{} content:{}",
+                        report.records, report.inaccessible, report.content_indexed
+                    ))?;
+                    diagnostics_runtime_phase(
+                        &runtime,
+                        3,
+                        "index-rebuild:reported",
+                        &cancellation,
+                    )?;
+                    Ok(report)
                 },
             )?;
             print_index_rebuild_report(report);
@@ -163,16 +185,44 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             let access_reports = recovery_access_reports(&spec)?;
             access_reports.preflight_volumes()?;
             let volume = access_reports.first_volume();
-            let report = run_volume_task_cancellable_with_payload_path(
+            let report = run_visible_diagnostics_job(
                 volume,
-                Priority::Visible,
+                JobPayloadKind::Repair,
                 "persistent index repair",
                 spec.state_path.clone(),
-                move |cancellation| {
+                move |cancellation, runtime| {
+                    let spec = spec.clone();
                     cancellation.check()?;
+                    runtime.resize_checked(3, "persistent-index-repair:preflight", || {
+                        cancellation.check()
+                    })?;
                     let _access = access_reports.access_checked(|| cancellation.check())?;
-                    cancellation.check()?;
-                    recover_index_cancellable(&spec, &cancellation)
+                    diagnostics_runtime_phase(
+                        &runtime,
+                        1,
+                        "persistent-index-repair:recover",
+                        &cancellation,
+                    )?;
+                    let report = recover_index_cancellable(&spec, &cancellation)?;
+                    diagnostics_runtime_phase(
+                        &runtime,
+                        2,
+                        "persistent-index-repair:complete",
+                        &cancellation,
+                    )?;
+                    runtime.remember_completion_detail(format!(
+                        "completed:records:{} state:{} quarantined:{}",
+                        report.rebuilt_records,
+                        report.rebuilt_state,
+                        report.quarantined_records_path.is_some()
+                    ))?;
+                    diagnostics_runtime_phase(
+                        &runtime,
+                        3,
+                        "persistent-index-repair:reported",
+                        &cancellation,
+                    )?;
+                    Ok(report)
                 },
             )?;
             print_persistent_index_recovery_report(report);
@@ -336,13 +386,42 @@ fn run_recovery_plan(spec: PersistentIndexRecoverySpec) -> Result<PersistentInde
         DiagnosticsAccessReport::new_checked(spec.root.clone(), AccessIntent::Index, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _access = access_report
-            .access_checked("persistent index repair root", || cancellation.check())?;
-        cancellation.check()?;
-        plan_index_recovery_cancellable(&spec, &cancellation)
-    })
+    run_visible_diagnostics_job(
+        volume,
+        JobPayloadKind::Repair,
+        WORKER,
+        spec.state_path.clone(),
+        move |cancellation, runtime| {
+            let spec = spec.clone();
+            cancellation.check()?;
+            runtime.resize_checked(3, "persistent-index-repair-plan:preflight", || {
+                cancellation.check()
+            })?;
+            let _access = access_report
+                .access_checked("persistent index repair root", || cancellation.check())?;
+            diagnostics_runtime_phase(
+                &runtime,
+                1,
+                "persistent-index-repair-plan:plan",
+                &cancellation,
+            )?;
+            let plan = plan_index_recovery_cancellable(&spec, &cancellation)?;
+            diagnostics_runtime_phase(
+                &runtime,
+                2,
+                "persistent-index-repair-plan:complete",
+                &cancellation,
+            )?;
+            runtime.remember_completion_detail("completed:persistent-index-plan".to_string())?;
+            diagnostics_runtime_phase(
+                &runtime,
+                3,
+                "persistent-index-repair-plan:reported",
+                &cancellation,
+            )?;
+            Ok(plan)
+        },
+    )
 }
 
 fn recovery_access_reports(spec: &PersistentIndexRecoverySpec) -> Result<DiagnosticsAccessReports> {
@@ -541,17 +620,46 @@ fn run_trace_export(output: PathBuf) -> Result<String> {
         DiagnosticsAccessReport::new_checked(output_probe, AccessIntent::Write, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _access = access_report.access_checked(WORKER, || cancellation.check())?;
-        cancellation.check()?;
-        let report = export_operator_trace_checked(output, || cancellation.check())?;
-        Ok(format!(
-            "{}\t{}",
-            report.path.display(),
-            report.bytes_written
-        ))
-    })
+    run_visible_diagnostics_job(
+        volume,
+        JobPayloadKind::Operation,
+        WORKER,
+        output.clone(),
+        move |cancellation, runtime| {
+            let output = output.clone();
+            cancellation.check()?;
+            runtime.resize_checked(3, "diagnostics-trace-export:preflight", || {
+                cancellation.check()
+            })?;
+            let _access = access_report.access_checked(WORKER, || cancellation.check())?;
+            diagnostics_runtime_phase(
+                &runtime,
+                1,
+                "diagnostics-trace-export:write",
+                &cancellation,
+            )?;
+            let report = export_operator_trace_checked(output, || cancellation.check())?;
+            diagnostics_runtime_phase(
+                &runtime,
+                2,
+                "diagnostics-trace-export:complete",
+                &cancellation,
+            )?;
+            runtime
+                .remember_completion_detail(format!("completed:bytes:{}", report.bytes_written))?;
+            diagnostics_runtime_phase(
+                &runtime,
+                3,
+                "diagnostics-trace-export:reported",
+                &cancellation,
+            )?;
+            Ok(format!(
+                "{}\t{}",
+                report.path.display(),
+                report.bytes_written
+            ))
+        },
+    )
 }
 
 fn run_parity_baseline(
@@ -575,17 +683,45 @@ fn run_parity_baseline(
     ]);
     access_reports.preflight_volumes()?;
     let volume = access_reports.first_volume();
-    run_volume_task_cancellable(
+    run_visible_diagnostics_job(
         volume,
-        Priority::Visible,
+        JobPayloadKind::Operation,
         "diagnostics parity baseline",
-        move |cancellation| {
+        store.path().to_path_buf(),
+        move |cancellation, runtime| {
+            let store = store.clone();
+            let baseline = baseline.clone();
+            let macos_build = macos_build.clone();
             cancellation.check()?;
+            runtime.resize_checked(3, "diagnostics-parity-baseline:preflight", || {
+                cancellation.check()
+            })?;
             let _access = access_reports.access_checked(|| cancellation.check())?;
-            cancellation.check()?;
+            diagnostics_runtime_phase(
+                &runtime,
+                1,
+                "diagnostics-parity-baseline:select",
+                &cancellation,
+            )?;
             let report = select_parity_baseline_checked(&store, baseline, macos_build, || {
                 cancellation.check()
             })?;
+            diagnostics_runtime_phase(
+                &runtime,
+                2,
+                "diagnostics-parity-baseline:complete",
+                &cancellation,
+            )?;
+            runtime.remember_completion_detail(format!(
+                "completed:macos-build:{}",
+                report.macos_build
+            ))?;
+            diagnostics_runtime_phase(
+                &runtime,
+                3,
+                "diagnostics-parity-baseline:reported",
+                &cancellation,
+            )?;
             Ok(format!(
                 "{}\t{}\t{}",
                 escape_diagnostics_tsv_path(&report.config_path),
@@ -602,30 +738,87 @@ fn run_storage_inspect(storage: PathBuf) -> Result<String> {
         DiagnosticsAccessReport::new_checked(storage.clone(), AccessIntent::Read, || Ok(()))?;
     access_report.preflight_volume(WORKER)?;
     let volume = access_report.volume();
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _access = access_report.access_checked(WORKER, || cancellation.check())?;
-        cancellation.check()?;
-        match inspect_storage_checked(storage, || cancellation.check())? {
-            StorageInspection::Records(report) => Ok(format!(
-                "records\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-                report.path.display(),
-                report.bytes,
-                report.records,
-                report.files,
-                report.directories,
-                report.symlinks,
-                report.hidden,
-                report.tagged
-            )),
-            StorageInspection::Content(report) => Ok(format!(
-                "content\t{}\t{}\t{}",
-                report.path.display(),
-                report.bytes,
-                report.terms
-            )),
-        }
+    run_visible_diagnostics_job(
+        volume,
+        JobPayloadKind::Operation,
+        WORKER,
+        storage.clone(),
+        move |cancellation, runtime| {
+            let storage = storage.clone();
+            cancellation.check()?;
+            runtime.resize_checked(3, "diagnostics-storage:preflight", || cancellation.check())?;
+            let _access = access_report.access_checked(WORKER, || cancellation.check())?;
+            diagnostics_runtime_phase(&runtime, 1, "diagnostics-storage:inspect", &cancellation)?;
+            let report = inspect_storage_checked(storage, || cancellation.check())?;
+            diagnostics_runtime_phase(&runtime, 2, "diagnostics-storage:complete", &cancellation)?;
+            let line = match report {
+                StorageInspection::Records(report) => Ok(format!(
+                    "records\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                    report.path.display(),
+                    report.bytes,
+                    report.records,
+                    report.files,
+                    report.directories,
+                    report.symlinks,
+                    report.hidden,
+                    report.tagged
+                )),
+                StorageInspection::Content(report) => Ok(format!(
+                    "content\t{}\t{}\t{}",
+                    report.path.display(),
+                    report.bytes,
+                    report.terms
+                )),
+            }?;
+            runtime.remember_completion_detail("completed:storage-inspect".to_string())?;
+            diagnostics_runtime_phase(&runtime, 3, "diagnostics-storage:reported", &cancellation)?;
+            Ok(line)
+        },
+    )
+}
+
+fn run_visible_diagnostics_job<T>(
+    volume: Option<VolumeId>,
+    payload_kind: JobPayloadKind,
+    label: &'static str,
+    payload_path: PathBuf,
+    work: impl Fn(Cancellation, RuntimeJobHandle) -> Result<T> + Send + Sync + 'static,
+) -> Result<T>
+where
+    T: Send + 'static,
+{
+    visible_scheduled_diagnostics_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            payload_kind,
+            label,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            payload_path,
+            work,
+        )?,
+        label,
+    )
+}
+
+fn diagnostics_runtime_phase(
+    runtime: &RuntimeJobHandle,
+    completed_units: u64,
+    detail: &'static str,
+    cancellation: &Cancellation,
+) -> Result<()> {
+    runtime.progress_checked(JobProgressState::Running, completed_units, detail, || {
+        cancellation.check()
     })
+}
+
+fn visible_scheduled_diagnostics_result<T>(
+    outcome: ScheduledTaskOutcome<T>,
+    label: &'static str,
+) -> Result<T> {
+    outcome
+        .result
+        .ok_or_else(|| GfmError::Format(format!("{label} deferred before visible run")))
 }
 
 fn write_probe_path(path: &Path) -> Result<&Path> {

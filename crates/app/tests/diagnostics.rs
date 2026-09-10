@@ -96,6 +96,150 @@ fn diagnostics_rebuilds_and_inspects_indexes_from_binary() {
 }
 
 #[test]
+fn diagnostics_visible_jobs_persist_runtime_progress_from_binary() {
+    let root = unique_temp_dir("gfm-cli-diagnostics-runtime");
+    let records = root.join("records.gfmidx");
+    let content = root.join("content.gfmcontent");
+    let state = root.join("state.gfmstate");
+    let quarantine = root.join("quarantine");
+    let trace = root.join("trace.json");
+    let config = root.join("config.toml");
+    let baseline = root.join("baselines");
+    let catalog = unique_temp_path("gfm-cli-diagnostics-runtime", "gfmjobs");
+    let progress = unique_temp_path("gfm-cli-diagnostics-runtime", "gfmprogress");
+    fs::write(root.join("RuntimeNeedle.md"), "diagnostic runtime needle").unwrap();
+    write_parity_baseline_manifest(&baseline, "25A354");
+
+    let rebuild = diagnostics_command(&catalog, &progress)
+        .args([
+            "diagnostics-index-rebuild",
+            root.to_str().unwrap(),
+            records.to_str().unwrap(),
+            content.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        rebuild.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rebuild.stderr)
+    );
+
+    let storage = diagnostics_command(&catalog, &progress)
+        .args(["diagnostics-storage-inspect", records.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        storage.status.success(),
+        "{}",
+        String::from_utf8_lossy(&storage.stderr)
+    );
+
+    let trace_output = diagnostics_command(&catalog, &progress)
+        .args(["diagnostics-trace-export", trace.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        trace_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&trace_output.stderr)
+    );
+
+    let recovery_plan = diagnostics_command(&catalog, &progress)
+        .args([
+            "diagnostics-index-recovery-plan",
+            root.to_str().unwrap(),
+            records.to_str().unwrap(),
+            state.to_str().unwrap(),
+            quarantine.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        recovery_plan.status.success(),
+        "{}",
+        String::from_utf8_lossy(&recovery_plan.stderr)
+    );
+
+    let parity = diagnostics_command(&catalog, &progress)
+        .args([
+            "diagnostics-parity-baseline",
+            config.to_str().unwrap(),
+            baseline.to_str().unwrap(),
+            "25A354",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        parity.status.success(),
+        "{}",
+        String::from_utf8_lossy(&parity.stderr)
+    );
+
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert_runtime_payload(&catalog_text, 1, "indexing", "index rebuild", &records);
+    assert_runtime_payload(
+        &catalog_text,
+        2,
+        "operation",
+        "diagnostics storage",
+        &records,
+    );
+    assert_runtime_payload(
+        &catalog_text,
+        3,
+        "operation",
+        "diagnostics trace export",
+        &trace,
+    );
+    assert_runtime_payload(
+        &catalog_text,
+        4,
+        "repair",
+        "persistent index repair plan",
+        &state,
+    );
+    assert_runtime_payload(
+        &catalog_text,
+        5,
+        "operation",
+        "diagnostics parity baseline",
+        &config,
+    );
+
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert_runtime_progress(&progress_text, 1, "index rebuild", "completed:records:");
+    assert_runtime_progress(
+        &progress_text,
+        2,
+        "diagnostics storage",
+        "completed:storage-inspect",
+    );
+    assert_runtime_progress(
+        &progress_text,
+        3,
+        "diagnostics trace export",
+        "completed:bytes:",
+    );
+    assert_runtime_progress(
+        &progress_text,
+        4,
+        "persistent index repair plan",
+        "completed:persistent-index-plan",
+    );
+    assert_runtime_progress(
+        &progress_text,
+        5,
+        "diagnostics parity baseline",
+        "completed:macos-build:25A354",
+    );
+
+    fs::remove_file(catalog).unwrap();
+    fs::remove_file(progress).unwrap();
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn diagnostics_rebuild_refuses_unreachable_volume_before_writing_indexes_from_binary() {
     let root = unique_temp_dir("gfm-cli-diagnostics-rebuild-unreachable");
     fs::write(root.join(".gfm-volume-kind"), "network-unreachable\n").unwrap();
@@ -1186,6 +1330,48 @@ fn assert_worker_admitted(stderr: &str, worker: &str, path: &Path) {
                 && line.split('\t').any(|field| field == expected_path)
         }),
         "{stderr}"
+    );
+}
+
+fn diagnostics_command(catalog: &Path, progress: &Path) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_gfm"));
+    command
+        .env("GFM_JOB_PAYLOAD_CATALOG", catalog)
+        .env("GFM_JOB_PROGRESS_STORE", progress);
+    command
+}
+
+fn assert_runtime_payload(
+    catalog_text: &str,
+    id: u64,
+    kind: &str,
+    label: &str,
+    payload_path: &Path,
+) {
+    assert!(
+        catalog_text.lines().any(|line| {
+            let prefix = format!(
+                "payload\t{id}\t{kind}\t{label}\t{}\t",
+                payload_path.display()
+            );
+            line.starts_with(&prefix)
+                && line
+                    .strip_prefix(&prefix)
+                    .and_then(|fields| fields.split('\t').next())
+                    .is_some_and(|volume| !volume.is_empty() && volume != "-")
+                && line.contains(&format!("\tvisible:{label}:adaptive"))
+        }),
+        "{catalog_text}"
+    );
+}
+
+fn assert_runtime_progress(progress_text: &str, id: u64, label: &str, detail: &str) {
+    assert!(
+        progress_text.lines().any(|line| line
+            .starts_with(&format!("progress\t{id}\tvisible\tvisible\t{label}\t"))
+            && line.contains("\tcompleted\t3\t3\t")
+            && line.contains(detail)),
+        "{progress_text}"
     );
 }
 
