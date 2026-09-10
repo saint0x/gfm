@@ -1,4 +1,4 @@
-use crate::Priority;
+use crate::{JobClass, JobFairnessPolicy, Priority};
 use gfm_types::VolumeId;
 use std::collections::HashMap;
 
@@ -71,6 +71,7 @@ pub struct SchedulingDecision {
     pub action: SchedulingAction,
     pub worker_threads: usize,
     pub volume_policy: VolumeConcurrencyPolicy,
+    pub fairness_policy: JobFairnessPolicy,
 }
 
 impl SchedulingPressure {
@@ -95,6 +96,7 @@ impl SchedulingPressure {
             action,
             worker_threads,
             volume_policy: VolumeConcurrencyPolicy::new(volume_limit),
+            fairness_policy: fairness_policy_for(action),
         }
     }
 
@@ -123,6 +125,24 @@ impl SchedulingPressure {
 
 fn throttle_limit(limit: usize) -> usize {
     (limit / 2).max(1)
+}
+
+fn fairness_policy_for(action: SchedulingAction) -> JobFairnessPolicy {
+    match action {
+        SchedulingAction::Run => JobFairnessPolicy::default(),
+        SchedulingAction::Throttle => JobFairnessPolicy::default()
+            .with_quota(JobClass::Foreground, 4)
+            .with_quota(JobClass::Visible, 4)
+            .with_quota(JobClass::Background, 1)
+            .with_quota(JobClass::Maintenance, 1)
+            .with_quota(JobClass::Repair, 1),
+        SchedulingAction::Defer => JobFairnessPolicy::default()
+            .with_quota(JobClass::Foreground, 4)
+            .with_quota(JobClass::Visible, 4)
+            .with_quota(JobClass::Background, 1)
+            .with_quota(JobClass::Maintenance, 1)
+            .with_quota(JobClass::Repair, 1),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

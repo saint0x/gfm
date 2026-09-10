@@ -370,11 +370,12 @@ where
             .map_err(|_| GfmError::Format(format!("{label} result receiver dropped")))?;
         Ok(())
     });
-    let report = WorkerPool::new(scheduling.worker_threads).run_retriable_isolated(
+    let report = WorkerPool::new(scheduling.worker_threads).run_retriable_isolated_fair(
         vec![task],
         &journal,
         RetryPolicy { max_attempts: 2 },
         scheduling.volume_policy,
+        scheduling.fairness_policy,
     );
     let outcome = report
         .outcomes

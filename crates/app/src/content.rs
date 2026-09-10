@@ -3804,11 +3804,12 @@ pub(crate) fn run_content_job(
         })
         .collect();
     drop(job_result_tx);
-    let worker_report = WorkerPool::new(scheduling.worker_threads).run_retriable_isolated(
+    let worker_report = WorkerPool::new(scheduling.worker_threads).run_retriable_isolated_fair(
         tasks,
         journal,
         RetryPolicy { max_attempts: 2 },
         scheduling.volume_policy,
+        scheduling.fairness_policy,
     );
     let outcome = worker_report
         .outcomes

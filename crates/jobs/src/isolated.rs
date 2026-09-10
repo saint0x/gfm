@@ -14,7 +14,11 @@ pub(crate) struct IsolatedTaskQueue {
 }
 
 impl IsolatedTaskQueue {
-    pub(crate) fn new(tasks: Vec<Task>, policy: VolumeConcurrencyPolicy) -> Self {
+    pub(crate) fn new(
+        tasks: Vec<Task>,
+        policy: VolumeConcurrencyPolicy,
+        fairness_policy: JobFairnessPolicy,
+    ) -> Self {
         Self {
             state: Mutex::new(IsolatedTaskQueueState {
                 pending: VecDeque::from(tasks),
@@ -26,7 +30,7 @@ impl IsolatedTaskQueue {
             }),
             wake: Condvar::new(),
             volume_policy: policy,
-            admission_order: JobFairnessPolicy::default().admission_order(),
+            admission_order: fairness_policy.admission_order(),
         }
     }
 
@@ -233,7 +237,11 @@ pub(crate) struct IsolatedRetriableTaskQueue {
 }
 
 impl IsolatedRetriableTaskQueue {
-    pub(crate) fn new(tasks: Vec<RetriableTask>, policy: VolumeConcurrencyPolicy) -> Self {
+    pub(crate) fn new(
+        tasks: Vec<RetriableTask>,
+        policy: VolumeConcurrencyPolicy,
+        fairness_policy: JobFairnessPolicy,
+    ) -> Self {
         Self {
             state: Mutex::new(IsolatedRetriableTaskQueueState {
                 pending: VecDeque::from(tasks),
@@ -245,7 +253,7 @@ impl IsolatedRetriableTaskQueue {
             }),
             wake: Condvar::new(),
             volume_policy: policy,
-            admission_order: JobFairnessPolicy::default().admission_order(),
+            admission_order: fairness_policy.admission_order(),
         }
     }
 

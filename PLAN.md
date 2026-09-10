@@ -276,7 +276,7 @@ gfm/
 - UI-visible jobs and invisible background jobs share one scheduler.
 - Provides volume-isolated worker admission that caps concurrent work per `VolumeId` while unrelated volumes and unscoped interactive jobs keep running.
 - Persists a schema-checked typed job payload catalog for operation, indexing, extraction, thumbnail, preview, and repair jobs, with job id, payload kind, label, payload path, volume id, and summary records.
-- Provides a dependency-aware fair planner across foreground, visible, background, maintenance, and repair job classes, with weighted quotas, deterministic ordering, blocked-dependency reporting, and producer-ready scheduling APIs for classed volume-scoped work.
+- Provides a dependency-aware fair planner across foreground, visible, background, maintenance, and repair job classes, with weighted quotas, deterministic ordering, blocked-dependency reporting, producer-ready scheduling APIs for classed volume-scoped work, and worker-pool execution that accepts adaptive fair admission policies.
 - Persists atomic job progress snapshots with typed job id, class, priority, label, volume id, state, completed units, total units, detail, and update timestamp records, and filters restorable planned/running/paused work after restart.
 - Integrates configured runtime payload and progress stores into the shared operation, volume-scoped, adaptive scheduled, and adaptive extraction worker producer paths so foreground operations, visible preview/repair/index jobs, adaptive sidecar/persistent-index/diagnostics repair jobs, direct extraction workers, quarantined extraction workers, and thumbnail producers publish durable payload/progress records from the same scheduler choke points.
 - Publishes durable payload/progress records from the retriable background content indexing worker as it plans, runs retry attempts, and records terminal status.
@@ -647,7 +647,7 @@ All operations go through a scheduler:
 Scheduler properties:
 
 - Per-volume queues backed by worker admission limits so one hot volume cannot monopolize all runtime workers or destroy interactive I/O latency; foreground file operations, live content extraction/search, Quick Look previews, thumbnail generation, background content indexing, sidecar repair, persistent index repair, and diagnostics index rebuild already run through isolated worker admission.
-- Background content indexing consumes explicit runtime pressure signals and adapts its action to run, throttle, or defer before doing extraction or compaction work.
+- Background content indexing consumes explicit runtime pressure signals and adapts its action to run, throttle, or defer before doing extraction or compaction work, carrying the resulting fair admission policy into retriable isolated worker execution.
 - Content segment maintenance consumes explicit runtime pressure signals and adapts its action before compacting segments or publishing repaired archive state.
 - Sidecar repair consumes explicit runtime pressure signals and adapts its action before rebuilding or quarantining derived sidecar archives.
 - Persistent index repair consumes explicit runtime pressure signals and adapts its action before rebuilding persistent state or quarantining corrupt record archives.

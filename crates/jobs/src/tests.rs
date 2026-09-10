@@ -1163,6 +1163,9 @@ fn scheduling_pressure_defers_background_under_saturated_io() {
     assert_eq!(decision.action, SchedulingAction::Defer);
     assert_eq!(decision.worker_threads, 0);
     assert_eq!(decision.volume_policy.default_limit(), 1);
+    assert_eq!(decision.fairness_policy.quota(JobClass::Foreground), 4);
+    assert_eq!(decision.fairness_policy.quota(JobClass::Visible), 4);
+    assert_eq!(decision.fairness_policy.quota(JobClass::Background), 1);
 }
 
 #[test]
@@ -1177,6 +1180,9 @@ fn scheduling_pressure_throttles_background_under_active_user_load() {
     assert_eq!(decision.action, SchedulingAction::Throttle);
     assert_eq!(decision.worker_threads, 4);
     assert_eq!(decision.volume_policy.default_limit(), 2);
+    assert_eq!(decision.fairness_policy.quota(JobClass::Foreground), 4);
+    assert_eq!(decision.fairness_policy.quota(JobClass::Visible), 4);
+    assert_eq!(decision.fairness_policy.quota(JobClass::Background), 1);
 }
 
 #[test]
@@ -1207,6 +1213,7 @@ fn scheduling_pressure_preserves_visible_work_under_host_pressure() {
     assert_eq!(decision.action, SchedulingAction::Run);
     assert_eq!(decision.worker_threads, 8);
     assert_eq!(decision.volume_policy.default_limit(), 4);
+    assert_eq!(decision.fairness_policy, JobFairnessPolicy::default());
 }
 
 #[test]
@@ -1462,6 +1469,54 @@ fn worker_pool_rotates_ready_admission_by_default_class_quotas() {
             "visible-2",
             "background",
             "foreground-3",
+        ]
+    );
+}
+
+#[test]
+fn worker_pool_accepts_custom_fairness_policy_for_isolated_execution() {
+    let mut scheduler = Scheduler::new();
+    let foreground = (0..3)
+        .map(|index| {
+            scheduler.schedule_in_class(
+                Priority::Interactive,
+                JobClass::Foreground,
+                format!("foreground-{index}"),
+            )
+        })
+        .collect::<Vec<_>>();
+    let visible = scheduler.schedule_in_class(Priority::Visible, JobClass::Visible, "visible");
+    let background =
+        scheduler.schedule_in_class(Priority::Background, JobClass::Background, "background");
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let tasks = foreground
+        .into_iter()
+        .chain([visible, background])
+        .map(|job| {
+            let order = Arc::clone(&order);
+            let label = job.label.clone();
+            Task::new(job, move |_| {
+                order.lock().unwrap().push(label);
+                Ok(())
+            })
+        })
+        .collect();
+
+    let report = WorkerPool::new(1).run_isolated_fair(
+        tasks,
+        VolumeConcurrencyPolicy::unlimited(),
+        JobFairnessPolicy::default().with_quota(JobClass::Foreground, 1),
+    );
+
+    assert_eq!(report.completed(), 5);
+    assert_eq!(
+        &*order.lock().unwrap(),
+        &[
+            "foreground-0",
+            "visible",
+            "background",
+            "foreground-1",
+            "foreground-2"
         ]
     );
 }
@@ -1892,6 +1947,61 @@ fn retriable_worker_admits_ready_jobs_by_fair_class_before_insertion_order() {
             "background",
             "maintenance",
             "repair"
+        ]
+    );
+    assert_eq!(journal.read().unwrap().len(), 10);
+
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn retriable_worker_accepts_custom_fairness_policy_for_isolated_execution() {
+    let path = temp_path("gfm-retriable-custom-fair-admission-journal", "journal");
+    let journal = JobJournal::new(&path);
+    let mut scheduler = Scheduler::new();
+    let foreground = (0..3)
+        .map(|index| {
+            scheduler.schedule_in_class(
+                Priority::Interactive,
+                JobClass::Foreground,
+                format!("foreground-{index}"),
+            )
+        })
+        .collect::<Vec<_>>();
+    let visible = scheduler.schedule_in_class(Priority::Visible, JobClass::Visible, "visible");
+    let background =
+        scheduler.schedule_in_class(Priority::Background, JobClass::Background, "background");
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let tasks = foreground
+        .into_iter()
+        .chain([visible, background])
+        .map(|job| {
+            let order = Arc::clone(&order);
+            let label = job.label.clone();
+            RetriableTask::new(job, move |_| {
+                order.lock().unwrap().push(label.clone());
+                Ok(())
+            })
+        })
+        .collect();
+
+    let report = WorkerPool::new(1).run_retriable_isolated_fair(
+        tasks,
+        &journal,
+        RetryPolicy { max_attempts: 2 },
+        VolumeConcurrencyPolicy::unlimited(),
+        JobFairnessPolicy::default().with_quota(JobClass::Foreground, 1),
+    );
+
+    assert_eq!(report.completed(), 5);
+    assert_eq!(
+        &*order.lock().unwrap(),
+        &[
+            "foreground-0",
+            "visible",
+            "background",
+            "foreground-1",
+            "foreground-2"
         ]
     );
     assert_eq!(journal.read().unwrap().len(), 10);

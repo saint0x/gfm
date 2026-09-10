@@ -1375,6 +1375,15 @@ impl WorkerPool {
     }
 
     pub fn run_isolated(&self, tasks: Vec<Task>, policy: VolumeConcurrencyPolicy) -> WorkerReport {
+        self.run_isolated_fair(tasks, policy, JobFairnessPolicy::default())
+    }
+
+    pub fn run_isolated_fair(
+        &self,
+        tasks: Vec<Task>,
+        volume_policy: VolumeConcurrencyPolicy,
+        fairness_policy: JobFairnessPolicy,
+    ) -> WorkerReport {
         if tasks.is_empty() {
             return WorkerReport {
                 outcomes: Vec::new(),
@@ -1382,7 +1391,11 @@ impl WorkerPool {
         }
 
         let task_count = tasks.len();
-        let queue = Arc::new(IsolatedTaskQueue::new(tasks, policy));
+        let queue = Arc::new(IsolatedTaskQueue::new(
+            tasks,
+            volume_policy,
+            fairness_policy,
+        ));
         let outcomes = Arc::new(Mutex::new(Vec::with_capacity(task_count)));
         let threads = self.threads.min(task_count);
 
@@ -1450,6 +1463,23 @@ impl WorkerPool {
         retry_policy: RetryPolicy,
         volume_policy: VolumeConcurrencyPolicy,
     ) -> WorkerReport {
+        self.run_retriable_isolated_fair(
+            tasks,
+            journal,
+            retry_policy,
+            volume_policy,
+            JobFairnessPolicy::default(),
+        )
+    }
+
+    pub fn run_retriable_isolated_fair(
+        &self,
+        tasks: Vec<RetriableTask>,
+        journal: &JobJournal,
+        retry_policy: RetryPolicy,
+        volume_policy: VolumeConcurrencyPolicy,
+        fairness_policy: JobFairnessPolicy,
+    ) -> WorkerReport {
         if tasks.is_empty() {
             return WorkerReport {
                 outcomes: Vec::new(),
@@ -1457,7 +1487,11 @@ impl WorkerPool {
         }
 
         let task_count = tasks.len();
-        let queue = Arc::new(IsolatedRetriableTaskQueue::new(tasks, volume_policy));
+        let queue = Arc::new(IsolatedRetriableTaskQueue::new(
+            tasks,
+            volume_policy,
+            fairness_policy,
+        ));
         let outcomes = Arc::new(Mutex::new(Vec::with_capacity(task_count)));
         let threads = self.threads.min(task_count);
 
