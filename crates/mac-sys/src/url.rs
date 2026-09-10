@@ -31,6 +31,16 @@ pub(crate) fn existing_path_url(path: &Path, noun: &str) -> NativePathUrl {
     }
 }
 
+pub(crate) fn path_url(path: &Path, noun: &str, is_directory: bool) -> NativePathUrl {
+    if path.to_str().is_none() {
+        return NativePathUrl::Invalid(format!("{noun} is not valid UTF-8: {}", path.display()));
+    }
+    match CFURL::from_path(path, is_directory) {
+        Some(url) => NativePathUrl::Ready(url),
+        None => NativePathUrl::Invalid(format!("invalid {noun} URL: {}", path.display())),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -95,5 +105,19 @@ mod tests {
             }
         }
         fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn path_url_builds_output_url_without_existing_file() {
+        let path = unique_path("output").with_extension("png");
+
+        let result = path_url(&path, "native output", false);
+
+        match result {
+            NativePathUrl::Ready(_) => {}
+            NativePathUrl::Missing(_)
+            | NativePathUrl::Unavailable(_)
+            | NativePathUrl::Invalid(_) => panic!("non-existing output file should build URL"),
+        }
     }
 }

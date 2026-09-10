@@ -3,6 +3,7 @@ mod fileprovider;
 mod finder;
 mod host;
 mod icon;
+mod pdf;
 mod permissions;
 mod process;
 mod security;
@@ -36,6 +37,7 @@ pub use icon::{
     NativeIconBadge, NativeIconBridgeContract, NativeIconBridgeDecision, NativeIconDescriptor,
     NativeIconInvalidationReport, NativeIconProvider, NativeIconRole,
 };
+pub use pdf::{PdfPageRasterizationReport, PdfPageRasterizationStatus};
 pub use permissions::{
     current_permission_onboarding, current_permission_onboarding_checked, permission_onboarding,
     permission_onboarding_checked, PermissionAction, PermissionOnboardingPlan, PermissionPolicy,

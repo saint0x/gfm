@@ -2,6 +2,7 @@ target/
 .fozzy/runs/
 .fozzy/tmp/
 .fozzy/artifacts/
+.fozzy/traces/
 .fz/
 artifacts/*.trace.fozzy
 artifacts/*.fozzy

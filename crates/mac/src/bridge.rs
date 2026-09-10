@@ -9,6 +9,7 @@ pub enum MacFramework {
     Security,
     DiskArbitration,
     FileProvider,
+    PDFKit,
     Spotlight,
     Vision,
 }
@@ -25,6 +26,7 @@ impl MacFramework {
             Self::Security => "security",
             Self::DiskArbitration => "diskarbitration",
             Self::FileProvider => "fileprovider",
+            Self::PDFKit => "pdfkit",
             Self::Spotlight => "spotlight",
             Self::Vision => "vision",
         }
@@ -207,6 +209,14 @@ impl MacBridgeContract {
                 "crates/index",
                 "metadata-import-without-primary-correctness-dependency",
                 MacBridgeThreadPolicy::BackgroundSafe,
+                MacBridgeStatus::Implemented,
+            ),
+            MacBridgeSpec::new(
+                "pdf-page-rasterization",
+                MacFramework::PDFKit,
+                "crates/mac",
+                "bounded-image-only-pdf-rendering-for-ocr-workers",
+                MacBridgeThreadPolicy::DedicatedWorker,
                 MacBridgeStatus::Implemented,
             ),
             MacBridgeSpec::new(

@@ -26,8 +26,9 @@ use crate::{
     parse_user_activity, required_path, required_string,
 };
 use gfm_content::{
-    CachedExtractor, ExtractionFingerprint, ExtractionQuarantine, Extractor, OcrCandidateQueue,
-    OcrFailureDecision, OcrFailureKind, OcrFailureQuarantine, OcrRecognition, OcrRecognitionCache,
+    CachedExtractor, ExtractionFingerprint, ExtractionQuarantine, Extractor, OcrCandidate,
+    OcrCandidateKind, OcrCandidateQueue, OcrFailureDecision, OcrFailureKind, OcrFailureQuarantine,
+    OcrRecognition, OcrRecognitionCache,
 };
 use gfm_fs::record_for_path_checked;
 use gfm_index::{
@@ -41,7 +42,8 @@ use gfm_jobs::{
     SchedulingPressure, TaskStatus, WorkerPool,
 };
 use gfm_mac::{
-    AccessIntent, VisionTextRecognitionReport, VisionTextRecognitionStatus, VolumeDiscoveryReport,
+    AccessIntent, PdfPageRasterizationReport, PdfPageRasterizationStatus,
+    VisionTextRecognitionReport, VisionTextRecognitionStatus, VolumeDiscoveryReport,
 };
 use gfm_store::{atomic_write_checked, read_records_checked, ContentArchiveManifest};
 use gfm_types::{GfmError, Result, SearchHit, VolumeId};
@@ -50,8 +52,13 @@ use std::fs;
 use std::io::{self, Read};
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::mpsc;
 use std::time::Duration;
+
+const OCR_PDF_MAX_PAGES: usize = 8;
+const OCR_PDF_MAX_DIMENSION_PX: u32 = 2048;
+static OCR_PDF_RENDER_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Result<bool> {
     match command {
@@ -1471,9 +1478,7 @@ fn run_ocr_worker(queue: PathBuf, cache: PathBuf, quarantine: Option<PathBuf>) -
                         candidate.path.clone(),
                         &cancellation,
                     ) {
-                        Ok(_access) => {
-                            VisionTextRecognitionReport::recognize_image(&candidate.path)
-                        }
+                        Ok(_access) => recognize_ocr_candidate(candidate, &cancellation),
                         Err(err) if gfm_error_is_not_found(&err) => {
                             VisionTextRecognitionReport::missing(format!("{err}"))
                         }
@@ -1574,6 +1579,115 @@ fn ocr_failure_kind_for_status(status: VisionTextRecognitionStatus) -> Option<Oc
         VisionTextRecognitionStatus::Failed => Some(OcrFailureKind::Failed),
         VisionTextRecognitionStatus::Unavailable => Some(OcrFailureKind::Unavailable),
     }
+}
+
+fn recognize_ocr_candidate(
+    candidate: &OcrCandidate,
+    cancellation: &Cancellation,
+) -> VisionTextRecognitionReport {
+    match candidate.kind {
+        OcrCandidateKind::ScreenshotImage => {
+            VisionTextRecognitionReport::recognize_image(&candidate.path)
+        }
+        OcrCandidateKind::ImageOnlyPdf => recognize_pdf_ocr_candidate(candidate, cancellation),
+    }
+}
+
+fn recognize_pdf_ocr_candidate(
+    candidate: &OcrCandidate,
+    cancellation: &Cancellation,
+) -> VisionTextRecognitionReport {
+    let render_dir = ocr_pdf_render_dir(&candidate.path);
+    let raster = PdfPageRasterizationReport::rasterize_for_ocr(
+        &candidate.path,
+        &render_dir,
+        OCR_PDF_MAX_PAGES,
+        OCR_PDF_MAX_DIMENSION_PX,
+    );
+    if raster.status != PdfPageRasterizationStatus::Available {
+        let _ = fs::remove_dir_all(&render_dir);
+        return VisionTextRecognitionReport {
+            text: String::new(),
+            lines: Vec::new(),
+            status: pdf_raster_status_as_vision_status(raster.status),
+            reason: Some(
+                raster
+                    .reason
+                    .unwrap_or_else(|| raster.status.as_str().to_string()),
+            ),
+        };
+    }
+
+    let mut lines = Vec::new();
+    let mut failure: Option<VisionTextRecognitionReport> = None;
+    for page in &raster.pages {
+        if let Err(err) = cancellation.check() {
+            let _ = fs::remove_dir_all(&render_dir);
+            return VisionTextRecognitionReport {
+                text: String::new(),
+                lines: Vec::new(),
+                status: VisionTextRecognitionStatus::Failed,
+                reason: Some(err.to_string()),
+            };
+        }
+        let page_report = VisionTextRecognitionReport::recognize_image(page);
+        if page_report.status() == VisionTextRecognitionStatus::Recognized {
+            lines.extend(page_report.lines().iter().cloned());
+        } else if failure.is_none() && page_report.status() != VisionTextRecognitionStatus::Empty {
+            failure = Some(page_report);
+        }
+    }
+    let _ = fs::remove_dir_all(&render_dir);
+    if !lines.is_empty() {
+        let text = lines.join("\n");
+        return VisionTextRecognitionReport {
+            text,
+            lines,
+            status: VisionTextRecognitionStatus::Recognized,
+            reason: None,
+        };
+    }
+    failure.unwrap_or_else(|| VisionTextRecognitionReport {
+        text: String::new(),
+        lines: Vec::new(),
+        status: VisionTextRecognitionStatus::Empty,
+        reason: Some("Vision returned no text for rasterized PDF pages".to_string()),
+    })
+}
+
+fn pdf_raster_status_as_vision_status(
+    status: PdfPageRasterizationStatus,
+) -> VisionTextRecognitionStatus {
+    match status {
+        PdfPageRasterizationStatus::Available => VisionTextRecognitionStatus::Recognized,
+        PdfPageRasterizationStatus::Empty => VisionTextRecognitionStatus::Empty,
+        PdfPageRasterizationStatus::Missing => VisionTextRecognitionStatus::Missing,
+        PdfPageRasterizationStatus::Unsupported => VisionTextRecognitionStatus::Unsupported,
+        PdfPageRasterizationStatus::Failed => VisionTextRecognitionStatus::Failed,
+        PdfPageRasterizationStatus::Unavailable => VisionTextRecognitionStatus::Unavailable,
+    }
+}
+
+fn ocr_pdf_render_dir(path: &Path) -> PathBuf {
+    let sequence = OCR_PDF_RENDER_SEQUENCE.fetch_add(1, AtomicOrdering::Relaxed);
+    let stem = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("pdf")
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .take(48)
+        .collect::<String>();
+    std::env::temp_dir().join(format!(
+        "gfm-ocr-pdf-{stem}-{}-{sequence}",
+        std::process::id()
+    ))
 }
 
 fn access_existing_ocr_candidate(
@@ -3145,6 +3259,34 @@ mod tests {
         assert!(failures.has_entry(&candidate));
         assert!(OcrRecognitionCache::read(cache).unwrap().is_empty());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn pdf_raster_status_maps_to_ocr_failure_status() {
+        assert_eq!(
+            pdf_raster_status_as_vision_status(PdfPageRasterizationStatus::Empty),
+            VisionTextRecognitionStatus::Empty
+        );
+        assert_eq!(
+            pdf_raster_status_as_vision_status(PdfPageRasterizationStatus::Missing),
+            VisionTextRecognitionStatus::Missing
+        );
+        assert_eq!(
+            pdf_raster_status_as_vision_status(PdfPageRasterizationStatus::Unavailable),
+            VisionTextRecognitionStatus::Unavailable
+        );
+    }
+
+    #[test]
+    fn ocr_pdf_render_dir_sanitizes_name_and_is_unique() {
+        let path = Path::new("/tmp/Scan Draft\tQ3\nFinal.pdf");
+
+        let first = ocr_pdf_render_dir(path);
+        let second = ocr_pdf_render_dir(path);
+
+        assert_ne!(first, second);
+        let first_name = first.file_name().and_then(|name| name.to_str()).unwrap();
+        assert!(first_name.starts_with("gfm-ocr-pdf-Scan-Draft-Q3-Final-"));
     }
 
     fn unique_temp_dir(prefix: &str) -> PathBuf {

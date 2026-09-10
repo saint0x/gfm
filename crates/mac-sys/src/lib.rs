@@ -1,6 +1,7 @@
 mod bookmark;
 mod fileprovider;
 mod finder;
+mod pdf;
 mod pressure;
 mod process;
 mod spotlight;
@@ -23,6 +24,9 @@ pub use fileprovider::{
     NativeUbiquitousError,
 };
 pub use finder::{copy_kind_string_for_path, NativeFinderKind, NativeFinderKindStatus};
+pub use pdf::{
+    rasterize_pdf_pages_for_ocr, NativePdfPageRasterization, NativePdfPageRasterizationStatus,
+};
 pub use pressure::{
     copy_host_pressure, NativeHostPressure, NativeHostSignalStatus, NativeIoPressureState,
     NativePowerSourceState, NativeThermalState, NativeUserActivityState,
