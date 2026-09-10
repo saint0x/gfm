@@ -281,9 +281,9 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
             println!(
                 "{}",
                 SidebarContract::from_path_snapshot(
-                    path,
+                    &path,
                     SidebarPathSnapshot::discover(),
-                    native_sidebar_volumes_checked(|| Ok(()))?
+                    native_sidebar_volumes_checked(&path, || Ok(()))?
                 )
                 .as_tsv()
             );
@@ -936,16 +936,37 @@ fn runtime_operation_conflict_input(
 }
 
 fn native_sidebar_volumes_checked(
+    launch_path: &Path,
     check_control: impl FnMut() -> Result<()>,
 ) -> Result<Vec<SidebarVolumeSpec>> {
-    Ok(
-        VolumeDiscoveryReport::discover_policy_checked(check_control)?
-            .volumes
+    native_sidebar_volume_descriptors_checked(launch_path, check_control).map(|volumes| {
+        volumes
             .iter()
             .filter(|volume| volume.kind != VolumeKind::System)
             .map(sidebar_volume_spec)
-            .collect(),
-    )
+            .collect()
+    })
+}
+
+fn native_sidebar_volume_descriptors_checked(
+    launch_path: &Path,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<Vec<VolumeDescriptor>> {
+    let mut volumes = VolumeDiscoveryReport::discover_policy_checked(&mut check_control)?.volumes;
+    check_control()?;
+    let containing =
+        VolumeDiscoveryReport::for_containing_path_policy_checked(launch_path, &mut check_control)?;
+    let mut seen = volumes
+        .iter()
+        .map(|volume| volume.stable_identity.clone())
+        .collect::<BTreeSet<_>>();
+    for volume in containing.volumes {
+        if seen.insert(volume.stable_identity.clone()) {
+            volumes.push(volume);
+        }
+    }
+    check_control()?;
+    Ok(volumes)
 }
 
 fn sidebar_volume_spec(volume: &VolumeDescriptor) -> SidebarVolumeSpec {
@@ -1867,11 +1888,11 @@ fn app_launch_spec_checked(
 ) -> Result<AppLaunchSpec> {
     check_control()?;
     let initial_view_mode = native_initial_view_mode_from_env()?;
-    let mut spec = path
-        .map(AppLaunchSpec::new)
-        .unwrap_or_default()
+    let mut spec = path.map(AppLaunchSpec::new).unwrap_or_default();
+    let sidebar_volumes = native_sidebar_volumes_checked(&spec.initial_path, &mut check_control)?;
+    spec = spec
         .with_sidebar_path_snapshot(SidebarPathSnapshot::discover())
-        .with_sidebar_volumes(native_sidebar_volumes_checked(&mut check_control)?);
+        .with_sidebar_volumes(sidebar_volumes);
     if let Some(placement) = capture_launch_placement_from_env()? {
         spec = spec.with_launch_placement(placement);
     }
@@ -3013,7 +3034,9 @@ mod tests {
 
     #[test]
     fn native_sidebar_volumes_checked_honors_pre_cancelled_control() {
-        let err = native_sidebar_volumes_checked(|| Err(GfmError::Cancelled)).unwrap_err();
+        let err =
+            native_sidebar_volumes_checked(Path::new("/tmp/gfm"), || Err(GfmError::Cancelled))
+                .unwrap_err();
 
         assert_eq!(err, GfmError::Cancelled);
     }

@@ -848,9 +848,7 @@ impl WindowLifecycleContract {
                 .map(DialogSurface::as_str)
                 .unwrap_or("none")
         )];
-        if let Some(sidebar) = &self.sidebar_contract {
-            lines.push(sidebar.as_tsv());
-        }
+        lines.push(self.effective_sidebar_contract().as_tsv());
         lines.extend(
             self.progress_surfaces
                 .iter()
@@ -882,6 +880,16 @@ impl WindowLifecycleContract {
             lines.push(refresh.as_tsv());
         }
         lines.join("\n")
+    }
+
+    fn effective_sidebar_contract(&self) -> SidebarContract {
+        self.sidebar_contract.clone().unwrap_or_else(|| {
+            SidebarContract::from_path_snapshot(
+                &self.initial_path,
+                self.sidebar_paths.clone(),
+                self.sidebar_volumes.clone(),
+            )
+        })
     }
 }
 
@@ -1179,11 +1187,15 @@ mod tests {
     fn contract_output_is_stable_for_cli_and_fozzy() {
         let spec = AppLaunchSpec::new("/tmp/gfm");
         let contract = WindowLifecycleContract::from_spec(&spec).unwrap();
+        let output = contract.as_tsv();
 
-        assert_eq!(
-            contract.as_tsv(),
-            "window\tGFM\t/tmp/gfm\t1040x720\tmin=640x420\ttransparent-titlebar=true\tactivate=true\ttabs=gfm-main-window\tsidebar-home=available\tsidebar-icloud=missing\tinitial-view=icon\tpermission-dialog=none"
-        );
+        assert!(output.starts_with(
+            "window\tGFM\t/tmp/gfm\t1040x720\tmin=640x420\ttransparent-titlebar=true\tactivate=true\ttabs=gfm-main-window\tsidebar-home=available\tsidebar-icloud=missing\tinitial-view=icon\tpermission-dialog=none\n"
+        ));
+        assert!(output.contains(
+            "sidebar\twidth=188\trow-height=28\tsection-header-height=26\tsections=Favorites,iCloud,Locations,Tags"
+        ));
+        assert!(output.contains("row\tLocations\tcomputer\tComputer\tcomputer\tlocation\t-"));
     }
 
     #[test]
@@ -1853,6 +1865,15 @@ mod tests {
         let contract = WindowLifecycleContract::from_spec(&spec).unwrap();
 
         assert_eq!(contract.sidebar_volumes, vec![volume]);
+        let output = contract.as_tsv();
+        assert!(
+            output.contains("row\tLocations\t")
+                && output
+                    .contains("\tMedia Backup\tmounted-volume\tlocation\t/Volumes/Media Backup\t"),
+            "{output}"
+        );
+        assert!(output.contains("\tvolume-kind=external\t"));
+        assert!(output.contains("\tvolume-ejectable=true\t"));
     }
 
     #[test]

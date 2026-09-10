@@ -7036,6 +7036,11 @@
     },
     {
       "type": "fs_write",
+      "path": "tmp/gfm-fozzy-native-launch-fixture/.gfm-volume-kind",
+      "data": "external-removable\n"
+    },
+    {
+      "type": "fs_write",
       "path": "tmp/gfm-fozzy-native-launch-fixture/Back Target.md",
       "data": "back\n"
     },

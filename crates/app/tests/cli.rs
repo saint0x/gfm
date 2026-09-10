@@ -20401,6 +20401,44 @@ fn native_app_launch_dispatches_without_operator_command_from_binary() {
 }
 
 #[test]
+fn native_app_launch_renders_effective_sidebar_volume_rows_from_binary() {
+    let root = unique_temp_dir("gfm-cli-native-launch-sidebar-volume");
+    fs::write(root.join(".gfm-volume-kind"), "external-removable\n").unwrap();
+    fs::write(root.join("Visible.txt"), "hello").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .current_dir(&root)
+        .env("GFM_NATIVE_LAUNCH_CONTRACT", "1")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("\nsidebar\t"), "{stdout}");
+    assert!(
+        stdout.contains("row\tLocations\tcomputer\tComputer\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(&format!(
+            "\t{}\tmounted-volume\tlocation\t",
+            root.file_name().unwrap().to_string_lossy()
+        )),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tvolume-kind=external\t"), "{stdout}");
+    assert!(stdout.contains("\tvolume-mount=mounted\t"), "{stdout}");
+    assert!(stdout.contains("\tvolume-ejectable=true\t"), "{stdout}");
+    assert!(stdout.contains("\tvolume-removable=true\t"), "{stdout}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn native_app_launch_dispatches_existing_path_arg_from_binary() {
     let root = unique_temp_dir("gfm-cli-native-launch-path");
     let fixture = root.join("fixture");
