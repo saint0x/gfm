@@ -3,10 +3,15 @@ use crate::{
         preflight_access_scope_checked_with_volume_report,
         preflight_volume_access_scope_with_report, ScopedAccessGuard,
     },
-    parse_u32_arg, parse_usize_arg, required_path,
-    runtime::run_volume_task_cancellable,
+    parse_u32_arg, parse_usize_arg,
+    platform::current_host_job_scheduling_pressure,
+    required_path,
+    runtime::{
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path,
+        run_volume_task_cancellable, RuntimeJobHandle, ScheduledTaskOutcome,
+    },
 };
-use gfm_jobs::Priority;
+use gfm_jobs::{Cancellation, JobPayloadKind, JobProgressState, Priority};
 use gfm_mac::{AccessIntent, VolumeDiscoveryReport};
 use gfm_testkit::{
     capture_parity_screenshot_checked, diff_rgba_files, evaluate_pixel_threshold,
@@ -181,7 +186,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 "macrobench fixture workspace",
                 move |cancellation| {
                     cancellation.check()?;
-                    let report = materialize_macrobench_fixture_report(root, scale)?;
+                    let report = materialize_macrobench_fixture_report(root.clone(), scale)?;
                     cancellation.check()?;
                     Ok(report)
                 },
@@ -679,7 +684,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 move |cancellation| {
                     cancellation.check()?;
                     let report = run_large_sidecar_gate(&LargeSidecarGateOptions::new(
-                        worker_workspace,
+                        worker_workspace.clone(),
                         records,
                     ))?;
                     cancellation.check()?;
@@ -1209,7 +1214,7 @@ fn macrobench_report_verify_access_reports(output_dir: &Path) -> Result<GateAcce
 fn run_workspace_write_task<T>(
     workspace: &Path,
     worker: &'static str,
-    work: impl FnOnce(gfm_jobs::Cancellation) -> Result<T> + Send + 'static,
+    work: impl Fn(Cancellation) -> Result<T> + Send + Sync + 'static,
 ) -> Result<T>
 where
     T: Send + 'static,
@@ -1218,12 +1223,48 @@ where
     let access_report = workspace_write_access_report(&workspace, worker)?;
     access_report.preflight_volume()?;
     let volume = access_report.volume();
-    run_volume_task_cancellable(volume, Priority::Visible, worker, move |cancellation| {
-        cancellation.check()?;
-        let _access = access_report.access_checked(|| cancellation.check())?;
-        cancellation.check()?;
-        work(cancellation)
+    visible_scheduled_gate_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Operation,
+            worker,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            workspace,
+            move |cancellation, runtime| {
+                cancellation.check()?;
+                runtime.resize_checked(3, "gate-workspace:preflight", || cancellation.check())?;
+                let _access = access_report.access_checked(|| cancellation.check())?;
+                gate_runtime_phase(&runtime, 1, "gate-workspace:run", &cancellation)?;
+                let result = work(cancellation.clone())?;
+                gate_runtime_phase(&runtime, 2, "gate-workspace:complete", &cancellation)?;
+                runtime.remember_completion_detail("completed:workspace".to_string())?;
+                gate_runtime_phase(&runtime, 3, "gate-workspace:reported", &cancellation)?;
+                Ok(result)
+            },
+        )?,
+        worker,
+    )
+}
+
+fn gate_runtime_phase(
+    runtime: &RuntimeJobHandle,
+    completed_units: u64,
+    detail: &'static str,
+    cancellation: &Cancellation,
+) -> Result<()> {
+    runtime.progress_checked(JobProgressState::Running, completed_units, detail, || {
+        cancellation.check()
     })
+}
+
+fn visible_scheduled_gate_result<T>(
+    outcome: ScheduledTaskOutcome<T>,
+    label: &'static str,
+) -> Result<T> {
+    outcome
+        .result
+        .ok_or_else(|| GfmError::Format(format!("{label} deferred before visible run")))
 }
 
 #[cfg(test)]

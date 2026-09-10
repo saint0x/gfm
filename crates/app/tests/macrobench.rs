@@ -292,6 +292,64 @@ fn materializes_parity_fixture_from_binary() {
 }
 
 #[test]
+fn workspace_gate_jobs_persist_runtime_progress_from_binary() {
+    let root = unique_temp_dir("gfm-cli-gate-runtime");
+    let catalog = root.join("runtime.gfmjobs");
+    let progress = root.join("runtime.gfmprogress");
+    let macrobench = root.join("macrobench-workspace");
+    let parity = root.join("parity-workspace");
+
+    let macrobench_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args(["macrobench-fixture", macrobench.to_str().unwrap(), "smoke"])
+        .output()
+        .unwrap();
+    assert!(
+        macrobench_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&macrobench_output.stderr)
+    );
+
+    let parity_output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .args(["parity-fixture", parity.to_str().unwrap(), "smoke"])
+        .output()
+        .unwrap();
+    assert!(
+        parity_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&parity_output.stderr)
+    );
+
+    let catalog_text = fs::read_to_string(&catalog).unwrap();
+    assert_gate_payload_catalog(
+        &catalog_text,
+        1,
+        "macrobench fixture workspace",
+        &macrobench,
+    );
+    assert_gate_payload_catalog(&catalog_text, 2, "parity fixture workspace", &parity);
+
+    let progress_text = fs::read_to_string(&progress).unwrap();
+    assert_gate_runtime_progress(
+        &progress_text,
+        1,
+        "macrobench fixture workspace",
+        "completed:workspace",
+    );
+    assert_gate_runtime_progress(
+        &progress_text,
+        2,
+        "parity fixture workspace",
+        "completed:workspace",
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn writes_parity_capture_plan_from_binary() {
     let root = unique_temp_dir("gfm-cli-parity-capture-plan");
     let fixture_workspace = root.join("fixture-workspace");
@@ -1770,6 +1828,27 @@ fn unique_temp_dir(prefix: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!("{prefix}-{}-{nanos}", std::process::id()));
     fs::create_dir_all(&path).unwrap();
     path
+}
+
+fn assert_gate_payload_catalog(catalog_text: &str, id: u64, label: &str, payload_path: &Path) {
+    assert!(
+        catalog_text.lines().any(|line| line.starts_with(&format!(
+            "payload\t{id}\toperation\t{label}\t{}\t",
+            payload_path.display()
+        )) && line
+            .contains(&format!("\tvisible:{label}:adaptive"))),
+        "{catalog_text}"
+    );
+}
+
+fn assert_gate_runtime_progress(progress_text: &str, id: u64, label: &str, detail: &str) {
+    assert!(
+        progress_text.lines().any(|line| line
+            .starts_with(&format!("progress\t{id}\tvisible\tvisible\t{label}\t"))
+            && line.contains("\tcompleted\t3\t3\t")
+            && line.contains(detail)),
+        "{progress_text}"
+    );
 }
 
 fn write_capture_provenance_artifacts(root: &Path, fixture_root: &str) {
