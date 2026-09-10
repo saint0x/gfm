@@ -12251,6 +12251,46 @@ fn ui_fileprovider_sidebar_state_reads_on_visible_worker_from_binary() {
 }
 
 #[test]
+fn native_app_launch_renders_fileprovider_sidebar_state_from_binary() {
+    let root = unique_temp_dir("gfm-cli-native-fileprovider-sidebar-state");
+    let current = root.join("Desktop");
+    let item = root.join("Downloading.icloud-downloading");
+    fs::create_dir_all(&current).unwrap();
+    fs::write(&item, "downloading").unwrap();
+    xattr::set(&item, "com.apple.fileprovider.state", b"downloading").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .current_dir(&current)
+        .env("GFM_NATIVE_LAUNCH_CONTRACT", "1")
+        .env("GFM_FILEPROVIDER_SIDEBAR_PATH", item.to_str().unwrap())
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_worker_admitted(&stderr, "ui fileprovider sidebar state", &item);
+    assert!(stdout.contains("\nsidebar\t"), "{stdout}");
+    assert!(stdout.contains("row\tiCloud\ticloud-drive\t"), "{stdout}");
+    assert!(stdout.contains("\tcloud=downloading\t"), "{stdout}");
+    assert!(
+        stdout.contains("\tcloud-progress-source=state\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\tcloud-progress-reason=provider-progress-unavailable"),
+        "{stdout}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn ui_fileprovider_sidebar_invalidation_reads_on_visible_worker_from_binary() {
     let root = unique_temp_dir("gfm-cli-ui-fileprovider-sidebar-invalidation-root");
     let item = root.join("Remote.icloud-placeholder");

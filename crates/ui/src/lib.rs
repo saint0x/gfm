@@ -96,6 +96,7 @@ pub struct AppLaunchSpec {
     pub launch_placement: Option<WindowPlacement>,
     pub sidebar_paths: SidebarPathSnapshot,
     pub sidebar_volumes: Vec<SidebarVolumeSpec>,
+    pub sidebar_contract: Option<SidebarContract>,
     pub initial_view: InitialViewContract,
     pub initial_icon_view: IconViewContract,
     pub progress_surfaces: Vec<OperationProgressContract>,
@@ -630,6 +631,11 @@ impl AppLaunchSpec {
         self
     }
 
+    pub fn with_sidebar_contract(mut self, sidebar: SidebarContract) -> Self {
+        self.sidebar_contract = Some(sidebar);
+        self
+    }
+
     pub fn with_launch_placement(mut self, placement: WindowPlacement) -> Self {
         self.width = placement.width;
         self.height = placement.height;
@@ -752,6 +758,7 @@ impl Default for AppLaunchSpec {
             launch_placement: None,
             sidebar_paths: SidebarPathSnapshot::default(),
             sidebar_volumes: Vec::new(),
+            sidebar_contract: None,
             initial_view: InitialViewContract::Icon(IconViewContract::from_records(
                 &[],
                 IconViewOptions::default(),
@@ -782,6 +789,7 @@ pub struct WindowLifecycleContract {
     pub tabbing_identifier: String,
     pub sidebar_paths: SidebarPathSnapshot,
     pub sidebar_volumes: Vec<SidebarVolumeSpec>,
+    pub sidebar_contract: Option<SidebarContract>,
     pub initial_view: InitialViewContract,
     pub progress_surfaces: Vec<OperationProgressContract>,
     pub operation_conflicts: Vec<OperationConflictContract>,
@@ -808,6 +816,7 @@ impl WindowLifecycleContract {
             tabbing_identifier: spec.tabbing_identifier.clone(),
             sidebar_paths: spec.sidebar_paths.clone(),
             sidebar_volumes: spec.sidebar_volumes.clone(),
+            sidebar_contract: spec.sidebar_contract.clone(),
             initial_view: spec.initial_view.clone(),
             progress_surfaces: spec.progress_surfaces.clone(),
             operation_conflicts: spec.operation_conflicts.clone(),
@@ -839,6 +848,9 @@ impl WindowLifecycleContract {
                 .map(DialogSurface::as_str)
                 .unwrap_or("none")
         )];
+        if let Some(sidebar) = &self.sidebar_contract {
+            lines.push(sidebar.as_tsv());
+        }
         lines.extend(
             self.progress_surfaces
                 .iter()
@@ -900,11 +912,13 @@ fn open_main_window(
         cx.new(|_| RootView {
             bounds_subscription: None,
             session_writer: WindowSessionWriter::new(session_store),
-            sidebar: sidebar::SidebarContract::from_path_snapshot(
-                &spec.initial_path,
-                spec.sidebar_paths.clone(),
-                spec.sidebar_volumes.clone(),
-            ),
+            sidebar: spec.sidebar_contract.clone().unwrap_or_else(|| {
+                sidebar::SidebarContract::from_path_snapshot(
+                    &spec.initial_path,
+                    spec.sidebar_paths.clone(),
+                    spec.sidebar_volumes.clone(),
+                )
+            }),
             initial_view: spec.initial_view,
             progress_surfaces: spec.progress_surfaces,
             operation_conflicts: spec.operation_conflicts,
@@ -1839,6 +1853,30 @@ mod tests {
         let contract = WindowLifecycleContract::from_spec(&spec).unwrap();
 
         assert_eq!(contract.sidebar_volumes, vec![volume]);
+    }
+
+    #[test]
+    fn lifecycle_contract_tracks_sidebar_contract_from_launch_spec() {
+        let sidebar = SidebarContract::from_path_snapshot_with_icloud_progress(
+            "/Users/tester/Library/Mobile Documents/com~apple~CloudDocs/Report.md",
+            SidebarPathSnapshot::default().with_icloud_drive(
+                "/Users/tester/Library/Mobile Documents/com~apple~CloudDocs",
+                SidebarPathState::Available,
+            ),
+            SidebarCloudState::Downloading,
+            Some(64_000),
+            Some("native-url-resource".to_string()),
+            Some("provider-progress-unavailable".to_string()),
+            Vec::new(),
+        );
+        let spec = AppLaunchSpec::new("/tmp/gfm").with_sidebar_contract(sidebar.clone());
+        let contract = WindowLifecycleContract::from_spec(&spec).unwrap();
+
+        assert_eq!(contract.sidebar_contract, Some(sidebar));
+        assert!(contract.as_tsv().contains("\nsidebar\t"));
+        assert!(contract
+            .as_tsv()
+            .contains("\tcloud=downloading\tcloud-progress=64000\t"));
     }
 
     #[test]

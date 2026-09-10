@@ -1822,6 +1822,27 @@ fn native_fileprovider_conflict_from_env() -> Result<Option<ProviderConflictCont
     Ok(Some(provider_conflict_contract(report)))
 }
 
+fn native_fileprovider_sidebar_from_env(spec: &AppLaunchSpec) -> Result<Option<SidebarContract>> {
+    let Some(path) = env::var_os("GFM_FILEPROVIDER_SIDEBAR_PATH") else {
+        return Ok(None);
+    };
+    let provider_path = PathBuf::from(path);
+    let report = read_ui_fileprovider_sidebar_state(provider_path.clone())?;
+    Ok(Some(
+        SidebarContract::from_path_snapshot_with_icloud_progress(
+            &spec.initial_path,
+            spec.sidebar_paths
+                .clone()
+                .with_icloud_drive(provider_path, SidebarPathState::Available),
+            sidebar_cloud_state(report.storage_state),
+            report.progress.percent_milli,
+            Some(report.progress.source.to_string()),
+            report.progress.reason,
+            spec.sidebar_volumes.clone(),
+        ),
+    ))
+}
+
 #[cfg(test)]
 fn preflight_ui_fileprovider_read_checked(
     path: &Path,
@@ -1853,6 +1874,9 @@ fn app_launch_spec_checked(
         .with_sidebar_volumes(native_sidebar_volumes_checked(&mut check_control)?);
     if let Some(placement) = capture_launch_placement_from_env()? {
         spec = spec.with_launch_placement(placement);
+    }
+    if let Some(sidebar) = native_fileprovider_sidebar_from_env(&spec)? {
+        spec = spec.with_sidebar_contract(sidebar);
     }
     check_control()?;
     if let Some(store) = crate::runtime::runtime_progress_store() {
