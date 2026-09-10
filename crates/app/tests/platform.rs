@@ -1433,6 +1433,54 @@ fn protected_worker_route_fails_closed_without_retained_bookmark_from_binary() {
 }
 
 #[test]
+fn security_bookmark_reconcile_persists_runtime_progress_from_binary() {
+    let root = std::env::temp_dir().join(format!(
+        "gfm-security-bookmark-runtime-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let bookmarks = root.join("bookmarks.tsv");
+    let catalog = root.join("payloads.gfmjobs");
+    let progress = root.join("progress.gfmprogress");
+    std::fs::write(&bookmarks, "gfm-security-bookmarks-v1\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .env("GFM_SECURITY_BOOKMARKS", &bookmarks)
+        .env("GFM_JOB_PAYLOAD_CATALOG", &catalog)
+        .env("GFM_JOB_PROGRESS_STORE", &progress)
+        .arg("security-bookmark-reconcile")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert_eq!(
+        stdout,
+        format!(
+            "security-bookmark-store\t{}\trecords=0\trepaired=0\tunavailable=0\n",
+            bookmarks.display()
+        )
+    );
+
+    let catalog_text = std::fs::read_to_string(&catalog).unwrap();
+    assert_platform_payload_catalog(&catalog_text, 1, "security bookmark reconcile", &bookmarks);
+    let progress_text = std::fs::read_to_string(&progress).unwrap();
+    assert_platform_runtime_progress(
+        &progress_text,
+        1,
+        "security bookmark reconcile",
+        "completed:records:0 repaired:0 unavailable:0",
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+}
+
+#[test]
 fn quicklook_refuses_missing_path_before_preview_from_binary() {
     let nanos = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

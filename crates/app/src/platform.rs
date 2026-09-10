@@ -4372,23 +4372,56 @@ fn run_security_bookmark_create(path: PathBuf, intent: AccessIntent) -> Result<V
     let volume = store_access_report
         .volume()
         .or_else(|| path_access_report.volume());
-    run_volume_task_cancellable(volume, Priority::Visible, WORKER, move |cancellation| {
-        cancellation.check()?;
-        let _store_access =
-            store_access_report.access_checked(STORE_WORKER, || cancellation.check())?;
-        cancellation.check()?;
-        let bookmark = gfm_mac::SecurityScopedBookmark::create(&path, report.read_only).map_err(
-            |failure| GfmError::Permission {
-                path: path.clone(),
-                message: failure
-                    .reason
-                    .unwrap_or_else(|| "security-scoped bookmark creation failed".to_string()),
+    scheduled_platform_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Operation,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            store.path().to_path_buf(),
+            move |cancellation, runtime| {
+                cancellation.check()?;
+                runtime.resize_checked(3, "security-bookmark-create:preflight", || {
+                    cancellation.check()
+                })?;
+                let _store_access =
+                    store_access_report.access_checked(STORE_WORKER, || cancellation.check())?;
+                platform_runtime_phase(
+                    &runtime,
+                    1,
+                    "security-bookmark-create:create",
+                    &cancellation,
+                )?;
+                let bookmark = gfm_mac::SecurityScopedBookmark::create(&path, report.read_only)
+                    .map_err(|failure| GfmError::Permission {
+                        path: path.clone(),
+                        message: failure.reason.unwrap_or_else(|| {
+                            "security-scoped bookmark creation failed".to_string()
+                        }),
+                    })?;
+                let store_report = store.upsert_checked(bookmark, || cancellation.check())?;
+                platform_runtime_phase(
+                    &runtime,
+                    2,
+                    "security-bookmark-create:complete",
+                    &cancellation,
+                )?;
+                runtime.remember_completion_detail(format!(
+                    "completed:records:{}",
+                    store_report.records
+                ))?;
+                platform_runtime_phase(
+                    &runtime,
+                    3,
+                    "security-bookmark-create:reported",
+                    &cancellation,
+                )?;
+                Ok(vec![report.as_tsv(), store_report.as_tsv()])
             },
-        )?;
-        cancellation.check()?;
-        let store_report = store.upsert_checked(bookmark, || cancellation.check())?;
-        Ok(vec![report.as_tsv(), store_report.as_tsv()])
-    })
+        )?,
+        WORKER,
+    )
 }
 
 fn run_security_bookmark_reconcile() -> Result<gfm_mac::SecurityScopedBookmarkStoreReport> {
@@ -4400,15 +4433,50 @@ fn run_security_bookmark_reconcile() -> Result<gfm_mac::SecurityScopedBookmarkSt
         || Ok(()),
     )?;
     store_access_report.preflight_volume(WORKER)?;
-    run_volume_task_cancellable(store_access_report.volume(), Priority::Visible, WORKER, {
-        move |cancellation| {
-            cancellation.check()?;
-            let _store_access =
-                store_access_report.access_checked(WORKER, || cancellation.check())?;
-            cancellation.check()?;
-            store.reconcile_checked(|| cancellation.check())
-        }
-    })
+    let volume = store_access_report.volume();
+    scheduled_platform_result(
+        run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+            Priority::Visible,
+            JobPayloadKind::Operation,
+            WORKER,
+            current_host_job_scheduling_pressure(),
+            || Ok(volume),
+            store.path().to_path_buf(),
+            move |cancellation, runtime| {
+                cancellation.check()?;
+                runtime.resize_checked(3, "security-bookmark-reconcile:preflight", || {
+                    cancellation.check()
+                })?;
+                let _store_access =
+                    store_access_report.access_checked(WORKER, || cancellation.check())?;
+                platform_runtime_phase(
+                    &runtime,
+                    1,
+                    "security-bookmark-reconcile:resolve",
+                    &cancellation,
+                )?;
+                let report = store.reconcile_checked(|| cancellation.check())?;
+                platform_runtime_phase(
+                    &runtime,
+                    2,
+                    "security-bookmark-reconcile:complete",
+                    &cancellation,
+                )?;
+                runtime.remember_completion_detail(format!(
+                    "completed:records:{} repaired:{} unavailable:{}",
+                    report.records, report.repaired, report.unavailable
+                ))?;
+                platform_runtime_phase(
+                    &runtime,
+                    3,
+                    "security-bookmark-reconcile:reported",
+                    &cancellation,
+                )?;
+                Ok(report)
+            },
+        )?,
+        WORKER,
+    )
 }
 
 fn run_spotlight_reconcile(
