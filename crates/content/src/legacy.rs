@@ -10,6 +10,8 @@ const DIRECTORY_ENTRY_BYTES: usize = 128;
 const FREESECT: u32 = 0xFFFF_FFFF;
 const ENDOFCHAIN: u32 = 0xFFFF_FFFE;
 const FATSECT: u32 = 0xFFFF_FFFD;
+#[cfg(test)]
+const DIFSECT: u32 = 0xFFFF_FFFC;
 const MAX_SECTOR_BYTES: usize = 4096;
 const MINI_SECTOR_BYTES: usize = 64;
 
@@ -146,6 +148,8 @@ impl OleDirectory {
         let mini_stream_cutoff = read_u32(bytes, 56).unwrap_or(4096) as usize;
         let first_mini_fat_sector = read_u32(bytes, 60).unwrap_or(FREESECT);
         let mini_fat_sector_count = read_u32(bytes, 64).unwrap_or_default() as usize;
+        let first_difat_sector = read_u32(bytes, 68).unwrap_or(FREESECT);
+        let difat_sector_count = read_u32(bytes, 72).unwrap_or_default() as usize;
         if matches!(first_directory_sector, FREESECT | ENDOFCHAIN) {
             return Ok(None);
         }
@@ -167,6 +171,20 @@ impl OleDirectory {
             if difat.len() == fat_sector_count {
                 break;
             }
+        }
+        if difat.len() < fat_sector_count {
+            append_difat_chain_checked(
+                OleDifatChain {
+                    bytes,
+                    sector_bytes,
+                    sector_count,
+                    first_sector: first_difat_sector,
+                    sector_count_hint: difat_sector_count,
+                    fat_sector_count,
+                },
+                &mut difat,
+                &mut check_control,
+            )?;
         }
         if difat.len() < fat_sector_count {
             return Ok(None);
@@ -322,6 +340,66 @@ impl OleDirectory {
         }
         Ok(Some(stream))
     }
+}
+
+struct OleDifatChain<'a> {
+    bytes: &'a [u8],
+    sector_bytes: usize,
+    sector_count: usize,
+    first_sector: u32,
+    sector_count_hint: usize,
+    fat_sector_count: usize,
+}
+
+fn append_difat_chain_checked(
+    chain: OleDifatChain<'_>,
+    difat: &mut Vec<u32>,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    if difat.len() >= chain.fat_sector_count
+        || chain.sector_count_hint == 0
+        || matches!(chain.first_sector, FREESECT | ENDOFCHAIN)
+    {
+        return Ok(());
+    }
+
+    let entries_per_sector = chain.sector_bytes / 4;
+    if entries_per_sector < 2 {
+        return Ok(());
+    }
+    let mut seen = HashSet::new();
+    let mut sector = chain.first_sector;
+    for _ in 0..chain.sector_count_hint {
+        check_control()?;
+        let sector_index = sector as usize;
+        if sector_index >= chain.sector_count || !seen.insert(sector) {
+            return Ok(());
+        }
+        let Some(difat_sector) = sector_bytes_for(chain.bytes, chain.sector_bytes, sector) else {
+            return Ok(());
+        };
+        for offset in (0..chain.sector_bytes - 4).step_by(4) {
+            check_control()?;
+            let Some(fat_sector) = read_u32(difat_sector, offset) else {
+                return Ok(());
+            };
+            if fat_sector == FREESECT {
+                continue;
+            }
+            difat.push(fat_sector);
+            if difat.len() == chain.fat_sector_count {
+                return Ok(());
+            }
+        }
+        let Some(next) = read_u32(difat_sector, chain.sector_bytes - 4) else {
+            return Ok(());
+        };
+        if matches!(next, FREESECT | ENDOFCHAIN) {
+            return Ok(());
+        }
+        sector = next;
+    }
+    Ok(())
 }
 
 fn read_mini_fat_and_stream_checked(
@@ -673,6 +751,24 @@ mod tests {
         assert!(document.text.contains("ministreamneedle launch plan"));
     }
 
+    #[test]
+    fn reads_legacy_office_fat_sectors_from_difat_chain() {
+        let bytes =
+            legacy_office_compound_file_with_difat("WordDocument", b"difatneedle launch plan");
+
+        let (status, document) = extract_legacy_office_document_checked(
+            &bytes,
+            LegacyOfficeKind::Doc,
+            &ExtractionPolicy::default(),
+            || Ok(()),
+        )
+        .unwrap();
+
+        assert_eq!(status, LegacyOfficeExtractStatus::Extracted);
+        let document = document.expect("DIFAT-backed WordDocument text should extract");
+        assert!(document.text.contains("difatneedle launch plan"));
+    }
+
     pub(crate) fn legacy_office_compound_file(streams: &[&str]) -> Vec<u8> {
         let mut header = vec![0_u8; HEADER_BYTES];
         header[..8].copy_from_slice(OLE_COMPOUND_FILE_MAGIC);
@@ -758,6 +854,54 @@ mod tests {
         mini_stream[..payload.len()].copy_from_slice(payload);
 
         [header, fat, directory, mini_fat, mini_stream].concat()
+    }
+
+    fn legacy_office_compound_file_with_difat(stream_name: &str, payload: &[u8]) -> Vec<u8> {
+        let mut header = vec![0_u8; HEADER_BYTES];
+        header[..8].copy_from_slice(OLE_COMPOUND_FILE_MAGIC);
+        header[24..26].copy_from_slice(&0x003e_u16.to_le_bytes());
+        header[26..28].copy_from_slice(&0x0003_u16.to_le_bytes());
+        header[28..30].copy_from_slice(&0xfffe_u16.to_le_bytes());
+        header[30..32].copy_from_slice(&9_u16.to_le_bytes());
+        header[32..34].copy_from_slice(&6_u16.to_le_bytes());
+        header[44..48].copy_from_slice(&1_u32.to_le_bytes());
+        header[48..52].copy_from_slice(&2_u32.to_le_bytes());
+        header[56..60].copy_from_slice(&4096_u32.to_le_bytes());
+        header[60..64].copy_from_slice(&ENDOFCHAIN.to_le_bytes());
+        header[68..72].copy_from_slice(&0_u32.to_le_bytes());
+        header[72..76].copy_from_slice(&1_u32.to_le_bytes());
+        for offset in (76..HEADER_BYTES).step_by(4) {
+            header[offset..offset + 4].copy_from_slice(&FREESECT.to_le_bytes());
+        }
+
+        let mut difat = vec![0xff_u8; HEADER_BYTES];
+        difat[0..4].copy_from_slice(&1_u32.to_le_bytes());
+        for offset in (4..HEADER_BYTES - 4).step_by(4) {
+            difat[offset..offset + 4].copy_from_slice(&FREESECT.to_le_bytes());
+        }
+        difat[HEADER_BYTES - 4..HEADER_BYTES].copy_from_slice(&ENDOFCHAIN.to_le_bytes());
+
+        let mut fat = vec![0xff_u8; HEADER_BYTES];
+        write_fat_entry(&mut fat, 0, DIFSECT);
+        write_fat_entry(&mut fat, 1, FATSECT);
+        write_fat_entry(&mut fat, 2, ENDOFCHAIN);
+        write_fat_entry(&mut fat, 3, ENDOFCHAIN);
+
+        let mut directory = vec![0_u8; HEADER_BYTES];
+        write_directory_entry(&mut directory[0..DIRECTORY_ENTRY_BYTES], "Root Entry", 5);
+        write_directory_entry_with_stream(
+            &mut directory[DIRECTORY_ENTRY_BYTES..DIRECTORY_ENTRY_BYTES * 2],
+            stream_name,
+            2,
+            3,
+            payload.len(),
+        );
+
+        let mut stream = vec![0_u8; HEADER_BYTES];
+        stream[..payload.len().min(HEADER_BYTES)]
+            .copy_from_slice(&payload[..payload.len().min(HEADER_BYTES)]);
+
+        [header, difat, fat, directory, stream].concat()
     }
 
     fn write_fat_entry(fat: &mut [u8], index: usize, value: u32) {

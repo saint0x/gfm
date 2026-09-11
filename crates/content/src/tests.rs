@@ -15,6 +15,7 @@ use zip::write::SimpleFileOptions;
 const TEST_OLE_FREESECT: u32 = 0xFFFF_FFFF;
 const TEST_OLE_ENDOFCHAIN: u32 = 0xFFFF_FFFE;
 const TEST_OLE_FATSECT: u32 = 0xFFFF_FFFD;
+const TEST_OLE_DIFSECT: u32 = 0xFFFF_FFFC;
 
 #[test]
 fn extracts_utf8_text_with_byte_budget() {
@@ -1124,6 +1125,26 @@ fn extracts_legacy_doc_text_from_worddocument_stream() {
 }
 
 #[test]
+fn extracts_legacy_doc_text_when_fat_sector_is_reached_through_difat() {
+    let root = unique_temp_dir("gfm-content-legacy-doc-difat");
+    let path = root.join("brief.doc");
+    fs::write(
+        &path,
+        legacy_office_bytes_with_difat_stream("WordDocument", b"\0\0legacydifatneedle launch plan"),
+    )
+    .unwrap();
+
+    let report = Extractor::default().extract_path_report(&path).unwrap();
+
+    assert_eq!(report.format, ExtractionFormat::Office);
+    assert_eq!(report.status, ExtractionStatus::Extracted);
+    let document = report.document.unwrap();
+    assert!(document.bytes_read > 0);
+    assert!(document.text.contains("legacydifatneedle launch plan"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn extracts_legacy_office_utf16_text_from_required_streams() {
     for (extension, stream, needle) in [
         ("xls", "Workbook", "legacyxlsneedle"),
@@ -2217,6 +2238,56 @@ fn legacy_office_bytes_with_stream(stream_name: &str, payload: &[u8]) -> Vec<u8>
         .copy_from_slice(&payload[..payload.len().min(HEADER_BYTES)]);
 
     [header, fat, directory, stream].concat()
+}
+
+fn legacy_office_bytes_with_difat_stream(stream_name: &str, payload: &[u8]) -> Vec<u8> {
+    const HEADER_BYTES: usize = 512;
+    const DIRECTORY_ENTRY_BYTES: usize = 128;
+
+    let mut header = vec![0_u8; HEADER_BYTES];
+    header[..8].copy_from_slice(b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1");
+    header[24..26].copy_from_slice(&0x003e_u16.to_le_bytes());
+    header[26..28].copy_from_slice(&0x0003_u16.to_le_bytes());
+    header[28..30].copy_from_slice(&0xfffe_u16.to_le_bytes());
+    header[30..32].copy_from_slice(&9_u16.to_le_bytes());
+    header[32..34].copy_from_slice(&6_u16.to_le_bytes());
+    header[44..48].copy_from_slice(&1_u32.to_le_bytes());
+    header[48..52].copy_from_slice(&2_u32.to_le_bytes());
+    header[56..60].copy_from_slice(&4096_u32.to_le_bytes());
+    header[60..64].copy_from_slice(&TEST_OLE_ENDOFCHAIN.to_le_bytes());
+    header[68..72].copy_from_slice(&0_u32.to_le_bytes());
+    header[72..76].copy_from_slice(&1_u32.to_le_bytes());
+    for offset in (76..HEADER_BYTES).step_by(4) {
+        header[offset..offset + 4].copy_from_slice(&TEST_OLE_FREESECT.to_le_bytes());
+    }
+
+    let mut difat = vec![0xff_u8; HEADER_BYTES];
+    difat[0..4].copy_from_slice(&1_u32.to_le_bytes());
+    for offset in (4..HEADER_BYTES - 4).step_by(4) {
+        difat[offset..offset + 4].copy_from_slice(&TEST_OLE_FREESECT.to_le_bytes());
+    }
+    difat[HEADER_BYTES - 4..HEADER_BYTES].copy_from_slice(&TEST_OLE_ENDOFCHAIN.to_le_bytes());
+
+    let mut fat = vec![0xff_u8; HEADER_BYTES];
+    write_fat_entry(&mut fat, 0, TEST_OLE_DIFSECT);
+    write_fat_entry(&mut fat, 1, TEST_OLE_FATSECT);
+    write_fat_entry(&mut fat, 2, TEST_OLE_ENDOFCHAIN);
+    write_fat_entry(&mut fat, 3, TEST_OLE_ENDOFCHAIN);
+
+    let mut directory = vec![0_u8; HEADER_BYTES];
+    write_directory_entry(&mut directory[0..DIRECTORY_ENTRY_BYTES], "Root Entry", 5);
+    write_directory_stream_entry(
+        &mut directory[DIRECTORY_ENTRY_BYTES..DIRECTORY_ENTRY_BYTES * 2],
+        stream_name,
+        3,
+        payload.len(),
+    );
+
+    let mut stream = vec![0_u8; HEADER_BYTES];
+    stream[..payload.len().min(HEADER_BYTES)]
+        .copy_from_slice(&payload[..payload.len().min(HEADER_BYTES)]);
+
+    [header, difat, fat, directory, stream].concat()
 }
 
 fn write_fat_entry(fat: &mut [u8], index: usize, value: u32) {
