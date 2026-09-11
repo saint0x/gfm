@@ -12275,8 +12275,10 @@ fn native_app_launch_renders_fileprovider_sidebar_state_from_binary() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_worker_admitted(&stderr, "ui fileprovider sidebar state", &item);
+    assert!(stdout.contains("\tsidebar-icloud=available\t"), "{stdout}");
     assert!(stdout.contains("\nsidebar\t"), "{stdout}");
     assert!(stdout.contains("row\tiCloud\ticloud-drive\t"), "{stdout}");
+    assert!(stdout.contains("\tpath-state=available\t"), "{stdout}");
     assert!(stdout.contains("\tcloud=downloading\t"), "{stdout}");
     assert!(
         stdout.contains("\tcloud-progress-source=state\t"),

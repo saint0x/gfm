@@ -1847,25 +1847,28 @@ fn native_fileprovider_conflict_from_env() -> Result<Option<ProviderConflictCont
     Ok(Some(provider_conflict_contract(report)))
 }
 
-fn native_fileprovider_sidebar_from_env(spec: &AppLaunchSpec) -> Result<Option<SidebarContract>> {
+fn native_fileprovider_sidebar_from_env(
+    spec: &AppLaunchSpec,
+) -> Result<Option<(SidebarPathSnapshot, SidebarContract)>> {
     let Some(path) = env::var_os("GFM_FILEPROVIDER_SIDEBAR_PATH") else {
         return Ok(None);
     };
     let provider_path = PathBuf::from(path);
     let report = read_ui_fileprovider_sidebar_state(provider_path.clone())?;
-    Ok(Some(
-        SidebarContract::from_path_snapshot_with_icloud_progress(
-            &spec.initial_path,
-            spec.sidebar_paths
-                .clone()
-                .with_icloud_drive(provider_path, SidebarPathState::Available),
-            sidebar_cloud_state(report.storage_state),
-            report.progress.percent_milli,
-            Some(report.progress.source.to_string()),
-            report.progress.reason,
-            spec.sidebar_volumes.clone(),
-        ),
-    ))
+    let sidebar_paths = spec
+        .sidebar_paths
+        .clone()
+        .with_icloud_drive(provider_path, SidebarPathState::Available);
+    let sidebar = SidebarContract::from_path_snapshot_with_icloud_progress(
+        &spec.initial_path,
+        sidebar_paths.clone(),
+        sidebar_cloud_state(report.storage_state),
+        report.progress.percent_milli,
+        Some(report.progress.source.to_string()),
+        report.progress.reason,
+        spec.sidebar_volumes.clone(),
+    );
+    Ok(Some((sidebar_paths, sidebar)))
 }
 
 #[cfg(test)]
@@ -1906,8 +1909,10 @@ fn app_launch_spec_checked(
     if let Some(placement) = capture_launch_placement_from_env()? {
         spec = spec.with_launch_placement(placement);
     }
-    if let Some(sidebar) = native_fileprovider_sidebar_from_env(&spec)? {
-        spec = spec.with_sidebar_contract(sidebar);
+    if let Some((sidebar_paths, sidebar)) = native_fileprovider_sidebar_from_env(&spec)? {
+        spec = spec
+            .with_sidebar_path_snapshot(sidebar_paths)
+            .with_sidebar_contract(sidebar);
     }
     check_control()?;
     if let Some(store) = crate::runtime::runtime_progress_store() {
