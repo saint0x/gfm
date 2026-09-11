@@ -28,11 +28,31 @@ pub(crate) fn extract_7z_metadata_checked(
     policy: &ExtractionPolicy,
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<(ArchiveExtractStatus, Option<ContentDocument>)> {
+    extract_7z_metadata_inner_checked(bytes, policy, false, &mut check_control)
+}
+
+pub(crate) fn extract_7z_volume_metadata_checked(
+    bytes: &[u8],
+    policy: &ExtractionPolicy,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<(ArchiveExtractStatus, Option<ContentDocument>)> {
+    extract_7z_metadata_inner_checked(bytes, policy, true, &mut check_control)
+}
+
+fn extract_7z_metadata_inner_checked(
+    bytes: &[u8],
+    policy: &ExtractionPolicy,
+    split_volume: bool,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<(ArchiveExtractStatus, Option<ContentDocument>)> {
     check_control()?;
     if bytes.len() as u64 > policy.max_archive_bytes {
         return Ok((ArchiveExtractStatus::TooLarge, None));
     }
     if !bytes.starts_with(SIGNATURE) || bytes.len() < HEADER_BYTES {
+        if split_volume {
+            return Ok((ArchiveExtractStatus::Unsupported, None));
+        }
         return Ok((ArchiveExtractStatus::Corrupt, None));
     }
 
@@ -44,6 +64,9 @@ pub(crate) fn extract_7z_metadata_checked(
         return Ok((ArchiveExtractStatus::Unsupported, None));
     }
     if next_header_end > bytes.len() as u64 {
+        if split_volume {
+            return Ok((ArchiveExtractStatus::Unsupported, None));
+        }
         return Ok((ArchiveExtractStatus::Corrupt, None));
     }
 

@@ -21,6 +21,7 @@ pub(crate) enum ArchiveKind {
     TarXz,
     Xz,
     Zip,
+    SevenZipVolume,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -68,6 +69,9 @@ pub(crate) fn extract_archive_metadata_checked(
         ArchiveKind::Rar => crate::rar::extract_rar_metadata_checked(bytes, policy, check_control),
         ArchiveKind::SevenZip => {
             crate::sevenzip::extract_7z_metadata_checked(bytes, policy, check_control)
+        }
+        ArchiveKind::SevenZipVolume => {
+            crate::sevenzip::extract_7z_volume_metadata_checked(bytes, policy, check_control)
         }
         ArchiveKind::Tar => extract_tar_metadata_checked(bytes, policy, check_control),
         ArchiveKind::TarBz2 => extract_compressed_tar_metadata_checked(

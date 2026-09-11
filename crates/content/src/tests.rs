@@ -482,6 +482,35 @@ fn extracts_real_7zz_metadata_fixture_through_public_report_path() {
 }
 
 #[test]
+fn skips_real_split_7zz_volumes_without_reporting_corruption() {
+    let root = unique_temp_dir("gfm-content-real-7zz-split-volume");
+    let first = root.join("split.7z.001");
+    let second = root.join("split.7z.002");
+    fs::write(
+        &first,
+        include_bytes!("../fixtures/archive/split-7zz.7z.001"),
+    )
+    .unwrap();
+    fs::write(
+        &second,
+        include_bytes!("../fixtures/archive/split-7zz.7z.002"),
+    )
+    .unwrap();
+
+    for path in [&first, &second] {
+        let report = Extractor::default().extract_path_report(path).unwrap();
+
+        assert_eq!(report.format, ExtractionFormat::Archive);
+        assert_eq!(
+            report.status,
+            ExtractionStatus::Skipped("unsupported-archive")
+        );
+        assert!(report.document.is_none());
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn quarantines_real_7zz_encrypted_header_fixture_without_reporting_corruption() {
     let root = unique_temp_dir("gfm-content-real-7zz-encrypted-header");
     let path = root.join("encrypted.7z");
@@ -863,6 +892,10 @@ fn extractor_versions_are_scoped_by_extraction_format() {
     );
     assert_eq!(
         extractor_version_for_path(Path::new("compressed.7z")),
+        ARCHIVE_EXTRACTOR_VERSION
+    );
+    assert_eq!(
+        extractor_version_for_path(Path::new("compressed.7z.001")),
         ARCHIVE_EXTRACTOR_VERSION
     );
     assert_eq!(

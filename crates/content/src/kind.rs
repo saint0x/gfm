@@ -84,6 +84,9 @@ pub(crate) fn archive_kind(path: &Path) -> Option<ArchiveKind> {
     if file_name.ends_with(".tar.xz") || file_name.ends_with(".txz") {
         return Some(ArchiveKind::TarXz);
     }
+    if is_numbered_7z_volume(&file_name) {
+        return Some(ArchiveKind::SevenZipVolume);
+    }
     match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
         "bz2" => Some(ArchiveKind::Bzip2),
         "gz" => Some(ArchiveKind::Gzip),
@@ -94,6 +97,12 @@ pub(crate) fn archive_kind(path: &Path) -> Option<ArchiveKind> {
         "7z" => Some(ArchiveKind::SevenZip),
         _ => None,
     }
+}
+
+fn is_numbered_7z_volume(file_name: &str) -> bool {
+    file_name.rsplit_once(".7z.").is_some_and(|(_, suffix)| {
+        suffix.len() == 3 && suffix.bytes().all(|byte| byte.is_ascii_digit())
+    })
 }
 
 pub(crate) fn office_kind(path: &Path) -> Option<OoxmlKind> {
