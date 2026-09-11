@@ -120,6 +120,9 @@ impl MmapContentSet {
         mut check_control: impl FnMut() -> Result<()>,
     ) -> Result<(Option<ContentPosting>, bool)> {
         check_control()?;
+        if limit == 0 {
+            return Ok((None, false));
+        }
         let term = canonical_term_checked(term, &mut check_control)?;
         if term.is_empty() {
             return Ok((None, false));
@@ -210,6 +213,11 @@ impl MmapContentSet {
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
     {
+        check_control()?;
+        if limit_per_term == 0 {
+            return Ok(Vec::new());
+        }
+
         let mut selected = BTreeSet::new();
         for term in terms {
             check_control()?;
@@ -474,6 +482,61 @@ mod tests {
 
         assert!(matches!(result, Err(GfmError::Cancelled)));
         assert!(checks >= 3);
+    }
+
+    #[test]
+    fn content_set_zero_limit_query_returns_before_canonicalization_or_archive_traversal() {
+        let path = temp_path("gfm-content-set-zero-limit-single", "gfmcontent");
+        write_content_postings(
+            &path,
+            &[ContentPosting {
+                term: "needle".to_string(),
+                ids: vec![FileId::new(VolumeId(1), 7)],
+                positions: Vec::new(),
+            }],
+        )
+        .unwrap();
+        let set = MmapContentSet::open([&path]).unwrap();
+        let mut checks = 0usize;
+
+        let (posting, truncated) = set
+            .posting_for_term_limit_checked("Needle".repeat(256).as_str(), 0, || {
+                checks += 1;
+                Ok(())
+            })
+            .unwrap();
+
+        assert!(posting.is_none());
+        assert!(!truncated);
+        assert_eq!(checks, 1);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn content_set_zero_limit_terms_query_returns_before_archive_traversal() {
+        let path = temp_path("gfm-content-set-zero-limit-terms", "gfmcontent");
+        write_content_postings(
+            &path,
+            &[ContentPosting {
+                term: "needle".to_string(),
+                ids: vec![FileId::new(VolumeId(1), 7)],
+                positions: Vec::new(),
+            }],
+        )
+        .unwrap();
+        let set = MmapContentSet::open([&path]).unwrap();
+        let mut checks = 0usize;
+
+        let postings = set
+            .postings_for_terms_limit_checked(["Needle".repeat(256)], 0, || {
+                checks += 1;
+                Ok(())
+            })
+            .unwrap();
+
+        assert!(postings.is_empty());
+        assert_eq!(checks, 1);
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
