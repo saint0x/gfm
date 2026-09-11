@@ -455,6 +455,23 @@ fn quarantines_rar5_service_headers_with_corrupt_extra_area() {
 }
 
 #[test]
+fn quarantines_rar5_oversized_variable_integer_header_without_panicking() {
+    let root = unique_temp_dir("gfm-content-rar5-oversized-vint");
+    let path = root.join("oversized-vint.rar");
+    fs::write(&path, rar5_oversized_vint_header_package()).unwrap();
+
+    let report = Extractor::default().extract_path_report(&path).unwrap();
+
+    assert_eq!(report.format, ExtractionFormat::Archive);
+    assert_eq!(
+        report.status,
+        ExtractionStatus::Quarantined("corrupt-archive")
+    );
+    assert!(report.document.is_none());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn quarantines_encrypted_7z_header_without_reporting_corruption() {
     let root = unique_temp_dir("gfm-content-7z-encrypted-header");
     let path = root.join("locked.7z");
@@ -2325,6 +2342,14 @@ fn rar5_corrupt_service_extra_package() -> Vec<u8> {
     push_rar5_block(&mut bytes, 1, 0, 0, &rar5_main_body(0), &[], 0);
     push_rar5_block(&mut bytes, 3, 0, 0, &[], &[0], 0);
     push_rar5_block(&mut bytes, 5, 0, 0, &[], &[], 0);
+    bytes
+}
+
+fn rar5_oversized_vint_header_package() -> Vec<u8> {
+    let mut bytes = b"Rar!\x1a\x07\x01\x00".to_vec();
+    bytes.extend_from_slice(&0_u32.to_le_bytes());
+    bytes.extend_from_slice(&[0xff; 9]);
+    bytes.push(0x02);
     bytes
 }
 

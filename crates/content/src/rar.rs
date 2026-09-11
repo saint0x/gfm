@@ -440,16 +440,22 @@ fn read_rar5_vint(bytes: &[u8], cursor: &mut usize) -> Option<u64> {
 
 fn read_rar5_vint_limited(bytes: &[u8], cursor: &mut usize, limit: usize) -> Option<u64> {
     let mut value = 0u64;
-    for shift in (0..70).step_by(7) {
+    let mut shift = 0u32;
+    for byte_index in 0..10 {
         if *cursor >= limit {
             return None;
         }
         let byte = *bytes.get(*cursor)?;
         *cursor += 1;
-        value |= u64::from(byte & 0x7f) << shift;
+        let payload = u64::from(byte & 0x7f);
+        if byte_index == 9 && payload > 1 {
+            return None;
+        }
+        value |= payload.checked_shl(shift)?;
         if byte & 0x80 == 0 {
             return Some(value);
         }
+        shift += 7;
     }
     None
 }
