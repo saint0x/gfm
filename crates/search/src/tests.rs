@@ -2756,6 +2756,26 @@ fn sharded_stream_merges_stages_across_volumes() {
 }
 
 #[test]
+fn sharded_stream_skips_deep_stage_when_scoped_shards_have_no_deep_delta() {
+    let mut index = ShardedSearchIndex::new();
+    let first = volume_record(1, 1, "/Volumes/A/report.md", "report.md");
+    let second = volume_record(2, 1, "/Volumes/B/report.txt", "report.txt");
+    index.insert(first.clone());
+    index.insert(second.clone());
+
+    let batches = index.stream("report", 10).unwrap();
+
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].stage, SearchStreamStage::Hot);
+    let paths = batches[0]
+        .hits
+        .iter()
+        .map(|hit| hit.record.path.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(paths, vec![first.path, second.path]);
+}
+
+#[test]
 fn sharded_stream_volume_scope_skips_excluded_deep_hits() {
     let mut index = ShardedSearchIndex::new();
     let hot = volume_record(1, 1, "/Volumes/A/needle.md", "needle.md");

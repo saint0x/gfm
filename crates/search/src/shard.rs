@@ -494,14 +494,39 @@ impl ShardedSearchIndex {
             return shard.stream_structured_cancellable(query, limit, cancellation);
         }
 
+        let may_have_deep_delta =
+            shards
+                .iter()
+                .try_fold(false, |may_have_deep_delta, (_, shard)| {
+                    if may_have_deep_delta {
+                        Ok(true)
+                    } else {
+                        shard.query_may_have_deep_delta_cancellable(query, cancellation)
+                    }
+                })?;
         let mut hot = BoundedHitMerge::new(limit);
-        let mut deep = BoundedHitMerge::new(limit.saturating_mul(2));
+        let mut deep = may_have_deep_delta.then(|| BoundedHitMerge::new(limit.saturating_mul(2)));
         std::thread::scope(|thread_scope| {
             let handles: Vec<_> = shards
                 .into_iter()
                 .map(|(_, shard)| {
                     thread_scope.spawn(move || {
-                        shard.stream_structured_cancellable(query, limit, cancellation)
+                        if may_have_deep_delta {
+                            shard.stream_structured_cancellable(query, limit, cancellation)
+                        } else {
+                            shard
+                                .query_hot_structured_cancellable(query, limit, cancellation)
+                                .map(|hits| {
+                                    if hits.is_empty() {
+                                        Vec::new()
+                                    } else {
+                                        vec![SearchStreamBatch {
+                                            stage: SearchStreamStage::Hot,
+                                            hits,
+                                        }]
+                                    }
+                                })
+                        }
                     })
                 })
                 .collect();
@@ -513,7 +538,11 @@ impl ShardedSearchIndex {
                 {
                     match batch.stage {
                         SearchStreamStage::Hot => hot.extend(batch.hits),
-                        SearchStreamStage::Deep => deep.extend(batch.hits),
+                        SearchStreamStage::Deep => {
+                            if let Some(deep) = &mut deep {
+                                deep.extend(batch.hits);
+                            }
+                        }
                     }
                 }
             }
@@ -534,6 +563,9 @@ impl ShardedSearchIndex {
         }
         cancellation.check()?;
 
+        let Some(deep) = deep else {
+            return Ok(batches);
+        };
         let mut deep = deep.into_sorted_hits();
         deep.retain(|hit| match seen.get(&hit.record.id) {
             Some(score) => hit.score > *score,

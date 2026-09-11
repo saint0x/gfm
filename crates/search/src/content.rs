@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 const CANCELLATION_STRIDE: usize = 256;
 
 impl SearchIndex {
-    pub(super) fn query_may_have_deep_delta_cancellable(
+    pub(crate) fn query_may_have_deep_delta_cancellable(
         &self,
         query: &SearchQuery,
         cancellation: &Cancellation,

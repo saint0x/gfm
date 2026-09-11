@@ -297,6 +297,23 @@ impl SearchIndex {
         Ok(batches)
     }
 
+    pub(crate) fn query_hot_structured_cancellable(
+        &self,
+        query: &SearchQuery,
+        limit: usize,
+        cancellation: &Cancellation,
+    ) -> gfm_types::Result<Vec<SearchHit>> {
+        self.query_pass(
+            query,
+            limit,
+            SearchPass::Hot,
+            &EmptySearchLookup,
+            SearchLookupBudget::default(),
+            cancellation,
+        )
+        .map(|report| report.hits)
+    }
+
     fn query_pass(
         &self,
         query: &SearchQuery,
