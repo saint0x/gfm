@@ -25,7 +25,7 @@ use kind::{
     archive_kind, extraction_format, legacy_office_kind, office_kind, path_is_pdf, rich_kind,
     structured_kind,
 };
-use legacy::extract_legacy_office_checked;
+use legacy::extract_legacy_office_document_checked;
 pub use ocr::{
     ocr_candidate_for_extraction, ocr_candidate_for_record, OcrCandidate, OcrCandidateKind,
     OcrCandidateQueue, OcrFailureDecision, OcrFailureEntry, OcrFailureKind, OcrFailureQuarantine,
@@ -232,14 +232,18 @@ impl Extractor {
         }
 
         if let Some(kind) = legacy_office {
-            let status =
-                extract_legacy_office_checked(&bytes, kind, &self.policy, &mut check_control)?;
+            let (status, document) = extract_legacy_office_document_checked(
+                &bytes,
+                kind,
+                &self.policy,
+                &mut check_control,
+            )?;
             return Ok(ExtractionReport {
                 path: path.to_path_buf(),
                 format,
                 status: status::legacy_office_report_status(status),
                 fingerprint,
-                document: None,
+                document,
             });
         }
 

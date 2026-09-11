@@ -32,6 +32,7 @@ pub(crate) fn ooxml_report_status(status: OoxmlExtractStatus) -> ExtractionStatu
 
 pub(crate) fn legacy_office_report_status(status: LegacyOfficeExtractStatus) -> ExtractionStatus {
     match status {
+        LegacyOfficeExtractStatus::Extracted => ExtractionStatus::Extracted,
         LegacyOfficeExtractStatus::Unsupported => ExtractionStatus::Skipped("legacy-office"),
         LegacyOfficeExtractStatus::TooLarge => ExtractionStatus::Skipped("too-large"),
         LegacyOfficeExtractStatus::Encrypted => ExtractionStatus::Quarantined("encrypted-office"),

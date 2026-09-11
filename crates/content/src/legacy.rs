@@ -1,4 +1,5 @@
 use crate::kind::LegacyOfficeKind;
+use crate::report::ContentDocument;
 use crate::ExtractionPolicy;
 use gfm_types::Result;
 use std::collections::HashSet;
@@ -13,45 +14,78 @@ const MAX_SECTOR_BYTES: usize = 4096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LegacyOfficeExtractStatus {
+    Extracted,
     Unsupported,
     TooLarge,
     Encrypted,
     Corrupt,
 }
 
-pub(crate) fn extract_legacy_office_checked(
+pub(crate) fn extract_legacy_office_document_checked(
     bytes: &[u8],
     kind: LegacyOfficeKind,
     policy: &ExtractionPolicy,
     mut check_control: impl FnMut() -> Result<()>,
-) -> Result<LegacyOfficeExtractStatus> {
+) -> Result<(LegacyOfficeExtractStatus, Option<ContentDocument>)> {
     check_control()?;
     if bytes.len() as u64 > policy.max_office_bytes {
-        return Ok(LegacyOfficeExtractStatus::TooLarge);
+        return Ok((LegacyOfficeExtractStatus::TooLarge, None));
     }
     if !bytes.starts_with(OLE_COMPOUND_FILE_MAGIC) {
-        return Ok(LegacyOfficeExtractStatus::Unsupported);
+        return Ok((LegacyOfficeExtractStatus::Unsupported, None));
     }
 
-    let Some(directory_names) = OleDirectory::parse_checked(bytes, &mut check_control)? else {
-        return Ok(LegacyOfficeExtractStatus::Corrupt);
+    let Some(directory) = OleDirectory::parse_checked(bytes, &mut check_control)? else {
+        return Ok((LegacyOfficeExtractStatus::Corrupt, None));
     };
     check_control()?;
 
-    if directory_names
+    if directory
+        .entries
         .iter()
-        .any(|name| encrypted_stream_name(name))
+        .any(|entry| encrypted_stream_name(&entry.name))
     {
-        return Ok(LegacyOfficeExtractStatus::Encrypted);
+        return Ok((LegacyOfficeExtractStatus::Encrypted, None));
     }
-    if !directory_names
+    let required = directory
+        .entries
         .iter()
-        .any(|name| required_legacy_office_stream(kind, name))
-    {
-        return Ok(LegacyOfficeExtractStatus::Corrupt);
+        .filter(|entry| required_legacy_office_stream(kind, &entry.name))
+        .collect::<Vec<_>>();
+    if required.is_empty() {
+        return Ok((LegacyOfficeExtractStatus::Corrupt, None));
     }
 
-    Ok(LegacyOfficeExtractStatus::Unsupported)
+    let mut text = String::new();
+    let mut bytes_read = 0;
+    for entry in required {
+        check_control()?;
+        if entry.stream_size as u64 > policy.max_office_entry_bytes {
+            continue;
+        }
+        let Some(stream) = directory.read_stream_checked(bytes, entry, &mut check_control)? else {
+            continue;
+        };
+        bytes_read += stream.len();
+        push_salvaged_legacy_text(
+            &stream,
+            policy.max_office_text_bytes,
+            &mut text,
+            &mut check_control,
+        )?;
+        if text.len() >= policy.max_office_text_bytes {
+            break;
+        }
+    }
+
+    let text = normalize_legacy_text(&text, policy.max_office_text_bytes);
+    if text.is_empty() {
+        return Ok((LegacyOfficeExtractStatus::Unsupported, None));
+    }
+    Ok((
+        LegacyOfficeExtractStatus::Extracted,
+        Some(ContentDocument { bytes_read, text }),
+    ))
 }
 
 fn encrypted_stream_name(name: &str) -> bool {
@@ -69,13 +103,26 @@ fn required_legacy_office_stream(kind: LegacyOfficeKind, name: &str) -> bool {
     }
 }
 
-struct OleDirectory;
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OleDirectoryEntry {
+    name: String,
+    object_type: u8,
+    start_sector: u32,
+    stream_size: usize,
+}
+
+struct OleDirectory {
+    sector_bytes: usize,
+    fat: Vec<u32>,
+    mini_stream_cutoff: usize,
+    entries: Vec<OleDirectoryEntry>,
+}
 
 impl OleDirectory {
     fn parse_checked(
         bytes: &[u8],
         mut check_control: impl FnMut() -> Result<()>,
-    ) -> Result<Option<Vec<String>>> {
+    ) -> Result<Option<Self>> {
         check_control()?;
         if bytes.len() < HEADER_BYTES {
             return Ok(None);
@@ -93,6 +140,7 @@ impl OleDirectory {
 
         let fat_sector_count = read_u32(bytes, 44).unwrap_or_default() as usize;
         let first_directory_sector = read_u32(bytes, 48).unwrap_or(FREESECT);
+        let mini_stream_cutoff = read_u32(bytes, 56).unwrap_or(4096) as usize;
         if matches!(first_directory_sector, FREESECT | ENDOFCHAIN) {
             return Ok(None);
         }
@@ -140,7 +188,7 @@ impl OleDirectory {
         else {
             return Ok(None);
         };
-        let mut names = Vec::new();
+        let mut entries = Vec::new();
         for entry in directory_stream.chunks_exact(DIRECTORY_ENTRY_BYTES) {
             check_control()?;
             let object_type = entry[66];
@@ -151,11 +199,58 @@ impl OleDirectory {
                 return Ok(None);
             };
             if !name.is_empty() {
-                names.push(name);
+                entries.push(OleDirectoryEntry {
+                    name,
+                    object_type,
+                    start_sector: read_u32(entry, 116).unwrap_or(ENDOFCHAIN),
+                    stream_size: read_u64_low_usize(entry, 120).unwrap_or_default(),
+                });
             }
         }
 
-        Ok(Some(names))
+        Ok(Some(Self {
+            sector_bytes,
+            fat,
+            mini_stream_cutoff,
+            entries,
+        }))
+    }
+
+    fn read_stream_checked(
+        &self,
+        bytes: &[u8],
+        entry: &OleDirectoryEntry,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Option<Vec<u8>>> {
+        check_control()?;
+        if entry.object_type != 2
+            || entry.stream_size == 0
+            || matches!(entry.start_sector, FREESECT | ENDOFCHAIN | FATSECT)
+        {
+            return Ok(None);
+        }
+
+        let Some(mut stream) = read_sector_chain_checked(
+            bytes,
+            self.sector_bytes,
+            &self.fat,
+            entry.start_sector,
+            &mut check_control,
+        )?
+        else {
+            return Ok(None);
+        };
+        if stream.len() < entry.stream_size {
+            return Ok(None);
+        }
+        stream.truncate(entry.stream_size);
+
+        // Real small OLE streams usually live in the ministream. Some legacy
+        // producers write regular chains anyway, so accept decodable content.
+        if entry.stream_size < self.mini_stream_cutoff && !stream_has_salvageable_text(&stream) {
+            return Ok(None);
+        }
+        Ok(Some(stream))
     }
 }
 
@@ -219,6 +314,167 @@ fn read_u32(bytes: &[u8], offset: usize) -> Option<u32> {
     Some(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
 }
 
+fn read_u64_low_usize(bytes: &[u8], offset: usize) -> Option<usize> {
+    let low = read_u32(bytes, offset)? as usize;
+    let high = read_u32(bytes, offset + 4).unwrap_or_default();
+    if high != 0 {
+        return None;
+    }
+    Some(low)
+}
+
+fn push_salvaged_legacy_text(
+    bytes: &[u8],
+    max_text_bytes: usize,
+    out: &mut String,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    check_control()?;
+    push_ascii_runs(bytes, max_text_bytes, out, &mut check_control)?;
+    check_control()?;
+    push_utf16le_runs(bytes, max_text_bytes, out, &mut check_control)
+}
+
+fn push_ascii_runs(
+    bytes: &[u8],
+    max_text_bytes: usize,
+    out: &mut String,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    let mut run = Vec::new();
+    for chunk in bytes.chunks(4096) {
+        check_control()?;
+        for &byte in chunk {
+            if is_ascii_text_byte(byte) {
+                run.push(byte);
+            } else {
+                flush_ascii_run(&mut run, max_text_bytes, out);
+            }
+            if out.len() >= max_text_bytes {
+                return Ok(());
+            }
+        }
+    }
+    flush_ascii_run(&mut run, max_text_bytes, out);
+    Ok(())
+}
+
+fn flush_ascii_run(run: &mut Vec<u8>, max_text_bytes: usize, out: &mut String) {
+    const MIN_ASCII_RUN: usize = 4;
+    if run.len() >= MIN_ASCII_RUN {
+        append_with_limit(out, &String::from_utf8_lossy(run), max_text_bytes);
+        append_with_limit(out, " ", max_text_bytes);
+    }
+    run.clear();
+}
+
+fn push_utf16le_runs(
+    bytes: &[u8],
+    max_text_bytes: usize,
+    out: &mut String,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    let mut run = String::new();
+    for chunk in bytes.chunks(4096) {
+        check_control()?;
+        for pair in chunk.chunks_exact(2) {
+            let unit = u16::from_le_bytes([pair[0], pair[1]]);
+            let Some(ch) = char::from_u32(unit as u32) else {
+                flush_utf16_run(&mut run, max_text_bytes, out);
+                continue;
+            };
+            if is_text_char(ch) {
+                run.push(ch);
+            } else {
+                flush_utf16_run(&mut run, max_text_bytes, out);
+            }
+            if out.len() >= max_text_bytes {
+                return Ok(());
+            }
+        }
+    }
+    flush_utf16_run(&mut run, max_text_bytes, out);
+    Ok(())
+}
+
+fn flush_utf16_run(run: &mut String, max_text_bytes: usize, out: &mut String) {
+    const MIN_UTF16_RUN_CHARS: usize = 4;
+    if run.chars().count() >= MIN_UTF16_RUN_CHARS {
+        append_with_limit(out, run, max_text_bytes);
+        append_with_limit(out, " ", max_text_bytes);
+    }
+    run.clear();
+}
+
+fn append_with_limit(out: &mut String, value: &str, max_text_bytes: usize) {
+    if out.len() >= max_text_bytes {
+        return;
+    }
+    for ch in value.chars() {
+        if out.len() + ch.len_utf8() > max_text_bytes {
+            break;
+        }
+        out.push(ch);
+    }
+}
+
+fn normalize_legacy_text(text: &str, max_text_bytes: usize) -> String {
+    let mut out = String::new();
+    let mut previous_space = true;
+    for ch in text.chars() {
+        if out.len() >= max_text_bytes {
+            break;
+        }
+        if ch.is_whitespace() {
+            if !previous_space {
+                append_with_limit(&mut out, " ", max_text_bytes);
+                previous_space = true;
+            }
+        } else {
+            append_with_limit(&mut out, &ch.to_string(), max_text_bytes);
+            previous_space = false;
+        }
+    }
+    out.trim().to_string()
+}
+
+fn stream_has_salvageable_text(bytes: &[u8]) -> bool {
+    let mut run = 0;
+    for byte in bytes {
+        if is_ascii_text_byte(*byte) {
+            run += 1;
+            if run >= 4 {
+                return true;
+            }
+        } else {
+            run = 0;
+        }
+    }
+    let mut utf16_run = 0;
+    for pair in bytes.chunks_exact(2) {
+        let unit = u16::from_le_bytes([pair[0], pair[1]]);
+        if let Some(ch) = char::from_u32(unit as u32) {
+            if is_text_char(ch) {
+                utf16_run += 1;
+                if utf16_run >= 4 {
+                    return true;
+                }
+                continue;
+            }
+        }
+        utf16_run = 0;
+    }
+    false
+}
+
+fn is_ascii_text_byte(byte: u8) -> bool {
+    byte == b'\t' || byte == b'\n' || byte == b'\r' || (0x20..=0x7e).contains(&byte)
+}
+
+fn is_text_char(ch: char) -> bool {
+    !ch.is_control() || ch.is_whitespace()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -228,7 +484,7 @@ mod tests {
     fn detects_encrypted_legacy_office_directory_entries() {
         let bytes = legacy_office_compound_file(&["WordDocument", "EncryptionInfo"]);
 
-        let status = extract_legacy_office_checked(
+        let (status, document) = extract_legacy_office_document_checked(
             &bytes,
             LegacyOfficeKind::Doc,
             &ExtractionPolicy::default(),
@@ -237,13 +493,14 @@ mod tests {
         .unwrap();
 
         assert_eq!(status, LegacyOfficeExtractStatus::Encrypted);
+        assert!(document.is_none());
     }
 
     #[test]
     fn corrupts_compound_files_without_required_office_streams() {
         let bytes = legacy_office_compound_file(&["NotOffice"]);
 
-        let status = extract_legacy_office_checked(
+        let (status, document) = extract_legacy_office_document_checked(
             &bytes,
             LegacyOfficeKind::Doc,
             &ExtractionPolicy::default(),
@@ -252,13 +509,14 @@ mod tests {
         .unwrap();
 
         assert_eq!(status, LegacyOfficeExtractStatus::Corrupt);
+        assert!(document.is_none());
     }
 
     #[test]
     fn keeps_well_formed_legacy_office_unsupported_until_binary_import_lands() {
         let bytes = legacy_office_compound_file(&["Workbook"]);
 
-        let status = extract_legacy_office_checked(
+        let (status, document) = extract_legacy_office_document_checked(
             &bytes,
             LegacyOfficeKind::Xls,
             &ExtractionPolicy::default(),
@@ -267,6 +525,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(status, LegacyOfficeExtractStatus::Unsupported);
+        assert!(document.is_none());
     }
 
     pub(crate) fn legacy_office_compound_file(streams: &[&str]) -> Vec<u8> {
