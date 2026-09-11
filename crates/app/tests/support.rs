@@ -1157,7 +1157,10 @@ fn reports_restorable_progress_surfaces_in_lifecycle_contract_from_binary() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
 
-    assert!(stdout.starts_with("window\tGFM\t/tmp/gfm\t"), "{stdout}");
+    assert!(
+        stdout.starts_with("window\t") && stdout.contains("\t/tmp/gfm\t1040x720\t"),
+        "{stdout}"
+    );
     assert!(
         stdout.contains(
             "\noperation-progress\tjob=1\tlabel=copy selected files\tstate=running\tcompleted=42\ttotal=100\tpercent=42\t"
@@ -1172,6 +1175,12 @@ fn reports_restorable_progress_surfaces_in_lifecycle_contract_from_binary() {
     );
     assert!(
         stdout.contains(
+            "\noperation-progress-visible\tjob=1\tstatus=42% complete - 42 of 100\tdetail=copy:/source->/target\tpayload=operation: copy:/source->/target"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
             "\noperation-progress\tjob=2\tlabel=index content\tstate=paused\tcompleted=128\ttotal=250\tpercent=51\t"
         ),
         "{stdout}"
@@ -1179,6 +1188,12 @@ fn reports_restorable_progress_surfaces_in_lifecycle_contract_from_binary() {
     assert!(
         stdout.contains(
             "\tpayload-kind=indexing\tpayload-path=index/content.gfmjob\tpayload-summary=index:/workspace"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "\noperation-progress-visible\tjob=2\tstatus=51% complete - 128 of 250\tdetail=throttled\tpayload=indexing: index:/workspace"
         ),
         "{stdout}"
     );
@@ -1233,7 +1248,10 @@ fn reports_restorable_progress_surfaces_without_optional_payload_catalog_from_bi
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
 
-    assert!(stdout.starts_with("window\tGFM\t/tmp/gfm\t"), "{stdout}");
+    assert!(
+        stdout.starts_with("window\t") && stdout.contains("\t/tmp/gfm\t1040x720\t"),
+        "{stdout}"
+    );
     assert!(
         stdout.contains(
             "\noperation-progress\tjob=1\tlabel=copy selected files\tstate=running\tcompleted=42\ttotal=100\tpercent=42\t"
@@ -1242,6 +1260,12 @@ fn reports_restorable_progress_surfaces_without_optional_payload_catalog_from_bi
     );
     assert!(
         stdout.contains("\tpayload-kind=-\tpayload-path=-\tpayload-summary=-"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "\noperation-progress-visible\tjob=1\tstatus=42% complete - 42 of 100\tdetail=copy:/source->/target\tpayload=-"
+        ),
         "{stdout}"
     );
     assert!(
@@ -1720,6 +1744,9 @@ fn reports_progress_dialog_from_job_progress_store() {
     assert!(stdout.contains("button\tstop\tStop\tcancel\tenabled=true"));
     assert!(stdout.contains(
         "operation-progress\tjob=2\tlabel=index content\tstate=paused\tcompleted=128\ttotal=250\tpercent=51\tdetail=pressure:throttled\tdetail-kind=pressure"
+    ));
+    assert!(stdout.contains(
+        "operation-progress-visible\tjob=2\tstatus=51% complete - 128 of 250\tdetail=throttled\tpayload=-"
     ));
     assert!(stdout.contains("operation-progress-command\tresume\tjob=2\tenabled=true"));
 

@@ -389,6 +389,7 @@ impl OperationProgressContract {
                 .map(escape_tsv)
                 .unwrap_or_else(|| "-".to_string()),
         )];
+        lines.push(self.visible_tsv());
         lines.extend(self.commands.iter().map(|command| {
             format!(
                 "operation-progress-command\t{}\tjob={}\tenabled={}",
@@ -449,6 +450,21 @@ impl OperationProgressContract {
                 Some(kind) => format!("{}: {value}", kind.as_str()),
                 None => value.clone(),
             })
+    }
+
+    pub fn visible_tsv(&self) -> String {
+        format!(
+            "operation-progress-visible\tjob={}\tstatus={}\tdetail={}\tpayload={}",
+            self.job_id
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            escape_tsv(&self.visible_status()),
+            escape_tsv(&self.visible_detail()),
+            self.visible_payload()
+                .as_deref()
+                .map(escape_tsv)
+                .unwrap_or_else(|| "-".to_string())
+        )
     }
 }
 
@@ -2420,6 +2436,9 @@ mod tests {
             contract.visible_payload().as_deref(),
             Some("operation: copy:/tmp/source")
         );
+        assert!(contract.as_tsv().contains(
+            "\noperation-progress-visible\tjob=7\tstatus=42% complete - 42 of 100\tdetail=throttled\tpayload=operation: copy:/tmp/source"
+        ));
     }
 
     #[test]
