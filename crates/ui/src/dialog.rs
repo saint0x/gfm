@@ -792,6 +792,16 @@ impl OperationConflictContract {
             escape_tsv(&self.keyboard_model),
             escape_tsv(&self.reason)
         )];
+        lines.push(format!(
+            "operation-conflict-visible\ttitle={}\tsummary={}\tpolicies={}\treview-preview={}\tmore-items={}\tdefault-action={}\tcancel-action={}",
+            escape_tsv(self.dialog.title),
+            escape_tsv(&self.visible_summary()),
+            escape_tsv(&self.visible_policy_summary()),
+            operation_conflict_review_preview_tsv(self.visible_review_rows()),
+            self.visible_more_items(),
+            escape_tsv(&self.default_action),
+            escape_tsv(&self.cancel_action)
+        ));
         lines.extend(self.review_rows.iter().map(|row| {
             format!(
                 "operation-conflict-row\t{}\toperation={}\tsource={}\ttarget={}\tkind={}\tpolicy={}\treason={}",
@@ -831,6 +841,34 @@ impl OperationConflictContract {
         } else {
             format!("Available: {}", self.available_policies.join(", "))
         }
+    }
+
+    pub fn visible_review_rows(&self) -> &[OperationConflictReviewRow] {
+        let visible_count = self.review_rows.len().min(4);
+        &self.review_rows[..visible_count]
+    }
+
+    pub fn visible_more_items(&self) -> usize {
+        self.review_rows.len().saturating_sub(4)
+    }
+}
+
+fn operation_conflict_review_preview_tsv(rows: &[OperationConflictReviewRow]) -> String {
+    if rows.is_empty() {
+        "-".to_string()
+    } else {
+        rows.iter()
+            .map(|row| {
+                format!(
+                    "{}:{}->{}:{}",
+                    escape_tsv(&row.operation),
+                    escape_tsv(&row.source),
+                    escape_tsv(&row.target),
+                    escape_tsv(&row.selected_policy)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",")
     }
 }
 
@@ -1260,7 +1298,7 @@ pub fn render_operation_conflict(conflict: &OperationConflictContract) -> impl I
         .flex()
         .flex_col()
         .gap(px(6.0));
-    for row in conflict.review_rows.iter().take(4) {
+    for row in conflict.visible_review_rows() {
         rows = rows.child(
             div()
                 .id("operation-conflict-row")
@@ -1291,13 +1329,14 @@ pub fn render_operation_conflict(conflict: &OperationConflictContract) -> impl I
                 ),
         );
     }
-    if conflict.review_rows.len() > 4 {
+    let more_items = conflict.visible_more_items();
+    if more_items > 0 {
         rows = rows.child(
             div()
                 .id("operation-conflict-more")
                 .text_size(px(11.0))
                 .text_color(rgb(0x9a9aa0))
-                .child(format!("{} more items", conflict.review_rows.len() - 4)),
+                .child(format!("{} more items", more_items)),
         );
     }
 
@@ -2127,6 +2166,9 @@ mod tests {
             .as_tsv()
             .contains("\noperation-conflict-ui\toperation=copy\ttarget=/tmp/target\tkind=file\t"));
         assert!(contract.as_tsv().contains(
+            "\noperation-conflict-visible\ttitle=An item with the same name already exists\tsummary=Choose how to resolve /tmp/target.\tpolicies=Available: replace, keep-both, skip\treview-preview=copy:/tmp/source->/tmp/target:fail\tmore-items=0\tdefault-action=keep-both\tcancel-action=stop"
+        ));
+        assert!(contract.as_tsv().contains(
             "\noperation-conflict-row\t0\toperation=copy\tsource=/tmp/source\ttarget=/tmp/target\tkind=file\t"
         ));
     }
@@ -2151,6 +2193,8 @@ mod tests {
             contract.visible_policy_summary(),
             "Available: replace, keep-both"
         );
+        assert_eq!(contract.visible_review_rows().len(), 1);
+        assert_eq!(contract.visible_more_items(), 0);
     }
 
     #[test]
@@ -2249,6 +2293,39 @@ mod tests {
         assert!(contract
             .as_tsv()
             .contains("\noperation-conflict-row\t1\toperation=move\tsource=/tmp/directory-source\ttarget=/tmp/directory-target\tkind=directory\t"));
+        assert!(contract.as_tsv().contains(
+            "\noperation-conflict-visible\ttitle=An item with the same name already exists\tsummary=Choose how to resolve 2 items.\tpolicies=Available: replace, keep-both, skip\treview-preview=copy:/tmp/file-source->/tmp/file-target:fail,move:/tmp/directory-source->/tmp/directory-target:fail\tmore-items=0\tdefault-action=keep-both\tcancel-action=stop"
+        ));
+    }
+
+    #[test]
+    fn operation_conflict_visible_contract_matches_rendered_review_limit() {
+        let inputs = (0..6)
+            .map(|index| {
+                OperationConflictInput::new(
+                    "copy",
+                    OperationConflictPaths::new(
+                        format!("/tmp/source-{index}"),
+                        format!("/tmp/target-{index}"),
+                    ),
+                    "file",
+                    "fail",
+                    vec!["replace".to_string(), "keep-both".to_string()],
+                    true,
+                    "destination-conflict-requires-user-resolution",
+                )
+            })
+            .collect();
+        let contract = OperationConflictContract::from_inputs(inputs).unwrap();
+        let tsv = contract.as_tsv();
+
+        assert_eq!(contract.visible_review_rows().len(), 4);
+        assert_eq!(contract.visible_more_items(), 2);
+        assert!(tsv.contains("\tmore-items=2\tdefault-action=keep-both\tcancel-action=stop"));
+        assert!(tsv.contains(
+            "review-preview=copy:/tmp/source-0->/tmp/target-0:fail,copy:/tmp/source-1->/tmp/target-1:fail,copy:/tmp/source-2->/tmp/target-2:fail,copy:/tmp/source-3->/tmp/target-3:fail\t"
+        ));
+        assert!(!tsv.contains("source-4->/tmp/target-4"));
     }
 
     #[test]
@@ -2339,6 +2416,10 @@ mod tests {
             .lines()
             .find(|line| line.starts_with("operation-conflict-ui\t"))
             .unwrap();
+        let visible = tsv
+            .lines()
+            .find(|line| line.starts_with("operation-conflict-visible\t"))
+            .unwrap();
         let row = tsv
             .lines()
             .find(|line| line.starts_with("operation-conflict-row\t"))
@@ -2354,6 +2435,20 @@ mod tests {
             ui.contains("reason=destination\\tconflict\\nrequires\\rresolution\\\\now"),
             "{tsv}"
         );
+        assert!(
+            visible.contains("summary=Choose how to resolve /tmp/target\\tA\\nB\\r.txt.\t"),
+            "{tsv}"
+        );
+        assert!(
+            visible.contains("policies=Available: keep\\tboth, skip\\\\item\t"),
+            "{tsv}"
+        );
+        assert!(
+            visible.contains(
+                "review-preview=copy\\tfiles:/tmp/source\\tA\\nB\\r.txt->/tmp/target\\tA\\nB\\r.txt:keep\\tboth\t"
+            ),
+            "{tsv}"
+        );
         assert!(row.contains("source=/tmp/source\\tA\\nB\\r.txt\t"), "{tsv}");
         assert!(row.contains("target=/tmp/target\\tA\\nB\\r.txt\t"), "{tsv}");
         assert!(
@@ -2361,6 +2456,7 @@ mod tests {
             "{tsv}"
         );
         assert_eq!(ui.split('\t').count(), 12, "{tsv}");
+        assert_eq!(visible.split('\t').count(), 8, "{tsv}");
         assert_eq!(row.split('\t').count(), 8, "{tsv}");
         assert_eq!(action.split('\t').count(), 6, "{tsv}");
     }

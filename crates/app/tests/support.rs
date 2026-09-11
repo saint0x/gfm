@@ -1492,7 +1492,11 @@ fn reports_operation_conflict_surfaces_in_lifecycle_contract_from_binary() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    assert!(stdout.starts_with("window\tGFM\t"), "{stdout}");
+    assert!(stdout.starts_with("window\t"), "{stdout}");
+    assert!(
+        stdout.contains(&format!("\t{}\t", root.display())),
+        "{stdout}"
+    );
     assert_worker_admitted(&stderr, "ui operation conflict store", &conflicts);
     assert!(
         stdout.contains(
@@ -1504,6 +1508,16 @@ fn reports_operation_conflict_surfaces_in_lifecycle_contract_from_binary() {
         stdout.contains(
             "\tfocus=keep-both\tdefault-action=keep-both\tcancel-action=stop\tkeyboard=finder-conflict-sheet-return-default-escape-cancel-tab-cycle\t"
         ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "\noperation-conflict-visible\ttitle=An item with the same name already exists\tsummary=Choose how to resolve 2 items.\tpolicies=Available: replace, keep-both, skip\t"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\tmore-items=0\tdefault-action=keep-both\tcancel-action=stop"),
         "{stdout}"
     );
     assert!(
@@ -1660,6 +1674,16 @@ fn resolves_operation_conflict_surface_before_next_lifecycle_contract() {
         "{resolve_stdout}"
     );
     assert!(
+        resolve_stdout.contains(
+            "\noperation-conflict-visible\ttitle=An item with the same name already exists\tsummary="
+        ),
+        "{resolve_stdout}"
+    );
+    assert!(
+        resolve_stdout.contains("\tmore-items=0\tdefault-action=keep-both\tcancel-action=-"),
+        "{resolve_stdout}"
+    );
+    assert!(
         resolve_stdout.contains(&format!(
             "\noperation-conflict-row\t0\toperation=copy\tsource={}\t",
             source.display()
@@ -1678,7 +1702,11 @@ fn resolves_operation_conflict_surface_before_next_lifecycle_contract() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.starts_with("window\tGFM\t"), "{stdout}");
+    assert!(stdout.starts_with("window\t"), "{stdout}");
+    assert!(
+        stdout.contains(&format!("\t{}\t", root.display())),
+        "{stdout}"
+    );
     assert!(!stdout.contains("\noperation-conflict-ui\t"), "{stdout}");
 
     let _ = std::fs::remove_dir_all(root);
@@ -2598,6 +2626,13 @@ fn reports_operation_conflict_sheet_from_existing_destination() {
     assert!(stdout.contains("button\tkeep-both\tKeep Both\tdefault\tenabled=true"));
     assert!(stdout.contains("button\tmerge\tMerge\talternate\tenabled=false"));
     assert!(stdout.contains("\noperation-conflict-ui\toperation=copy\t"));
+    assert!(stdout.contains(
+        "\noperation-conflict-visible\ttitle=An item with the same name already exists\tsummary=Choose how to resolve "
+    ));
+    assert!(stdout.contains("\tpolicies=Available: replace, keep-both, skip\t"));
+    assert!(stdout.contains("\treview-preview=copy:"));
+    assert!(stdout.contains("->"));
+    assert!(stdout.contains(":fail\tmore-items=0\tdefault-action=keep-both\tcancel-action=stop"));
     assert!(stdout.contains("\tfocus=keep-both\tdefault-action=keep-both\tcancel-action=stop\t"));
     assert!(stdout.contains(&format!(
         "\noperation-conflict-row\t0\toperation=copy\tsource={}\t",
@@ -2638,6 +2673,10 @@ fn reports_directory_operation_conflict_with_merge_resolution() {
     let stdout = String::from_utf8(output.stdout).unwrap();
 
     assert!(stdout.contains("button\tmerge\tMerge\talternate\tenabled=true"));
+    assert!(stdout.contains("\noperation-conflict-visible\t"));
+    assert!(stdout.contains("\tpolicies=Available: replace, keep-both, merge, skip\t"));
+    assert!(stdout.contains("\treview-preview=move:"));
+    assert!(stdout.contains(":fail\tmore-items=0\tdefault-action=keep-both\tcancel-action=stop"));
     assert!(stdout.contains("\tfocus=keep-both\tdefault-action=keep-both\tcancel-action=stop\t"));
     assert!(stdout.contains(&format!(
         "\noperation-conflict-row\t0\toperation=move\tsource={}\t",
