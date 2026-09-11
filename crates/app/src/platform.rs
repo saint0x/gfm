@@ -2374,15 +2374,11 @@ impl PreviewAccessReport {
         preview_volume_descriptor_from_report(&self.volume_path, &self.volume_report)
     }
 
-    fn scheduling_policy(
-        &self,
-        base: PreviewSchedulingPolicy,
-        pressure: SchedulingPressure,
-    ) -> PreviewSchedulingPolicy {
+    fn volume_scheduling_policy(&self, base: PreviewSchedulingPolicy) -> PreviewSchedulingPolicy {
         preview_scheduling_policy_from_volume_report(
             &self.path,
             base,
-            pressure,
+            SchedulingPressure::default(),
             &self.volume_report,
         )
     }
@@ -4107,10 +4103,11 @@ fn build_quicklook_session_contract(
     )
     .with_cloud_materialization(cloud)
     .with_volume_descriptor(access_report.descriptor().as_ref())
-    .with_scheduling_policy(access_report.scheduling_policy(
-        preview_base_scheduling_policy(PreviewKind::QuickLook),
-        pressure,
-    ))
+    .with_scheduling_policy(
+        access_report
+            .volume_scheduling_policy(preview_base_scheduling_policy(PreviewKind::QuickLook)),
+    )
+    .with_scheduling_pressure(pressure)
     .with_invalidation(PreviewInvalidationEvent {
         content_changed: true,
         ..PreviewInvalidationEvent::default()
@@ -4142,10 +4139,11 @@ fn build_thumbnail_generation_contract(
     )
     .with_cloud_materialization(cloud)
     .with_volume_descriptor(access_report.descriptor().as_ref())
-    .with_scheduling_policy(access_report.scheduling_policy(
-        preview_base_scheduling_policy(PreviewKind::Thumbnail),
-        pressure,
-    ))
+    .with_scheduling_policy(
+        access_report
+            .volume_scheduling_policy(preview_base_scheduling_policy(PreviewKind::Thumbnail)),
+    )
+    .with_scheduling_pressure(pressure)
     .with_size(512, 2_000)
     .with_invalidation(PreviewInvalidationEvent {
         metadata_changed: true,
@@ -4316,25 +4314,26 @@ fn run_adaptive_quicklook_session(
             let cloud =
                 fileprovider_materialization_for_preview(&access_report.path, &cancellation)?;
             cancellation.check()?;
-            let input = QuickLookSessionInput::new(
-                PreviewRequestKey::new(
-                    record.id,
-                    access_report.path.clone(),
-                    PreviewKind::QuickLook,
-                ),
-                Rect::new(0, 0, 640, 480),
-                Viewport::new(Rect::new(0, 0, 1024, 768), 256),
-            )
-            .with_cloud_materialization(cloud)
-            .with_volume_descriptor(access_report.descriptor().as_ref())
-            .with_scheduling_policy(access_report.scheduling_policy(
-                preview_base_scheduling_policy(PreviewKind::QuickLook),
-                pressure,
-            ))
-            .with_invalidation(PreviewInvalidationEvent {
-                content_changed: true,
-                ..PreviewInvalidationEvent::default()
-            });
+            let input =
+                QuickLookSessionInput::new(
+                    PreviewRequestKey::new(
+                        record.id,
+                        access_report.path.clone(),
+                        PreviewKind::QuickLook,
+                    ),
+                    Rect::new(0, 0, 640, 480),
+                    Viewport::new(Rect::new(0, 0, 1024, 768), 256),
+                )
+                .with_cloud_materialization(cloud)
+                .with_volume_descriptor(access_report.descriptor().as_ref())
+                .with_scheduling_policy(access_report.volume_scheduling_policy(
+                    preview_base_scheduling_policy(PreviewKind::QuickLook),
+                ))
+                .with_scheduling_pressure(pressure)
+                .with_invalidation(PreviewInvalidationEvent {
+                    content_changed: true,
+                    ..PreviewInvalidationEvent::default()
+                });
             QuickLookSessionContract::from_input_checked(
                 &PreviewSecurityPolicy::default(),
                 input,
@@ -4378,26 +4377,27 @@ fn run_adaptive_thumbnail_generation(
             let cloud =
                 fileprovider_materialization_for_preview(&access_report.path, &cancellation)?;
             cancellation.check()?;
-            let input = ThumbnailGenerationInput::new(
-                PreviewRequestKey::new(
-                    record.id,
-                    access_report.path.clone(),
-                    PreviewKind::Thumbnail,
-                ),
-                Rect::new(0, 0, 160, 160),
-                Viewport::new(Rect::new(0, 0, 1024, 768), 256),
-            )
-            .with_cloud_materialization(cloud)
-            .with_volume_descriptor(access_report.descriptor().as_ref())
-            .with_scheduling_policy(access_report.scheduling_policy(
-                preview_base_scheduling_policy(PreviewKind::Thumbnail),
-                pressure,
-            ))
-            .with_size(512, 2_000)
-            .with_invalidation(PreviewInvalidationEvent {
-                metadata_changed: true,
-                ..PreviewInvalidationEvent::default()
-            });
+            let input =
+                ThumbnailGenerationInput::new(
+                    PreviewRequestKey::new(
+                        record.id,
+                        access_report.path.clone(),
+                        PreviewKind::Thumbnail,
+                    ),
+                    Rect::new(0, 0, 160, 160),
+                    Viewport::new(Rect::new(0, 0, 1024, 768), 256),
+                )
+                .with_cloud_materialization(cloud)
+                .with_volume_descriptor(access_report.descriptor().as_ref())
+                .with_scheduling_policy(access_report.volume_scheduling_policy(
+                    preview_base_scheduling_policy(PreviewKind::Thumbnail),
+                ))
+                .with_scheduling_pressure(pressure)
+                .with_size(512, 2_000)
+                .with_invalidation(PreviewInvalidationEvent {
+                    metadata_changed: true,
+                    ..PreviewInvalidationEvent::default()
+                });
             ThumbnailGenerationContract::from_input_checked(
                 &PreviewSecurityPolicy::default(),
                 input,
