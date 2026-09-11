@@ -17,7 +17,10 @@ use gfm_mac::{
     VolumeEventKind, VolumeEventState, VolumeKind, VolumeTopologyChangeKind, VolumeTopologyDiff,
 };
 use gfm_ops::{ConflictPolicy, Operation, OperationConflictReport};
-use gfm_types::{DirectoryPage, FileEvent, FileEventKind, FileKind, GfmError, Result, VolumeId};
+use gfm_types::{
+    DirectoryPage, FileEvent, FileEventKind, FileId, FileKind, FileRecord, GfmError, Result,
+    VolumeId,
+};
 use gfm_ui::{
     AppLaunchSpec, ColumnSource, ColumnViewContract, ColumnViewOptions, ContextMenuContract,
     ContextMenuInput, ContextSurface, DialogContract, DialogSurface, GalleryViewContract,
@@ -2014,7 +2017,7 @@ fn native_directory_initial_view_contract(
     path: &Path,
     page: &DirectoryPage,
 ) -> Result<InitialViewContract> {
-    let selected = native_selected_file_ids_from_env(page)?;
+    let selected = native_selected_file_ids_from_records(page.entries.iter(), "initial view")?;
     match mode {
         NativeInitialViewMode::Icon => {
             Ok(InitialViewContract::Icon(IconViewContract::from_records(
@@ -2047,7 +2050,10 @@ fn native_directory_initial_view_contract(
     }
 }
 
-fn native_selected_file_ids_from_env(page: &DirectoryPage) -> Result<Vec<gfm_types::FileId>> {
+fn native_selected_file_ids_from_records<'a>(
+    records: impl IntoIterator<Item = &'a FileRecord>,
+    surface: &str,
+) -> Result<Vec<FileId>> {
     let Some(value) = env::var_os("GFM_NATIVE_SELECTED_PATH") else {
         return Ok(Vec::new());
     };
@@ -2057,14 +2063,13 @@ fn native_selected_file_ids_from_env(page: &DirectoryPage) -> Result<Vec<gfm_typ
             "GFM_NATIVE_SELECTED_PATH must not be empty".to_string(),
         ));
     }
-    let selected = page
-        .entries
-        .iter()
+    let selected = records
+        .into_iter()
         .find(|record| record.path == selected_path)
         .map(|record| record.id)
         .ok_or_else(|| {
             GfmError::Format(format!(
-                "GFM_NATIVE_SELECTED_PATH `{}` is not visible in native app initial view",
+                "GFM_NATIVE_SELECTED_PATH `{}` is not visible in native app {surface}",
                 selected_path.display()
             ))
         })?;
@@ -2074,8 +2079,17 @@ fn native_selected_file_ids_from_env(page: &DirectoryPage) -> Result<Vec<gfm_typ
 fn native_search_initial_view_contract(path: &Path) -> Result<InitialViewContract> {
     let query = native_search_query_from_env()?;
     let batches = ui_search_results_batches(path.to_path_buf(), query.clone())?;
+    let selected = native_selected_file_ids_from_records(
+        batches
+            .iter()
+            .flat_map(|batch| batch.hits.iter().map(|hit| &hit.record)),
+        "search results",
+    )?;
     Ok(InitialViewContract::SearchResults(
-        SearchResultsContract::from_batches(batches, SearchResultsOptions::new(query)),
+        SearchResultsContract::from_batches(
+            batches,
+            SearchResultsOptions::new(query).with_selected(selected),
+        ),
     ))
 }
 
@@ -2101,9 +2115,13 @@ fn native_trash_initial_view_contract(path: &Path) -> Result<InitialViewContract
         .map(|path| read_trash_restore_metadata(path.as_path()))
         .transpose()?
         .unwrap_or_default();
+    let selected =
+        native_selected_file_ids_from_records(page.entries.iter(), "initial trash view")?;
     Ok(InitialViewContract::Trash(TrashViewContract::from_records(
         &page.entries,
-        TrashViewOptions::default().with_metadata(metadata),
+        TrashViewOptions::default()
+            .with_metadata(metadata)
+            .with_selected(selected),
     )))
 }
 

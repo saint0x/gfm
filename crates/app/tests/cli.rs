@@ -20720,6 +20720,43 @@ fn native_app_launch_selects_search_results_contract_from_binary() {
 }
 
 #[test]
+fn native_app_launch_selects_search_result_item_from_binary() {
+    let root = unique_temp_dir("gfm-cli-native-launch-search-selection");
+    let selected = root.join("Needle.md");
+    fs::create_dir_all(root.join("Folder")).unwrap();
+    fs::write(&selected, "needle").unwrap();
+    fs::write(root.join("Folder").join("Needle-notes.txt"), "needle").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .current_dir(&root)
+        .env("GFM_NATIVE_LAUNCH_CONTRACT", "1")
+        .env("GFM_NATIVE_VIEW_MODE", "search")
+        .env("GFM_NATIVE_SEARCH_QUERY", "Needle")
+        .env("GFM_NATIVE_SELECTED_PATH", &selected)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let selected_row = stdout
+        .lines()
+        .find(|line| line.starts_with("row\t") && line.contains("Needle.md"))
+        .unwrap_or_else(|| panic!("{stdout}"));
+    assert!(selected_row.contains("\tselected=true\t"), "{stdout}");
+    assert!(stdout.contains("\tinitial-view=search\t"), "{stdout}");
+    assert!(
+        stdout.contains("\ncontrol\tsearch\tsearch-field\tNeedle\t"),
+        "{stdout}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn native_app_launch_search_view_requires_query_from_binary() {
     let root = unique_temp_dir("gfm-cli-native-launch-search-missing-query");
     fs::write(root.join("Needle.md"), "needle").unwrap();
@@ -20775,6 +20812,44 @@ fn native_app_launch_selects_trash_view_contract_from_binary() {
         "{stdout}"
     );
     assert!(!stdout.contains("\nicon-view\t"), "{stdout}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn native_app_launch_selects_trash_view_item_from_binary() {
+    let root = unique_temp_dir("gfm-cli-native-launch-trash-selection");
+    let selected = root.join("Note.txt");
+    let metadata = root.join("restore.tsv");
+    fs::write(&selected, "note").unwrap();
+    fs::write(
+        &metadata,
+        "Note.txt\t/Users/me/Documents/Note.txt\t2026-09-10T19:00:00Z\ttrue\ttrue\t\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .current_dir(&root)
+        .env("GFM_NATIVE_LAUNCH_CONTRACT", "1")
+        .env("GFM_NATIVE_VIEW_MODE", "trash")
+        .env("GFM_NATIVE_TRASH_METADATA", metadata.to_str().unwrap())
+        .env("GFM_NATIVE_SELECTED_PATH", &selected)
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let selected_row = stdout
+        .lines()
+        .find(|line| line.starts_with("row\t") && line.contains("Note.txt"))
+        .unwrap_or_else(|| panic!("{stdout}"));
+    assert!(selected_row.contains("\tselected=true\t"), "{stdout}");
+    assert!(selected_row.contains("\trestore=true\t"), "{stdout}");
+    assert!(stdout.contains("\tinitial-view=trash\t"), "{stdout}");
 
     fs::remove_dir_all(root).unwrap();
 }
