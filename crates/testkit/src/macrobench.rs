@@ -240,6 +240,7 @@ pub struct MacrobenchArtifactReport {
     pub summary_path: PathBuf,
     pub measurements_path: PathBuf,
     pub budget_violations_path: PathBuf,
+    pub history_path: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -477,16 +478,19 @@ pub fn write_macrobench_artifacts(
     let summary_path = output_dir.join("summary.tsv");
     let measurements_path = output_dir.join("measurements.tsv");
     let budget_violations_path = output_dir.join("budget-violations.tsv");
+    let history_path = output_dir.join("gfm-macrobench-history.tsv");
     write_macrobench_capacity(&report.workspace_capacity, &capacity_path)?;
     write_macrobench_summary(report, &summary_path)?;
     write_macrobench_measurements(report, &measurements_path)?;
     write_macrobench_budget_violations(report, &budget_violations_path)?;
+    append_macrobench_history(report, &history_path)?;
     Ok(MacrobenchArtifactReport {
         output_dir,
         capacity_path,
         summary_path,
         measurements_path,
         budget_violations_path,
+        history_path,
     })
 }
 
@@ -1067,6 +1071,72 @@ fn write_macrobench_budget_violations(report: &MacrobenchReport, path: &Path) ->
     Ok(())
 }
 
+fn append_macrobench_history(report: &MacrobenchReport, path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|err| GfmError::io(parent, err))?;
+    }
+    let previous = fs::read_to_string(path).unwrap_or_default();
+    let run = previous
+        .lines()
+        .filter(|line| line.starts_with("macrobench-history\t"))
+        .count()
+        + 1;
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .map_err(|err| GfmError::io(path, err))?;
+    if previous.trim().is_empty() {
+        writeln!(
+            file,
+            "macrobench-history-header\trun\tmacos-version\tmacos-build\tcpu-architecture\thost-memory-bytes\tlogical-cpus\tfiles\tmeasurements\tmax-peak-resident-bytes\tmax-index-build-ns\tmax-hot-search-ns\tmax-stream-search-ns\tmax-content-search-ns\tbudget-violations\tpassed"
+        )
+        .map_err(|err| GfmError::io(path, err))?;
+    }
+    let host = current_host_profile()?;
+    let max_peak_resident_bytes = report
+        .measurements
+        .iter()
+        .map(|measurement| measurement.peak_resident_bytes)
+        .max()
+        .unwrap_or(0);
+    let max_index_build = max_stage_duration(report, MacrobenchStage::IndexBuild);
+    let max_hot_search = max_stage_duration(report, MacrobenchStage::HotSearch);
+    let max_stream_search = max_stage_duration(report, MacrobenchStage::StreamSearch);
+    let max_content_search = max_stage_duration(report, MacrobenchStage::ContentSearch);
+    writeln!(
+        file,
+        "macrobench-history\t{run}\t{}.{}.{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+        host.macos_version.major,
+        host.macos_version.minor,
+        host.macos_version.patch,
+        escape_tsv_field(&host.build),
+        host.hardware.architecture.as_str(),
+        host.hardware.memory_bytes,
+        host.hardware.logical_cpus,
+        report.files_materialized,
+        report.measurements.len(),
+        max_peak_resident_bytes,
+        max_index_build.as_nanos(),
+        max_hot_search.as_nanos(),
+        max_stream_search.as_nanos(),
+        max_content_search.as_nanos(),
+        report.budget_violations.len(),
+        report.passed()
+    )
+    .map_err(|err| GfmError::io(path, err))
+}
+
+fn max_stage_duration(report: &MacrobenchReport, stage: MacrobenchStage) -> Duration {
+    report
+        .measurements
+        .iter()
+        .filter(|measurement| measurement.stage == stage)
+        .map(|measurement| measurement.duration)
+        .max()
+        .unwrap_or_default()
+}
+
 fn read_summary_tsv(path: &Path) -> Result<BTreeMap<String, String>> {
     let content = fs::read_to_string(path).map_err(|err| GfmError::io(path, err))?;
     let mut lines = content.lines();
@@ -1529,6 +1599,7 @@ mod tests {
         let capacity = fs::read_to_string(&artifacts.capacity_path).unwrap();
         let measurements = fs::read_to_string(&artifacts.measurements_path).unwrap();
         let violations = fs::read_to_string(&artifacts.budget_violations_path).unwrap();
+        let history = fs::read_to_string(&artifacts.history_path).unwrap();
         assert!(capacity.contains("files\t201"), "{capacity}");
         assert!(
             capacity.contains("required_available_bytes\t"),
@@ -1560,6 +1631,28 @@ mod tests {
             "{measurements}"
         );
         assert_eq!(violations.lines().next(), Some("violation"));
+        assert!(history.contains("macrobench-history-header\t"), "{history}");
+        assert!(history.contains("macrobench-history\t1\t"), "{history}");
+        assert!(history.contains("\tfiles\t"), "{history}");
+        assert!(history.contains("\tmax-index-build-ns\t"), "{history}");
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn retained_macrobench_history_appends_across_runs() {
+        let root = unique_temp_dir("gfm-testkit-macrobench-history");
+        let output = root.join("telemetry");
+
+        let (_, first) = run_macrobench_report(&MacrobenchOptions::smoke(&root), &output).unwrap();
+        let (_, second) = run_macrobench_report(&MacrobenchOptions::smoke(&root), &output).unwrap();
+
+        assert_eq!(first.history_path, second.history_path);
+        let history = fs::read_to_string(&second.history_path).unwrap();
+        assert_eq!(history.matches("macrobench-history-header\t").count(), 1);
+        assert!(history.contains("macrobench-history\t1\t"), "{history}");
+        assert!(history.contains("macrobench-history\t2\t"), "{history}");
+        assert!(history.contains("\t201\t36\t"), "{history}");
 
         fs::remove_dir_all(root).unwrap();
     }

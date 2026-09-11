@@ -88,7 +88,7 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 },
             )?;
             println!(
-                "macrobench-report\tfixture={}\tfiles={}\tpassed={}\toutput={}\tcapacity={}\tsummary={}\tmeasurements={}\tbudget-violations={}",
+                "macrobench-report\tfixture={}\tfiles={}\tpassed={}\toutput={}\tcapacity={}\tsummary={}\tmeasurements={}\tbudget-violations={}\thistory={}",
                 report.fixture_root.display(),
                 report.files_materialized,
                 report.passed(),
@@ -96,7 +96,8 @@ pub(crate) fn run(command: &str, args: &mut impl Iterator<Item = String>) -> Res
                 artifacts.capacity_path.display(),
                 artifacts.summary_path.display(),
                 artifacts.measurements_path.display(),
-                artifacts.budget_violations_path.display()
+                artifacts.budget_violations_path.display(),
+                artifacts.history_path.display()
             );
             for violation in report.budget_violations {
                 eprintln!("budget-violation\t{violation:?}");
