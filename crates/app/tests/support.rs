@@ -148,6 +148,9 @@ fn reports_ui_dialog_contract_from_binary() {
     let stdout = String::from_utf8(output.stdout).unwrap();
 
     assert!(stdout.starts_with("dialog\tsurface=conflict\tpresentation=window-sheet"));
+    assert!(stdout.contains(
+        "\ndialog-visible\tsurface=conflict\tpresentation=window-sheet\ttitle=An item with the same name already exists\tfocus=keep-both\tdefault-action=keep-both\tcancel-action=stop\tfields=apply-to-all:checkbox\tblocks-parent=true\tescape-cancels=true"
+    ));
     assert!(stdout.contains("field\tapply-to-all\tApply to All\tcheckbox"));
     assert!(stdout.contains("button\treplace\tReplace\tdestructive\tenabled=true"));
     assert!(stdout.contains("button\tkeep-both\tKeep Both\tdefault\tenabled=true"));

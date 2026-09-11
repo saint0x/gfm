@@ -1173,7 +1173,7 @@ impl DialogContract {
     }
 
     pub fn as_tsv(&self) -> String {
-        let mut lines = Vec::with_capacity(self.buttons.len() + self.fields.len() + 1);
+        let mut lines = Vec::with_capacity(self.buttons.len() + self.fields.len() + 2);
         lines.push(format!(
             "dialog\tsurface={}\tpresentation={}\ttitle={}\tmessage={}\ticon={}\tblocks-parent={}\tescape-cancels={}",
             self.surface.as_str(),
@@ -1184,6 +1184,7 @@ impl DialogContract {
             self.blocks_parent_window,
             self.escape_cancels
         ));
+        lines.push(self.visible_tsv());
         lines.extend(self.fields.iter().map(|field| {
             format!(
                 "field\t{}\t{}\t{}\trequired={}\tenabled={}",
@@ -1204,6 +1205,71 @@ impl DialogContract {
             )
         }));
         lines.join("\n")
+    }
+
+    pub fn visible_tsv(&self) -> String {
+        format!(
+            "dialog-visible\tsurface={}\tpresentation={}\ttitle={}\tfocus={}\tdefault-action={}\tcancel-action={}\tfields={}\tblocks-parent={}\tescape-cancels={}",
+            self.surface.as_str(),
+            self.presentation.as_str(),
+            escape_tsv(self.title),
+            escape_tsv(&self.visible_focus()),
+            escape_tsv(&self.visible_default_action()),
+            escape_tsv(&self.visible_cancel_action()),
+            escape_tsv(&self.visible_field_summary()),
+            self.blocks_parent_window,
+            self.escape_cancels
+        )
+    }
+
+    pub fn visible_focus(&self) -> String {
+        self.visible_default_action()
+    }
+
+    pub fn visible_default_action(&self) -> String {
+        self.buttons
+            .iter()
+            .find(|button| button.role == DialogButtonRole::Default && button.enabled)
+            .or_else(|| self.buttons.iter().find(|button| button.enabled))
+            .map(|button| button.id.to_string())
+            .or_else(|| {
+                self.fields
+                    .iter()
+                    .find(|field| field.enabled)
+                    .map(|field| field.id.to_string())
+            })
+            .unwrap_or_else(|| "-".to_string())
+    }
+
+    pub fn visible_cancel_action(&self) -> String {
+        self.buttons
+            .iter()
+            .find(|button| button.role == DialogButtonRole::Cancel && button.enabled)
+            .map(|button| button.id.to_string())
+            .unwrap_or_else(|| {
+                if self.escape_cancels {
+                    "escape".to_string()
+                } else {
+                    "-".to_string()
+                }
+            })
+    }
+
+    pub fn visible_field_summary(&self) -> String {
+        let fields = self
+            .fields
+            .iter()
+            .filter(|field| field.enabled)
+            .map(|field| {
+                let required = if field.required { ":required" } else { "" };
+                format!("{}:{}{}", field.id, field.kind.as_str(), required)
+            })
+            .collect::<Vec<_>>();
+        if fields.is_empty() {
+            "-".to_string()
+        } else {
+            fields.join(",")
+        }
     }
 }
 
@@ -2698,8 +2764,21 @@ mod tests {
         let tsv = DialogContract::finder_default(DialogSurface::Permission).as_tsv();
 
         assert!(tsv.starts_with("dialog\tsurface=permission\tpresentation=window-sheet"));
+        assert!(tsv.contains(
+            "\ndialog-visible\tsurface=permission\tpresentation=window-sheet\ttitle=GFM needs permission to continue\tfocus=open-settings\tdefault-action=open-settings\tcancel-action=not-now\tfields=-\tblocks-parent=true\tescape-cancels=true"
+        ));
         assert!(tsv.contains("button\topen-settings\tOpen Settings\tdefault\tenabled=true"));
         assert!(tsv.contains("button\tnot-now\tNot Now\tcancel\tenabled=true"));
+    }
+
+    #[test]
+    fn dialog_visible_summary_tracks_inline_field_focus_and_escape_cancel() {
+        let contract = DialogContract::finder_default(DialogSurface::Rename);
+
+        assert_eq!(
+            contract.visible_tsv(),
+            "dialog-visible\tsurface=rename\tpresentation=inline-editor\ttitle=Rename\tfocus=filename\tdefault-action=filename\tcancel-action=escape\tfields=filename:text:required\tblocks-parent=false\tescape-cancels=true"
+        );
     }
 
     #[test]
@@ -2729,16 +2808,25 @@ mod tests {
         let tsv = contract.as_tsv();
         let mut lines = tsv.lines();
         let header = lines.next().unwrap();
+        let visible = lines.next().unwrap();
         let field = lines.next().unwrap();
         let button = lines.next().unwrap();
 
-        assert_eq!(tsv.lines().count(), 3, "{tsv}");
+        assert_eq!(tsv.lines().count(), 4, "{tsv}");
         assert!(header.contains("title=Title\\tOne\\nTwo\\r\t"), "{tsv}");
         assert!(
             header.contains("message=Message\\tOne\\nTwo\\r\\\\tail\t"),
             "{tsv}"
         );
         assert!(header.contains("icon=icon\\tname\t"), "{tsv}");
+        assert!(
+            visible.contains("dialog-visible\tsurface=alert\tpresentation=window-sheet\ttitle=Title\\tOne\\nTwo\\r\t"),
+            "{tsv}"
+        );
+        assert!(
+            visible.contains("\tfields=name\\tfield:text:required\t"),
+            "{tsv}"
+        );
         assert!(
             field.contains("field\tname\\tfield\tName\\tLabel\\nFull\\r\t"),
             "{tsv}"
@@ -2748,6 +2836,7 @@ mod tests {
             "{tsv}"
         );
         assert_eq!(header.split('\t').count(), 8, "{tsv}");
+        assert_eq!(visible.split('\t').count(), 10, "{tsv}");
         assert_eq!(field.split('\t').count(), 6, "{tsv}");
         assert_eq!(button.split('\t').count(), 5, "{tsv}");
     }

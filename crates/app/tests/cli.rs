@@ -21112,6 +21112,12 @@ fn native_app_launch_renders_permission_dialog_contract_from_binary() {
         "{stdout}"
     );
     assert!(
+        stdout.contains(
+            "\ndialog-visible\tsurface=permission\tpresentation=window-sheet\ttitle=Choose a Folder to Continue\tfocus=choose-location\tdefault-action=choose-location\tcancel-action=not-now\tfields=-\tblocks-parent=true\tescape-cancels=true"
+        ),
+        "{stdout}"
+    );
+    assert!(
         stdout.contains("\nbutton\tchoose-location\tChoose...\tdefault\tenabled=true"),
         "{stdout}"
     );
