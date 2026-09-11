@@ -6,13 +6,17 @@ const SIGNATURE: &[u8; 6] = b"7z\xbc\xaf\x27\x1c";
 const HEADER_BYTES: usize = 32;
 const K_END: u8 = 0x00;
 const K_HEADER: u8 = 0x01;
+const K_ADDITIONAL_STREAMS_INFO: u8 = 0x03;
+const K_MAIN_STREAMS_INFO: u8 = 0x04;
 const K_FILES_INFO: u8 = 0x05;
 const K_PACK_INFO: u8 = 0x06;
 const K_UNPACK_INFO: u8 = 0x07;
+const K_SUB_STREAMS_INFO: u8 = 0x08;
 const K_SIZE: u8 = 0x09;
 const K_CRC: u8 = 0x0a;
 const K_FOLDER: u8 = 0x0b;
 const K_CODERS_UNPACK_SIZE: u8 = 0x0c;
+const K_NUM_UNPACK_STREAM: u8 = 0x0d;
 const K_NAME: u8 = 0x11;
 const K_ENCODED_HEADER: u8 = 0x17;
 const MAX_7Z_FILES: u64 = 1_000_000;
@@ -90,6 +94,14 @@ fn parse_7z_names_checked(
         match id {
             K_END => return Ok(SevenZipNames::Unsupported),
             K_FILES_INFO => break,
+            K_ADDITIONAL_STREAMS_INFO | K_MAIN_STREAMS_INFO => {
+                match skip_streams_info_checked(header, &mut cursor, &mut check_control)? {
+                    SevenZipStreams::Skipped => {}
+                    SevenZipStreams::Encrypted => return Ok(SevenZipNames::Encrypted),
+                    SevenZipStreams::Unsupported => return Ok(SevenZipNames::Unsupported),
+                    SevenZipStreams::Corrupt => return Ok(SevenZipNames::Corrupt),
+                }
+            }
             _ => {
                 if !skip_7z_property(header, &mut cursor) {
                     return Ok(SevenZipNames::Corrupt);
@@ -149,66 +161,95 @@ fn parse_7z_names_checked(
 
 fn parse_encoded_header_checked(
     streams_info: &[u8],
-    mut check_control: impl FnMut() -> Result<()>,
+    check_control: impl FnMut() -> Result<()>,
 ) -> Result<SevenZipNames> {
     let mut cursor = 0usize;
-    while cursor < streams_info.len() {
-        check_control()?;
-        let Some(id) = read_byte(streams_info, &mut cursor) else {
-            return Ok(SevenZipNames::Corrupt);
-        };
-        match id {
-            K_END => return Ok(SevenZipNames::Unsupported),
-            K_PACK_INFO => {
-                if !skip_pack_info(streams_info, &mut cursor) {
-                    return Ok(SevenZipNames::Corrupt);
-                }
-            }
-            K_UNPACK_INFO => {
-                return parse_unpack_info_for_encryption_checked(
-                    streams_info,
-                    &mut cursor,
-                    check_control,
-                );
-            }
-            _ => return Ok(SevenZipNames::Unsupported),
-        }
+    match skip_streams_info_checked(streams_info, &mut cursor, check_control)? {
+        SevenZipStreams::Encrypted => Ok(SevenZipNames::Encrypted),
+        SevenZipStreams::Skipped | SevenZipStreams::Unsupported => Ok(SevenZipNames::Unsupported),
+        SevenZipStreams::Corrupt => Ok(SevenZipNames::Corrupt),
     }
-    Ok(SevenZipNames::Corrupt)
 }
 
-fn parse_unpack_info_for_encryption_checked(
+enum SevenZipStreams {
+    Skipped,
+    Encrypted,
+    Unsupported,
+    Corrupt,
+}
+
+fn skip_streams_info_checked(
     bytes: &[u8],
     cursor: &mut usize,
     mut check_control: impl FnMut() -> Result<()>,
-) -> Result<SevenZipNames> {
+) -> Result<SevenZipStreams> {
+    let mut folder_out_streams = Vec::new();
+    while *cursor < bytes.len() {
+        check_control()?;
+        let Some(id) = read_byte(bytes, cursor) else {
+            return Ok(SevenZipStreams::Corrupt);
+        };
+        match id {
+            K_END => return Ok(SevenZipStreams::Skipped),
+            K_PACK_INFO => {
+                if !skip_pack_info(bytes, cursor) {
+                    return Ok(SevenZipStreams::Corrupt);
+                }
+            }
+            K_UNPACK_INFO => match skip_unpack_info_for_encryption_checked(
+                bytes,
+                cursor,
+                &mut folder_out_streams,
+                &mut check_control,
+            )? {
+                SevenZipStreams::Encrypted => return Ok(SevenZipStreams::Encrypted),
+                SevenZipStreams::Skipped => {}
+                other => return Ok(other),
+            },
+            K_SUB_STREAMS_INFO => {
+                if !skip_substreams_info(bytes, cursor, &folder_out_streams) {
+                    return Ok(SevenZipStreams::Corrupt);
+                }
+            }
+            _ => return Ok(SevenZipStreams::Unsupported),
+        }
+    }
+    Ok(SevenZipStreams::Corrupt)
+}
+
+fn skip_unpack_info_for_encryption_checked(
+    bytes: &[u8],
+    cursor: &mut usize,
+    folder_out_streams: &mut Vec<u64>,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<SevenZipStreams> {
     let Some(folder_id) = read_byte(bytes, cursor) else {
-        return Ok(SevenZipNames::Corrupt);
+        return Ok(SevenZipStreams::Corrupt);
     };
     if folder_id != K_FOLDER {
-        return Ok(SevenZipNames::Unsupported);
+        return Ok(SevenZipStreams::Unsupported);
     }
     let Some(folder_count) = read_7z_uint(bytes, cursor) else {
-        return Ok(SevenZipNames::Corrupt);
+        return Ok(SevenZipStreams::Corrupt);
     };
     if folder_count > MAX_7Z_FILES {
-        return Ok(SevenZipNames::Corrupt);
+        return Ok(SevenZipStreams::Corrupt);
     }
     let Some(external) = read_byte(bytes, cursor) else {
-        return Ok(SevenZipNames::Corrupt);
+        return Ok(SevenZipStreams::Corrupt);
     };
     if external != 0 {
-        return Ok(SevenZipNames::Unsupported);
+        return Ok(SevenZipStreams::Unsupported);
     }
 
-    let mut folder_out_streams = Vec::new();
+    folder_out_streams.clear();
     for _ in 0..folder_count {
         check_control()?;
         let Some(folder) = parse_folder_for_encryption(bytes, cursor) else {
-            return Ok(SevenZipNames::Corrupt);
+            return Ok(SevenZipStreams::Corrupt);
         };
         if folder.encrypted {
-            return Ok(SevenZipNames::Encrypted);
+            return Ok(SevenZipStreams::Encrypted);
         }
         folder_out_streams.push(folder.out_streams);
     }
@@ -216,33 +257,33 @@ fn parse_unpack_info_for_encryption_checked(
     while *cursor < bytes.len() {
         check_control()?;
         let Some(id) = read_byte(bytes, cursor) else {
-            return Ok(SevenZipNames::Corrupt);
+            return Ok(SevenZipStreams::Corrupt);
         };
         match id {
-            K_END => return Ok(SevenZipNames::Unsupported),
+            K_END => return Ok(SevenZipStreams::Skipped),
             K_CODERS_UNPACK_SIZE => {
-                for out_streams in &folder_out_streams {
+                for out_streams in folder_out_streams.iter() {
                     for _ in 0..*out_streams {
                         if read_7z_uint(bytes, cursor).is_none() {
-                            return Ok(SevenZipNames::Corrupt);
+                            return Ok(SevenZipStreams::Corrupt);
                         }
                     }
                 }
             }
             K_CRC => {
                 if !skip_digests(bytes, cursor, folder_count) {
-                    return Ok(SevenZipNames::Corrupt);
+                    return Ok(SevenZipStreams::Corrupt);
                 }
             }
             _ => {
                 if !skip_7z_property(bytes, cursor) {
-                    return Ok(SevenZipNames::Corrupt);
+                    return Ok(SevenZipStreams::Corrupt);
                 }
             }
         }
     }
 
-    Ok(SevenZipNames::Corrupt)
+    Ok(SevenZipStreams::Corrupt)
 }
 
 struct SevenZipFolder {
@@ -328,6 +369,52 @@ fn skip_pack_info(bytes: &[u8], cursor: &mut usize) -> bool {
             K_END => return true,
             K_SIZE => {
                 for _ in 0..stream_count {
+                    if read_7z_uint(bytes, cursor).is_none() {
+                        return false;
+                    }
+                }
+            }
+            K_CRC => {
+                if !skip_digests(bytes, cursor, stream_count) {
+                    return false;
+                }
+            }
+            _ => {
+                if !skip_7z_property(bytes, cursor) {
+                    return false;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn skip_substreams_info(bytes: &[u8], cursor: &mut usize, folder_out_streams: &[u64]) -> bool {
+    let mut stream_count = folder_out_streams.len() as u64;
+    while *cursor < bytes.len() {
+        let Some(id) = read_byte(bytes, cursor) else {
+            return false;
+        };
+        match id {
+            K_END => return true,
+            K_NUM_UNPACK_STREAM => {
+                stream_count = 0;
+                for _ in folder_out_streams {
+                    let Some(folder_streams) = read_7z_uint(bytes, cursor) else {
+                        return false;
+                    };
+                    let Some(next) = stream_count.checked_add(folder_streams) else {
+                        return false;
+                    };
+                    stream_count = next;
+                }
+            }
+            K_SIZE => {
+                let Some(size_count) = stream_count.checked_sub(folder_out_streams.len() as u64)
+                else {
+                    return false;
+                };
+                for _ in 0..size_count {
                     if read_7z_uint(bytes, cursor).is_none() {
                         return false;
                     }

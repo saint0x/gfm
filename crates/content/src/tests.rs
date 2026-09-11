@@ -463,6 +463,50 @@ fn skips_non_encrypted_7z_encoded_header_without_reporting_corruption() {
 }
 
 #[test]
+fn extracts_real_7zz_metadata_fixture_through_public_report_path() {
+    let root = unique_temp_dir("gfm-content-real-7zz-metadata");
+    let path = root.join("plain.7z");
+    fs::write(&path, include_bytes!("../fixtures/archive/plain-7zz.7z")).unwrap();
+
+    let report = Extractor::default().extract_path_report(&path).unwrap();
+
+    assert_eq!(report.format, ExtractionFormat::Archive);
+    assert_eq!(report.status, ExtractionStatus::Extracted);
+    assert!(report
+        .document
+        .as_ref()
+        .unwrap()
+        .text
+        .contains("fixture-needle.txt"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn quarantines_real_7zz_encrypted_header_fixture_without_reporting_corruption() {
+    let root = unique_temp_dir("gfm-content-real-7zz-encrypted-header");
+    let path = root.join("encrypted.7z");
+    fs::write(
+        &path,
+        include_bytes!("../fixtures/archive/encrypted-header-7zz.7z"),
+    )
+    .unwrap();
+    let mut quarantine = ExtractionQuarantine::new(1);
+
+    let report = Extractor::default().extract_path_report(&path).unwrap();
+    let decision = quarantine.record_report(&report);
+
+    assert_eq!(report.format, ExtractionFormat::Archive);
+    assert_eq!(
+        report.status,
+        ExtractionStatus::Quarantined("encrypted-archive")
+    );
+    assert!(report.document.is_none());
+    assert!(matches!(decision, QuarantineDecision::Quarantined(_)));
+    assert!(decision.as_tsv().contains("\treason=encrypted-archive\t"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn quarantines_corrupt_rar_and_7z_archives() {
     for extension in ["rar", "7z"] {
         let root = unique_temp_dir(&format!("gfm-content-corrupt-archive-{extension}"));
