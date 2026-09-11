@@ -196,7 +196,43 @@ impl WindowSessionContract {
             self.movable,
             self.resizable,
             self.minimizable
+        ) + "\n" + &self.visible_tsv()
+    }
+
+    pub fn visible_tsv(&self) -> String {
+        format!(
+            "session-visible\tplacement={}\tcascade={}\tactivation={}\tfocus={}\tshow={}\ttabs={}\taffordances={}",
+            self.visible_placement(),
+            self.cascade_ordinal,
+            self.activation_policy.as_str(),
+            self.focus_new_window,
+            self.show_on_open,
+            self.tabbing_identifier,
+            self.visible_affordances()
         )
+    }
+
+    pub fn visible_placement(&self) -> String {
+        self.placement
+            .map(WindowPlacement::as_field)
+            .unwrap_or_else(|| "centered".to_string())
+    }
+
+    pub fn visible_affordances(&self) -> String {
+        format!(
+            "movable-{},resizable-{},minimizable-{}",
+            enabled_word(self.movable),
+            enabled_word(self.resizable),
+            enabled_word(self.minimizable)
+        )
+    }
+}
+
+fn enabled_word(enabled: bool) -> &'static str {
+    if enabled {
+        "enabled"
+    } else {
+        "disabled"
     }
 }
 
@@ -402,6 +438,28 @@ mod tests {
         );
         assert!(contract.focus_new_window);
         assert!(contract.as_tsv().contains("placement=centered"));
+        assert!(contract.as_tsv().contains(
+            "\nsession-visible\tplacement=centered\tcascade=0\tactivation=activate-app-and-focus-new-window\tfocus=true\tshow=true\ttabs=gfm-main-window\taffordances=movable-enabled,resizable-enabled,minimizable-enabled"
+        ));
+    }
+
+    #[test]
+    fn visible_contract_tracks_explicit_placement_and_cascade() {
+        let store = WindowSessionStore::new("/tmp/gfm-visible-window-session.tsv");
+        let placement = WindowPlacement {
+            x: 40.0,
+            y: 70.0,
+            width: 800.0,
+            height: 500.0,
+        };
+        let spec = AppLaunchSpec::new("/tmp/gfm").with_launch_placement(placement);
+        let contract =
+            WindowSessionContract::from_spec_with_restored_placement(&spec, &store, 2, None);
+
+        assert_eq!(
+            contract.visible_tsv(),
+            "session-visible\tplacement=88,118,800,500\tcascade=2\tactivation=activate-app-and-focus-new-window\tfocus=true\tshow=true\ttabs=gfm-main-window\taffordances=movable-enabled,resizable-enabled,minimizable-enabled"
+        );
     }
 
     #[test]

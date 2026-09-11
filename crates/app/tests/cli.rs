@@ -21248,10 +21248,11 @@ fn native_app_launch_applies_capture_window_placement_from_binary() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
-    assert!(stdout.contains("window\tGFM\t"), "{stdout}");
+    assert!(stdout.starts_with("window\t"), "{stdout}");
     assert!(stdout.contains("\t800x500\t"), "{stdout}");
     assert!(stdout.contains("\nsession\trestore=restore-last-window-bounds\tplacement-policy=persisted-or-centered\ttab-policy=native-macos-tab-group\tactivation=activate-app-and-focus-new-window\t"), "{stdout}");
     assert!(stdout.contains("\tplacement=40,70,800,500\tcascade=0\tfocus=true\tshow=true\tmovable=true\tresizable=true\tminimizable=true"), "{stdout}");
+    assert!(stdout.contains("\nsession-visible\tplacement=40,70,800,500\tcascade=0\tactivation=activate-app-and-focus-new-window\tfocus=true\tshow=true\ttabs=gfm-main-window\taffordances=movable-enabled,resizable-enabled,minimizable-enabled"), "{stdout}");
     assert!(stdout.contains("icon-view\t"), "{stdout}");
     assert!(stdout.contains("Visible.txt"), "{stdout}");
 

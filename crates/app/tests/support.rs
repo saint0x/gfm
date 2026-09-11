@@ -1850,6 +1850,9 @@ fn reports_ui_session_contract_from_binary() {
     assert!(stdout.contains("activation=activate-app-and-focus-new-window"));
     assert!(stdout.contains("tabs=gfm-main-window"));
     assert!(stdout.contains("placement=centered"));
+    assert!(stdout.contains(
+        "\nsession-visible\tplacement=centered\tcascade=0\tactivation=activate-app-and-focus-new-window\tfocus=true\tshow=true\ttabs=gfm-main-window\taffordances=movable-enabled,resizable-enabled,minimizable-enabled"
+    ));
     assert!(
         stdout.contains("focus=true\tshow=true\tmovable=true\tresizable=true\tminimizable=true")
     );
