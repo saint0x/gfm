@@ -148,15 +148,6 @@ fozzy trace verify /tmp/gfm-cli-host.trace.fozzy --strict --json
 fozzy replay /tmp/gfm-cli-host.trace.fozzy --json
 fozzy ci /tmp/gfm-cli-host.trace.fozzy --json
 fz doctor project . --strict
-fz lint tools/fozzy/main.fzy --tier production
-fz check tools/fozzy/main.fzy
-fz verify tools/fozzy/main.fzy
-fz doctor --deep --scenario tests/scenarios/gfm-cli-host.fozzy.json --runs 5 --seed 424242 --strict-verify --host-backends --json
-fz test tests/scenarios/gfm-cli-host.fozzy.json --det --strict-verify --json
-fz run tests/scenarios/gfm-cli-host.fozzy.json --det --record /tmp/gfm-cli-host.trace.1.fozzy --host-backends --json
-fz trace verify /tmp/gfm-cli-host.trace.1.fozzy --strict --json
-fz replay /tmp/gfm-cli-host.trace.1.fozzy --json
-fz ci /tmp/gfm-cli-host.trace.1.fozzy --strict --json
 ```
 
 Use narrower test filters first while developing, but do not claim production readiness from a narrow filter when a broader gate is feasible.

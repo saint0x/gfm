@@ -360,5 +360,5 @@ not only a parse-only diagnostic.
 
 This document records the intended operation recovery architecture and the
 contracts already visible in the codebase. Remaining production work is tracked
-only in `STATUS.md`; completed and verified work should be removed from that
-living list rather than duplicated here.
+only in `STATUS.md`; completed and verified capability wording should be removed
+from that living list rather than duplicated here.

@@ -1,8 +1,8 @@
 # Agent 2 Remaining Work
 
-Date: 2026-08-30
+Last reviewed: 2026-09-11
 
-This is an undone-only handoff. Remove an item only when the whole item is implemented in production code, verified at the stated scope, committed, pushed to `origin/main`, and followed by a clean `git status --branch --short`.
+This is an undone-only handoff. Remove completed wording as soon as that capability or named sub-capability is implemented in production code, verified at the stated scope, committed, pushed to `origin/main`, and followed by a clean `git status --branch --short`. Keep partially unfinished items, but narrow them so they name only the work that remains.
 
 GFM is macOS-only. It is a native Rust + GPUI Finder-parity file manager with GFM-owned performance-critical internals. Do not build cross-platform abstractions. Do not build a product CLI. Existing `gfm <command>` routes are internal operator/test harness surfaces only.
 
@@ -14,7 +14,7 @@ GFM is macOS-only. It is a native Rust + GPUI Finder-parity file manager with GF
 4. Pixel-parity work is not done from a token, layout constant, or hand-built fixture alone. It requires captured Finder and captured GFM artifacts for the same macOS build/profile, a strict diff, and reviewed baseline provenance.
 5. UI-plumbing work is not done until the GPUI surface consumes the typed production state and has tests or captured artifacts proving the state appears in the right Finder-matched surface.
 6. Performance work is not done until it has measured latency, memory, cancellation, backpressure, and failure-path evidence for the relevant hot path.
-7. Keep `STATUS.md` as the source of truth for global unfinished work. Do not shrink it unless an entire numbered status item is production-complete.
+7. Keep `STATUS.md` as the source of truth for global unfinished work. Shrink wording for verified completed sub-scopes immediately; remove a numbered item only when the whole item is production-complete.
 
 ## FileProvider And iCloud Remaining Work
 
@@ -29,7 +29,7 @@ GFM is macOS-only. It is a native Rust + GPUI Finder-parity file manager with GF
 ## Security, TCC, And Permission Remaining Work
 
 1. Add Finder-parity captured baselines for first-run permission guidance, protected-path denial, bookmark acquisition, operation permission sheets, and Full Disk Access guidance.
-2. Verify with deterministic security-policy tests, binary/operator tests that do not trigger unwanted prompts, operation preflight tests, worker admission tests, GPUI contract tests, and Fozzy coverage. Leave `STATUS.md` items 30, 41, and 50 in place until the full UI and worker-enforcement scope is complete.
+2. Verify with deterministic security-policy tests, binary/operator tests that do not trigger unwanted prompts, operation preflight tests, worker admission tests, GPUI contract tests, and Fozzy coverage. Keep `STATUS.md` items 30, 33, 41, and 45 narrowed to their still-undone security, worker-enforcement, scheduling, and first-run onboarding scopes until each remaining scope is complete.
 
 ## Finder Pixel-Parity Harness Remaining Work
 
@@ -86,6 +86,6 @@ GFM is macOS-only. It is a native Rust + GPUI Finder-parity file manager with GF
 2. Do not mix FileProvider, DiskArbitration, Security/TCC, and parity-capture work in one broad commit.
 3. Do not update `README.md` unless a real command, contract, or product behavior changed.
 4. Do not update `PLAN.md` unless an architectural decision changed.
-5. Do not shrink `STATUS.md` unless a full numbered item is complete.
+5. Shrink `STATUS.md` whenever a named sub-scope is fully verified, but remove a numbered item only when its entire remaining scope is complete.
 6. Push every verified pass to `origin/main`.
 7. Leave the tree clean after push.

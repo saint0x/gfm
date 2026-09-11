@@ -1,7 +1,7 @@
 # Native macOS File Manager Plan
 
-Status: initial product and engineering plan  
-Date: 2026-08-24  
+Status: production plan and living architecture record
+Last reviewed: 2026-09-11
 Stack: Rust, GPUI, macOS native APIs, APFS-aware storage, full-machine search
 
 ## Instruction Boundary

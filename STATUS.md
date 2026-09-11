@@ -1,8 +1,8 @@
 # GFM Remaining Work
 
-Date: 2026-08-26
+Last reviewed: 2026-09-11
 
-This is the living unfinished-work ledger for GFM. When a capability is implemented, verified, and accepted as production-grade, remove it from this file.
+This is the living unfinished-work ledger for GFM. When a capability or named sub-capability is implemented, verified, accepted as production-grade, committed, pushed, and followed by a clean working tree, remove that completed wording from this file. Keep only undone work here.
 
 ## Native App Shell
 
@@ -78,9 +78,3 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 ## Packaging
 
 45. Wire the first-run permission onboarding contract into the GPUI shell with Finder-parity presentation.
-
-## Documentation
-
-46. Expand `PLAN.md` when architectural decisions change materially.
-47. Keep `README.md` written as the completed product contract.
-48. Keep this file limited to unfinished work only.
