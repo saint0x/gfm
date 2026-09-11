@@ -46,12 +46,23 @@ impl SearchIndex {
     }
 
     pub(super) fn content_matches_phrase(&self, id: FileId, phrase: &str) -> bool {
+        self.content_matches_phrase_cancellable(id, phrase, &Cancellation::default())
+            .unwrap_or(false)
+    }
+
+    fn content_matches_phrase_cancellable(
+        &self,
+        id: FileId,
+        phrase: &str,
+        cancellation: &Cancellation,
+    ) -> gfm_types::Result<bool> {
+        cancellation.check()?;
         let terms = tokenize(&normalize(phrase));
         if terms.is_empty() {
-            return false;
+            return Ok(false);
         }
         if terms.len() == 1 {
-            return self.content_has(id, &terms[0]);
+            return Ok(self.content_has(id, &terms[0]));
         }
 
         let mut positions = Vec::with_capacity(terms.len());
@@ -62,7 +73,7 @@ impl SearchIndex {
                 .and_then(|positions| positions.get(&id))
                 .filter(|positions| !positions.is_empty())
             else {
-                return false;
+                return Ok(false);
             };
             positions.push(term_positions);
         }
@@ -72,13 +83,16 @@ impl SearchIndex {
             .enumerate()
             .min_by_key(|(_, positions)| positions.len())
         else {
-            return false;
+            return Ok(false);
         };
-        anchor_positions.iter().copied().any(|anchor| {
+        for (index, anchor) in anchor_positions.iter().copied().enumerate() {
+            if index % CANCELLATION_STRIDE == 0 {
+                cancellation.check()?;
+            }
             let Some(start) = anchor.checked_sub(anchor_offset as u32) else {
-                return false;
+                continue;
             };
-            positions
+            if positions
                 .iter()
                 .enumerate()
                 .all(|(offset, term_positions)| {
@@ -86,98 +100,153 @@ impl SearchIndex {
                         .checked_add(offset as u32)
                         .is_some_and(|position| sorted_contains_position(term_positions, position))
                 })
-        })
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
-    pub(super) fn record_phrase_ids(&self, phrase: &str) -> Vec<FileId> {
+    pub(super) fn record_phrase_ids_cancellable(
+        &self,
+        phrase: &str,
+        cancellation: &Cancellation,
+    ) -> gfm_types::Result<Vec<FileId>> {
+        cancellation.check()?;
         let terms = tokenize(&normalize(phrase));
         if terms.is_empty() {
-            return self
-                .records
-                .values()
-                .filter(|record| self.record_matches_phrase(record, phrase))
-                .map(|record| record.id)
-                .collect();
+            let mut ids = Vec::new();
+            for (index, record) in self.records.values().enumerate() {
+                if index % CANCELLATION_STRIDE == 0 {
+                    cancellation.check()?;
+                }
+                if self.record_matches_phrase(record, phrase) {
+                    ids.push(record.id);
+                }
+            }
+            return Ok(ids);
         }
 
         let mut ids = BTreeSet::new();
-        self.add_record_phrase_ids_for_field(
+        self.add_record_phrase_ids_for_field_cancellable(
             &terms,
             phrase,
             &self.name_terms,
             |columns, phrase| columns.matches_name_phrase(phrase),
             &mut ids,
-        );
-        self.add_record_phrase_ids_for_field(
+            cancellation,
+        )?;
+        self.add_record_phrase_ids_for_field_cancellable(
             &terms,
             phrase,
             &self.path_terms,
             |columns, phrase| columns.matches_path_phrase(phrase),
             &mut ids,
-        );
-        self.add_record_phrase_ids_for_field(
+            cancellation,
+        )?;
+        self.add_record_phrase_ids_for_field_cancellable(
             &terms,
             phrase,
             &self.metadata_terms,
             |columns, phrase| columns.matches_comment_phrase(phrase),
             &mut ids,
-        );
-        ids.into_iter().collect()
+            cancellation,
+        )?;
+        Ok(ids.into_iter().collect())
     }
 
-    fn add_record_phrase_ids_for_field(
+    fn add_record_phrase_ids_for_field_cancellable(
         &self,
         terms: &[String],
         phrase: &str,
         postings: &BTreeMap<String, BTreeSet<FileId>>,
         matches: impl Fn(&RecordColumns, &str) -> bool,
         ids: &mut BTreeSet<FileId>,
-    ) {
+        cancellation: &Cancellation,
+    ) -> gfm_types::Result<()> {
+        cancellation.check()?;
         let Some(candidates) = rarest_term_postings(terms, postings) else {
-            return;
+            return Ok(());
         };
-        ids.extend(candidates.iter().copied().filter(|id| {
-            self.columns
-                .get(id)
+        for (index, id) in candidates.iter().copied().enumerate() {
+            if index % CANCELLATION_STRIDE == 0 {
+                cancellation.check()?;
+            }
+            if self
+                .columns
+                .get(&id)
                 .is_some_and(|columns| matches(columns, phrase))
-        }));
+            {
+                ids.insert(id);
+            }
+        }
+        Ok(())
     }
 
-    pub(super) fn content_phrase_ids(&self, phrase: &str) -> Vec<FileId> {
+    pub(super) fn content_phrase_ids_cancellable(
+        &self,
+        phrase: &str,
+        cancellation: &Cancellation,
+    ) -> gfm_types::Result<Vec<FileId>> {
+        cancellation.check()?;
         let terms = tokenize(&normalize(phrase));
         let Some(candidates) = rarest_content_postings(&terms, &self.content_terms) else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
-        candidates
-            .keys()
-            .copied()
-            .filter(|id| self.content_matches_phrase(*id, phrase))
-            .collect()
+        let mut ids = Vec::new();
+        for (index, id) in candidates.keys().copied().enumerate() {
+            if index % CANCELLATION_STRIDE == 0 {
+                cancellation.check()?;
+            }
+            if self.content_matches_phrase_cancellable(id, phrase, cancellation)? {
+                ids.push(id);
+            }
+        }
+        Ok(ids)
     }
 
-    pub(super) fn content_proximity_ids(&self, proximity: &QueryProximity) -> Vec<FileId> {
+    pub(super) fn content_proximity_ids_cancellable(
+        &self,
+        proximity: &QueryProximity,
+        cancellation: &Cancellation,
+    ) -> gfm_types::Result<Vec<FileId>> {
+        cancellation.check()?;
         let Some((anchor_term, rarest)) =
             rarest_content_term_postings(&proximity.terms, &self.content_terms)
         else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
-        rarest
-            .keys()
-            .copied()
-            .filter(|id| {
-                proximity.terms.iter().all(|term| {
-                    term == anchor_term
-                        || self
-                            .content_terms
-                            .get(term)
-                            .is_some_and(|positions| positions.contains_key(id))
-                })
-            })
-            .filter(|id| self.content_matches_proximity(*id, proximity))
-            .collect()
+        let mut ids = Vec::new();
+        for (index, id) in rarest.keys().copied().enumerate() {
+            if index % CANCELLATION_STRIDE == 0 {
+                cancellation.check()?;
+            }
+            if proximity.terms.iter().all(|term| {
+                term == anchor_term
+                    || self
+                        .content_terms
+                        .get(term)
+                        .is_some_and(|positions| positions.contains_key(&id))
+            }) && self.content_matches_proximity_cancellable(id, proximity, cancellation)?
+            {
+                ids.push(id);
+            }
+        }
+        Ok(ids)
     }
 
     pub(super) fn content_matches_proximity(&self, id: FileId, proximity: &QueryProximity) -> bool {
+        self.content_matches_proximity_cancellable(id, proximity, &Cancellation::default())
+            .unwrap_or(false)
+    }
+
+    fn content_matches_proximity_cancellable(
+        &self,
+        id: FileId,
+        proximity: &QueryProximity,
+        cancellation: &Cancellation,
+    ) -> gfm_types::Result<bool> {
+        cancellation.check()?;
         let mut positions = Vec::with_capacity(proximity.terms.len());
         for term in &proximity.terms {
             let Some(term_positions) = self
@@ -186,7 +255,7 @@ impl SearchIndex {
                 .and_then(|positions| positions.get(&id))
                 .filter(|positions| !positions.is_empty())
             else {
-                return false;
+                return Ok(false);
             };
             positions.push(term_positions);
         }
@@ -196,14 +265,20 @@ impl SearchIndex {
             .enumerate()
             .min_by_key(|(_, positions)| positions.len())
         else {
-            return false;
+            return Ok(false);
         };
-        anchor_positions.iter().copied().any(|anchor| {
-            positions.iter().enumerate().all(|(index, other)| {
+        for (position_index, anchor) in anchor_positions.iter().copied().enumerate() {
+            if position_index % CANCELLATION_STRIDE == 0 {
+                cancellation.check()?;
+            }
+            if positions.iter().enumerate().all(|(index, other)| {
                 index == anchor_index
                     || sorted_has_position_within(other, anchor, proximity.distance)
-            })
-        })
+            }) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 }
 

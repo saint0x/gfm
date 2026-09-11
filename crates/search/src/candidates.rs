@@ -36,13 +36,17 @@ impl SearchIndex {
             QueryExpr::Phrase(phrase) => {
                 let mut ids = BTreeSet::new();
                 extend_ids(
-                    ids_from_record_phrase(self.record_phrase_ids(phrase)),
+                    ids_from_record_phrase(
+                        self.record_phrase_ids_cancellable(phrase, cancellation)?,
+                    ),
                     &mut ids,
                     cancellation,
                 )?;
                 if pass.includes_deep() {
                     extend_ids(
-                        ids_from_record_phrase(self.content_phrase_ids(phrase)),
+                        ids_from_record_phrase(
+                            self.content_phrase_ids_cancellable(phrase, cancellation)?,
+                        ),
                         &mut ids,
                         cancellation,
                     )?;
@@ -52,7 +56,10 @@ impl SearchIndex {
             QueryExpr::Proximity(proximity) => pass
                 .includes_deep()
                 .then(|| {
-                    collect_ids_cancellable(self.content_proximity_ids(proximity), cancellation)
+                    collect_ids_cancellable(
+                        self.content_proximity_ids_cancellable(proximity, cancellation)?,
+                        cancellation,
+                    )
                 })
                 .transpose(),
             QueryExpr::Filter(filter) => {
@@ -138,13 +145,17 @@ impl SearchIndex {
             QueryExpr::Phrase(phrase) => {
                 let mut ids = BTreeSet::new();
                 extend_ids(
-                    ids_from_record_phrase(self.record_phrase_ids(phrase)),
+                    ids_from_record_phrase(
+                        self.record_phrase_ids_cancellable(phrase, cancellation)?,
+                    ),
                     &mut ids,
                     cancellation,
                 )?;
                 if pass.includes_deep() {
                     extend_ids(
-                        ids_from_record_phrase(self.content_phrase_ids(phrase)),
+                        ids_from_record_phrase(
+                            self.content_phrase_ids_cancellable(phrase, cancellation)?,
+                        ),
                         &mut ids,
                         cancellation,
                     )?;
@@ -154,7 +165,10 @@ impl SearchIndex {
             QueryExpr::Proximity(proximity) => pass
                 .includes_deep()
                 .then(|| {
-                    collect_ids_cancellable(self.content_proximity_ids(proximity), cancellation)
+                    collect_ids_cancellable(
+                        self.content_proximity_ids_cancellable(proximity, cancellation)?,
+                        cancellation,
+                    )
                 })
                 .transpose(),
             QueryExpr::Filter(filter) => {

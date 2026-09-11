@@ -422,11 +422,11 @@ impl SearchIndex {
         for phrase in &query.phrases {
             cancellation.check()?;
             let mut phrase_matches = HashMap::new();
-            for id in self.record_phrase_ids(phrase) {
+            for id in self.record_phrase_ids_cancellable(phrase, cancellation)? {
                 phrase_matches.insert(id, MatchReason::PathComponent);
             }
             if pass.includes_deep() {
-                for id in self.content_phrase_ids(phrase) {
+                for id in self.content_phrase_ids_cancellable(phrase, cancellation)? {
                     phrase_matches.insert(id, MatchReason::Content);
                 }
             }
@@ -442,7 +442,7 @@ impl SearchIndex {
         if pass.includes_deep() {
             for proximity in &query.proximities {
                 cancellation.check()?;
-                for id in self.content_proximity_ids(proximity) {
+                for id in self.content_proximity_ids_cancellable(proximity, cancellation)? {
                     scores
                         .entry(id)
                         .and_modify(|score| score.add(PROXIMITY, MatchReason::Content))

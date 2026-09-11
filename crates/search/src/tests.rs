@@ -958,6 +958,36 @@ fn candidate_construction_honors_cancelled_tokens_before_materializing_sets() {
 }
 
 #[test]
+fn deep_content_phrase_and_proximity_candidates_honor_cancelled_tokens() {
+    let mut index = SearchIndex::new();
+    for node in 1..=2048 {
+        let item = record(
+            node,
+            &format!("/tmp/deep-cancel/{node:04}.txt"),
+            &format!("deep-cancel-{node:04}.txt"),
+        );
+        index.insert(item.clone());
+        index.insert_content(item.id, "alpha beta gamma");
+    }
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+
+    let phrase = index.content_phrase_ids_cancellable("alpha beta", &cancellation);
+    assert!(matches!(phrase, Err(GfmError::Cancelled)));
+
+    let proximity = QueryProximity {
+        distance: 2,
+        terms: vec!["alpha".to_string(), "gamma".to_string()],
+    };
+    let proximity_ids = index.content_proximity_ids_cancellable(&proximity, &cancellation);
+    assert!(matches!(proximity_ids, Err(GfmError::Cancelled)));
+
+    let query = SearchQuery::parse(r#""alpha beta" near:2:alpha,gamma"#);
+    let hits = index.query_structured_cancellable(&query, 10, &cancellation);
+    assert!(matches!(hits, Err(GfmError::Cancelled)));
+}
+
+#[test]
 fn supersession_cancels_stale_query_tokens() {
     let supersession = SearchSupersession::new();
     let first = supersession.begin();
