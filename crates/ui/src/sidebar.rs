@@ -1237,7 +1237,7 @@ fn location_rows(volumes: &[SidebarVolumeSpec], current_path: &Path) -> Vec<Side
         .state(RowState {
             path_state: state,
             enabled,
-            selected: enabled && volume.path == current_path,
+            selected: enabled && same_or_descendant_path(&volume.path, current_path),
             ejectable: volume.ejectable,
             virtual_item: false,
         }))
@@ -1508,6 +1508,15 @@ fn same_path(left: &Path, right: &Path) -> bool {
     left == right
         || match (fs::canonicalize(left), fs::canonicalize(right)) {
             (Ok(left), Ok(right)) => left == right,
+            _ => false,
+        }
+}
+
+fn same_or_descendant_path(ancestor: &Path, path: &Path) -> bool {
+    same_path(ancestor, path)
+        || path.starts_with(ancestor)
+        || match (fs::canonicalize(ancestor), fs::canonicalize(path)) {
+            (Ok(ancestor), Ok(path)) => path.starts_with(ancestor),
             _ => false,
         }
 }
@@ -1888,6 +1897,58 @@ mod tests {
         assert_eq!(row.path_state, SidebarPathState::Available);
         assert!(row.enabled);
         assert!(row.selected);
+    }
+
+    #[test]
+    fn mounted_volume_row_stays_selected_for_descendant_path() {
+        let root = std::env::temp_dir().join(format!(
+            "gfm-sidebar-volume-descendant-{}",
+            std::process::id()
+        ));
+        let volume_path = root.join("External");
+        let child = volume_path.join("Project").join("Plan.md");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(child.parent().unwrap()).unwrap();
+        fs::write(&child, "plan").unwrap();
+
+        let contract = SidebarContract::from_environment(
+            &child,
+            SidebarEnvironment {
+                paths: test_paths(root.join("Home")),
+                icloud_state: SidebarCloudState::None,
+                icloud_progress_milli: None,
+                icloud_progress_source: None,
+                icloud_progress_reason: None,
+                volumes: vec![SidebarVolumeSpec::from_native_seed(
+                    "diskarbitration:uuid:External",
+                    "External",
+                    volume_path.clone(),
+                    true,
+                )
+                .with_volume_state(
+                    SidebarVolumeKind::External,
+                    SidebarVolumeMountState::Mounted,
+                    false,
+                    false,
+                    Some(true),
+                )],
+            },
+        );
+
+        let row = contract
+            .rows
+            .iter()
+            .find(|row| row.id == "volume-diskarbitration-uuid-external")
+            .unwrap();
+        assert_eq!(row.path.as_deref(), Some(volume_path.as_path()));
+        assert!(row.enabled);
+        assert!(row.selected);
+        assert!(contract.as_tsv().contains(
+            "row\tLocations\tvolume-diskarbitration-uuid-external\tExternal\tmounted-volume\tlocation\t"
+        ));
+        assert!(contract.as_tsv().contains("\tselected=true\t"));
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

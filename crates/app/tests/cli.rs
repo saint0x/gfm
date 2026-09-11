@@ -20641,12 +20641,15 @@ fn native_app_launch_derives_context_menu_writable_and_clipboard_state_from_bina
 #[test]
 fn native_app_launch_renders_effective_sidebar_volume_rows_from_binary() {
     let root = unique_temp_dir("gfm-cli-native-launch-sidebar-volume");
+    let child = root.join("Project").join("Visible.txt");
     fs::write(root.join(".gfm-volume-kind"), "external-removable\n").unwrap();
-    fs::write(root.join("Visible.txt"), "hello").unwrap();
+    fs::create_dir_all(child.parent().unwrap()).unwrap();
+    fs::write(&child, "hello").unwrap();
 
     let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .current_dir(&root)
         .env("GFM_NATIVE_LAUNCH_CONTRACT", "1")
+        .arg(child.parent().unwrap().to_str().unwrap())
         .output()
         .unwrap();
 
@@ -20672,6 +20675,10 @@ fn native_app_launch_renders_effective_sidebar_volume_rows_from_binary() {
     assert!(stdout.contains("\tvolume-mount=mounted\t"), "{stdout}");
     assert!(stdout.contains("\tvolume-ejectable=true\t"), "{stdout}");
     assert!(stdout.contains("\tvolume-removable=true\t"), "{stdout}");
+    assert!(
+        stdout.contains("\tselected=true\tejectable=true\tvirtual=false\tpath-state=available\t"),
+        "{stdout}"
+    );
 
     fs::remove_dir_all(root).unwrap();
 }
