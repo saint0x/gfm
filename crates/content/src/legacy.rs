@@ -69,6 +69,9 @@ pub(crate) fn extract_legacy_office_document_checked(
         let Some(stream) = directory.read_stream_checked(bytes, entry, &mut check_control)? else {
             continue;
         };
+        if legacy_required_stream_reports_protection(kind, &entry.name, &stream) {
+            return Ok((LegacyOfficeExtractStatus::Encrypted, None));
+        }
         bytes_read += stream.len();
         push_salvaged_legacy_text(
             &stream,
@@ -104,6 +107,67 @@ fn required_legacy_office_stream(kind: LegacyOfficeKind, name: &str) -> bool {
         LegacyOfficeKind::Xls => name == "Workbook" || name == "Book",
         LegacyOfficeKind::Ppt => name == "PowerPoint Document",
     }
+}
+
+fn legacy_required_stream_reports_protection(
+    kind: LegacyOfficeKind,
+    name: &str,
+    stream: &[u8],
+) -> bool {
+    match kind {
+        LegacyOfficeKind::Doc if name == "WordDocument" => {
+            word_document_fib_reports_protection(stream)
+        }
+        LegacyOfficeKind::Xls if name == "Workbook" || name == "Book" => {
+            workbook_biff_reports_filepass(stream)
+        }
+        _ => false,
+    }
+}
+
+fn word_document_fib_reports_protection(stream: &[u8]) -> bool {
+    const FIB_IDENT_OFFSET: usize = 0x00;
+    const FIB_IDENT: u16 = 0xa5ec;
+    const FIB_FLAGS_OFFSET: usize = 0x0a;
+    const F_ENCRYPTED: u16 = 1 << 8;
+    const F_OBFUSCATED: u16 = 1 << 15;
+
+    if read_u16(stream, FIB_IDENT_OFFSET) != Some(FIB_IDENT) {
+        return false;
+    }
+    read_u16(stream, FIB_FLAGS_OFFSET)
+        .is_some_and(|flags| flags & (F_ENCRYPTED | F_OBFUSCATED) != 0)
+}
+
+fn workbook_biff_reports_filepass(stream: &[u8]) -> bool {
+    const BIFF_FILEPASS_RECORD: u16 = 0x002f;
+    const MAX_BIFF_RECORDS_TO_SCAN: usize = 4096;
+
+    let mut cursor = 0usize;
+    let mut records = 0usize;
+    while cursor + 4 <= stream.len() && records < MAX_BIFF_RECORDS_TO_SCAN {
+        let Some(kind) = read_u16(stream, cursor) else {
+            return false;
+        };
+        let Some(size) = read_u16(stream, cursor + 2).map(usize::from) else {
+            return false;
+        };
+        let Some(next) = cursor
+            .checked_add(4)
+            .and_then(|start| start.checked_add(size))
+        else {
+            return false;
+        };
+        if next > stream.len() {
+            return false;
+        }
+        if kind == BIFF_FILEPASS_RECORD {
+            return true;
+        }
+        cursor = next;
+        records += 1;
+    }
+    false
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -286,11 +350,6 @@ impl OleDirectory {
         }
         stream.truncate(entry.stream_size);
 
-        // Real small OLE streams usually live in the ministream. Some legacy
-        // producers write regular chains anyway, so accept decodable content.
-        if entry.stream_size < self.mini_stream_cutoff && !stream_has_salvageable_text(&stream) {
-            return Ok(None);
-        }
         Ok(Some(stream))
     }
 
@@ -335,9 +394,6 @@ impl OleDirectory {
             return Ok(None);
         }
         stream.truncate(entry.stream_size);
-        if !stream_has_salvageable_text(&stream) {
-            return Ok(None);
-        }
         Ok(Some(stream))
     }
 }
@@ -641,35 +697,6 @@ fn normalize_legacy_text(text: &str, max_text_bytes: usize) -> String {
     out.trim().to_string()
 }
 
-fn stream_has_salvageable_text(bytes: &[u8]) -> bool {
-    let mut run = 0;
-    for byte in bytes {
-        if is_ascii_text_byte(*byte) {
-            run += 1;
-            if run >= 4 {
-                return true;
-            }
-        } else {
-            run = 0;
-        }
-    }
-    let mut utf16_run = 0;
-    for pair in bytes.chunks_exact(2) {
-        let unit = u16::from_le_bytes([pair[0], pair[1]]);
-        if let Some(ch) = char::from_u32(unit as u32) {
-            if is_text_char(ch) {
-                utf16_run += 1;
-                if utf16_run >= 4 {
-                    return true;
-                }
-                continue;
-            }
-        }
-        utf16_run = 0;
-    }
-    false
-}
-
 fn is_ascii_text_byte(byte: u8) -> bool {
     byte == b'\t' || byte == b'\n' || byte == b'\r' || (0x20..=0x7e).contains(&byte)
 }
@@ -690,6 +717,64 @@ mod tests {
         let (status, document) = extract_legacy_office_document_checked(
             &bytes,
             LegacyOfficeKind::Doc,
+            &ExtractionPolicy::default(),
+            || Ok(()),
+        )
+        .unwrap();
+
+        assert_eq!(status, LegacyOfficeExtractStatus::Encrypted);
+        assert!(document.is_none());
+    }
+
+    #[test]
+    fn detects_protected_word_document_fib_flags() {
+        let mut payload = vec![0_u8; 16];
+        payload[0x00..0x02].copy_from_slice(&0xa5ec_u16.to_le_bytes());
+        payload[0x0a..0x0c].copy_from_slice(&(1_u16 << 8).to_le_bytes());
+        let bytes = legacy_office_compound_file_with_ministream("WordDocument", &payload);
+
+        let (status, document) = extract_legacy_office_document_checked(
+            &bytes,
+            LegacyOfficeKind::Doc,
+            &ExtractionPolicy::default(),
+            || Ok(()),
+        )
+        .unwrap();
+
+        assert_eq!(status, LegacyOfficeExtractStatus::Encrypted);
+        assert!(document.is_none());
+    }
+
+    #[test]
+    fn detects_obfuscated_word_document_fib_flags() {
+        let mut payload = vec![0_u8; 16];
+        payload[0x00..0x02].copy_from_slice(&0xa5ec_u16.to_le_bytes());
+        payload[0x0a..0x0c].copy_from_slice(&(1_u16 << 15).to_le_bytes());
+        let bytes = legacy_office_compound_file_with_ministream("WordDocument", &payload);
+
+        let (status, document) = extract_legacy_office_document_checked(
+            &bytes,
+            LegacyOfficeKind::Doc,
+            &ExtractionPolicy::default(),
+            || Ok(()),
+        )
+        .unwrap();
+
+        assert_eq!(status, LegacyOfficeExtractStatus::Encrypted);
+        assert!(document.is_none());
+    }
+
+    #[test]
+    fn detects_workbook_filepass_records() {
+        let payload = [
+            0x09, 0x08, 0x00, 0x00, // BOF with no body in this minimal stream.
+            0x2f, 0x00, 0x00, 0x00, // FILEPASS with no body.
+        ];
+        let bytes = legacy_office_compound_file_with_ministream("Workbook", &payload);
+
+        let (status, document) = extract_legacy_office_document_checked(
+            &bytes,
+            LegacyOfficeKind::Xls,
             &ExtractionPolicy::default(),
             || Ok(()),
         )

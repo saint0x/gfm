@@ -1226,6 +1226,59 @@ fn quarantines_encrypted_legacy_office_without_reporting_corruption() {
 }
 
 #[test]
+fn quarantines_legacy_doc_fib_encryption_flags_without_reporting_corruption() {
+    let root = unique_temp_dir("gfm-content-encrypted-legacy-doc-fib");
+    let path = root.join("locked.doc");
+    let mut payload = vec![0_u8; 16];
+    payload[0x00..0x02].copy_from_slice(&0xa5ec_u16.to_le_bytes());
+    payload[0x0a..0x0c].copy_from_slice(&(1_u16 << 8).to_le_bytes());
+    fs::write(
+        &path,
+        legacy_office_bytes_with_stream("WordDocument", &payload),
+    )
+    .unwrap();
+    let mut quarantine = ExtractionQuarantine::new(1);
+
+    let report = Extractor::default().extract_path_report(&path).unwrap();
+    let decision = quarantine.record_report(&report);
+
+    assert_eq!(report.format, ExtractionFormat::Office);
+    assert_eq!(
+        report.status,
+        ExtractionStatus::Quarantined("encrypted-office")
+    );
+    assert!(report.document.is_none());
+    assert!(matches!(decision, QuarantineDecision::Quarantined(_)));
+    assert!(decision.as_tsv().contains("\treason=encrypted-office\t"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn quarantines_legacy_xls_filepass_records_without_reporting_corruption() {
+    let root = unique_temp_dir("gfm-content-encrypted-legacy-xls-filepass");
+    let path = root.join("locked.xls");
+    let payload = [
+        0x09, 0x08, 0x00, 0x00, // BOF with no body in this minimal stream.
+        0x2f, 0x00, 0x00, 0x00, // FILEPASS with no body.
+    ];
+    fs::write(&path, legacy_office_bytes_with_stream("Workbook", &payload)).unwrap();
+    let mut quarantine = ExtractionQuarantine::new(1);
+
+    let report = Extractor::default().extract_path_report(&path).unwrap();
+    let decision = quarantine.record_report(&report);
+
+    assert_eq!(report.format, ExtractionFormat::Office);
+    assert_eq!(
+        report.status,
+        ExtractionStatus::Quarantined("encrypted-office")
+    );
+    assert!(report.document.is_none());
+    assert!(matches!(decision, QuarantineDecision::Quarantined(_)));
+    assert!(decision.as_tsv().contains("\treason=encrypted-office\t"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn quarantines_case_varied_legacy_office_encryption_streams() {
     let root = unique_temp_dir("gfm-content-case-varied-encrypted-legacy-office");
     let path = root.join("locked.doc");
