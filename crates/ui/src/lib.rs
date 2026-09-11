@@ -70,7 +70,9 @@ pub use sidebar::{
 pub use titlebar::{
     FullScreenPolicy, TitlebarContract, TitlebarFocusPolicy, TitlebarMaterialPolicy,
 };
-pub use toolbar::{ToolbarContract, ToolbarControlKind, ToolbarControlSpec};
+pub use toolbar::{
+    ToolbarContract, ToolbarControlKind, ToolbarControlSpec, ToolbarNavigationState,
+};
 pub use trash::{
     render as render_trash_view, TrashCommandSpec, TrashEntryMetadata, TrashRowSpec, TrashSortMode,
     TrashViewContract, TrashViewOptions,
@@ -94,6 +96,7 @@ pub struct AppLaunchSpec {
     pub activate_on_launch: bool,
     pub tabbing_identifier: String,
     pub launch_placement: Option<WindowPlacement>,
+    pub toolbar_navigation: ToolbarNavigationState,
     pub sidebar_visible: bool,
     pub sidebar_paths: SidebarPathSnapshot,
     pub sidebar_volumes: Vec<SidebarVolumeSpec>,
@@ -705,6 +708,11 @@ impl AppLaunchSpec {
         self
     }
 
+    pub fn with_toolbar_navigation(mut self, navigation: ToolbarNavigationState) -> Self {
+        self.toolbar_navigation = navigation;
+        self
+    }
+
     pub fn with_initial_icon_view(mut self, icon_view: IconViewContract) -> Self {
         self.initial_view = InitialViewContract::Icon(icon_view.clone());
         self.initial_icon_view = icon_view;
@@ -896,6 +904,7 @@ impl Default for AppLaunchSpec {
             activate_on_launch: true,
             tabbing_identifier: "gfm-main-window".to_string(),
             launch_placement: None,
+            toolbar_navigation: ToolbarNavigationState::default(),
             sidebar_visible: true,
             sidebar_paths: SidebarPathSnapshot::default(),
             sidebar_volumes: Vec::new(),
@@ -929,6 +938,7 @@ pub struct WindowLifecycleContract {
     pub transparent_titlebar: bool,
     pub activate_on_launch: bool,
     pub tabbing_identifier: String,
+    pub toolbar_navigation: ToolbarNavigationState,
     pub sidebar_visible: bool,
     pub sidebar_paths: SidebarPathSnapshot,
     pub sidebar_volumes: Vec<SidebarVolumeSpec>,
@@ -959,6 +969,7 @@ impl WindowLifecycleContract {
             transparent_titlebar: spec.transparent_titlebar,
             activate_on_launch: spec.activate_on_launch,
             tabbing_identifier: spec.tabbing_identifier.clone(),
+            toolbar_navigation: spec.toolbar_navigation,
             sidebar_visible: spec.sidebar_visible,
             sidebar_paths: spec.sidebar_paths.clone(),
             sidebar_volumes: spec.sidebar_volumes.clone(),
@@ -984,7 +995,7 @@ impl WindowLifecycleContract {
 
     pub fn as_tsv(&self) -> String {
         let mut lines = vec![format!(
-            "window\t{}\t{}\t{}x{}\tmin={}x{}\ttransparent-titlebar={}\tactivate={}\ttabs={}\tsidebar-visible={}\tsidebar-home={}\tsidebar-icloud={}\tinitial-view={}\tpermission-dialog={}",
+            "window\t{}\t{}\t{}x{}\tmin={}x{}\ttransparent-titlebar={}\tactivate={}\ttabs={}\tnav-back={}\tnav-forward={}\tsidebar-visible={}\tsidebar-home={}\tsidebar-icloud={}\tinitial-view={}\tpermission-dialog={}",
             escape_contract_field(&self.title),
             escape_contract_field(&self.initial_path.display().to_string()),
             self.width,
@@ -994,6 +1005,8 @@ impl WindowLifecycleContract {
             self.transparent_titlebar,
             self.activate_on_launch,
             escape_contract_field(&self.tabbing_identifier),
+            self.toolbar_navigation.can_go_back,
+            self.toolbar_navigation.can_go_forward,
             self.sidebar_visible,
             self.sidebar_paths.home_state.as_str(),
             self.sidebar_paths.icloud_drive_state.as_str(),
@@ -1074,11 +1087,12 @@ impl WindowLifecycleContract {
     }
 
     fn effective_toolbar_contract(&self) -> ToolbarContract {
-        ToolbarContract::finder_for_view_mode_with_search_and_selection(
+        ToolbarContract::finder_for_view_state(
             &self.initial_path,
             self.initial_view.mode(),
             self.initial_view.search_query(),
             self.initial_view.has_selection(),
+            self.toolbar_navigation,
         )
     }
 
@@ -1118,11 +1132,12 @@ fn open_main_window(
         cx.new(|_| RootView {
             bounds_subscription: None,
             session_writer: WindowSessionWriter::new(session_store),
-            toolbar: ToolbarContract::finder_for_view_mode_with_search_and_selection(
+            toolbar: ToolbarContract::finder_for_view_state(
                 &spec.initial_path,
                 spec.initial_view.mode(),
                 spec.initial_view.search_query(),
                 spec.initial_view.has_selection(),
+                spec.toolbar_navigation,
             ),
             sidebar: spec.sidebar_contract.clone().unwrap_or_else(|| {
                 sidebar::SidebarContract::from_path_snapshot(
@@ -1412,7 +1427,7 @@ mod tests {
         let output = contract.as_tsv();
 
         assert!(output.starts_with(
-            "window\tgfm\t/tmp/gfm\t1040x720\tmin=640x420\ttransparent-titlebar=true\tactivate=true\ttabs=gfm-main-window\tsidebar-visible=true\tsidebar-home=available\tsidebar-icloud=missing\tinitial-view=icon\tpermission-dialog=none\n"
+            "window\tgfm\t/tmp/gfm\t1040x720\tmin=640x420\ttransparent-titlebar=true\tactivate=true\ttabs=gfm-main-window\tnav-back=true\tnav-forward=false\tsidebar-visible=true\tsidebar-home=available\tsidebar-icloud=missing\tinitial-view=icon\tpermission-dialog=none\n"
         ));
         assert!(output.contains(
             "\nsession\trestore=restore-last-window-bounds\tplacement-policy=persisted-or-centered\ttab-policy=native-macos-tab-group\tactivation=activate-app-and-focus-new-window\ttabs=gfm-main-window\trestore-key=main-window\t"
@@ -1534,9 +1549,29 @@ mod tests {
         let tsv = contract.as_tsv();
 
         assert!(!contract.sidebar_visible);
-        assert!(tsv.starts_with("window\tgfm\t/tmp/gfm\t1040x720\tmin=640x420\ttransparent-titlebar=true\tactivate=true\ttabs=gfm-main-window\tsidebar-visible=false\t"));
+        assert!(tsv.starts_with("window\tgfm\t/tmp/gfm\t1040x720\tmin=640x420\ttransparent-titlebar=true\tactivate=true\ttabs=gfm-main-window\tnav-back=true\tnav-forward=false\tsidebar-visible=false\t"));
         assert!(tsv.contains(
             "command\tView\tShow Sidebar\tgfm::ToggleSidebar\toption-cmd-s\tview\tenabled=true\tselected=false"
+        ));
+    }
+
+    #[test]
+    fn lifecycle_contract_tracks_toolbar_navigation_state() {
+        let spec = AppLaunchSpec::new("/tmp/gfm")
+            .with_toolbar_navigation(ToolbarNavigationState::new(false, true));
+        let contract = WindowLifecycleContract::from_spec(&spec).unwrap();
+        let tsv = contract.as_tsv();
+
+        assert_eq!(
+            contract.toolbar_navigation,
+            ToolbarNavigationState::new(false, true)
+        );
+        assert!(tsv.contains("\tnav-back=false\tnav-forward=true\tsidebar-visible=true\t"));
+        assert!(tsv.contains(
+            "\ncontrol\tnavigation\tback\t<\tgo-back\tbutton\t28px\tenabled=false\tselected=false"
+        ));
+        assert!(tsv.contains(
+            "\ncontrol\tnavigation\tforward\t>\tgo-forward\tbutton\t28px\tenabled=true\tselected=false"
         ));
     }
 
@@ -1670,7 +1705,11 @@ mod tests {
         assert!(window.contains("GFM\\tWindow\\nTitle\\r\t"), "{tsv}");
         assert!(window.contains("\t/tmp/Window\\tPath\\nRoot\\r\t"), "{tsv}");
         assert!(window.contains("\ttabs=gfm\\tmain\\nwindow\\r\t"), "{tsv}");
-        assert_eq!(window.split('\t').count(), 13, "{tsv}");
+        assert!(
+            window.contains("\tnav-back=true\tnav-forward=false\t"),
+            "{tsv}"
+        );
+        assert_eq!(window.split('\t').count(), 15, "{tsv}");
     }
 
     #[test]
@@ -2366,7 +2405,7 @@ mod tests {
         assert_eq!(contract.sidebar_paths, paths);
         assert!(contract
             .as_tsv()
-            .contains("\tsidebar-visible=true\tsidebar-home=available\tsidebar-icloud=missing\t"));
+            .contains("\tnav-back=true\tnav-forward=false\tsidebar-visible=true\tsidebar-home=available\tsidebar-icloud=missing\t"));
     }
 
     #[test]

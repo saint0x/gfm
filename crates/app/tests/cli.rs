@@ -20526,6 +20526,66 @@ fn native_app_launch_rejects_invalid_sidebar_visibility_from_binary() {
 }
 
 #[test]
+fn native_app_launch_derives_toolbar_navigation_state_from_binary() {
+    let root = unique_temp_dir("gfm-cli-native-launch-toolbar-navigation");
+    fs::write(root.join("Visible.txt"), "hello").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .current_dir(&root)
+        .env("GFM_NATIVE_LAUNCH_CONTRACT", "1")
+        .env("GFM_NATIVE_CAN_GO_BACK", "false")
+        .env("GFM_NATIVE_CAN_GO_FORWARD", "true")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("\tnav-back=false\tnav-forward=true\tsidebar-visible=true\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "control\tnavigation\tback\t<\tgo-back\tbutton\t28px\tenabled=false\tselected=false"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "control\tnavigation\tforward\t>\tgo-forward\tbutton\t28px\tenabled=true\tselected=false"
+        ),
+        "{stdout}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn native_app_launch_rejects_invalid_toolbar_navigation_state_from_binary() {
+    let root = unique_temp_dir("gfm-cli-native-launch-bad-toolbar-navigation");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .current_dir(&root)
+        .env("GFM_NATIVE_LAUNCH_CONTRACT", "1")
+        .env("GFM_NATIVE_CAN_GO_FORWARD", "later")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("GFM_NATIVE_CAN_GO_FORWARD must be true or false"),
+        "{stderr}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn native_app_launch_derives_context_menu_writable_and_clipboard_state_from_binary() {
     let root = unique_temp_dir("gfm-cli-native-launch-context-state");
     fs::write(root.join("Visible.txt"), "hello").unwrap();

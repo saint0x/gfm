@@ -35,9 +35,9 @@ use gfm_ui::{
     SearchResultsStage, SidebarCloudInvalidation, SidebarCloudState, SidebarContract,
     SidebarPathSnapshot, SidebarPathState, SidebarVolumeEventKind, SidebarVolumeInvalidation,
     SidebarVolumeKind, SidebarVolumeMountState, SidebarVolumeSpec, TitlebarContract,
-    ToolbarContract, TrashEntryMetadata, TrashViewContract, TrashViewOptions, VirtualSurface,
-    VirtualizationContract, WindowLifecycleContract, WindowPlacement, WindowSessionContract,
-    WindowSessionStore,
+    ToolbarContract, ToolbarNavigationState, TrashEntryMetadata, TrashViewContract,
+    TrashViewOptions, VirtualSurface, VirtualizationContract, WindowLifecycleContract,
+    WindowPlacement, WindowSessionContract, WindowSessionStore,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::env;
@@ -1898,6 +1898,7 @@ fn app_launch_spec_checked(
     if let Some(visible) = native_sidebar_visible_from_env()? {
         spec = spec.with_sidebar_visible(visible);
     }
+    spec = spec.with_toolbar_navigation(native_toolbar_navigation_from_env()?);
     let sidebar_volumes = native_sidebar_volumes_checked(&spec.initial_path, &mut check_control)?;
     spec = spec
         .with_sidebar_path_snapshot(SidebarPathSnapshot::discover())
@@ -2026,6 +2027,19 @@ fn native_context_clipboard_items_from_env() -> Result<Option<bool>> {
             )
         })
         .transpose()
+}
+
+fn native_toolbar_navigation_from_env() -> Result<ToolbarNavigationState> {
+    Ok(ToolbarNavigationState::new(
+        env::var_os("GFM_NATIVE_CAN_GO_BACK")
+            .map(|value| parse_bool(&value.to_string_lossy(), "GFM_NATIVE_CAN_GO_BACK"))
+            .transpose()?
+            .unwrap_or(true),
+        env::var_os("GFM_NATIVE_CAN_GO_FORWARD")
+            .map(|value| parse_bool(&value.to_string_lossy(), "GFM_NATIVE_CAN_GO_FORWARD"))
+            .transpose()?
+            .unwrap_or(false),
+    ))
 }
 
 fn native_initial_view_contract(

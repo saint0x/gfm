@@ -63,6 +63,27 @@ pub struct ToolbarContract {
     pub controls: Vec<ToolbarControlSpec>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ToolbarNavigationState {
+    pub can_go_back: bool,
+    pub can_go_forward: bool,
+}
+
+impl ToolbarNavigationState {
+    pub const fn new(can_go_back: bool, can_go_forward: bool) -> Self {
+        Self {
+            can_go_back,
+            can_go_forward,
+        }
+    }
+}
+
+impl Default for ToolbarNavigationState {
+    fn default() -> Self {
+        Self::new(true, false)
+    }
+}
+
 impl ToolbarContract {
     pub fn finder_default(path: impl AsRef<Path>) -> Self {
         Self::finder_for_view_mode(path, "icon")
@@ -86,6 +107,22 @@ impl ToolbarContract {
         search_query: Option<&str>,
         has_selection: bool,
     ) -> Self {
+        Self::finder_for_view_state(
+            path,
+            mode,
+            search_query,
+            has_selection,
+            ToolbarNavigationState::default(),
+        )
+    }
+
+    pub fn finder_for_view_state(
+        path: impl AsRef<Path>,
+        mode: &str,
+        search_query: Option<&str>,
+        has_selection: bool,
+        navigation: ToolbarNavigationState,
+    ) -> Self {
         let title = toolbar_title(path.as_ref());
         let search_label = search_query
             .filter(|query| mode == "search" && !query.is_empty())
@@ -100,7 +137,7 @@ impl ToolbarContract {
                     "<",
                     "go-back",
                     ToolbarControlKind::Button,
-                    ControlState::new(28, true, false),
+                    ControlState::new(28, navigation.can_go_back, false),
                 ),
                 control(
                     "navigation",
@@ -108,7 +145,7 @@ impl ToolbarContract {
                     ">",
                     "go-forward",
                     ToolbarControlKind::Button,
-                    ControlState::new(28, false, false),
+                    ControlState::new(28, navigation.can_go_forward, false),
                 ),
                 ToolbarControlSpec {
                     group: "location",
@@ -465,6 +502,25 @@ mod tests {
         ));
         assert!(tsv.contains(
             "control\tactions\ttags\ttags\ttags\tbutton\t28px\tenabled=true\tselected=false"
+        ));
+    }
+
+    #[test]
+    fn finder_for_navigation_state_enables_history_controls() {
+        let contract = ToolbarContract::finder_for_view_state(
+            "/tmp/gfm",
+            "icon",
+            None,
+            false,
+            ToolbarNavigationState::new(false, true),
+        );
+        let tsv = contract.as_tsv();
+
+        assert!(tsv.contains(
+            "control\tnavigation\tback\t<\tgo-back\tbutton\t28px\tenabled=false\tselected=false"
+        ));
+        assert!(tsv.contains(
+            "control\tnavigation\tforward\t>\tgo-forward\tbutton\t28px\tenabled=true\tselected=false"
         ));
     }
 
