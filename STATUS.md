@@ -48,7 +48,7 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 
 ## Content Extraction
 
-31. Complete full-fidelity Office legacy binary structured text extraction/import for real WordDocument piece tables, remaining Workbook/Book BIFF string surfaces such as formulas, comments, and sheet names, and PowerPoint Document text records, plus remaining PowerPoint encryption, rights-managed, and edit-protected document handling.
+31. Complete full-fidelity Office legacy binary structured text extraction/import for real WordDocument piece tables, remaining Workbook/Book BIFF string surfaces such as formulas and comments, and PowerPoint Document text records, plus remaining PowerPoint encryption, rights-managed, and edit-protected document handling.
 32. Complete production fixture coverage for RAR5 metadata import plus remaining non-encrypted encoded-header 7z and multi-volume archive import.
 33. Complete hardened extraction-worker isolation with XPC/App Sandbox entitlement minimization and full sandbox violation diagnostic capture.
 

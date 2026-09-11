@@ -197,6 +197,7 @@ fn push_workbook_biff_text_records(
     const BIFF_LABEL_RECORD: u16 = 0x0204;
     const BIFF_SST_RECORD: u16 = 0x00fc;
     const BIFF_CONTINUE_RECORD: u16 = 0x003c;
+    const BIFF_BOUNDSHEET_RECORD: u16 = 0x0085;
 
     let mut cursor = 0usize;
     let mut records = 0usize;
@@ -220,6 +221,7 @@ fn push_workbook_biff_text_records(
         }
         let data = &stream[data_start..next];
         match record_type {
+            BIFF_BOUNDSHEET_RECORD => push_biff_boundsheet_record_text(data, max_text_bytes, out),
             BIFF_LABEL_RECORD => push_biff_label_record_text(data, max_text_bytes, out),
             BIFF_SST_RECORD => {
                 let (payload, payload_next, payload_records) = collect_biff_continued_payload(
@@ -247,6 +249,35 @@ fn push_workbook_biff_text_records(
         records += 1;
     }
     Ok(out.len() > initial_len)
+}
+
+fn push_biff_boundsheet_record_text(data: &[u8], max_text_bytes: usize, out: &mut String) {
+    if data.len() < 8 {
+        return;
+    }
+    let char_count = usize::from(data[6]);
+    let flags = data[7];
+    let name_start = 8usize;
+    let name_bytes = if flags & 0x01 != 0 {
+        char_count.checked_mul(2)
+    } else {
+        Some(char_count)
+    };
+    let Some(name_bytes) = name_bytes else {
+        return;
+    };
+    let Some(name_end) = name_start.checked_add(name_bytes) else {
+        return;
+    };
+    let Some(raw) = data.get(name_start..name_end) else {
+        return;
+    };
+    let name = if flags & 0x01 != 0 {
+        decode_utf16le_lossy(raw)
+    } else {
+        decode_biff_compressed_string(raw)
+    };
+    append_biff_text(Some(&name), max_text_bytes, out);
 }
 
 fn collect_biff_continued_payload<'a>(
@@ -1180,6 +1211,48 @@ mod tests {
     }
 
     #[test]
+    fn extracts_workbook_biff_sheet_names_before_raw_salvage() {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&biff_boundsheet_record("Budget", false));
+        payload.extend_from_slice(&biff_boundsheet_record("ΔPlan", true));
+        let bytes = legacy_office_compound_file_with_ministream("Workbook", &payload);
+
+        let (status, document) = extract_legacy_office_document_checked(
+            &bytes,
+            LegacyOfficeKind::Xls,
+            &ExtractionPolicy::default(),
+            || Ok(()),
+        )
+        .unwrap();
+
+        assert_eq!(status, LegacyOfficeExtractStatus::Extracted);
+        let document = document.expect("BIFF sheet names should extract");
+        assert_eq!(document.text, "Budget ΔPlan");
+    }
+
+    #[test]
+    fn workbook_biff_sheet_names_honor_text_budget() {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&biff_boundsheet_record("Budget", false));
+        payload.extend_from_slice(&biff_boundsheet_record("Later", false));
+        let bytes = legacy_office_compound_file_with_ministream("Workbook", &payload);
+        let policy = ExtractionPolicy {
+            max_office_text_bytes: 6,
+            ..ExtractionPolicy::default()
+        };
+
+        let (status, document) =
+            extract_legacy_office_document_checked(&bytes, LegacyOfficeKind::Xls, &policy, || {
+                Ok(())
+            })
+            .unwrap();
+
+        assert_eq!(status, LegacyOfficeExtractStatus::Extracted);
+        let document = document.expect("budgeted BIFF sheet name should extract");
+        assert_eq!(document.text, "Budget");
+    }
+
+    #[test]
     fn extracts_workbook_biff_sst_strings() {
         let mut payload = Vec::new();
         let mut sst = Vec::new();
@@ -1338,6 +1411,24 @@ mod tests {
         data.extend_from_slice(&0_u16.to_le_bytes());
         data.extend_from_slice(&biff_string(text, wide));
         biff_record(0x0204, &data)
+    }
+
+    fn biff_boundsheet_record(name: &str, wide: bool) -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend_from_slice(&0_u32.to_le_bytes());
+        data.extend_from_slice(&0_u16.to_le_bytes());
+        data.push(name.chars().count() as u8);
+        data.push(if wide { 0x01 } else { 0x00 });
+        if wide {
+            for unit in name.encode_utf16() {
+                data.extend_from_slice(&unit.to_le_bytes());
+            }
+        } else {
+            for ch in name.chars() {
+                data.push(ch as u8);
+            }
+        }
+        biff_record(0x0085, &data)
     }
 
     fn biff_string(text: &str, wide: bool) -> Vec<u8> {
