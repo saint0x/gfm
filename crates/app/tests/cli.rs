@@ -20560,6 +20560,18 @@ fn native_app_launch_derives_toolbar_navigation_state_from_binary() {
         ),
         "{stdout}"
     );
+    assert!(
+        stdout.contains(
+            "command\tGo\tBack\tgfm::Back\tcmd-left\tview\tenabled=false\tselected=false"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "command\tGo\tForward\tgfm::Forward\tcmd-right\tview\tenabled=true\tselected=false"
+        ),
+        "{stdout}"
+    );
 
     fs::remove_dir_all(root).unwrap();
 }

@@ -91,6 +91,8 @@ pub struct MenuContext {
     pub has_selection: bool,
     pub view_mode: &'static str,
     pub sidebar_visible: bool,
+    pub can_go_back: bool,
+    pub can_go_forward: bool,
 }
 
 impl Default for MenuContext {
@@ -99,6 +101,8 @@ impl Default for MenuContext {
             has_selection: false,
             view_mode: "icon",
             sidebar_visible: true,
+            can_go_back: true,
+            can_go_forward: false,
         }
     }
 }
@@ -506,7 +510,7 @@ fn command_specs(context: MenuContext) -> Vec<MenuCommandSpec> {
             Back.name(),
             Some("cmd-left"),
             MenuCommandState::View,
-            true,
+            context.can_go_back,
             false,
         ),
         command(
@@ -515,7 +519,7 @@ fn command_specs(context: MenuContext) -> Vec<MenuCommandSpec> {
             Forward.name(),
             Some("cmd-right"),
             MenuCommandState::View,
-            true,
+            context.can_go_forward,
             false,
         ),
         command(
@@ -706,6 +710,8 @@ mod tests {
             has_selection: true,
             view_mode: "list",
             sidebar_visible: false,
+            can_go_back: false,
+            can_go_forward: true,
         })
         .as_tsv();
 
@@ -720,6 +726,12 @@ mod tests {
         ));
         assert!(tsv.contains(
             "command\tView\tShow Sidebar\tgfm::ToggleSidebar\toption-cmd-s\tview\tenabled=true\tselected=false"
+        ));
+        assert!(tsv.contains(
+            "command\tGo\tBack\tgfm::Back\tcmd-left\tview\tenabled=false\tselected=false"
+        ));
+        assert!(tsv.contains(
+            "command\tGo\tForward\tgfm::Forward\tcmd-right\tview\tenabled=true\tselected=false"
         ));
     }
 }

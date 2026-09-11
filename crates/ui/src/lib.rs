@@ -1101,6 +1101,8 @@ impl WindowLifecycleContract {
             has_selection: self.initial_view.has_selection(),
             view_mode: self.initial_view.mode(),
             sidebar_visible: self.sidebar_visible,
+            can_go_back: self.toolbar_navigation.can_go_back,
+            can_go_forward: self.toolbar_navigation.can_go_forward,
         })
     }
 }
@@ -1572,6 +1574,12 @@ mod tests {
         ));
         assert!(tsv.contains(
             "\ncontrol\tnavigation\tforward\t>\tgo-forward\tbutton\t28px\tenabled=true\tselected=false"
+        ));
+        assert!(tsv.contains(
+            "command\tGo\tBack\tgfm::Back\tcmd-left\tview\tenabled=false\tselected=false"
+        ));
+        assert!(tsv.contains(
+            "command\tGo\tForward\tgfm::Forward\tcmd-right\tview\tenabled=true\tselected=false"
         ));
     }
 
