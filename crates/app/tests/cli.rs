@@ -21017,6 +21017,12 @@ fn native_app_launch_selects_trash_view_contract_from_binary() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("\tinitial-view=trash\t"), "{stdout}");
     assert!(stdout.contains("\ntrash-view\t"), "{stdout}");
+    assert!(
+        stdout.contains(
+            "\ntrash-view-visible\tstatus=2 items in Trash\tvisible=0..2\tselection=-\trestore=disabled\tdelete=disabled\tempty=enabled\tpermission-blocked=false"
+        ),
+        "{stdout}"
+    );
     assert!(stdout.contains("\ttotal=2\t"), "{stdout}");
     assert!(stdout.contains("Note.txt"), "{stdout}");
     assert!(
@@ -21061,6 +21067,12 @@ fn native_app_launch_selects_trash_view_item_from_binary() {
         .unwrap_or_else(|| panic!("{stdout}"));
     assert!(selected_row.contains("\tselected=true\t"), "{stdout}");
     assert!(selected_row.contains("\trestore=true\t"), "{stdout}");
+    assert!(
+        stdout.contains(
+            "\ntrash-view-visible\tstatus=2 items in Trash\tvisible=0..2\tselection=1 visible item selected\trestore=enabled\tdelete=enabled\tempty=enabled\tpermission-blocked=false"
+        ),
+        "{stdout}"
+    );
     assert!(stdout.contains("\tinitial-view=trash\t"), "{stdout}");
 
     fs::remove_dir_all(root).unwrap();

@@ -2604,6 +2604,9 @@ fn reports_ui_trash_view_contract_from_binary() {
     assert!(stdout.starts_with("trash-view\tsort=deleted-newest\trow-height=24px"));
     assert!(stdout.contains("\ttotal=3\t"));
     assert!(stdout.contains(
+        "\ntrash-view-visible\tstatus=3 items in Trash\tvisible=0..3\tselection=-\trestore=disabled\tdelete=disabled\tempty=blocked\tpermission-blocked=true"
+    ));
+    assert!(stdout.contains(
         "command\tempty-trash\tEmpty Trash\tenabled=false\tdestructive=true\tdisabled-reason=permission-blocked"
     ));
     assert!(stdout.contains("row\t0\t"));

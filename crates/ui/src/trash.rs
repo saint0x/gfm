@@ -185,7 +185,7 @@ impl TrashViewContract {
     }
 
     pub fn as_tsv(&self) -> String {
-        let mut lines = Vec::with_capacity(self.rows.len() + 2);
+        let mut lines = Vec::with_capacity(self.rows.len() + 3);
         lines.push(format!(
             "trash-view\tsort={}\trow-height={}px\tviewport-rows={}\tscroll-row={}\ttotal={}\tvisible={}..{}",
             self.sort.as_str(),
@@ -196,9 +196,79 @@ impl TrashViewContract {
             self.visible_start,
             self.visible_end
         ));
+        lines.push(self.visible_tsv());
         lines.push(self.empty_trash.as_tsv());
         lines.extend(self.rows.iter().map(TrashRowSpec::as_tsv));
         lines.join("\n")
+    }
+
+    pub fn visible_tsv(&self) -> String {
+        format!(
+            "trash-view-visible\tstatus={}\tvisible={}\tselection={}\trestore={}\tdelete={}\tempty={}\tpermission-blocked={}",
+            escape_field(&self.visible_status()),
+            escape_field(&format!("{}..{}", self.visible_start, self.visible_end)),
+            escape_field(&self.visible_selection_summary()),
+            self.visible_restore_action(),
+            self.visible_delete_action(),
+            visible_action_state(&self.empty_trash),
+            self.has_visible_permission_block()
+        )
+    }
+
+    pub fn visible_status(&self) -> String {
+        match self.total_rows {
+            0 => "Trash is empty".to_string(),
+            1 => "1 item in Trash".to_string(),
+            total => format!("{total} items in Trash"),
+        }
+    }
+
+    pub fn visible_selection_summary(&self) -> String {
+        let selected = self.rows.iter().filter(|row| row.selected).count();
+        match selected {
+            0 => "-".to_string(),
+            1 => "1 visible item selected".to_string(),
+            count => format!("{count} visible items selected"),
+        }
+    }
+
+    pub fn visible_restore_action(&self) -> &'static str {
+        let mut selected = self.rows.iter().filter(|row| row.selected).peekable();
+        if selected.peek().is_none() {
+            return "disabled";
+        }
+        if selected.all(|row| row.restore.enabled) {
+            "enabled"
+        } else {
+            "blocked"
+        }
+    }
+
+    pub fn visible_delete_action(&self) -> &'static str {
+        let mut selected = self.rows.iter().filter(|row| row.selected).peekable();
+        if selected.peek().is_none() {
+            return "disabled";
+        }
+        if selected.all(|row| row.delete_permanently.enabled) {
+            "enabled"
+        } else {
+            "blocked"
+        }
+    }
+
+    pub fn has_visible_permission_block(&self) -> bool {
+        self.rows.iter().any(|row| row.permission_issue.is_some())
+            || self.empty_trash.disabled_reason.as_deref() == Some("permission-blocked")
+    }
+}
+
+fn visible_action_state(command: &TrashCommandSpec) -> &'static str {
+    if command.enabled {
+        "enabled"
+    } else if command.disabled_reason.as_deref() == Some("permission-blocked") {
+        "blocked"
+    } else {
+        "disabled"
     }
 }
 
@@ -493,8 +563,40 @@ mod tests {
             tsv.starts_with("trash-view\tsort=deleted-newest\trow-height=24px\tviewport-rows=24")
         );
         assert!(tsv.contains("command\tempty-trash\tEmpty Trash\tenabled=true\tdestructive=true"));
+        assert!(tsv.contains(
+            "\ntrash-view-visible\tstatus=1 item in Trash\tvisible=0..1\tselection=-\trestore=disabled\tdelete=disabled\tempty=enabled\tpermission-blocked=false"
+        ));
         assert!(tsv.contains("row\t0\t1\t1\tfile\t0px\tNote.txt"));
         assert!(tsv.contains("original=/Users/me/Documents/Note.txt\tdeleted-at=100"));
+    }
+
+    #[test]
+    fn trash_view_visible_summary_tracks_selection_actions_and_blocks() {
+        let selected_restore = FileId::new(VolumeId(1), 1);
+        let selected_blocked = FileId::new(VolumeId(1), 2);
+        let contract = TrashViewContract::from_records(
+            &[
+                record(1, "Note.txt", FileKind::File),
+                record(2, "Locked.txt", FileKind::File),
+            ],
+            TrashViewOptions::default()
+                .with_selected([selected_restore, selected_blocked])
+                .with_metadata([
+                    (
+                        "Note.txt".to_string(),
+                        TrashEntryMetadata::restorable("/Users/me/Documents/Note.txt", "200"),
+                    ),
+                    (
+                        "Locked.txt".to_string(),
+                        TrashEntryMetadata::blocked("full-disk-access-required"),
+                    ),
+                ]),
+        );
+
+        assert_eq!(
+            contract.visible_tsv(),
+            "trash-view-visible\tstatus=2 items in Trash\tvisible=0..2\tselection=2 visible items selected\trestore=blocked\tdelete=blocked\tempty=blocked\tpermission-blocked=true"
+        );
     }
 
     #[test]
@@ -517,7 +619,7 @@ mod tests {
         let tsv = contract.as_tsv();
         let row = tsv.lines().find(|line| line.starts_with("row\t")).unwrap();
 
-        assert_eq!(tsv.lines().count(), 3, "{tsv}");
+        assert_eq!(tsv.lines().count(), 4, "{tsv}");
         assert!(
             row.contains(
                 "Reports\\tQ3\\nDraft\\rTrash.txt\t/tmp/.Trash/Reports\\tQ3\\nDraft\\rTrash.txt\t"
