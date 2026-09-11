@@ -20418,6 +20418,12 @@ fn native_app_launch_dispatches_without_operator_command_from_binary() {
         "{stdout}"
     );
     assert!(
+        stdout.contains(
+            "command\tFile\tOpen\tgfm::Open\tcmd-o\tselection\tenabled=false\tselected=false"
+        ),
+        "{stdout}"
+    );
+    assert!(
         stdout.contains("command\tEdit\tCopy\tsystem::Copy\tcmd-c\tsystem"),
         "{stdout}"
     );
@@ -20486,6 +20492,12 @@ fn native_app_launch_can_hide_sidebar_from_binary() {
     );
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("\tsidebar-visible=false\t"), "{stdout}");
+    assert!(
+        stdout.contains(
+            "command\tView\tShow Sidebar\tgfm::ToggleSidebar\toption-cmd-s\tview\tenabled=true\tselected=false"
+        ),
+        "{stdout}"
+    );
     assert!(stdout.contains("\nsidebar\t"), "{stdout}");
     assert!(stdout.contains("\nicon-view\t"), "{stdout}");
 
@@ -20651,6 +20663,18 @@ fn native_app_launch_selects_list_view_item_from_binary() {
         .find(|line| line.starts_with("row\t") && line.contains("Visible.txt"))
         .unwrap_or_else(|| panic!("{stdout}"));
     assert!(selected_row.contains("\tselected=true\t"), "{stdout}");
+    assert!(
+        stdout.contains(
+            "command\tFile\tOpen\tgfm::Open\tcmd-o\tselection\tenabled=true\tselected=false"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "command\tView\tas List\tgfm::ListView\tcmd-2\tview\tenabled=true\tselected=true"
+        ),
+        "{stdout}"
+    );
     assert!(stdout.contains("\tinitial-view=list\t"), "{stdout}");
     assert!(stdout.contains("\nlist-view\t"), "{stdout}");
 

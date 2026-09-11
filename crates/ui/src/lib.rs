@@ -52,7 +52,7 @@ pub use list::{
     render as render_list_view, ListCellSpec, ListColumnKind, ListColumnSpec, ListRowSpec,
     ListSortMode, ListViewContract, ListViewOptions,
 };
-pub use menu::{MenuCommandSpec, MenuCommandState, MenuContract};
+pub use menu::{MenuCommandSpec, MenuCommandState, MenuContext, MenuContract};
 pub use results::{
     render as render_search_results_view, SearchResultRowSpec, SearchResultsBatch,
     SearchResultsContract, SearchResultsGroupSpec, SearchResultsGrouping, SearchResultsOptions,
@@ -138,6 +138,32 @@ impl InitialViewContract {
             Self::SearchResults(contract) => Some(&contract.query),
             _ => None,
         }
+    }
+
+    pub fn selected_item_count(&self) -> usize {
+        match self {
+            Self::Icon(contract) => contract.cells.iter().filter(|cell| cell.selected).count(),
+            Self::List(contract) => contract.rows.iter().filter(|row| row.selected).count(),
+            Self::Column(contract) => contract
+                .columns
+                .iter()
+                .flat_map(|column| column.rows.iter())
+                .filter(|row| row.selected)
+                .count(),
+            Self::Gallery(contract) => contract
+                .filmstrip
+                .iter()
+                .filter(|item| item.selected)
+                .count(),
+            Self::SearchResults(contract) => {
+                contract.rows.iter().filter(|row| row.selected).count()
+            }
+            Self::Trash(contract) => contract.rows.iter().filter(|row| row.selected).count(),
+        }
+    }
+
+    pub fn has_selection(&self) -> bool {
+        self.selected_item_count() > 0
     }
 
     pub fn as_tsv(&self) -> String {
@@ -1014,7 +1040,11 @@ impl WindowLifecycleContract {
     }
 
     fn effective_menu_contract(&self) -> MenuContract {
-        MenuContract::finder_default()
+        MenuContract::finder_for_context(MenuContext {
+            has_selection: self.initial_view.has_selection(),
+            view_mode: self.initial_view.mode(),
+            sidebar_visible: self.sidebar_visible,
+        })
     }
 }
 
@@ -1023,7 +1053,7 @@ pub fn run_native(spec: AppLaunchSpec) -> Result<()> {
     Application::new().run(move |cx: &mut App| {
         let window_counter = Arc::new(AtomicU32::new(1));
         let session_store = WindowSessionStore::platform_default();
-        install_native_menu(cx);
+        install_native_menu(cx, spec.sidebar_visible);
         install_new_window_action(cx, window_counter, spec.clone());
         if let Err(err) = open_main_window(cx, spec, session_store, 0) {
             eprintln!("gfm-ui: {err}");
@@ -1075,7 +1105,7 @@ fn open_main_window(
     Ok(())
 }
 
-fn install_native_menu(cx: &mut App) {
+fn install_native_menu(cx: &mut App, sidebar_visible: bool) {
     cx.bind_keys(menu::key_bindings());
     cx.on_action(|_: &menu::CloseWindow, cx| {
         if let Some(active_window) = cx.active_window() {
@@ -1083,7 +1113,7 @@ fn install_native_menu(cx: &mut App) {
         }
     });
     cx.on_action(|_: &menu::Quit, cx| cx.quit());
-    cx.set_menus(menu::native_menus());
+    cx.set_menus(menu::native_menus(sidebar_visible));
 }
 
 fn install_new_window_action(cx: &mut App, window_counter: Arc<AtomicU32>, spec: AppLaunchSpec) {
@@ -1416,11 +1446,13 @@ mod tests {
     fn lifecycle_contract_tracks_hidden_sidebar_state() {
         let spec = AppLaunchSpec::new("/tmp/gfm").with_sidebar_visible(false);
         let contract = WindowLifecycleContract::from_spec(&spec).unwrap();
+        let tsv = contract.as_tsv();
 
         assert!(!contract.sidebar_visible);
-        assert!(contract
-            .as_tsv()
-            .starts_with("window\tgfm\t/tmp/gfm\t1040x720\tmin=640x420\ttransparent-titlebar=true\tactivate=true\ttabs=gfm-main-window\tsidebar-visible=false\t"));
+        assert!(tsv.starts_with("window\tgfm\t/tmp/gfm\t1040x720\tmin=640x420\ttransparent-titlebar=true\tactivate=true\ttabs=gfm-main-window\tsidebar-visible=false\t"));
+        assert!(tsv.contains(
+            "command\tView\tShow Sidebar\tgfm::ToggleSidebar\toption-cmd-s\tview\tenabled=true\tselected=false"
+        ));
     }
 
     #[test]
@@ -1449,19 +1481,50 @@ mod tests {
 
     #[test]
     fn lifecycle_contract_tracks_selected_initial_view() {
-        let list_view =
-            ListViewContract::from_records(&[], ListViewOptions::default().with_viewport_rows(8));
+        let selected = gfm_types::FileId::new(gfm_types::VolumeId(1), 7);
+        let records = [gfm_types::FileRecord {
+            id: selected,
+            parent: None,
+            path: PathBuf::from("/tmp/gfm/Selected.txt"),
+            name: "Selected.txt".to_string(),
+            kind: gfm_types::FileKind::File,
+            len: 12,
+            mode: 0o644,
+            owner: 501,
+            group: 20,
+            xattrs_digest: 0,
+            created: None,
+            modified: None,
+            changed: None,
+            hidden: false,
+            tags: Vec::new(),
+            finder_comment: None,
+        }];
+        let list_view = ListViewContract::from_records(
+            &records,
+            ListViewOptions::default()
+                .with_viewport_rows(8)
+                .with_selected([selected]),
+        );
         let spec = AppLaunchSpec::new("/tmp/gfm")
             .with_initial_view(InitialViewContract::List(list_view.clone()));
         let contract = WindowLifecycleContract::from_spec(&spec).unwrap();
+        let tsv = contract.as_tsv();
 
         assert_eq!(contract.initial_view, InitialViewContract::List(list_view));
-        assert!(contract.as_tsv().contains("\tinitial-view=list\t"));
-        assert!(contract.as_tsv().contains(
+        assert!(contract.initial_view.has_selection());
+        assert!(tsv.contains("\tinitial-view=list\t"));
+        assert!(tsv.contains(
             "\ncontrol\tview\ticon-view\tgrid\tview-as-icons\tsegmented-button\t34px\tenabled=true\tselected=false"
         ));
-        assert!(contract.as_tsv().contains(
+        assert!(tsv.contains(
             "\ncontrol\tview\tlist-view\tlist\tview-as-list\tsegmented-button\t34px\tenabled=true\tselected=true"
+        ));
+        assert!(tsv.contains(
+            "command\tFile\tOpen\tgfm::Open\tcmd-o\tselection\tenabled=true\tselected=false"
+        ));
+        assert!(tsv.contains(
+            "command\tView\tas List\tgfm::ListView\tcmd-2\tview\tenabled=true\tselected=true"
         ));
         assert_eq!(contract.initial_view.as_tsv(), spec.initial_view.as_tsv());
     }

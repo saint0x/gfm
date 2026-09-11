@@ -71,10 +71,12 @@ impl MenuCommandState {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MenuCommandSpec {
     pub menu: &'static str,
-    pub title: &'static str,
+    pub title: String,
     pub action: &'static str,
     pub shortcut: Option<&'static str>,
     pub state: MenuCommandState,
+    pub enabled: bool,
+    pub selected: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,11 +86,32 @@ pub struct MenuContract {
     pub services_menu: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MenuContext {
+    pub has_selection: bool,
+    pub view_mode: &'static str,
+    pub sidebar_visible: bool,
+}
+
+impl Default for MenuContext {
+    fn default() -> Self {
+        Self {
+            has_selection: false,
+            view_mode: "icon",
+            sidebar_visible: true,
+        }
+    }
+}
+
 impl MenuContract {
     pub fn finder_default() -> Self {
+        Self::finder_for_context(MenuContext::default())
+    }
+
+    pub fn finder_for_context(context: MenuContext) -> Self {
         Self {
             menus: vec!["GFM", "File", "Edit", "View", "Go", "Window", "Help"],
-            commands: command_specs(),
+            commands: command_specs(context),
             services_menu: true,
         }
     }
@@ -102,19 +125,26 @@ impl MenuContract {
         ));
         lines.extend(self.commands.iter().map(|command| {
             format!(
-                "command\t{}\t{}\t{}\t{}\t{}",
+                "command\t{}\t{}\t{}\t{}\t{}\tenabled={}\tselected={}",
                 command.menu,
                 command.title,
                 command.action,
                 command.shortcut.unwrap_or("-"),
-                command.state.as_str()
+                command.state.as_str(),
+                command.enabled,
+                command.selected
             )
         }));
         lines.join("\n")
     }
 }
 
-pub fn native_menus() -> Vec<Menu> {
+pub fn native_menus(sidebar_visible: bool) -> Vec<Menu> {
+    let sidebar_title = if sidebar_visible {
+        "Hide Sidebar"
+    } else {
+        "Show Sidebar"
+    };
     vec![
         Menu {
             name: "GFM".into(),
@@ -169,7 +199,7 @@ pub fn native_menus() -> Vec<Menu> {
                 MenuItem::action("as Gallery", GalleryView),
                 MenuItem::separator(),
                 MenuItem::action("Show View Options", ShowViewOptions),
-                MenuItem::action("Toggle Sidebar", ToggleSidebar),
+                MenuItem::action(sidebar_title, ToggleSidebar),
             ],
         },
         Menu {
@@ -221,6 +251,7 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-2", ListView, None),
         KeyBinding::new("cmd-3", ColumnView, None),
         KeyBinding::new("cmd-4", GalleryView, None),
+        KeyBinding::new("alt-cmd-s", ToggleSidebar, None),
         KeyBinding::new("cmd-left", Back, None),
         KeyBinding::new("cmd-right", Forward, None),
         KeyBinding::new("cmd-up", EnclosingFolder, None),
@@ -236,7 +267,13 @@ pub fn key_bindings() -> Vec<KeyBinding> {
     ]
 }
 
-fn command_specs() -> Vec<MenuCommandSpec> {
+fn command_specs(context: MenuContext) -> Vec<MenuCommandSpec> {
+    let selection_enabled = context.has_selection;
+    let sidebar_title = if context.sidebar_visible {
+        "Hide Sidebar"
+    } else {
+        "Show Sidebar"
+    };
     vec![
         command(
             "GFM",
@@ -244,6 +281,8 @@ fn command_specs() -> Vec<MenuCommandSpec> {
             "system::Services",
             None,
             MenuCommandState::System,
+            true,
+            false,
         ),
         command(
             "GFM",
@@ -251,6 +290,8 @@ fn command_specs() -> Vec<MenuCommandSpec> {
             Quit.name(),
             Some("cmd-q"),
             MenuCommandState::Global,
+            true,
+            false,
         ),
         command(
             "File",
@@ -258,6 +299,8 @@ fn command_specs() -> Vec<MenuCommandSpec> {
             NewWindow.name(),
             Some("cmd-n"),
             MenuCommandState::Global,
+            true,
+            false,
         ),
         command(
             "File",
@@ -265,6 +308,8 @@ fn command_specs() -> Vec<MenuCommandSpec> {
             CloseWindow.name(),
             Some("cmd-w"),
             MenuCommandState::Global,
+            true,
+            false,
         ),
         command(
             "File",
@@ -272,6 +317,8 @@ fn command_specs() -> Vec<MenuCommandSpec> {
             Open.name(),
             Some("cmd-o"),
             MenuCommandState::Selection,
+            selection_enabled,
+            false,
         ),
         command(
             "File",
@@ -279,6 +326,8 @@ fn command_specs() -> Vec<MenuCommandSpec> {
             OpenWith.name(),
             None,
             MenuCommandState::Selection,
+            selection_enabled,
+            false,
         ),
         command(
             "File",
@@ -286,6 +335,8 @@ fn command_specs() -> Vec<MenuCommandSpec> {
             GetInfo.name(),
             Some("cmd-i"),
             MenuCommandState::Selection,
+            selection_enabled,
+            false,
         ),
         command(
             "File",
@@ -293,6 +344,8 @@ fn command_specs() -> Vec<MenuCommandSpec> {
             Rename.name(),
             Some("enter"),
             MenuCommandState::Selection,
+            selection_enabled,
+            false,
         ),
         command(
             "File",
@@ -300,6 +353,8 @@ fn command_specs() -> Vec<MenuCommandSpec> {
             Duplicate.name(),
             Some("cmd-d"),
             MenuCommandState::Selection,
+            selection_enabled,
+            false,
         ),
         command(
             "File",
@@ -307,6 +362,8 @@ fn command_specs() -> Vec<MenuCommandSpec> {
             MakeAlias.name(),
             Some("cmd-l"),
             MenuCommandState::Selection,
+            selection_enabled,
+            false,
         ),
         command(
             "File",
@@ -314,6 +371,8 @@ fn command_specs() -> Vec<MenuCommandSpec> {
             QuickLook.name(),
             Some("space"),
             MenuCommandState::Selection,
+            selection_enabled,
+            false,
         ),
         command(
             "File",
@@ -321,6 +380,8 @@ fn command_specs() -> Vec<MenuCommandSpec> {
             MoveToTrash.name(),
             Some("cmd-backspace"),
             MenuCommandState::Selection,
+            selection_enabled,
+            false,
         ),
         command(
             "Edit",
@@ -328,6 +389,8 @@ fn command_specs() -> Vec<MenuCommandSpec> {
             "system::Undo",
             Some("cmd-z"),
             MenuCommandState::System,
+            true,
+            false,
         ),
         command(
             "Edit",
@@ -335,6 +398,8 @@ fn command_specs() -> Vec<MenuCommandSpec> {
             "system::Redo",
             Some("shift-cmd-z"),
             MenuCommandState::System,
+            true,
+            false,
         ),
         command(
             "Edit",
@@ -342,6 +407,8 @@ fn command_specs() -> Vec<MenuCommandSpec> {
             "system::Cut",
             Some("cmd-x"),
             MenuCommandState::System,
+            true,
+            false,
         ),
         command(
             "Edit",
@@ -349,6 +416,8 @@ fn command_specs() -> Vec<MenuCommandSpec> {
             "system::Copy",
             Some("cmd-c"),
             MenuCommandState::System,
+            true,
+            false,
         ),
         command(
             "Edit",
@@ -356,6 +425,8 @@ fn command_specs() -> Vec<MenuCommandSpec> {
             "system::Paste",
             Some("cmd-v"),
             MenuCommandState::System,
+            true,
+            false,
         ),
         command(
             "Edit",
@@ -363,6 +434,8 @@ fn command_specs() -> Vec<MenuCommandSpec> {
             "system::SelectAll",
             Some("cmd-a"),
             MenuCommandState::System,
+            true,
+            false,
         ),
         command(
             "Edit",
@@ -370,6 +443,8 @@ fn command_specs() -> Vec<MenuCommandSpec> {
             Find.name(),
             Some("cmd-f"),
             MenuCommandState::View,
+            true,
+            false,
         ),
         command(
             "View",
@@ -377,6 +452,8 @@ fn command_specs() -> Vec<MenuCommandSpec> {
             IconView.name(),
             Some("cmd-1"),
             MenuCommandState::View,
+            true,
+            context.view_mode == "icon",
         ),
         command(
             "View",
@@ -384,6 +461,8 @@ fn command_specs() -> Vec<MenuCommandSpec> {
             ListView.name(),
             Some("cmd-2"),
             MenuCommandState::View,
+            true,
+            context.view_mode == "list",
         ),
         command(
             "View",
@@ -391,6 +470,8 @@ fn command_specs() -> Vec<MenuCommandSpec> {
             ColumnView.name(),
             Some("cmd-3"),
             MenuCommandState::View,
+            true,
+            context.view_mode == "column",
         ),
         command(
             "View",
@@ -398,6 +479,8 @@ fn command_specs() -> Vec<MenuCommandSpec> {
             GalleryView.name(),
             Some("cmd-4"),
             MenuCommandState::View,
+            true,
+            context.view_mode == "gallery",
         ),
         command(
             "View",
@@ -405,13 +488,17 @@ fn command_specs() -> Vec<MenuCommandSpec> {
             ShowViewOptions.name(),
             Some("cmd-j"),
             MenuCommandState::View,
+            true,
+            false,
         ),
         command(
             "View",
-            "Toggle Sidebar",
+            sidebar_title,
             ToggleSidebar.name(),
-            None,
+            Some("option-cmd-s"),
             MenuCommandState::View,
+            true,
+            context.sidebar_visible,
         ),
         command(
             "Go",
@@ -419,6 +506,8 @@ fn command_specs() -> Vec<MenuCommandSpec> {
             Back.name(),
             Some("cmd-left"),
             MenuCommandState::View,
+            true,
+            false,
         ),
         command(
             "Go",
@@ -426,6 +515,8 @@ fn command_specs() -> Vec<MenuCommandSpec> {
             Forward.name(),
             Some("cmd-right"),
             MenuCommandState::View,
+            true,
+            false,
         ),
         command(
             "Go",
@@ -433,6 +524,8 @@ fn command_specs() -> Vec<MenuCommandSpec> {
             EnclosingFolder.name(),
             Some("cmd-up"),
             MenuCommandState::View,
+            true,
+            false,
         ),
         command(
             "Go",
@@ -440,6 +533,8 @@ fn command_specs() -> Vec<MenuCommandSpec> {
             Home.name(),
             Some("shift-cmd-h"),
             MenuCommandState::Global,
+            true,
+            false,
         ),
         command(
             "Go",
@@ -447,6 +542,8 @@ fn command_specs() -> Vec<MenuCommandSpec> {
             Desktop.name(),
             Some("shift-cmd-d"),
             MenuCommandState::Global,
+            true,
+            false,
         ),
         command(
             "Go",
@@ -454,6 +551,8 @@ fn command_specs() -> Vec<MenuCommandSpec> {
             Documents.name(),
             Some("shift-cmd-o"),
             MenuCommandState::Global,
+            true,
+            false,
         ),
         command(
             "Go",
@@ -461,6 +560,8 @@ fn command_specs() -> Vec<MenuCommandSpec> {
             Downloads.name(),
             Some("option-cmd-l"),
             MenuCommandState::Global,
+            true,
+            false,
         ),
         command(
             "Go",
@@ -468,6 +569,8 @@ fn command_specs() -> Vec<MenuCommandSpec> {
             Applications.name(),
             Some("shift-cmd-a"),
             MenuCommandState::Global,
+            true,
+            false,
         ),
         command(
             "Go",
@@ -475,6 +578,8 @@ fn command_specs() -> Vec<MenuCommandSpec> {
             ConnectToServer.name(),
             Some("cmd-k"),
             MenuCommandState::Global,
+            true,
+            false,
         ),
         command(
             "Window",
@@ -482,6 +587,8 @@ fn command_specs() -> Vec<MenuCommandSpec> {
             Minimize.name(),
             Some("cmd-m"),
             MenuCommandState::Global,
+            true,
+            false,
         ),
         command(
             "Window",
@@ -489,6 +596,8 @@ fn command_specs() -> Vec<MenuCommandSpec> {
             Zoom.name(),
             None,
             MenuCommandState::Global,
+            true,
+            false,
         ),
         command(
             "Window",
@@ -496,6 +605,8 @@ fn command_specs() -> Vec<MenuCommandSpec> {
             BringAllToFront.name(),
             None,
             MenuCommandState::Global,
+            true,
+            false,
         ),
         command(
             "Help",
@@ -503,23 +614,29 @@ fn command_specs() -> Vec<MenuCommandSpec> {
             Help.name(),
             Some("cmd-?"),
             MenuCommandState::Global,
+            true,
+            false,
         ),
     ]
 }
 
 fn command(
     menu: &'static str,
-    title: &'static str,
+    title: impl Into<String>,
     action: &'static str,
     shortcut: Option<&'static str>,
     state: MenuCommandState,
+    enabled: bool,
+    selected: bool,
 ) -> MenuCommandSpec {
     MenuCommandSpec {
         menu,
-        title,
+        title: title.into(),
         action,
         shortcut,
         state,
+        enabled,
+        selected,
     }
 }
 
@@ -544,11 +661,21 @@ mod tests {
 
     #[test]
     fn gpui_menu_and_keybinding_construction_is_valid() {
-        let menus = native_menus();
+        let menus = native_menus(true);
+        let hidden_sidebar_menus = native_menus(false);
         let bindings = key_bindings();
 
         assert_eq!(menus.len(), 7);
         assert!(bindings.len() >= 20);
+        assert!(hidden_sidebar_menus.iter().any(|menu| {
+            menu.name.as_ref() == "View"
+                && menu.items.iter().any(|item| {
+                    matches!(
+                        item,
+                        MenuItem::Action { name, .. } if name.as_ref() == "Show Sidebar"
+                    )
+                })
+        }));
     }
 
     #[test]
@@ -556,7 +683,43 @@ mod tests {
         let tsv = MenuContract::finder_default().as_tsv();
 
         assert!(tsv.starts_with("menus\tGFM,File,Edit,View,Go,Window,Help\tservices=true\n"));
-        assert!(tsv.contains("command\tFile\tNew Window\tgfm::NewWindow\tcmd-n\tglobal"));
-        assert!(tsv.contains("command\tEdit\tCopy\tsystem::Copy\tcmd-c\tsystem"));
+        assert!(tsv.contains(
+            "command\tFile\tNew Window\tgfm::NewWindow\tcmd-n\tglobal\tenabled=true\tselected=false"
+        ));
+        assert!(tsv.contains(
+            "command\tEdit\tCopy\tsystem::Copy\tcmd-c\tsystem\tenabled=true\tselected=false"
+        ));
+        assert!(tsv.contains(
+            "command\tFile\tOpen\tgfm::Open\tcmd-o\tselection\tenabled=false\tselected=false"
+        ));
+        assert!(tsv.contains(
+            "command\tView\tas Icons\tgfm::IconView\tcmd-1\tview\tenabled=true\tselected=true"
+        ));
+        assert!(tsv.contains(
+            "command\tView\tHide Sidebar\tgfm::ToggleSidebar\toption-cmd-s\tview\tenabled=true\tselected=true"
+        ));
+    }
+
+    #[test]
+    fn tsv_tracks_selection_view_mode_and_sidebar_visibility() {
+        let tsv = MenuContract::finder_for_context(MenuContext {
+            has_selection: true,
+            view_mode: "list",
+            sidebar_visible: false,
+        })
+        .as_tsv();
+
+        assert!(tsv.contains(
+            "command\tFile\tOpen\tgfm::Open\tcmd-o\tselection\tenabled=true\tselected=false"
+        ));
+        assert!(tsv.contains(
+            "command\tView\tas Icons\tgfm::IconView\tcmd-1\tview\tenabled=true\tselected=false"
+        ));
+        assert!(tsv.contains(
+            "command\tView\tas List\tgfm::ListView\tcmd-2\tview\tenabled=true\tselected=true"
+        ));
+        assert!(tsv.contains(
+            "command\tView\tShow Sidebar\tgfm::ToggleSidebar\toption-cmd-s\tview\tenabled=true\tselected=false"
+        ));
     }
 }
