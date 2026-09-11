@@ -20715,6 +20715,18 @@ fn native_app_launch_selects_list_view_item_from_binary() {
         "{stdout}"
     );
     assert!(
+        stdout.contains(
+            "control\tactions\tshare\tshare\tshare\tbutton\t28px\tenabled=true\tselected=false"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "control\tactions\ttags\ttags\ttags\tbutton\t28px\tenabled=true\tselected=false"
+        ),
+        "{stdout}"
+    );
+    assert!(
         stdout.contains("\ncontext-menu\tsurface=file\tselection=1\titems="),
         "{stdout}"
     );

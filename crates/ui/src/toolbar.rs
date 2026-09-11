@@ -77,6 +77,15 @@ impl ToolbarContract {
         mode: &str,
         search_query: Option<&str>,
     ) -> Self {
+        Self::finder_for_view_mode_with_search_and_selection(path, mode, search_query, false)
+    }
+
+    pub fn finder_for_view_mode_with_search_and_selection(
+        path: impl AsRef<Path>,
+        mode: &str,
+        search_query: Option<&str>,
+        has_selection: bool,
+    ) -> Self {
         let title = toolbar_title(path.as_ref());
         let search_label = search_query
             .filter(|query| mode == "search" && !query.is_empty())
@@ -157,7 +166,7 @@ impl ToolbarContract {
                     "share",
                     "share",
                     ToolbarControlKind::Button,
-                    ControlState::new(28, false, false),
+                    ControlState::new(28, has_selection, false),
                 ),
                 control(
                     "actions",
@@ -165,7 +174,7 @@ impl ToolbarContract {
                     "tags",
                     "tags",
                     ToolbarControlKind::Button,
-                    ControlState::new(28, false, false),
+                    ControlState::new(28, has_selection, false),
                 ),
                 control(
                     "actions",
@@ -441,6 +450,21 @@ mod tests {
 
         assert!(tsv.contains(
             "control\tsearch\tsearch-field\tNeedle\tmachine-search\tsearch-field\t232px\tenabled=true\tselected=true"
+        ));
+    }
+
+    #[test]
+    fn finder_for_selection_enables_share_and_tags_actions() {
+        let contract = ToolbarContract::finder_for_view_mode_with_search_and_selection(
+            "/tmp/gfm", "list", None, true,
+        );
+        let tsv = contract.as_tsv();
+
+        assert!(tsv.contains(
+            "control\tactions\tshare\tshare\tshare\tbutton\t28px\tenabled=true\tselected=false"
+        ));
+        assert!(tsv.contains(
+            "control\tactions\ttags\ttags\ttags\tbutton\t28px\tenabled=true\tselected=false"
         ));
     }
 

@@ -1074,10 +1074,11 @@ impl WindowLifecycleContract {
     }
 
     fn effective_toolbar_contract(&self) -> ToolbarContract {
-        ToolbarContract::finder_for_view_mode_with_search(
+        ToolbarContract::finder_for_view_mode_with_search_and_selection(
             &self.initial_path,
             self.initial_view.mode(),
             self.initial_view.search_query(),
+            self.initial_view.has_selection(),
         )
     }
 
@@ -1117,10 +1118,11 @@ fn open_main_window(
         cx.new(|_| RootView {
             bounds_subscription: None,
             session_writer: WindowSessionWriter::new(session_store),
-            toolbar: ToolbarContract::finder_for_view_mode_with_search(
+            toolbar: ToolbarContract::finder_for_view_mode_with_search_and_selection(
                 &spec.initial_path,
                 spec.initial_view.mode(),
                 spec.initial_view.search_query(),
+                spec.initial_view.has_selection(),
             ),
             sidebar: spec.sidebar_contract.clone().unwrap_or_else(|| {
                 sidebar::SidebarContract::from_path_snapshot(
@@ -1602,6 +1604,12 @@ mod tests {
         ));
         assert!(tsv.contains(
             "\ncontrol\tview\tlist-view\tlist\tview-as-list\tsegmented-button\t34px\tenabled=true\tselected=true"
+        ));
+        assert!(tsv.contains(
+            "\ncontrol\tactions\tshare\tshare\tshare\tbutton\t28px\tenabled=true\tselected=false"
+        ));
+        assert!(tsv.contains(
+            "\ncontrol\tactions\ttags\ttags\ttags\tbutton\t28px\tenabled=true\tselected=false"
         ));
         assert!(tsv.contains(
             "command\tFile\tOpen\tgfm::Open\tcmd-o\tselection\tenabled=true\tselected=false"
