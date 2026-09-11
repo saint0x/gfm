@@ -25,20 +25,24 @@ impl Rect {
     }
 
     pub fn intersects(self, other: Self) -> bool {
-        let ax2 = self.x.saturating_add(self.width as i32);
-        let ay2 = self.y.saturating_add(self.height as i32);
-        let bx2 = other.x.saturating_add(other.width as i32);
-        let by2 = other.y.saturating_add(other.height as i32);
-        self.x < bx2 && ax2 > other.x && self.y < by2 && ay2 > other.y
+        let ax2 = i64::from(self.x) + i64::from(self.width);
+        let ay2 = i64::from(self.y) + i64::from(self.height);
+        let bx2 = i64::from(other.x) + i64::from(other.width);
+        let by2 = i64::from(other.y) + i64::from(other.height);
+        i64::from(self.x) < bx2
+            && ax2 > i64::from(other.x)
+            && i64::from(self.y) < by2
+            && ay2 > i64::from(other.y)
     }
 
     pub fn inflate(self, margin: u32) -> Self {
-        let margin = margin as i32;
+        let signed_margin = i32::try_from(margin).unwrap_or(i32::MAX);
+        let growth = margin.saturating_mul(2);
         Self {
-            x: self.x.saturating_sub(margin),
-            y: self.y.saturating_sub(margin),
-            width: self.width.saturating_add((margin * 2) as u32),
-            height: self.height.saturating_add((margin * 2) as u32),
+            x: self.x.saturating_sub(signed_margin),
+            y: self.y.saturating_sub(signed_margin),
+            width: self.width.saturating_add(growth),
+            height: self.height.saturating_add(growth),
         }
     }
 }
@@ -682,6 +686,36 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn extreme_prefetch_margin_saturates_without_panicking() {
+        let viewport = Viewport::new(Rect::new(i32::MIN + 8, i32::MIN + 16, 100, 120), u32::MAX);
+        let inflated = viewport.visible.inflate(viewport.prefetch_margin_px);
+
+        assert_eq!(inflated.x, i32::MIN);
+        assert_eq!(inflated.y, i32::MIN);
+        assert_eq!(inflated.width, u32::MAX);
+        assert_eq!(inflated.height, u32::MAX);
+
+        let mut scheduler = PreviewScheduler::new(PreviewSchedulingPolicy {
+            max_visible: 1,
+            max_prefetch: 1,
+            cancel_offscreen: true,
+        })
+        .unwrap();
+        let decisions = scheduler.schedule(
+            viewport,
+            [task(77, Rect::new(i32::MAX - 20, i32::MAX - 20, 10, 10))],
+        );
+
+        assert_eq!(
+            decisions,
+            vec![PreviewTaskDecision::Scheduled {
+                key: task(77, Rect::new(i32::MAX - 20, i32::MAX - 20, 10, 10)).key,
+                priority: PreviewPriority::Prefetch,
+            }]
+        );
     }
 
     #[test]
