@@ -6,6 +6,7 @@ use crate::{
     PreviewScheduler, PreviewSchedulingPolicy, PreviewSecurityDecision, PreviewSecurityPolicy,
     PreviewTask, PreviewTaskDecision, Rect, Viewport,
 };
+use gfm_jobs::SchedulingPressure;
 use gfm_mac::{CloudMaterialization, CloudStorageState, VolumeDescriptor};
 use gfm_types::Result;
 
@@ -34,6 +35,7 @@ pub struct QuickLookSessionInput {
     pub rect: Rect,
     pub viewport: Viewport,
     pub scheduling_policy: PreviewSchedulingPolicy,
+    pub scheduling_pressure: SchedulingPressure,
     pub is_remote: bool,
     pub invalidation_event: PreviewInvalidationEvent,
     pub cloud_state: CloudStorageState,
@@ -51,6 +53,7 @@ impl QuickLookSessionInput {
                 max_prefetch: 1,
                 cancel_offscreen: true,
             },
+            scheduling_pressure: SchedulingPressure::default(),
             is_remote: false,
             invalidation_event: PreviewInvalidationEvent::default(),
             cloud_state: CloudStorageState::LocalOnly,
@@ -75,6 +78,11 @@ impl QuickLookSessionInput {
 
     pub fn with_scheduling_policy(mut self, policy: PreviewSchedulingPolicy) -> Self {
         self.scheduling_policy = policy;
+        self
+    }
+
+    pub fn with_scheduling_pressure(mut self, pressure: SchedulingPressure) -> Self {
+        self.scheduling_pressure = pressure;
         self
     }
 
@@ -152,7 +160,8 @@ impl QuickLookSessionContract {
                 let mut scheduler = PreviewScheduler::new(input.scheduling_policy)?;
                 check()?;
                 scheduler
-                    .schedule_checked(
+                    .schedule_with_pressure_checked(
+                        input.scheduling_pressure,
                         input.viewport,
                         [PreviewTask::new(input.key.clone(), input.rect)],
                         &mut check,
@@ -313,17 +322,16 @@ mod tests {
     fn pressure_policy_preserves_visible_quicklook_preview() {
         let contract = QuickLookSessionContract::from_input(
             &PreviewSecurityPolicy::default(),
-            input("Report.pdf", Rect::new(0, 0, 400, 300)).with_scheduling_policy(
-                PreviewSchedulingPolicy {
+            input("Report.pdf", Rect::new(0, 0, 400, 300))
+                .with_scheduling_policy(PreviewSchedulingPolicy {
                     max_visible: 1,
                     max_prefetch: 1,
                     cancel_offscreen: true,
-                }
-                .adapted_for_pressure(gfm_jobs::SchedulingPressure {
+                })
+                .with_scheduling_pressure(gfm_jobs::SchedulingPressure {
                     thermal: gfm_jobs::JobThermalState::Critical,
                     ..gfm_jobs::SchedulingPressure::default()
                 }),
-            ),
         )
         .unwrap();
 
@@ -331,6 +339,28 @@ mod tests {
             contract.schedule_decision,
             PreviewTaskDecision::Scheduled {
                 priority: crate::PreviewPriority::Visible,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn pressure_input_drops_offscreen_quicklook_prefetch() {
+        let contract = QuickLookSessionContract::from_input(
+            &PreviewSecurityPolicy::default(),
+            input("Report.pdf", Rect::new(0, 900, 400, 300)).with_scheduling_pressure(
+                gfm_jobs::SchedulingPressure {
+                    io: gfm_jobs::JobIoPressure::Saturated,
+                    ..gfm_jobs::SchedulingPressure::default()
+                },
+            ),
+        )
+        .unwrap();
+
+        assert!(matches!(
+            contract.schedule_decision,
+            PreviewTaskDecision::Cancelled {
+                reason: "outside-preview-budget",
                 ..
             }
         ));

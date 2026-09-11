@@ -6,6 +6,7 @@ use crate::{
     PreviewScheduler, PreviewSchedulingPolicy, PreviewSecurityDecision, PreviewSecurityPolicy,
     PreviewTask, PreviewTaskDecision, Rect, Viewport,
 };
+use gfm_jobs::SchedulingPressure;
 use gfm_mac::{CloudMaterialization, CloudStorageState, VolumeDescriptor};
 use gfm_types::Result;
 
@@ -53,6 +54,7 @@ pub struct ThumbnailGenerationInput {
     pub rect: Rect,
     pub viewport: Viewport,
     pub scheduling_policy: PreviewSchedulingPolicy,
+    pub scheduling_pressure: SchedulingPressure,
     pub is_remote: bool,
     pub max_pixel_size: u16,
     pub scale_factor_milli: u16,
@@ -68,6 +70,7 @@ impl ThumbnailGenerationInput {
             rect,
             viewport,
             scheduling_policy: PreviewSchedulingPolicy::default(),
+            scheduling_pressure: SchedulingPressure::default(),
             is_remote: false,
             max_pixel_size: 512,
             scale_factor_milli: 2_000,
@@ -102,6 +105,11 @@ impl ThumbnailGenerationInput {
 
     pub fn with_scheduling_policy(mut self, policy: PreviewSchedulingPolicy) -> Self {
         self.scheduling_policy = policy;
+        self
+    }
+
+    pub fn with_scheduling_pressure(mut self, pressure: SchedulingPressure) -> Self {
+        self.scheduling_pressure = pressure;
         self
     }
 
@@ -183,7 +191,8 @@ impl ThumbnailGenerationContract {
                 let mut scheduler = PreviewScheduler::new(input.scheduling_policy)?;
                 check()?;
                 scheduler
-                    .schedule_checked(
+                    .schedule_with_pressure_checked(
+                        input.scheduling_pressure,
                         input.viewport,
                         [PreviewTask::new(input.key.clone(), input.rect)],
                         &mut check,
@@ -380,13 +389,11 @@ mod tests {
     fn pressure_policy_can_drop_offscreen_thumbnail_prefetch() {
         let contract = ThumbnailGenerationContract::from_input(
             &PreviewSecurityPolicy::default(),
-            input("Image.png", Rect::new(0, 900, 128, 128)).with_scheduling_policy(
-                PreviewSchedulingPolicy::default().adapted_for_pressure(
-                    gfm_jobs::SchedulingPressure {
-                        io: gfm_jobs::JobIoPressure::Saturated,
-                        ..gfm_jobs::SchedulingPressure::default()
-                    },
-                ),
+            input("Image.png", Rect::new(0, 900, 128, 128)).with_scheduling_pressure(
+                gfm_jobs::SchedulingPressure {
+                    io: gfm_jobs::JobIoPressure::Saturated,
+                    ..gfm_jobs::SchedulingPressure::default()
+                },
             ),
         )
         .unwrap();
