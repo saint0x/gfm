@@ -249,15 +249,15 @@ fn push_workbook_biff_text_records(
     Ok(out.len() > initial_len)
 }
 
-fn collect_biff_continued_payload(
-    stream: &[u8],
-    first: &[u8],
+fn collect_biff_continued_payload<'a>(
+    stream: &'a [u8],
+    first: &'a [u8],
     mut cursor: usize,
     mut records: usize,
     continue_record_type: u16,
     mut check_control: impl FnMut() -> Result<()>,
-) -> Result<(Vec<u8>, usize, usize)> {
-    let mut payload = first.to_vec();
+) -> Result<(Vec<&'a [u8]>, usize, usize)> {
+    let mut payload = vec![first];
     while cursor + 4 <= stream.len() && records + 1 < MAX_BIFF_TEXT_RECORDS_TO_SCAN {
         check_control()?;
         let Some(record_type) = read_u16(stream, cursor) else {
@@ -278,7 +278,7 @@ fn collect_biff_continued_payload(
         if next > stream.len() {
             break;
         }
-        payload.extend_from_slice(&stream[data_start..next]);
+        payload.push(&stream[data_start..next]);
         cursor = next;
         records += 1;
     }
@@ -294,19 +294,22 @@ fn push_biff_label_record_text(data: &[u8], max_text_bytes: usize, out: &mut Str
 }
 
 fn push_biff_sst_record_text(
-    data: &[u8],
+    segments: &[&[u8]],
     max_text_bytes: usize,
     out: &mut String,
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<()> {
-    if data.len() < 8 {
+    if segments.is_empty() || segments[0].len() < 8 {
         return Ok(());
     }
-    let declared_unique = read_u32(data, 4).unwrap_or_default() as usize;
-    let mut cursor = 8usize;
+    let declared_unique = read_u32(segments[0], 4).unwrap_or_default() as usize;
+    let mut cursor = BiffPayloadCursor {
+        segment: 0,
+        offset: 8,
+    };
     for _ in 0..declared_unique.min(MAX_BIFF_TEXT_RECORDS_TO_SCAN) {
         check_control()?;
-        let Some((string, next)) = parse_biff_string_at(data, cursor) else {
+        let Some((string, next)) = parse_biff_string_at_segments(segments, cursor) else {
             break;
         };
         append_biff_text(Some(&string), max_text_bytes, out);
@@ -318,8 +321,78 @@ fn push_biff_sst_record_text(
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+struct BiffPayloadCursor {
+    segment: usize,
+    offset: usize,
+}
+
 fn parse_biff_string(data: &[u8], offset: usize) -> Option<String> {
     parse_biff_string_at(data, offset).map(|(string, _)| string)
+}
+
+fn parse_biff_string_at_segments(
+    segments: &[&[u8]],
+    mut cursor: BiffPayloadCursor,
+) -> Option<(String, BiffPayloadCursor)> {
+    let char_count = read_biff_u16_segments(segments, &mut cursor)? as usize;
+    let flags = read_biff_u8_segments(segments, &mut cursor)?;
+    let mut has_16_bit_chars = flags & 0x01 != 0;
+    let has_rich_text_runs = flags & 0x08 != 0;
+    let has_extended_data = flags & 0x04 != 0;
+    let rich_text_runs = if has_rich_text_runs {
+        read_biff_u16_segments(segments, &mut cursor)? as usize
+    } else {
+        0
+    };
+    let extended_data_bytes = if has_extended_data {
+        read_biff_u32_segments(segments, &mut cursor)? as usize
+    } else {
+        0
+    };
+
+    let mut remaining = char_count;
+    let mut string = String::new();
+    while remaining > 0 {
+        if cursor.offset >= segments.get(cursor.segment)?.len() {
+            cursor.segment = cursor.segment.checked_add(1)?;
+            cursor.offset = 0;
+            if cursor.segment >= segments.len() {
+                return None;
+            }
+            let continuation_flags = read_biff_u8_segments(segments, &mut cursor)?;
+            has_16_bit_chars = continuation_flags & 0x01 != 0;
+        }
+
+        let segment = *segments.get(cursor.segment)?;
+        let available = segment.len().checked_sub(cursor.offset)?;
+        if has_16_bit_chars {
+            let units = remaining.min(available / 2);
+            if units == 0 {
+                return None;
+            }
+            let bytes = units.checked_mul(2)?;
+            string.push_str(&decode_utf16le_lossy(
+                segment.get(cursor.offset..cursor.offset + bytes)?,
+            ));
+            cursor.offset += bytes;
+            remaining -= units;
+        } else {
+            let bytes = remaining.min(available);
+            if bytes == 0 {
+                return None;
+            }
+            string.push_str(&decode_biff_compressed_string(
+                segment.get(cursor.offset..cursor.offset + bytes)?,
+            ));
+            cursor.offset += bytes;
+            remaining -= bytes;
+        }
+    }
+
+    advance_biff_segments(&mut cursor, segments, rich_text_runs.checked_mul(4)?)?;
+    advance_biff_segments(&mut cursor, segments, extended_data_bytes)?;
+    Some((string, cursor))
 }
 
 fn parse_biff_string_at(data: &[u8], offset: usize) -> Option<(String, usize)> {
@@ -363,6 +436,56 @@ fn parse_biff_string_at(data: &[u8], offset: usize) -> Option<(String, usize)> {
         return None;
     }
     Some((string, cursor))
+}
+
+fn read_biff_u8_segments(segments: &[&[u8]], cursor: &mut BiffPayloadCursor) -> Option<u8> {
+    while cursor.segment < segments.len() {
+        let segment = segments[cursor.segment];
+        if cursor.offset < segment.len() {
+            let byte = segment[cursor.offset];
+            cursor.offset += 1;
+            return Some(byte);
+        }
+        cursor.segment += 1;
+        cursor.offset = 0;
+    }
+    None
+}
+
+fn read_biff_u16_segments(segments: &[&[u8]], cursor: &mut BiffPayloadCursor) -> Option<u16> {
+    let low = read_biff_u8_segments(segments, cursor)?;
+    let high = read_biff_u8_segments(segments, cursor)?;
+    Some(u16::from_le_bytes([low, high]))
+}
+
+fn read_biff_u32_segments(segments: &[&[u8]], cursor: &mut BiffPayloadCursor) -> Option<u32> {
+    let b0 = read_biff_u8_segments(segments, cursor)?;
+    let b1 = read_biff_u8_segments(segments, cursor)?;
+    let b2 = read_biff_u8_segments(segments, cursor)?;
+    let b3 = read_biff_u8_segments(segments, cursor)?;
+    Some(u32::from_le_bytes([b0, b1, b2, b3]))
+}
+
+fn advance_biff_segments(
+    cursor: &mut BiffPayloadCursor,
+    segments: &[&[u8]],
+    mut bytes: usize,
+) -> Option<()> {
+    while bytes > 0 {
+        let segment = *segments.get(cursor.segment)?;
+        if cursor.offset > segment.len() {
+            return None;
+        }
+        let available = segment.len() - cursor.offset;
+        if available >= bytes {
+            cursor.offset += bytes;
+            return Some(());
+        }
+        bytes -= available;
+        cursor.segment += 1;
+        cursor.offset = 0;
+    }
+    Some(())
 }
 
 fn decode_biff_compressed_string(raw: &[u8]) -> String {
@@ -1104,6 +1227,37 @@ mod tests {
 
         assert_eq!(status, LegacyOfficeExtractStatus::Extracted);
         let document = document.expect("continued BIFF shared strings should extract");
+        assert_eq!(document.text, "North South");
+    }
+
+    #[test]
+    fn extracts_workbook_biff_sst_string_split_mid_text_across_continue_records() {
+        let mut sst = Vec::new();
+        sst.extend_from_slice(&2_u32.to_le_bytes());
+        sst.extend_from_slice(&2_u32.to_le_bytes());
+        let north = biff_string("North", false);
+        sst.extend_from_slice(&north[..5]);
+
+        let mut continued = Vec::new();
+        continued.push(0x00);
+        continued.extend_from_slice(&north[5..]);
+        continued.extend_from_slice(&biff_string("South", false));
+
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&biff_record(0x00fc, &sst));
+        payload.extend_from_slice(&biff_record(0x003c, &continued));
+        let bytes = legacy_office_compound_file_with_ministream("Workbook", &payload);
+
+        let (status, document) = extract_legacy_office_document_checked(
+            &bytes,
+            LegacyOfficeKind::Xls,
+            &ExtractionPolicy::default(),
+            || Ok(()),
+        )
+        .unwrap();
+
+        assert_eq!(status, LegacyOfficeExtractStatus::Extracted);
+        let document = document.expect("mid-string continued BIFF shared strings should extract");
         assert_eq!(document.text, "North South");
     }
 
