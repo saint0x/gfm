@@ -1874,6 +1874,10 @@ fn reports_ui_toolbar_contract_from_binary() {
         lines.next(),
         Some("toolbar\theight=54\ttraffic-light-gutter=96")
     );
+    assert_eq!(
+        lines.next(),
+        Some("toolbar-visible\ttitle=gfm\tview=icon\tsearch=inactive\tnav=back-enabled,forward-disabled\tactions=share-disabled,tags-disabled,more-enabled\theight=54\ttraffic-light-gutter=96")
+    );
     assert!(stdout.contains(
         "control\tlocation\tpath-title\tgfm\tcurrent-folder-title\tpath-title\t220px\tenabled=true\tselected=false"
     ));

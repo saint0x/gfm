@@ -234,11 +234,12 @@ impl ToolbarContract {
     }
 
     pub fn as_tsv(&self) -> String {
-        let mut lines = Vec::with_capacity(self.controls.len() + 1);
+        let mut lines = Vec::with_capacity(self.controls.len() + 2);
         lines.push(format!(
             "toolbar\theight={}\ttraffic-light-gutter={}",
             self.height_px, self.traffic_light_gutter_px
         ));
+        lines.push(self.visible_tsv());
         lines.extend(self.controls.iter().map(|control| {
             format!(
                 "control\t{}\t{}\t{}\t{}\t{}\t{}px\tenabled={}\tselected={}",
@@ -253,6 +254,79 @@ impl ToolbarContract {
             )
         }));
         lines.join("\n")
+    }
+
+    pub fn visible_tsv(&self) -> String {
+        format!(
+            "toolbar-visible\ttitle={}\tview={}\tsearch={}\tnav={}\tactions={}\theight={}\ttraffic-light-gutter={}",
+            escape_field(&self.visible_title()),
+            escape_field(&self.visible_view_mode()),
+            escape_field(&self.visible_search_state()),
+            escape_field(&self.visible_navigation_state()),
+            escape_field(&self.visible_action_state()),
+            self.height_px,
+            self.traffic_light_gutter_px
+        )
+    }
+
+    pub fn visible_title(&self) -> String {
+        self.control("path-title")
+            .map(|control| control.label.clone())
+            .unwrap_or_else(|| "-".to_string())
+    }
+
+    pub fn visible_view_mode(&self) -> String {
+        self.controls
+            .iter()
+            .find(|control| control.group == "view" && control.selected)
+            .map(|control| {
+                control
+                    .id
+                    .strip_suffix("-view")
+                    .unwrap_or(control.id)
+                    .to_string()
+            })
+            .unwrap_or_else(|| "-".to_string())
+    }
+
+    pub fn visible_search_state(&self) -> String {
+        self.control("search-field")
+            .map(|control| {
+                if control.selected {
+                    format!("query:{}", control.label)
+                } else {
+                    "inactive".to_string()
+                }
+            })
+            .unwrap_or_else(|| "-".to_string())
+    }
+
+    pub fn visible_navigation_state(&self) -> String {
+        format!(
+            "back-{},forward-{}",
+            enabled_state(self.control("back")),
+            enabled_state(self.control("forward"))
+        )
+    }
+
+    pub fn visible_action_state(&self) -> String {
+        ["share", "tags", "more"]
+            .iter()
+            .map(|id| format!("{id}-{}", enabled_state(self.control(id))))
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    fn control(&self, id: &str) -> Option<&ToolbarControlSpec> {
+        self.controls.iter().find(|control| control.id == id)
+    }
+}
+
+fn enabled_state(control: Option<&ToolbarControlSpec>) -> &'static str {
+    match control {
+        Some(control) if control.enabled => "enabled",
+        Some(_) => "disabled",
+        None => "missing",
     }
 }
 
@@ -459,6 +533,9 @@ mod tests {
             .as_tsv()
             .starts_with("toolbar\theight=54\ttraffic-light-gutter=96"));
         assert!(contract.as_tsv().contains(
+            "\ntoolbar-visible\ttitle=gfm\tview=icon\tsearch=inactive\tnav=back-enabled,forward-disabled\tactions=share-disabled,tags-disabled,more-enabled\theight=54\ttraffic-light-gutter=96"
+        ));
+        assert!(contract.as_tsv().contains(
             "control\tlocation\tpath-title\tgfm\tcurrent-folder-title\tpath-title\t220px\tenabled=true\tselected=false"
         ));
         assert!(contract.as_tsv().contains(
@@ -477,6 +554,7 @@ mod tests {
         assert!(tsv.contains(
             "control\tview\tlist-view\tlist\tview-as-list\tsegmented-button\t34px\tenabled=true\tselected=true"
         ));
+        assert!(tsv.contains("\ntoolbar-visible\ttitle=gfm\tview=list\t"));
     }
 
     #[test]
@@ -488,6 +566,7 @@ mod tests {
         assert!(tsv.contains(
             "control\tsearch\tsearch-field\tNeedle\tmachine-search\tsearch-field\t232px\tenabled=true\tselected=true"
         ));
+        assert!(tsv.contains("\tsearch=query:Needle\t"));
     }
 
     #[test]
@@ -503,6 +582,7 @@ mod tests {
         assert!(tsv.contains(
             "control\tactions\ttags\ttags\ttags\tbutton\t28px\tenabled=true\tselected=false"
         ));
+        assert!(tsv.contains("\tactions=share-enabled,tags-enabled,more-enabled\t"));
     }
 
     #[test]
@@ -522,6 +602,7 @@ mod tests {
         assert!(tsv.contains(
             "control\tnavigation\tforward\t>\tgo-forward\tbutton\t28px\tenabled=true\tselected=false"
         ));
+        assert!(tsv.contains("\tnav=back-disabled,forward-enabled\t"));
     }
 
     #[test]
@@ -533,7 +614,8 @@ mod tests {
             .find(|line| line.starts_with("control\tlocation\tpath-title\t"))
             .unwrap();
 
-        assert_eq!(tsv.lines().count(), 13, "{tsv}");
+        assert_eq!(tsv.lines().count(), 14, "{tsv}");
+        assert!(tsv.contains("\ntoolbar-visible\ttitle=Reports\\tQ3\\nDraft\\rToolbar\t"));
         assert!(
             title.contains("\tReports\\tQ3\\nDraft\\rToolbar\tcurrent-folder-title\t"),
             "{tsv}"

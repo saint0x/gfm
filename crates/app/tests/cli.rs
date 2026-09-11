@@ -20551,6 +20551,12 @@ fn native_app_launch_derives_toolbar_navigation_state_from_binary() {
         "{stdout}"
     );
     assert!(
+        stdout.contains("\ntoolbar-visible\t")
+            && stdout.contains("\tnav=back-disabled,forward-enabled\t")
+            && stdout.contains("\tactions=share-disabled,tags-disabled,more-enabled\t"),
+        "{stdout}"
+    );
+    assert!(
         stdout.contains(
             "control\tnavigation\tback\t<\tgo-back\tbutton\t28px\tenabled=false\tselected=false"
         ),
