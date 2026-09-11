@@ -519,6 +519,11 @@ impl ContentIndexQuerySession {
         budget: SearchLookupBudget,
         cancellation: &Cancellation,
     ) -> Result<Vec<ContentPosting>> {
+        cancellation.check()?;
+        if budget.max_content_ids_per_term == 0 {
+            return Ok(Vec::new());
+        }
+
         let mut selected = BTreeSet::new();
         for term in terms {
             cancellation.check()?;
@@ -579,6 +584,11 @@ impl ContentIndexQuerySession {
         budget: SearchLookupBudget,
         cancellation: &Cancellation,
     ) -> Result<Vec<ContentPosting>> {
+        cancellation.check()?;
+        if budget.max_content_ids_per_term == 0 {
+            return Ok(Vec::new());
+        }
+
         let mut selected = BTreeSet::new();
         for term in terms {
             cancellation.check()?;
@@ -1551,6 +1561,68 @@ mod tests {
         assert_eq!(session.posting_cache_telemetry(), (0, 0));
         assert_eq!(session.record_cache_telemetry(), (0, 0));
         assert_eq!(session.result_cache_telemetry(), (0, 0));
+    }
+
+    #[test]
+    fn content_session_zero_content_budget_skips_posting_and_record_cache_work() {
+        let fixture = ContentSessionFixture::new("zero-content-budget");
+        let session = fixture.session();
+
+        let report = session
+            .search_with_budget(
+                "needle",
+                5,
+                SearchLookupBudget {
+                    max_content_ids_per_term: 0,
+                    ..SearchLookupBudget::default()
+                },
+            )
+            .unwrap();
+
+        assert!(report.search.hits.is_empty());
+        assert_eq!(report.load.content_keys, 0);
+        assert_eq!(report.load.candidate_ids, 0);
+        assert_eq!(report.load.records_loaded, 0);
+        assert!(!report.load.full_hydration);
+        assert_eq!(report.posting_cache_hits, 0);
+        assert_eq!(report.posting_cache_misses, 0);
+        assert_eq!(report.record_cache_hits, 0);
+        assert_eq!(report.record_cache_misses, 0);
+        assert_eq!(report.result_cache_hits, 0);
+        assert_eq!(report.result_cache_misses, 1);
+        assert_eq!(session.posting_cache_telemetry(), (0, 0));
+        assert_eq!(session.record_cache_telemetry(), (0, 0));
+    }
+
+    #[test]
+    fn content_session_scoped_zero_content_budget_skips_posting_and_record_cache_work() {
+        let fixture = ContentSessionFixture::new("scoped-zero-content-budget");
+        let session = fixture.session();
+
+        let report = session
+            .search_with_volume_scope_budget_cancellable(
+                "needle",
+                5,
+                &SearchVolumeScope::only([VolumeId(1)]),
+                SearchLookupBudget {
+                    max_content_ids_per_term: 0,
+                    ..SearchLookupBudget::default()
+                },
+                &Cancellation::default(),
+            )
+            .unwrap();
+
+        assert!(report.search.hits.is_empty());
+        assert_eq!(report.load.content_keys, 0);
+        assert_eq!(report.load.candidate_ids, 0);
+        assert_eq!(report.load.records_loaded, 0);
+        assert!(!report.load.full_hydration);
+        assert_eq!(report.posting_cache_hits, 0);
+        assert_eq!(report.posting_cache_misses, 0);
+        assert_eq!(report.record_cache_hits, 0);
+        assert_eq!(report.record_cache_misses, 0);
+        assert_eq!(session.posting_cache_telemetry(), (0, 0));
+        assert_eq!(session.record_cache_telemetry(), (0, 0));
     }
 
     #[test]
