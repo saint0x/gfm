@@ -1594,12 +1594,50 @@ fn recognize_ocr_candidate(
     }
 }
 
+trait PdfOcrPageBackend {
+    fn rasterize_for_ocr(
+        &self,
+        pdf: &Path,
+        output_dir: &Path,
+        max_pages: usize,
+        max_dimension_px: u32,
+    ) -> PdfPageRasterizationReport;
+
+    fn recognize_image(&self, path: &Path) -> VisionTextRecognitionReport;
+}
+
+struct NativePdfOcrPageBackend;
+
+impl PdfOcrPageBackend for NativePdfOcrPageBackend {
+    fn rasterize_for_ocr(
+        &self,
+        pdf: &Path,
+        output_dir: &Path,
+        max_pages: usize,
+        max_dimension_px: u32,
+    ) -> PdfPageRasterizationReport {
+        PdfPageRasterizationReport::rasterize_for_ocr(pdf, output_dir, max_pages, max_dimension_px)
+    }
+
+    fn recognize_image(&self, path: &Path) -> VisionTextRecognitionReport {
+        VisionTextRecognitionReport::recognize_image(path)
+    }
+}
+
 fn recognize_pdf_ocr_candidate(
     candidate: &OcrCandidate,
     cancellation: &Cancellation,
 ) -> VisionTextRecognitionReport {
+    recognize_pdf_ocr_candidate_with_backend(candidate, cancellation, &NativePdfOcrPageBackend)
+}
+
+fn recognize_pdf_ocr_candidate_with_backend(
+    candidate: &OcrCandidate,
+    cancellation: &Cancellation,
+    backend: &impl PdfOcrPageBackend,
+) -> VisionTextRecognitionReport {
     let render_dir = ocr_pdf_render_dir(&candidate.path);
-    let raster = PdfPageRasterizationReport::rasterize_for_ocr(
+    let raster = backend.rasterize_for_ocr(
         &candidate.path,
         &render_dir,
         OCR_PDF_MAX_PAGES,
@@ -1631,7 +1669,7 @@ fn recognize_pdf_ocr_candidate(
                 reason: Some(err.to_string()),
             };
         }
-        let page_report = VisionTextRecognitionReport::recognize_image(page);
+        let page_report = backend.recognize_image(page);
         if page_report.status() == VisionTextRecognitionStatus::Recognized {
             lines.extend(page_report.lines().iter().cloned());
         } else if failure.is_none() && page_report.status() != VisionTextRecognitionStatus::Empty {
@@ -2306,6 +2344,7 @@ mod tests {
     use gfm_content::{ExtractionVolumeClass, OcrCandidate, OcrCandidateKind};
     use gfm_mac::VolumeCapacity;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
 
     #[cfg(unix)]
     use std::ffi::OsString;
@@ -3316,6 +3355,93 @@ mod tests {
     }
 
     #[test]
+    fn pdf_ocr_candidate_combines_rendered_page_text_and_removes_render_dir() {
+        let root = unique_temp_dir("gfm-pdf-ocr-recognized-pages");
+        let candidate = image_only_pdf_candidate(root.join("scan.pdf"));
+        let backend = FakePdfOcrPageBackend::available([
+            recognized_vision_report(["first page text"]),
+            VisionTextRecognitionReport {
+                text: String::new(),
+                lines: Vec::new(),
+                status: VisionTextRecognitionStatus::Empty,
+                reason: Some("empty page".to_string()),
+            },
+            recognized_vision_report(["second page text"]),
+        ]);
+
+        let report = recognize_pdf_ocr_candidate_with_backend(
+            &candidate,
+            &Cancellation::default(),
+            &backend,
+        );
+        let render_dirs = backend.render_dirs.lock().unwrap();
+        let recognized_images = backend.recognized_images.lock().unwrap();
+
+        assert_eq!(report.status(), VisionTextRecognitionStatus::Recognized);
+        assert_eq!(report.text(), "first page text\nsecond page text");
+        assert_eq!(recognized_images.len(), 3);
+        assert_eq!(render_dirs.len(), 1);
+        assert!(!render_dirs[0].exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn pdf_ocr_candidate_preserves_missing_rendered_page_status_for_quarantine() {
+        let root = unique_temp_dir("gfm-pdf-ocr-missing-page");
+        let candidate = image_only_pdf_candidate(root.join("scan.pdf"));
+        let backend = FakePdfOcrPageBackend::available([VisionTextRecognitionReport {
+            text: String::new(),
+            lines: Vec::new(),
+            status: VisionTextRecognitionStatus::Missing,
+            reason: Some("rendered page disappeared before Vision read".to_string()),
+        }]);
+
+        let report = recognize_pdf_ocr_candidate_with_backend(
+            &candidate,
+            &Cancellation::default(),
+            &backend,
+        );
+        let render_dirs = backend.render_dirs.lock().unwrap();
+
+        assert_eq!(report.status(), VisionTextRecognitionStatus::Missing);
+        assert_eq!(
+            ocr_failure_kind_for_status(report.status()),
+            Some(OcrFailureKind::Missing)
+        );
+        assert_eq!(
+            report.reason(),
+            Some("rendered page disappeared before Vision read")
+        );
+        assert_eq!(render_dirs.len(), 1);
+        assert!(!render_dirs[0].exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn pdf_ocr_candidate_preserves_unavailable_raster_status_for_quarantine() {
+        let root = unique_temp_dir("gfm-pdf-ocr-unavailable-raster");
+        let candidate = image_only_pdf_candidate(root.join("scan.pdf"));
+        let backend = FakePdfOcrPageBackend::unavailable("PDFKit raster service unavailable");
+
+        let report = recognize_pdf_ocr_candidate_with_backend(
+            &candidate,
+            &Cancellation::default(),
+            &backend,
+        );
+        let render_dirs = backend.render_dirs.lock().unwrap();
+
+        assert_eq!(report.status(), VisionTextRecognitionStatus::Unavailable);
+        assert_eq!(
+            ocr_failure_kind_for_status(report.status()),
+            Some(OcrFailureKind::Unavailable)
+        );
+        assert_eq!(report.reason(), Some("PDFKit raster service unavailable"));
+        assert_eq!(render_dirs.len(), 1);
+        assert!(!render_dirs[0].exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn ocr_pdf_render_dir_sanitizes_name_and_is_unique() {
         let path = Path::new("/tmp/Scan Draft\tQ3\nFinal.pdf");
 
@@ -3325,6 +3451,120 @@ mod tests {
         assert_ne!(first, second);
         let first_name = first.file_name().and_then(|name| name.to_str()).unwrap();
         assert!(first_name.starts_with("gfm-ocr-pdf-Scan-Draft-Q3-Final-"));
+    }
+
+    struct FakePdfOcrPageBackend {
+        raster_status: PdfPageRasterizationStatus,
+        raster_reason: Option<String>,
+        page_reports: Vec<VisionTextRecognitionReport>,
+        render_dirs: Mutex<Vec<PathBuf>>,
+        recognized_images: Mutex<Vec<PathBuf>>,
+    }
+
+    impl FakePdfOcrPageBackend {
+        fn available(
+            reports: impl IntoIterator<Item = VisionTextRecognitionReport>,
+        ) -> FakePdfOcrPageBackend {
+            FakePdfOcrPageBackend {
+                raster_status: PdfPageRasterizationStatus::Available,
+                raster_reason: None,
+                page_reports: reports.into_iter().collect(),
+                render_dirs: Mutex::new(Vec::new()),
+                recognized_images: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn unavailable(reason: impl Into<String>) -> FakePdfOcrPageBackend {
+            FakePdfOcrPageBackend {
+                raster_status: PdfPageRasterizationStatus::Unavailable,
+                raster_reason: Some(reason.into()),
+                page_reports: Vec::new(),
+                render_dirs: Mutex::new(Vec::new()),
+                recognized_images: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
+    impl PdfOcrPageBackend for FakePdfOcrPageBackend {
+        fn rasterize_for_ocr(
+            &self,
+            _pdf: &Path,
+            output_dir: &Path,
+            _max_pages: usize,
+            _max_dimension_px: u32,
+        ) -> PdfPageRasterizationReport {
+            self.render_dirs
+                .lock()
+                .unwrap()
+                .push(output_dir.to_path_buf());
+            if self.raster_status != PdfPageRasterizationStatus::Available {
+                return PdfPageRasterizationReport {
+                    pages: Vec::new(),
+                    status: self.raster_status,
+                    reason: self.raster_reason.clone(),
+                };
+            }
+            fs::create_dir_all(output_dir).unwrap();
+            let mut pages = Vec::new();
+            for index in 0..self.page_reports.len() {
+                let page = output_dir.join(format!("page-{index}.png"));
+                fs::write(&page, b"test page").unwrap();
+                pages.push(page);
+            }
+            PdfPageRasterizationReport {
+                pages,
+                status: PdfPageRasterizationStatus::Available,
+                reason: None,
+            }
+        }
+
+        fn recognize_image(&self, path: &Path) -> VisionTextRecognitionReport {
+            self.recognized_images
+                .lock()
+                .unwrap()
+                .push(path.to_path_buf());
+            let Some(index) = path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .and_then(|stem| stem.strip_prefix("page-"))
+                .and_then(|index| index.parse::<usize>().ok())
+            else {
+                return VisionTextRecognitionReport {
+                    text: String::new(),
+                    lines: Vec::new(),
+                    status: VisionTextRecognitionStatus::Failed,
+                    reason: Some("unexpected rendered page name".to_string()),
+                };
+            };
+            self.page_reports[index].clone()
+        }
+    }
+
+    fn image_only_pdf_candidate(path: PathBuf) -> OcrCandidate {
+        OcrCandidate {
+            path,
+            kind: OcrCandidateKind::ImageOnlyPdf,
+            fingerprint: ExtractionFingerprint {
+                extractor_version: 1,
+                len: 1024,
+                modified_ns: Some(1),
+            },
+        }
+    }
+
+    fn recognized_vision_report(
+        lines: impl IntoIterator<Item = &'static str>,
+    ) -> VisionTextRecognitionReport {
+        let lines = lines
+            .into_iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
+        VisionTextRecognitionReport {
+            text: lines.join("\n"),
+            lines,
+            status: VisionTextRecognitionStatus::Recognized,
+            reason: None,
+        }
     }
 
     fn unique_temp_dir(prefix: &str) -> PathBuf {

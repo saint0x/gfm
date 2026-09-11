@@ -50,7 +50,7 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 
 31. Complete full Office legacy binary text extraction/import and remaining protected-document handling for password-protected, rights-managed, and edit-protected documents.
 32. Complete remaining RAR5, encoded-header 7z, encrypted-header 7z, multi-volume archive, and production fixture coverage for RAR and 7z archive import.
-33. Complete image-only PDF OCR production verification with a real text-bearing scanned-PDF fixture recognized through PDFKit-rendered pages and Vision, plus rendered-page missing/unavailable edge-case quarantine.
+33. Complete image-only PDF OCR production verification with a real text-bearing scanned-PDF fixture recognized through PDFKit-rendered pages and Vision.
 34. Complete hardened extraction-worker isolation with production read-deny Seatbelt feasibility, XPC/App Sandbox entitlement minimization, crash telemetry retention, and full sandbox violation diagnostic capture.
 
 ## Storage Engine
