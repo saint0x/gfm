@@ -195,6 +195,7 @@ fn push_workbook_biff_text_records(
     mut check_control: impl FnMut() -> Result<()>,
 ) -> Result<bool> {
     const BIFF_LABEL_RECORD: u16 = 0x0204;
+    const BIFF_STRING_RECORD: u16 = 0x0207;
     const BIFF_SST_RECORD: u16 = 0x00fc;
     const BIFF_CONTINUE_RECORD: u16 = 0x003c;
     const BIFF_BOUNDSHEET_RECORD: u16 = 0x0085;
@@ -223,6 +224,7 @@ fn push_workbook_biff_text_records(
         match record_type {
             BIFF_BOUNDSHEET_RECORD => push_biff_boundsheet_record_text(data, max_text_bytes, out),
             BIFF_LABEL_RECORD => push_biff_label_record_text(data, max_text_bytes, out),
+            BIFF_STRING_RECORD => push_biff_string_record_text(data, max_text_bytes, out),
             BIFF_SST_RECORD => {
                 let (payload, payload_next, payload_records) = collect_biff_continued_payload(
                     stream,
@@ -321,6 +323,11 @@ fn push_biff_label_record_text(data: &[u8], max_text_bytes: usize, out: &mut Str
         return;
     }
     let string = parse_biff_string(data, 6);
+    append_biff_text(string.as_deref(), max_text_bytes, out);
+}
+
+fn push_biff_string_record_text(data: &[u8], max_text_bytes: usize, out: &mut String) {
+    let string = parse_biff_string(data, 0);
     append_biff_text(string.as_deref(), max_text_bytes, out);
 }
 
@@ -1253,6 +1260,48 @@ mod tests {
     }
 
     #[test]
+    fn extracts_workbook_biff_formula_string_records_before_raw_salvage() {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&biff_string_record("FormulaResult", false));
+        payload.extend_from_slice(&biff_string_record("ΣTotal", true));
+        let bytes = legacy_office_compound_file_with_ministream("Workbook", &payload);
+
+        let (status, document) = extract_legacy_office_document_checked(
+            &bytes,
+            LegacyOfficeKind::Xls,
+            &ExtractionPolicy::default(),
+            || Ok(()),
+        )
+        .unwrap();
+
+        assert_eq!(status, LegacyOfficeExtractStatus::Extracted);
+        let document = document.expect("BIFF formula strings should extract");
+        assert_eq!(document.text, "FormulaResult ΣTotal");
+    }
+
+    #[test]
+    fn workbook_biff_formula_string_records_honor_text_budget() {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&biff_string_record("FormulaResult", false));
+        payload.extend_from_slice(&biff_string_record("Later", false));
+        let bytes = legacy_office_compound_file_with_ministream("Workbook", &payload);
+        let policy = ExtractionPolicy {
+            max_office_text_bytes: 7,
+            ..ExtractionPolicy::default()
+        };
+
+        let (status, document) =
+            extract_legacy_office_document_checked(&bytes, LegacyOfficeKind::Xls, &policy, || {
+                Ok(())
+            })
+            .unwrap();
+
+        assert_eq!(status, LegacyOfficeExtractStatus::Extracted);
+        let document = document.expect("budgeted BIFF formula string should extract");
+        assert_eq!(document.text, "Formula");
+    }
+
+    #[test]
     fn extracts_workbook_biff_sst_strings() {
         let mut payload = Vec::new();
         let mut sst = Vec::new();
@@ -1429,6 +1478,10 @@ mod tests {
             }
         }
         biff_record(0x0085, &data)
+    }
+
+    fn biff_string_record(text: &str, wide: bool) -> Vec<u8> {
+        biff_record(0x0207, &biff_string(text, wide))
     }
 
     fn biff_string(text: &str, wide: bool) -> Vec<u8> {
