@@ -3,6 +3,7 @@
 These fixtures are tiny production-format archives used by the content extractor tests.
 
 - `plain-7zz.7z` was created with `7zz 26.02` from one file named `fixture-needle.txt`.
+- `encoded-header-7zz.7z` was created with `7zz 26.02`, `-t7z`, `-mx=0`, and `-mhc=on` from 80 tiny text files named `needle-file-000.txt` through `needle-file-079.txt`.
 - `encrypted-header-7zz.7z` was created with `7zz 26.02`, `-psecret`, and `-mhe=on` from the same file.
 - `split-7zz.7z.001` and `split-7zz.7z.002` were created with `7zz 26.02`, `-t7z`, `-mx=0`, and `-v1k` from one file named `split-fixture.txt`.
 

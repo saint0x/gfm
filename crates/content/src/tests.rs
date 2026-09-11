@@ -463,6 +463,27 @@ fn skips_non_encrypted_7z_encoded_header_without_reporting_corruption() {
 }
 
 #[test]
+fn skips_real_7zz_encoded_header_fixture_without_reporting_corruption() {
+    let root = unique_temp_dir("gfm-content-real-7zz-encoded-header");
+    let path = root.join("encoded.7z");
+    fs::write(
+        &path,
+        include_bytes!("../fixtures/archive/encoded-header-7zz.7z"),
+    )
+    .unwrap();
+
+    let report = Extractor::default().extract_path_report(&path).unwrap();
+
+    assert_eq!(report.format, ExtractionFormat::Archive);
+    assert_eq!(
+        report.status,
+        ExtractionStatus::Skipped("unsupported-archive")
+    );
+    assert!(report.document.is_none());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn extracts_real_7zz_metadata_fixture_through_public_report_path() {
     let root = unique_temp_dir("gfm-content-real-7zz-metadata");
     let path = root.join("plain.7z");
