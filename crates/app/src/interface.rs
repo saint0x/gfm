@@ -790,6 +790,7 @@ fn print_permission_access_contract(
     if let Some(refresh) = refresh {
         println!("{}", refresh.as_tsv());
     }
+    println!("{}", access.visible_tsv());
     println!("{}", access.as_tsv());
     println!("{}", admission.as_tsv());
     Ok(())

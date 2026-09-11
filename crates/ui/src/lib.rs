@@ -356,6 +356,42 @@ impl PermissionAccessContract {
             escape_contract_field(&self.reason)
         )
     }
+
+    pub fn visible_status(&self) -> String {
+        if self.can_touch_filesystem {
+            format!("{} access ready", self.intent)
+        } else if self.promptable {
+            format!("{} access needs permission", self.intent)
+        } else {
+            format!("{} access blocked", self.intent)
+        }
+    }
+
+    pub fn visible_detail(&self) -> String {
+        let target = if self.scope == "none" {
+            self.path.clone()
+        } else {
+            format!("{} - {}", self.scope, self.path)
+        };
+        format!("{}: {}", target, self.reason)
+    }
+
+    pub fn visible_action(&self) -> String {
+        if self.prompt_action == "none" {
+            format!("worker {}", self.worker_action)
+        } else {
+            format!("{} via {}", self.prompt_action, self.prompt_source)
+        }
+    }
+
+    pub fn visible_tsv(&self) -> String {
+        format!(
+            "permission-access-visible\tstatus={}\tdetail={}\taction={}",
+            escape_contract_field(&self.visible_status()),
+            escape_contract_field(&self.visible_detail()),
+            escape_contract_field(&self.visible_action())
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2105,6 +2141,18 @@ mod tests {
 
         let _element = dialog::render_permission(&dialog, Some(&access));
 
+        assert_eq!(access.visible_status(), "preview access ready");
+        assert_eq!(
+            access.visible_detail(),
+            "documents - /Users/me/Documents/Plan.md: preview worker may start after retained bookmark access"
+        );
+        assert_eq!(
+            access.visible_action(),
+            "choose-location via security-scoped-bookmark"
+        );
+        assert!(access.visible_tsv().contains(
+            "permission-access-visible\tstatus=preview access ready\tdetail=documents - /Users/me/Documents/Plan.md: preview worker may start after retained bookmark access\taction=choose-location via security-scoped-bookmark"
+        ));
         assert!(access
             .as_tsv()
             .contains("\tprompt-action=choose-location\tpromptable=true\tprompt-source=security-scoped-bookmark\t"));

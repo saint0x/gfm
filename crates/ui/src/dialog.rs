@@ -1419,7 +1419,12 @@ pub fn render_permission_onboarding(
     )
 }
 
-struct PermissionAccessContractState(String);
+struct PermissionAccessContractState {
+    status: String,
+    detail: String,
+    action: String,
+    tsv: String,
+}
 struct PermissionOnboardingContractState {
     status: String,
     scope_summary: String,
@@ -1429,7 +1434,12 @@ struct PermissionOnboardingContractState {
 
 impl From<&super::PermissionAccessContract> for PermissionAccessContractState {
     fn from(access: &super::PermissionAccessContract) -> Self {
-        Self(access.as_tsv())
+        Self {
+            status: access.visible_status(),
+            detail: access.visible_detail(),
+            action: access.visible_action(),
+            tsv: access.as_tsv(),
+        }
     }
 }
 
@@ -1496,6 +1506,9 @@ fn render_with_state(
     if let Some(onboarding) = &onboarding_state {
         content = content.child(render_permission_onboarding_state(onboarding));
     }
+    if let Some(access) = &access_state {
+        content = content.child(render_permission_access_state(access));
+    }
     content = content.child(render_buttons(&contract));
 
     let mut sheet_content = base_sheet(sheet_id).child(content);
@@ -1504,7 +1517,7 @@ fn render_with_state(
             div()
                 .id("permission-sheet-state")
                 .invisible()
-                .child(state.0),
+                .child(state.tsv),
         );
     }
     if let Some(state) = onboarding_state {
@@ -1516,6 +1529,39 @@ fn render_with_state(
         );
     }
     render_sheet(sheet_content)
+}
+
+fn render_permission_access_state(access: &PermissionAccessContractState) -> impl IntoElement {
+    div()
+        .id("permission-access-visible-state")
+        .p(px(8.0))
+        .rounded(px(6.0))
+        .bg(rgb(0x242426))
+        .child(
+            div()
+                .id("permission-access-status")
+                .text_size(px(12.0))
+                .font_weight(gpui::FontWeight::SEMIBOLD)
+                .text_color(rgb(0xf2f2f2))
+                .child(access.status.clone()),
+        )
+        .child(
+            div()
+                .id("permission-access-detail")
+                .mt(px(3.0))
+                .text_size(px(11.0))
+                .line_height(px(15.0))
+                .text_color(rgb(0xc7c7cc))
+                .child(access.detail.clone()),
+        )
+        .child(
+            div()
+                .id("permission-access-action")
+                .mt(px(3.0))
+                .text_size(px(11.0))
+                .text_color(rgb(0x9a9aa0))
+                .child(access.action.clone()),
+        )
 }
 
 fn render_permission_onboarding_state(

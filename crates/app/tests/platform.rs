@@ -253,6 +253,21 @@ fn ui_permission_access_contract_reports_blocked_volume_orchestration_from_binar
         stdout.starts_with("dialog\tsurface=permission\tpresentation=window-sheet\t"),
         "{stdout}"
     );
+    assert!(
+        stdout.contains("\npermission-access-visible\tstatus=preview access blocked\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(&format!(
+            "\tdetail={}: preview worker volume access blocked: unreachable volume network",
+            path.display()
+        )),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\taction=blocked-volume via volume\n"),
+        "{stdout}"
+    );
     assert!(stdout.contains("permission-access\t"), "{stdout}");
     assert!(stdout.contains("\tprompt-kind=blocked\t"));
     assert!(stdout.contains("\tprompt-action=blocked-volume\t"));
