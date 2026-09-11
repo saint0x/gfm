@@ -175,6 +175,19 @@ pub trait SearchLookup: Sync {
         ))
     }
 
+    fn prefix_ids_for_volume_bounded_cancellable(
+        &self,
+        prefix: &str,
+        volume: VolumeId,
+        limit: usize,
+        cancellation: &Cancellation,
+    ) -> gfm_types::Result<SearchLookupIds> {
+        cancellation.check()?;
+        let ids = self.prefix_ids_for_volume_bounded(prefix, volume, limit)?;
+        cancellation.check()?;
+        Ok(ids)
+    }
+
     fn substring_ids_for_volume_bounded(
         &self,
         gram: &str,
@@ -187,9 +200,34 @@ pub trait SearchLookup: Sync {
         ))
     }
 
+    fn substring_ids_for_volume_bounded_cancellable(
+        &self,
+        gram: &str,
+        volume: VolumeId,
+        limit: usize,
+        cancellation: &Cancellation,
+    ) -> gfm_types::Result<SearchLookupIds> {
+        cancellation.check()?;
+        let ids = self.substring_ids_for_volume_bounded(gram, volume, limit)?;
+        cancellation.check()?;
+        Ok(ids)
+    }
+
     fn prefix_ids_bounded(&self, prefix: &str, limit: usize) -> gfm_types::Result<SearchLookupIds> {
         let _ = (prefix, limit);
         Err(unbounded_lookup_not_allowed("prefix_ids_bounded"))
+    }
+
+    fn prefix_ids_bounded_cancellable(
+        &self,
+        prefix: &str,
+        limit: usize,
+        cancellation: &Cancellation,
+    ) -> gfm_types::Result<SearchLookupIds> {
+        cancellation.check()?;
+        let ids = self.prefix_ids_bounded(prefix, limit)?;
+        cancellation.check()?;
+        Ok(ids)
     }
 
     fn substring_ids_bounded(
@@ -201,9 +239,33 @@ pub trait SearchLookup: Sync {
         Err(unbounded_lookup_not_allowed("substring_ids_bounded"))
     }
 
+    fn substring_ids_bounded_cancellable(
+        &self,
+        gram: &str,
+        limit: usize,
+        cancellation: &Cancellation,
+    ) -> gfm_types::Result<SearchLookupIds> {
+        cancellation.check()?;
+        let ids = self.substring_ids_bounded(gram, limit)?;
+        cancellation.check()?;
+        Ok(ids)
+    }
+
     fn fuzzy_terms_bounded(&self, key: &str, limit: usize) -> gfm_types::Result<SearchLookupTerms> {
         let _ = (key, limit);
         Err(unbounded_lookup_not_allowed("fuzzy_terms_bounded"))
+    }
+
+    fn fuzzy_terms_bounded_cancellable(
+        &self,
+        key: &str,
+        limit: usize,
+        cancellation: &Cancellation,
+    ) -> gfm_types::Result<SearchLookupTerms> {
+        cancellation.check()?;
+        let terms = self.fuzzy_terms_bounded(key, limit)?;
+        cancellation.check()?;
+        Ok(terms)
     }
 
     fn fuzzy_terms_for_volume_bounded(
@@ -214,6 +276,19 @@ pub trait SearchLookup: Sync {
     ) -> gfm_types::Result<SearchLookupTerms> {
         let _ = volume;
         self.fuzzy_terms_bounded(key, limit)
+    }
+
+    fn fuzzy_terms_for_volume_bounded_cancellable(
+        &self,
+        key: &str,
+        volume: VolumeId,
+        limit: usize,
+        cancellation: &Cancellation,
+    ) -> gfm_types::Result<SearchLookupTerms> {
+        cancellation.check()?;
+        let terms = self.fuzzy_terms_for_volume_bounded(key, volume, limit)?;
+        cancellation.check()?;
+        Ok(terms)
     }
 
     fn cache_telemetry(&self) -> SearchLookupTelemetry {
@@ -362,7 +437,8 @@ impl SearchIndex {
             if remaining_candidates > 0 {
                 let lookup_limit = budget.max_fuzzy_terms_per_key.min(remaining_candidates);
                 cancellation.check()?;
-                let lookup_terms = lookup.fuzzy_terms_bounded(&key, lookup_limit)?;
+                let lookup_terms =
+                    lookup.fuzzy_terms_bounded_cancellable(&key, lookup_limit, cancellation)?;
                 cancellation.check()?;
                 telemetry.fuzzy_lookup_terms += lookup_terms.terms.len();
                 if lookup_terms.truncated {
@@ -423,7 +499,7 @@ impl SearchIndex {
             return Ok(ids);
         }
         cancellation.check()?;
-        let lookup_ids = lookup.prefix_ids_bounded(term, remaining)?;
+        let lookup_ids = lookup.prefix_ids_bounded_cancellable(term, remaining, cancellation)?;
         cancellation.check()?;
         telemetry.prefix_lookup_ids += lookup_ids.ids.len();
         if lookup_ids.truncated {
@@ -489,7 +565,8 @@ impl SearchIndex {
             let remaining = budget.max_substring_ids_per_gram.saturating_sub(ids.len());
             if remaining > 0 {
                 cancellation.check()?;
-                let lookup_ids = lookup.substring_ids_bounded(&gram, remaining)?;
+                let lookup_ids =
+                    lookup.substring_ids_bounded_cancellable(&gram, remaining, cancellation)?;
                 cancellation.check()?;
                 telemetry.substring_lookup_ids += lookup_ids.ids.len();
                 if lookup_ids.truncated {

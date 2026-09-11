@@ -581,9 +581,37 @@ impl SearchLookup for VolumeScopedSearchLookup<'_> {
             .prefix_ids_for_volume_bounded(prefix, self.volume, limit)
     }
 
+    fn prefix_ids_bounded_cancellable(
+        &self,
+        prefix: &str,
+        limit: usize,
+        cancellation: &Cancellation,
+    ) -> Result<SearchLookupIds> {
+        self.lookup.prefix_ids_for_volume_bounded_cancellable(
+            prefix,
+            self.volume,
+            limit,
+            cancellation,
+        )
+    }
+
     fn substring_ids_bounded(&self, gram: &str, limit: usize) -> Result<SearchLookupIds> {
         self.lookup
             .substring_ids_for_volume_bounded(gram, self.volume, limit)
+    }
+
+    fn substring_ids_bounded_cancellable(
+        &self,
+        gram: &str,
+        limit: usize,
+        cancellation: &Cancellation,
+    ) -> Result<SearchLookupIds> {
+        self.lookup.substring_ids_for_volume_bounded_cancellable(
+            gram,
+            self.volume,
+            limit,
+            cancellation,
+        )
     }
 
     fn fuzzy_terms(&self, key: &str) -> Result<Vec<String>> {
@@ -595,6 +623,20 @@ impl SearchLookup for VolumeScopedSearchLookup<'_> {
             .fuzzy_terms_for_volume_bounded(key, self.volume, limit)
     }
 
+    fn fuzzy_terms_bounded_cancellable(
+        &self,
+        key: &str,
+        limit: usize,
+        cancellation: &Cancellation,
+    ) -> Result<SearchLookupTerms> {
+        self.lookup.fuzzy_terms_for_volume_bounded_cancellable(
+            key,
+            self.volume,
+            limit,
+            cancellation,
+        )
+    }
+
     fn fuzzy_terms_for_volume_bounded(
         &self,
         key: &str,
@@ -603,6 +645,21 @@ impl SearchLookup for VolumeScopedSearchLookup<'_> {
     ) -> Result<SearchLookupTerms> {
         self.lookup
             .fuzzy_terms_for_volume_bounded(key, self.volume, limit)
+    }
+
+    fn fuzzy_terms_for_volume_bounded_cancellable(
+        &self,
+        key: &str,
+        _volume: VolumeId,
+        limit: usize,
+        cancellation: &Cancellation,
+    ) -> Result<SearchLookupTerms> {
+        self.lookup.fuzzy_terms_for_volume_bounded_cancellable(
+            key,
+            self.volume,
+            limit,
+            cancellation,
+        )
     }
 
     fn cache_telemetry(&self) -> SearchLookupTelemetry {

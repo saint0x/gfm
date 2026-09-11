@@ -1138,6 +1138,7 @@ impl SearchArchiveLookup {
         limit: usize,
         cancellation: &Cancellation,
     ) -> Result<SearchLookupIds> {
+        cancellation.check()?;
         self.prefix_requests.fetch_add(1, Ordering::Relaxed);
         if limit == 0 {
             return Ok(SearchLookupIds::new(Vec::new(), false));
@@ -1167,6 +1168,7 @@ impl SearchArchiveLookup {
         limit: usize,
         cancellation: &Cancellation,
     ) -> Result<SearchLookupIds> {
+        cancellation.check()?;
         self.substring_requests.fetch_add(1, Ordering::Relaxed);
         if limit == 0 {
             return Ok(SearchLookupIds::new(Vec::new(), false));
@@ -1196,6 +1198,7 @@ impl SearchArchiveLookup {
         limit: usize,
         cancellation: &Cancellation,
     ) -> Result<SearchLookupTerms> {
+        cancellation.check()?;
         self.fuzzy_requests.fetch_add(1, Ordering::Relaxed);
         if limit == 0 {
             return Ok(SearchLookupTerms::new(Vec::new(), false));
@@ -1291,6 +1294,37 @@ impl SearchLookup for SearchArchiveLookup {
         Ok(SearchLookupIds::new(ids, truncated))
     }
 
+    fn prefix_ids_bounded_cancellable(
+        &self,
+        prefix: &str,
+        limit: usize,
+        cancellation: &Cancellation,
+    ) -> Result<SearchLookupIds> {
+        cancellation.check()?;
+        self.prefix_requests.fetch_add(1, Ordering::Relaxed);
+        if limit == 0 {
+            return Ok(SearchLookupIds::new(Vec::new(), false));
+        }
+        if let Some(mut ids) = self.prefix_cache_lock().get(prefix) {
+            self.prefix_hits.fetch_add(1, Ordering::Relaxed);
+            let truncated = ids.len() > limit;
+            ids.truncate(limit);
+            return Ok(SearchLookupIds::new(ids, truncated));
+        }
+
+        cancellation.check()?;
+        self.prefix_misses.fetch_add(1, Ordering::Relaxed);
+        let (ids, truncated) = self
+            .prefixes
+            .ids_for_limit_checked(prefix, limit, || cancellation.check())?;
+        if !truncated {
+            self.prefix_cache_lock()
+                .insert(prefix.to_string(), ids.clone());
+        }
+        cancellation.check()?;
+        Ok(SearchLookupIds::new(ids, truncated))
+    }
+
     fn prefix_ids_for_volume(&self, prefix: &str, volume: VolumeId) -> Result<Vec<FileId>> {
         self.prefix_requests.fetch_add(1, Ordering::Relaxed);
         self.prefix_misses.fetch_add(1, Ordering::Relaxed);
@@ -1323,6 +1357,22 @@ impl SearchLookup for SearchArchiveLookup {
             self.prefix_cache_lock().insert(cache_key, ids.clone());
         }
         Ok(SearchLookupIds::new(ids, truncated))
+    }
+
+    fn prefix_ids_for_volume_bounded_cancellable(
+        &self,
+        prefix: &str,
+        volume: VolumeId,
+        limit: usize,
+        cancellation: &Cancellation,
+    ) -> Result<SearchLookupIds> {
+        SearchArchiveLookup::prefix_ids_for_volume_bounded_cancellable(
+            self,
+            prefix,
+            volume,
+            limit,
+            cancellation,
+        )
     }
 
     fn substring_ids(&self, gram: &str) -> Result<Vec<FileId>> {
@@ -1360,6 +1410,37 @@ impl SearchLookup for SearchArchiveLookup {
         Ok(SearchLookupIds::new(ids, truncated))
     }
 
+    fn substring_ids_bounded_cancellable(
+        &self,
+        gram: &str,
+        limit: usize,
+        cancellation: &Cancellation,
+    ) -> Result<SearchLookupIds> {
+        cancellation.check()?;
+        self.substring_requests.fetch_add(1, Ordering::Relaxed);
+        if limit == 0 {
+            return Ok(SearchLookupIds::new(Vec::new(), false));
+        }
+        if let Some(mut ids) = self.substring_cache_lock().get(gram) {
+            self.substring_hits.fetch_add(1, Ordering::Relaxed);
+            let truncated = ids.len() > limit;
+            ids.truncate(limit);
+            return Ok(SearchLookupIds::new(ids, truncated));
+        }
+
+        cancellation.check()?;
+        self.substring_misses.fetch_add(1, Ordering::Relaxed);
+        let (ids, truncated) = self
+            .substrings
+            .ids_for_limit_checked(gram, limit, || cancellation.check())?;
+        if !truncated {
+            self.substring_cache_lock()
+                .insert(gram.to_string(), ids.clone());
+        }
+        cancellation.check()?;
+        Ok(SearchLookupIds::new(ids, truncated))
+    }
+
     fn substring_ids_for_volume(&self, gram: &str, volume: VolumeId) -> Result<Vec<FileId>> {
         self.substring_requests.fetch_add(1, Ordering::Relaxed);
         self.substring_misses.fetch_add(1, Ordering::Relaxed);
@@ -1392,6 +1473,22 @@ impl SearchLookup for SearchArchiveLookup {
             self.substring_cache_lock().insert(cache_key, ids.clone());
         }
         Ok(SearchLookupIds::new(ids, truncated))
+    }
+
+    fn substring_ids_for_volume_bounded_cancellable(
+        &self,
+        gram: &str,
+        volume: VolumeId,
+        limit: usize,
+        cancellation: &Cancellation,
+    ) -> Result<SearchLookupIds> {
+        SearchArchiveLookup::substring_ids_for_volume_bounded_cancellable(
+            self,
+            gram,
+            volume,
+            limit,
+            cancellation,
+        )
     }
 
     fn fuzzy_terms(&self, key: &str) -> Result<Vec<String>> {
@@ -1429,6 +1526,37 @@ impl SearchLookup for SearchArchiveLookup {
         Ok(SearchLookupTerms::new(terms, truncated))
     }
 
+    fn fuzzy_terms_bounded_cancellable(
+        &self,
+        key: &str,
+        limit: usize,
+        cancellation: &Cancellation,
+    ) -> Result<SearchLookupTerms> {
+        cancellation.check()?;
+        self.fuzzy_requests.fetch_add(1, Ordering::Relaxed);
+        if limit == 0 {
+            return Ok(SearchLookupTerms::new(Vec::new(), false));
+        }
+        if let Some(mut terms) = self.fuzzy_cache_lock().get(key) {
+            self.fuzzy_hits.fetch_add(1, Ordering::Relaxed);
+            let truncated = terms.len() > limit;
+            terms.truncate(limit);
+            return Ok(SearchLookupTerms::new(terms, truncated));
+        }
+
+        cancellation.check()?;
+        self.fuzzy_misses.fetch_add(1, Ordering::Relaxed);
+        let (terms, truncated) = self
+            .fuzzy
+            .terms_for_limit_checked(key, limit, || cancellation.check())?;
+        if !truncated {
+            self.fuzzy_cache_lock()
+                .insert(key.to_string(), terms.clone());
+        }
+        cancellation.check()?;
+        Ok(SearchLookupTerms::new(terms, truncated))
+    }
+
     fn fuzzy_terms_for_volume_bounded(
         &self,
         key: &str,
@@ -1440,6 +1568,22 @@ impl SearchLookup for SearchArchiveLookup {
             volume,
             limit,
             &Cancellation::default(),
+        )
+    }
+
+    fn fuzzy_terms_for_volume_bounded_cancellable(
+        &self,
+        key: &str,
+        volume: VolumeId,
+        limit: usize,
+        cancellation: &Cancellation,
+    ) -> Result<SearchLookupTerms> {
+        SearchArchiveLookup::fuzzy_terms_for_volume_bounded_cancellable(
+            self,
+            key,
+            volume,
+            limit,
+            cancellation,
         )
     }
 
@@ -2267,6 +2411,49 @@ mod tests {
         assert!(matches!(result, Err(GfmError::Cancelled)));
         assert_eq!(session.content_cache_telemetry(), (0, 0));
         assert_eq!(session.record_cache_telemetry(), (0, 0));
+    }
+
+    #[test]
+    fn search_archive_lookup_cancellable_methods_honor_pre_cancelled_token_before_cache_work() {
+        let fixture = SidecarFixture::new("lookup-pre-cancelled");
+        let lookup = fixture.lookup();
+        let cancellation = Cancellation::default();
+        cancellation.cancel();
+
+        let prefix = lookup.prefix_ids_bounded_cancellable("finderlatency", 8, &cancellation);
+        assert!(matches!(prefix, Err(GfmError::Cancelled)));
+
+        let substring = lookup.substring_ids_bounded_cancellable("fin", 8, &cancellation);
+        assert!(matches!(substring, Err(GfmError::Cancelled)));
+
+        let fuzzy = lookup.fuzzy_terms_bounded_cancellable("findrlatency", 8, &cancellation);
+        assert!(matches!(fuzzy, Err(GfmError::Cancelled)));
+
+        let volume_prefix = lookup.prefix_ids_for_volume_bounded_cancellable(
+            "finderlatency",
+            VolumeId(7),
+            8,
+            &cancellation,
+        );
+        assert!(matches!(volume_prefix, Err(GfmError::Cancelled)));
+
+        let volume_substring = lookup.substring_ids_for_volume_bounded_cancellable(
+            "fin",
+            VolumeId(7),
+            8,
+            &cancellation,
+        );
+        assert!(matches!(volume_substring, Err(GfmError::Cancelled)));
+
+        let volume_fuzzy = lookup.fuzzy_terms_for_volume_bounded_cancellable(
+            "findrlatency",
+            VolumeId(7),
+            8,
+            &cancellation,
+        );
+        assert!(matches!(volume_fuzzy, Err(GfmError::Cancelled)));
+
+        assert_eq!(lookup.cache_telemetry(), SearchLookupTelemetry::default());
     }
 
     #[test]
