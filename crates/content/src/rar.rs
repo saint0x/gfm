@@ -85,8 +85,14 @@ fn extract_rar5_metadata_checked(
                 let Some(entry) = parse_rar5_file_entry(bytes, header) else {
                     return Ok((ArchiveExtractStatus::Corrupt, None));
                 };
-                if entry.encrypted {
-                    return Ok((ArchiveExtractStatus::Encrypted, None));
+                match entry.extra_status {
+                    Rar5ExtraInspection::Clear => {}
+                    Rar5ExtraInspection::Encrypted => {
+                        return Ok((ArchiveExtractStatus::Encrypted, None));
+                    }
+                    Rar5ExtraInspection::Corrupt => {
+                        return Ok((ArchiveExtractStatus::Corrupt, None))
+                    }
                 }
                 entries += 1;
                 if entries > policy.max_archive_entries {
@@ -102,11 +108,13 @@ fn extract_rar5_metadata_checked(
                     break;
                 }
             }
-            RAR5_SERVICE_HEAD => {
-                if rar5_extra_area_contains_encryption(bytes, header) {
+            RAR5_SERVICE_HEAD => match inspect_rar5_extra_area(bytes, header) {
+                Rar5ExtraInspection::Clear => {}
+                Rar5ExtraInspection::Encrypted => {
                     return Ok((ArchiveExtractStatus::Encrypted, None));
                 }
-            }
+                Rar5ExtraInspection::Corrupt => return Ok((ArchiveExtractStatus::Corrupt, None)),
+            },
             RAR5_ENCRYPTION_HEAD => return Ok((ArchiveExtractStatus::Encrypted, None)),
             RAR5_END_HEAD => break,
             _ => {}
@@ -296,7 +304,14 @@ struct Rar5MainHeader {
 struct Rar5FileEntry {
     name: String,
     unpacked_size: u64,
-    encrypted: bool,
+    extra_status: Rar5ExtraInspection,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Rar5ExtraInspection {
+    Clear,
+    Encrypted,
+    Corrupt,
 }
 
 fn parse_rar4_file_entry(bytes: &[u8], header: Rar4BlockHeader) -> Option<Rar4FileEntry> {
@@ -361,33 +376,35 @@ fn parse_rar5_file_entry(bytes: &[u8], header: Rar5BlockHeader) -> Option<Rar5Fi
         } else {
             unpacked_size
         },
-        encrypted: rar5_extra_area_contains_encryption(bytes, header),
+        extra_status: inspect_rar5_extra_area(bytes, header),
     })
 }
 
-fn rar5_extra_area_contains_encryption(bytes: &[u8], header: Rar5BlockHeader) -> bool {
+fn inspect_rar5_extra_area(bytes: &[u8], header: Rar5BlockHeader) -> Rar5ExtraInspection {
     let mut cursor = header.extra_start;
     while cursor < header.header_end {
         let Some(record_size) = read_rar5_vint_limited(bytes, &mut cursor, header.header_end)
             .and_then(|size| usize::try_from(size).ok())
         else {
-            return false;
+            return Rar5ExtraInspection::Corrupt;
         };
         let Some(record_end) = cursor.checked_add(record_size) else {
-            return false;
+            return Rar5ExtraInspection::Corrupt;
         };
         if record_size == 0 || record_end > header.header_end {
-            return false;
+            return Rar5ExtraInspection::Corrupt;
         }
         let record_start = cursor;
         if let Some(record_type) = read_rar5_vint_limited(bytes, &mut cursor, record_end) {
             if record_type == RAR5_EXTRA_FILE_ENCRYPTION {
-                return true;
+                return Rar5ExtraInspection::Encrypted;
             }
+        } else {
+            return Rar5ExtraInspection::Corrupt;
         }
         cursor = record_end.max(record_start);
     }
-    false
+    Rar5ExtraInspection::Clear
 }
 
 fn push_entry_metadata(output: &mut String, name: &str, size: u64, max_bytes: usize) {

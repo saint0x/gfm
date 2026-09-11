@@ -421,6 +421,40 @@ fn skips_rar5_multi_volume_archives_until_spanning_import_lands() {
 }
 
 #[test]
+fn quarantines_rar5_file_headers_with_corrupt_extra_area() {
+    let root = unique_temp_dir("gfm-content-rar5-corrupt-file-extra");
+    let path = root.join("corrupt-extra.rar");
+    fs::write(&path, rar5_corrupt_file_extra_package()).unwrap();
+
+    let report = Extractor::default().extract_path_report(&path).unwrap();
+
+    assert_eq!(report.format, ExtractionFormat::Archive);
+    assert_eq!(
+        report.status,
+        ExtractionStatus::Quarantined("corrupt-archive")
+    );
+    assert!(report.document.is_none());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn quarantines_rar5_service_headers_with_corrupt_extra_area() {
+    let root = unique_temp_dir("gfm-content-rar5-corrupt-service-extra");
+    let path = root.join("corrupt-service-extra.rar");
+    fs::write(&path, rar5_corrupt_service_extra_package()).unwrap();
+
+    let report = Extractor::default().extract_path_report(&path).unwrap();
+
+    assert_eq!(report.format, ExtractionFormat::Archive);
+    assert_eq!(
+        report.status,
+        ExtractionStatus::Quarantined("corrupt-archive")
+    );
+    assert!(report.document.is_none());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn quarantines_encrypted_7z_header_without_reporting_corruption() {
     let root = unique_temp_dir("gfm-content-7z-encrypted-header");
     let path = root.join("locked.7z");
@@ -2266,6 +2300,30 @@ fn rar5_encrypted_header_package() -> Vec<u8> {
 fn rar5_multivolume_package() -> Vec<u8> {
     let mut bytes = b"Rar!\x1a\x07\x01\x00".to_vec();
     push_rar5_block(&mut bytes, 1, 0, 0, &rar5_main_body(0x0001), &[], 0);
+    push_rar5_block(&mut bytes, 5, 0, 0, &[], &[], 0);
+    bytes
+}
+
+fn rar5_corrupt_file_extra_package() -> Vec<u8> {
+    let mut bytes = b"Rar!\x1a\x07\x01\x00".to_vec();
+    push_rar5_block(&mut bytes, 1, 0, 0, &rar5_main_body(0), &[], 0);
+    push_rar5_block(
+        &mut bytes,
+        2,
+        0,
+        0,
+        &rar5_file_body("docs/corrupt-extra.txt", 31),
+        &[0],
+        0,
+    );
+    push_rar5_block(&mut bytes, 5, 0, 0, &[], &[], 0);
+    bytes
+}
+
+fn rar5_corrupt_service_extra_package() -> Vec<u8> {
+    let mut bytes = b"Rar!\x1a\x07\x01\x00".to_vec();
+    push_rar5_block(&mut bytes, 1, 0, 0, &rar5_main_body(0), &[], 0);
+    push_rar5_block(&mut bytes, 3, 0, 0, &[], &[0], 0);
     push_rar5_block(&mut bytes, 5, 0, 0, &[], &[], 0);
     bytes
 }
