@@ -50,7 +50,7 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 
 31. Complete full-fidelity Office legacy binary text extraction/import for WordDocument, Workbook/Book, and PowerPoint Document formats, plus password-protected, rights-managed, and edit-protected document handling.
 32. Complete production fixture coverage for RAR5 metadata import plus remaining non-encrypted encoded-header 7z and multi-volume archive import.
-33. Complete hardened extraction-worker isolation with production read-deny Seatbelt feasibility, XPC/App Sandbox entitlement minimization, crash telemetry retention, and full sandbox violation diagnostic capture.
+33. Complete hardened extraction-worker isolation with XPC/App Sandbox entitlement minimization and full sandbox violation diagnostic capture.
 
 ## Storage Engine
 
