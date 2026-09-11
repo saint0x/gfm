@@ -14,6 +14,7 @@ const FATSECT: u32 = 0xFFFF_FFFD;
 const DIFSECT: u32 = 0xFFFF_FFFC;
 const MAX_SECTOR_BYTES: usize = 4096;
 const MINI_SECTOR_BYTES: usize = 64;
+const MAX_BIFF_TEXT_RECORDS_TO_SCAN: usize = 4096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LegacyOfficeExtractStatus {
@@ -73,7 +74,8 @@ pub(crate) fn extract_legacy_office_document_checked(
             return Ok((LegacyOfficeExtractStatus::Encrypted, None));
         }
         bytes_read += stream.len();
-        push_salvaged_legacy_text(
+        push_legacy_office_stream_text(
+            kind,
             &stream,
             policy.max_office_text_bytes,
             &mut text,
@@ -168,6 +170,173 @@ fn workbook_biff_reports_filepass(stream: &[u8]) -> bool {
         records += 1;
     }
     false
+}
+
+fn push_legacy_office_stream_text(
+    kind: LegacyOfficeKind,
+    stream: &[u8],
+    max_text_bytes: usize,
+    out: &mut String,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    if kind == LegacyOfficeKind::Xls {
+        if push_workbook_biff_text_records(stream, max_text_bytes, out, &mut check_control)? {
+            return Ok(());
+        }
+        check_control()?;
+    }
+    push_salvaged_legacy_text(stream, max_text_bytes, out, &mut check_control)
+}
+
+fn push_workbook_biff_text_records(
+    stream: &[u8],
+    max_text_bytes: usize,
+    out: &mut String,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<bool> {
+    const BIFF_LABEL_RECORD: u16 = 0x0204;
+    const BIFF_SST_RECORD: u16 = 0x00fc;
+
+    let mut cursor = 0usize;
+    let mut records = 0usize;
+    let initial_len = out.len();
+    while cursor + 4 <= stream.len() && records < MAX_BIFF_TEXT_RECORDS_TO_SCAN {
+        check_control()?;
+        let Some(record_type) = read_u16(stream, cursor) else {
+            break;
+        };
+        let Some(size) = read_u16(stream, cursor + 2).map(usize::from) else {
+            break;
+        };
+        let Some(data_start) = cursor.checked_add(4) else {
+            break;
+        };
+        let Some(next) = data_start.checked_add(size) else {
+            break;
+        };
+        if next > stream.len() {
+            break;
+        }
+        let data = &stream[data_start..next];
+        match record_type {
+            BIFF_LABEL_RECORD => push_biff_label_record_text(data, max_text_bytes, out),
+            BIFF_SST_RECORD => {
+                push_biff_sst_record_text(data, max_text_bytes, out, &mut check_control)?
+            }
+            _ => {}
+        }
+        if out.len() >= max_text_bytes {
+            return Ok(out.len() > initial_len);
+        }
+        cursor = next;
+        records += 1;
+    }
+    Ok(out.len() > initial_len)
+}
+
+fn push_biff_label_record_text(data: &[u8], max_text_bytes: usize, out: &mut String) {
+    if data.len() < 8 {
+        return;
+    }
+    let string = parse_biff_string(data, 6);
+    append_biff_text(string.as_deref(), max_text_bytes, out);
+}
+
+fn push_biff_sst_record_text(
+    data: &[u8],
+    max_text_bytes: usize,
+    out: &mut String,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<()> {
+    if data.len() < 8 {
+        return Ok(());
+    }
+    let declared_unique = read_u32(data, 4).unwrap_or_default() as usize;
+    let mut cursor = 8usize;
+    for _ in 0..declared_unique.min(MAX_BIFF_TEXT_RECORDS_TO_SCAN) {
+        check_control()?;
+        let Some((string, next)) = parse_biff_string_at(data, cursor) else {
+            break;
+        };
+        append_biff_text(Some(&string), max_text_bytes, out);
+        if out.len() >= max_text_bytes {
+            break;
+        }
+        cursor = next;
+    }
+    Ok(())
+}
+
+fn parse_biff_string(data: &[u8], offset: usize) -> Option<String> {
+    parse_biff_string_at(data, offset).map(|(string, _)| string)
+}
+
+fn parse_biff_string_at(data: &[u8], offset: usize) -> Option<(String, usize)> {
+    let char_count = read_u16(data, offset)? as usize;
+    let flags_offset = offset.checked_add(2)?;
+    let flags = *data.get(flags_offset)?;
+    let mut cursor = flags_offset.checked_add(1)?;
+    let has_16_bit_chars = flags & 0x01 != 0;
+    let has_rich_text_runs = flags & 0x08 != 0;
+    let has_extended_data = flags & 0x04 != 0;
+    let rich_text_runs = if has_rich_text_runs {
+        let value = read_u16(data, cursor)? as usize;
+        cursor = cursor.checked_add(2)?;
+        value
+    } else {
+        0
+    };
+    let extended_data_bytes = if has_extended_data {
+        let value = read_u32(data, cursor)? as usize;
+        cursor = cursor.checked_add(4)?;
+        value
+    } else {
+        0
+    };
+    let string_bytes = if has_16_bit_chars {
+        char_count.checked_mul(2)?
+    } else {
+        char_count
+    };
+    let string_end = cursor.checked_add(string_bytes)?;
+    let raw = data.get(cursor..string_end)?;
+    let string = if has_16_bit_chars {
+        decode_utf16le_lossy(raw)
+    } else {
+        decode_biff_compressed_string(raw)
+    };
+    cursor = string_end;
+    cursor = cursor.checked_add(rich_text_runs.checked_mul(4)?)?;
+    cursor = cursor.checked_add(extended_data_bytes)?;
+    if cursor > data.len() {
+        return None;
+    }
+    Some((string, cursor))
+}
+
+fn decode_biff_compressed_string(raw: &[u8]) -> String {
+    raw.iter()
+        .filter_map(|&byte| {
+            let ch = char::from(byte);
+            is_text_char(ch).then_some(ch)
+        })
+        .collect()
+}
+
+fn decode_utf16le_lossy(raw: &[u8]) -> String {
+    let utf16 = raw
+        .chunks_exact(2)
+        .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+        .collect::<Vec<_>>();
+    String::from_utf16_lossy(&utf16)
+}
+
+fn append_biff_text(value: Option<&str>, max_text_bytes: usize, out: &mut String) {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return;
+    };
+    append_with_limit(out, value, max_text_bytes);
+    append_with_limit(out, " ", max_text_bytes);
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -817,6 +986,74 @@ mod tests {
     }
 
     #[test]
+    fn extracts_workbook_biff_label_records_before_raw_salvage() {
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&biff_label_record(0, 0, "Q4", false));
+        payload.extend_from_slice(&biff_label_record(0, 1, "OK", false));
+        let bytes = legacy_office_compound_file_with_ministream("Workbook", &payload);
+
+        let (status, document) = extract_legacy_office_document_checked(
+            &bytes,
+            LegacyOfficeKind::Xls,
+            &ExtractionPolicy::default(),
+            || Ok(()),
+        )
+        .unwrap();
+
+        assert_eq!(status, LegacyOfficeExtractStatus::Extracted);
+        let document = document.expect("BIFF labels should extract");
+        assert_eq!(document.text, "Q4 OK");
+    }
+
+    #[test]
+    fn extracts_workbook_biff_sst_strings() {
+        let mut payload = Vec::new();
+        let mut sst = Vec::new();
+        sst.extend_from_slice(&2_u32.to_le_bytes());
+        sst.extend_from_slice(&2_u32.to_le_bytes());
+        sst.extend_from_slice(&biff_string("A1", false));
+        sst.extend_from_slice(&biff_string("Ω2", true));
+        payload.extend_from_slice(&biff_record(0x00fc, &sst));
+        let bytes = legacy_office_compound_file_with_ministream("Workbook", &payload);
+
+        let (status, document) = extract_legacy_office_document_checked(
+            &bytes,
+            LegacyOfficeKind::Xls,
+            &ExtractionPolicy::default(),
+            || Ok(()),
+        )
+        .unwrap();
+
+        assert_eq!(status, LegacyOfficeExtractStatus::Extracted);
+        let document = document.expect("BIFF shared strings should extract");
+        assert_eq!(document.text, "A1 Ω2");
+    }
+
+    #[test]
+    fn workbook_biff_text_record_scan_honors_cancellation() {
+        let payload = biff_label_record(0, 0, "Q4", false);
+        let bytes = legacy_office_compound_file_with_ministream("Workbook", &payload);
+        let mut checks = 0usize;
+
+        let err = extract_legacy_office_document_checked(
+            &bytes,
+            LegacyOfficeKind::Xls,
+            &ExtractionPolicy::default(),
+            || {
+                checks += 1;
+                if checks >= 8 {
+                    Err(gfm_types::GfmError::Cancelled)
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(err, gfm_types::GfmError::Cancelled);
+    }
+
+    #[test]
     fn extracts_small_legacy_office_streams_from_ministream() {
         let bytes = legacy_office_compound_file_with_ministream(
             "WordDocument",
@@ -852,6 +1089,40 @@ mod tests {
         assert_eq!(status, LegacyOfficeExtractStatus::Extracted);
         let document = document.expect("DIFAT-backed WordDocument text should extract");
         assert!(document.text.contains("difatneedle launch plan"));
+    }
+
+    fn biff_record(record_type: u16, data: &[u8]) -> Vec<u8> {
+        let mut record = Vec::new();
+        record.extend_from_slice(&record_type.to_le_bytes());
+        record.extend_from_slice(&(data.len() as u16).to_le_bytes());
+        record.extend_from_slice(data);
+        record
+    }
+
+    fn biff_label_record(row: u16, column: u16, text: &str, wide: bool) -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend_from_slice(&row.to_le_bytes());
+        data.extend_from_slice(&column.to_le_bytes());
+        data.extend_from_slice(&0_u16.to_le_bytes());
+        data.extend_from_slice(&biff_string(text, wide));
+        biff_record(0x0204, &data)
+    }
+
+    fn biff_string(text: &str, wide: bool) -> Vec<u8> {
+        let char_count = text.chars().count();
+        let mut data = Vec::new();
+        data.extend_from_slice(&(char_count as u16).to_le_bytes());
+        data.push(if wide { 0x01 } else { 0x00 });
+        if wide {
+            for unit in text.encode_utf16() {
+                data.extend_from_slice(&unit.to_le_bytes());
+            }
+        } else {
+            for ch in text.chars() {
+                data.push(ch as u8);
+            }
+        }
+        data
     }
 
     pub(crate) fn legacy_office_compound_file(streams: &[&str]) -> Vec<u8> {
