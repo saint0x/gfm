@@ -921,7 +921,7 @@ impl ProviderConflictContract {
 
     pub fn as_tsv(&self) -> String {
         format!(
-            "{}\nprovider-conflict\tpath={}\tconflict={}\taffected={}\taffected-paths={}\treveal={}\toperations-blocked={}\treason={}",
+            "{}\nprovider-conflict\tpath={}\tconflict={}\taffected={}\taffected-paths={}\treveal={}\toperations-blocked={}\treason={}\nprovider-conflict-visible\ttitle={}\tpath={}\treason={}\taffected-preview={}\tmore-conflicts={}\tdefault-action={}",
             self.dialog.as_tsv(),
             escape_tsv(&self.path),
             self.has_unresolved_conflict,
@@ -930,7 +930,31 @@ impl ProviderConflictContract {
             self.reveal_enabled,
             self.operations_blocked,
             escape_tsv(&self.reason),
+            escape_tsv(self.dialog.title),
+            escape_tsv(&self.path),
+            escape_tsv(&self.reason),
+            affected_paths_tsv(self.visible_affected_paths()),
+            self.visible_more_conflicts(),
+            escape_tsv(self.visible_default_action()),
         )
+    }
+
+    pub fn visible_affected_paths(&self) -> &[String] {
+        let visible_count = self.affected_paths.len().min(4);
+        &self.affected_paths[..visible_count]
+    }
+
+    pub fn visible_more_conflicts(&self) -> usize {
+        self.affected_paths.len().saturating_sub(4)
+    }
+
+    pub fn visible_default_action(&self) -> &'static str {
+        self.dialog
+            .buttons
+            .iter()
+            .find(|button| button.role == DialogButtonRole::Default && button.enabled)
+            .map(|button| button.id)
+            .unwrap_or("-")
     }
 }
 
@@ -1335,7 +1359,7 @@ pub fn render_provider_conflict(conflict: &ProviderConflictContract) -> impl Int
         .flex()
         .flex_col()
         .gap(px(5.0));
-    for path in conflict.affected_paths.iter().take(4) {
+    for path in conflict.visible_affected_paths() {
         affected = affected.child(
             div()
                 .id("provider-conflict-affected-path")
@@ -1345,16 +1369,14 @@ pub fn render_provider_conflict(conflict: &ProviderConflictContract) -> impl Int
                 .child(path.clone()),
         );
     }
-    if conflict.affected_paths.len() > 4 {
+    let more_conflicts = conflict.visible_more_conflicts();
+    if more_conflicts > 0 {
         affected = affected.child(
             div()
                 .id("provider-conflict-more")
                 .text_size(px(11.0))
                 .text_color(rgb(0x9a9aa0))
-                .child(format!(
-                    "{} more conflicts",
-                    conflict.affected_paths.len() - 4
-                )),
+                .child(format!("{} more conflicts", more_conflicts)),
         );
     }
 
@@ -1964,6 +1986,9 @@ mod tests {
         assert!(contract.as_tsv().contains(
             "provider-conflict\tpath=/tmp/Conflict.icloud-conflict.md\tconflict=true\taffected=1\taffected-paths=/tmp/Conflict.icloud-conflict.md\treveal=true\toperations-blocked=true\treason=conflict-requires-user-resolution"
         ));
+        assert!(contract.as_tsv().contains(
+            "\nprovider-conflict-visible\ttitle=Resolve FileProvider Conflict\tpath=/tmp/Conflict.icloud-conflict.md\treason=conflict-requires-user-resolution\taffected-preview=/tmp/Conflict.icloud-conflict.md\tmore-conflicts=0\tdefault-action=reveal-conflict"
+        ));
     }
 
     #[test]
@@ -2017,6 +2042,49 @@ mod tests {
             "{tsv}"
         );
         assert_eq!(row.split('\t').count(), 8, "{tsv}");
+        let visible_row = tsv
+            .lines()
+            .find(|line| line.starts_with("provider-conflict-visible\t"))
+            .unwrap();
+
+        assert!(
+            visible_row.contains("path=/tmp/Conflict\\tOne\\nTwo\\r.md\t"),
+            "{tsv}"
+        );
+        assert!(
+            visible_row.contains(
+                "affected-preview=/tmp/Conflict\\tOne\\nTwo\\r.md,/tmp/Other\\\\Affected.md\t"
+            ),
+            "{tsv}"
+        );
+        assert!(
+            visible_row.contains("reason=provider\\tconflict\\nrequires\\rreview\\\\now\t"),
+            "{tsv}"
+        );
+        assert_eq!(visible_row.split('\t').count(), 7, "{tsv}");
+    }
+
+    #[test]
+    fn provider_conflict_visible_contract_matches_rendered_path_limit() {
+        let contract = ProviderConflictContract::from_input(ProviderConflictInput::new(
+            "/tmp/Conflict.icloud-conflict.md",
+            true,
+            (0..6)
+                .map(|index| format!("/tmp/Conflict-{index}.icloud-conflict.md"))
+                .collect(),
+            true,
+            true,
+            "conflict-requires-user-resolution",
+        ));
+        let tsv = contract.as_tsv();
+
+        assert_eq!(contract.visible_affected_paths().len(), 4);
+        assert_eq!(contract.visible_more_conflicts(), 2);
+        assert!(tsv.contains("more-conflicts=2\tdefault-action=reveal-conflict"));
+        assert!(
+            tsv.contains("affected-preview=/tmp/Conflict-0.icloud-conflict.md,/tmp/Conflict-1.icloud-conflict.md,/tmp/Conflict-2.icloud-conflict.md,/tmp/Conflict-3.icloud-conflict.md\t"),
+            "{tsv}"
+        );
     }
 
     #[test]

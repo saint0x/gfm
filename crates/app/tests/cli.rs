@@ -21169,6 +21169,12 @@ fn native_app_launch_renders_fileprovider_conflict_surface_from_binary() {
         ),
         "{stdout}"
     );
+    assert!(
+        stdout.contains("\nprovider-conflict-visible\ttitle=Resolve FileProvider Conflict\t")
+            && stdout.contains("\taffected-preview=")
+            && stdout.contains("\tmore-conflicts=0\tdefault-action=reveal-conflict"),
+        "{stdout}"
+    );
 
     fs::remove_dir_all(root).unwrap();
 }
