@@ -193,6 +193,11 @@ pub(crate) struct ScheduledTaskOutcome<T> {
     pub(crate) deferred: bool,
 }
 
+struct RuntimeVolumeBinding<V> {
+    resolve: V,
+    defer_hint: Option<VolumeId>,
+}
+
 pub(crate) fn run_scheduled_volume_task_cancellable<T>(
     volume: Option<VolumeId>,
     priority: Priority,
@@ -203,12 +208,18 @@ pub(crate) fn run_scheduled_volume_task_cancellable<T>(
 where
     T: Send + 'static,
 {
-    run_scheduled_volume_task_cancellable_with_volume(
+    let payload_kind = payload_kind_for_label(label);
+    run_scheduled_volume_task_cancellable_with_runtime_and_payload_path_inner(
         priority,
+        payload_kind,
         label,
         pressure,
-        || Ok(volume),
-        work,
+        runtime_payload_path(payload_kind, label),
+        RuntimeVolumeBinding {
+            resolve: || Ok(volume),
+            defer_hint: volume,
+        },
+        move |cancellation, _runtime| work(cancellation),
     )
 }
 
@@ -288,13 +299,16 @@ where
     T: Send + 'static,
 {
     let payload_kind = payload_kind_for_label(label);
-    run_scheduled_volume_task_cancellable_with_runtime_and_payload_path(
+    run_scheduled_volume_task_cancellable_with_runtime_and_payload_path_inner(
         priority,
         payload_kind,
         label,
         pressure,
-        || Ok(volume),
         runtime_payload_path(payload_kind, label),
+        RuntimeVolumeBinding {
+            resolve: || Ok(volume),
+            defer_hint: volume,
+        },
         work,
     )
 }
@@ -311,6 +325,32 @@ pub(crate) fn run_scheduled_volume_task_cancellable_with_runtime_and_payload_pat
 where
     T: Send + 'static,
 {
+    run_scheduled_volume_task_cancellable_with_runtime_and_payload_path_inner(
+        priority,
+        payload_kind,
+        label,
+        pressure,
+        payload_path,
+        RuntimeVolumeBinding {
+            resolve: volume,
+            defer_hint: None,
+        },
+        work,
+    )
+}
+
+fn run_scheduled_volume_task_cancellable_with_runtime_and_payload_path_inner<T>(
+    priority: Priority,
+    payload_kind: JobPayloadKind,
+    label: &'static str,
+    pressure: SchedulingPressure,
+    payload_path: impl Into<PathBuf>,
+    volume: RuntimeVolumeBinding<impl FnOnce() -> Result<Option<VolumeId>>>,
+    work: impl Fn(Cancellation, RuntimeJobHandle) -> Result<T> + Send + Sync + 'static,
+) -> Result<ScheduledTaskOutcome<T>>
+where
+    T: Send + 'static,
+{
     let payload_path = payload_path.into();
     let scheduling = pressure.decide_for_payload(priority, payload_kind, 1, 1);
     let stores = RuntimeJobBeginStores::from_environment();
@@ -318,6 +358,11 @@ where
     let mut job = scheduler.schedule_payload(priority, payload_kind, label);
     let journal = JobJournal::new(default_job_journal_path());
     if scheduling.action == SchedulingAction::Defer {
+        if let Some(volume) = volume.defer_hint {
+            job = scheduler
+                .bind_volume(job.id, volume)
+                .ok_or_else(|| GfmError::Format(format!("{label} job was not queued")))?;
+        }
         let runtime = RuntimeJobHandle::begin_with_explicit_stores_checked(
             &job,
             RuntimeJobBeginRequest::new(
@@ -338,7 +383,7 @@ where
         });
     }
 
-    if let Some(volume) = volume()? {
+    if let Some(volume) = (volume.resolve)()? {
         job = scheduler
             .bind_volume(job.id, volume)
             .ok_or_else(|| GfmError::Format(format!("{label} job was not queued")))?;
@@ -782,11 +827,13 @@ fn progress_semantics_equal(left: &JobProgressSnapshot, right: &JobProgressSnaps
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gfm_jobs::{JobClass, JobId};
+    use gfm_jobs::{JobClass, JobId, JobIoPressure};
     use std::cell::Cell;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::Mutex as StdMutex;
 
     static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+    static ENV_LOCK: StdMutex<()> = StdMutex::new(());
 
     #[test]
     fn progress_semantics_ignore_timestamp_only_drift() {
@@ -867,6 +914,56 @@ mod tests {
             JobProgressState::Planned
         );
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn deferred_known_volume_persists_runtime_volume_without_resolving_volume_closure() {
+        let _env_guard = ENV_LOCK.lock().unwrap();
+        let catalog_path = temp_path("gfm-runtime-deferred-known-volume-catalog", "gfmjobs");
+        let progress_path = temp_path("gfm-runtime-deferred-known-volume-progress", "gfmprogress");
+        std::env::set_var("GFM_JOB_PAYLOAD_CATALOG", &catalog_path);
+        std::env::set_var("GFM_JOB_PROGRESS_STORE", &progress_path);
+
+        let volume_called = Arc::new(AtomicBool::new(false));
+        let called = Arc::clone(&volume_called);
+        let outcome = run_scheduled_volume_task_cancellable_with_runtime_and_payload_path_inner(
+            Priority::Background,
+            JobPayloadKind::Indexing,
+            "deferred known volume",
+            SchedulingPressure {
+                io: JobIoPressure::Saturated,
+                ..SchedulingPressure::default()
+            },
+            "/tmp/deferred-known-volume",
+            RuntimeVolumeBinding {
+                resolve: move || {
+                    called.store(true, Ordering::SeqCst);
+                    Ok(Some(VolumeId(99)))
+                },
+                defer_hint: Some(VolumeId(44)),
+            },
+            |_cancellation, _runtime| Ok(()),
+        )
+        .unwrap();
+
+        assert!(outcome.deferred);
+        assert_eq!(outcome.scheduling_action, SchedulingAction::Defer);
+        assert_eq!(outcome.result, None);
+        assert!(!volume_called.load(Ordering::SeqCst));
+
+        let payloads = JobPayloadCatalog::new(&catalog_path).read().unwrap();
+        assert_eq!(payloads.len(), 1);
+        assert_eq!(payloads[0].volume, Some(VolumeId(44)));
+        let snapshots = JobProgressStore::new(&progress_path).read().unwrap();
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].volume, Some(VolumeId(44)));
+        assert_eq!(snapshots[0].state, JobProgressState::Paused);
+        assert_eq!(snapshots[0].detail, "deferred:Defer");
+
+        std::env::remove_var("GFM_JOB_PAYLOAD_CATALOG");
+        std::env::remove_var("GFM_JOB_PROGRESS_STORE");
+        std::fs::remove_file(catalog_path).unwrap();
+        std::fs::remove_file(progress_path).unwrap();
     }
 
     #[test]
