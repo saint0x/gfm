@@ -20428,12 +20428,12 @@ fn native_app_launch_dispatches_without_operator_command_from_binary() {
         "{stdout}"
     );
     assert!(
-        stdout.contains("\ncontext-menu\tsurface=file\tselection=1\titems="),
+        stdout.contains("\ncontext-menu\tsurface=file\tselection=0\titems="),
         "{stdout}"
     );
     assert!(
         stdout.contains(
-            "item\topen-with\tOpen With\tgfm::OpenWith\tsubmenu\tenabled=true\tdestructive=false"
+            "item\topen-with\tOpen With\tgfm::OpenWith\tsubmenu\tenabled=false\tdestructive=false"
         ),
         "{stdout}"
     );
@@ -20456,12 +20456,12 @@ fn native_app_launch_dispatches_without_operator_command_from_binary() {
         "{stdout}"
     );
     assert!(
-        stdout.contains("\ncontext-menu\tsurface=trash\tselection=1\titems=5"),
+        stdout.contains("\ncontext-menu\tsurface=trash\tselection=0\titems=5"),
         "{stdout}"
     );
     assert!(
         stdout.contains(
-            "item\tdelete-immediately\tDelete Immediately...\tgfm::DeleteImmediately\tcommand\tenabled=true\tdestructive=true"
+            "item\tdelete-immediately\tDelete Immediately...\tgfm::DeleteImmediately\tcommand\tenabled=false\tdestructive=true"
         ),
         "{stdout}"
     );
@@ -20520,6 +20520,45 @@ fn native_app_launch_rejects_invalid_sidebar_visibility_from_binary() {
     assert!(
         stderr.contains("GFM_NATIVE_SIDEBAR_VISIBLE must be true or false"),
         "{stderr}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn native_app_launch_derives_context_menu_writable_and_clipboard_state_from_binary() {
+    let root = unique_temp_dir("gfm-cli-native-launch-context-state");
+    fs::write(root.join("Visible.txt"), "hello").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .current_dir(&root)
+        .env("GFM_NATIVE_LAUNCH_CONTRACT", "1")
+        .env("GFM_NATIVE_CONTEXT_WRITABLE", "false")
+        .env("GFM_NATIVE_CONTEXT_CLIPBOARD_ITEMS", "false")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("\ncontext-menu\tsurface=empty\tselection=0\titems=8"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "item\tnew-folder\tNew Folder\tgfm::NewFolder\tcommand\tenabled=false\tdestructive=false"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "item\tpaste-item\tPaste Item\tgfm::PasteItem\tcommand\tenabled=false\tdestructive=false"
+        ),
+        "{stdout}"
     );
 
     fs::remove_dir_all(root).unwrap();
@@ -20672,6 +20711,16 @@ fn native_app_launch_selects_list_view_item_from_binary() {
     assert!(
         stdout.contains(
             "command\tView\tas List\tgfm::ListView\tcmd-2\tview\tenabled=true\tselected=true"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\ncontext-menu\tsurface=file\tselection=1\titems="),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(
+            "item\topen-with\tOpen With\tgfm::OpenWith\tsubmenu\tenabled=true\tdestructive=false"
         ),
         "{stdout}"
     );

@@ -841,6 +841,48 @@ fn finder_default_context_menus() -> Vec<ContextMenuContract> {
     .collect()
 }
 
+pub fn finder_context_menus_for_launch(
+    initial_view: &InitialViewContract,
+    writable: bool,
+    has_clipboard_items: bool,
+) -> Vec<ContextMenuContract> {
+    let selection_count = initial_view
+        .selected_item_count()
+        .min(usize::from(u16::MAX)) as u16;
+    let selected_item_count = selection_count.max(u16::from(initial_view.has_selection()));
+    let selection_surface_count = if selection_count > 1 {
+        selection_count
+    } else {
+        selected_item_count
+    };
+
+    [
+        ContextMenuInput::new(ContextSurface::File)
+            .with_selection_count(selected_item_count)
+            .with_writable(writable),
+        ContextMenuInput::new(ContextSurface::Folder)
+            .with_selection_count(selected_item_count)
+            .with_writable(writable),
+        ContextMenuInput::new(ContextSurface::Selection)
+            .with_selection_count(selection_surface_count)
+            .with_writable(writable),
+        ContextMenuInput::new(ContextSurface::SearchResult)
+            .with_selection_count(selected_item_count)
+            .with_writable(writable),
+        ContextMenuInput::empty_space()
+            .with_writable(writable)
+            .with_clipboard_items(has_clipboard_items),
+        ContextMenuInput::new(ContextSurface::Sidebar),
+        ContextMenuInput::new(ContextSurface::Volume).with_ejectable(true),
+        ContextMenuInput::new(ContextSurface::Trash)
+            .with_selection_count(selected_item_count)
+            .with_writable(writable),
+    ]
+    .into_iter()
+    .map(ContextMenuContract::finder_default)
+    .collect()
+}
+
 impl Default for AppLaunchSpec {
     fn default() -> Self {
         Self {
@@ -1421,6 +1463,47 @@ mod tests {
         assert!(output.contains("\ncontext-menu\tsurface=empty\tselection=0\titems=8"));
         assert!(output.contains(
             "item\tpaste-item\tPaste Item\tgfm::PasteItem\tcommand\tenabled=false\tdestructive=false"
+        ));
+    }
+
+    #[test]
+    fn launch_context_menus_follow_initial_selection_and_write_state() {
+        let selected = gfm_types::FileId::new(gfm_types::VolumeId(1), 9);
+        let records = [gfm_types::FileRecord {
+            id: selected,
+            parent: None,
+            path: PathBuf::from("/tmp/gfm/Selected.txt"),
+            name: "Selected.txt".to_string(),
+            kind: gfm_types::FileKind::File,
+            len: 12,
+            mode: 0o644,
+            owner: 501,
+            group: 20,
+            xattrs_digest: 0,
+            created: None,
+            modified: None,
+            changed: None,
+            hidden: false,
+            tags: Vec::new(),
+            finder_comment: None,
+        }];
+        let initial_view = InitialViewContract::List(ListViewContract::from_records(
+            &records,
+            ListViewOptions::default().with_selected([selected]),
+        ));
+
+        let tsv = finder_context_menus_for_launch(&initial_view, false, false)
+            .into_iter()
+            .map(|menu| menu.as_tsv())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(tsv.contains("\nitem\topen\tOpen\tgfm::Open\tcommand\tenabled=true"));
+        assert!(tsv.contains(
+            "\nitem\trename\tRename\tgfm::Rename\tcommand\tenabled=false\tdestructive=false"
+        ));
+        assert!(tsv.contains(
+            "\nitem\tpaste-item\tPaste Item\tgfm::PasteItem\tcommand\tenabled=false\tdestructive=false"
         ));
     }
 

@@ -21,6 +21,7 @@ use gfm_types::{
     DirectoryPage, FileEvent, FileEventKind, FileId, FileKind, FileRecord, GfmError, Result,
     VolumeId,
 };
+use gfm_ui::finder_context_menus_for_launch;
 use gfm_ui::{
     AppLaunchSpec, ColumnSource, ColumnViewContract, ColumnViewOptions, ContextMenuContract,
     ContextMenuInput, ContextSurface, DialogContract, DialogSurface, GalleryViewContract,
@@ -1966,6 +1967,12 @@ fn app_launch_spec_checked(
     } else if initial_view_mode != NativeInitialViewMode::Icon {
         spec = spec.with_initial_view(native_empty_initial_view_contract(initial_view_mode));
     }
+    let context_menus = finder_context_menus_for_launch(
+        &spec.initial_view,
+        native_context_writable_from_env()?.unwrap_or(true),
+        native_context_clipboard_items_from_env()?.unwrap_or(true),
+    );
+    spec = spec.with_context_menus(context_menus);
     check_control()?;
     Ok(spec)
 }
@@ -2001,6 +2008,23 @@ fn native_initial_view_mode_from_env() -> Result<NativeInitialViewMode> {
 fn native_sidebar_visible_from_env() -> Result<Option<bool>> {
     env::var_os("GFM_NATIVE_SIDEBAR_VISIBLE")
         .map(|value| parse_bool(&value.to_string_lossy(), "GFM_NATIVE_SIDEBAR_VISIBLE"))
+        .transpose()
+}
+
+fn native_context_writable_from_env() -> Result<Option<bool>> {
+    env::var_os("GFM_NATIVE_CONTEXT_WRITABLE")
+        .map(|value| parse_bool(&value.to_string_lossy(), "GFM_NATIVE_CONTEXT_WRITABLE"))
+        .transpose()
+}
+
+fn native_context_clipboard_items_from_env() -> Result<Option<bool>> {
+    env::var_os("GFM_NATIVE_CONTEXT_CLIPBOARD_ITEMS")
+        .map(|value| {
+            parse_bool(
+                &value.to_string_lossy(),
+                "GFM_NATIVE_CONTEXT_CLIPBOARD_ITEMS",
+            )
+        })
         .transpose()
 }
 
