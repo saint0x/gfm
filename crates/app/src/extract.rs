@@ -973,7 +973,7 @@ fn extraction_sandbox_profile(
         .map(canonical_or_self)
         .transpose()?
         .unwrap_or_else(env::temp_dir);
-    let mut profile = String::from("(version 1)\n(allow default)\n");
+    let mut profile = String::from("(version 1)\n(allow default)\n(deny network*)\n");
     if read_mode == ExtractionSandboxReadMode::Strict {
         profile.push_str(&format!(
             "(deny file-read*)\n\
@@ -1014,9 +1014,14 @@ enum ExtractionSandboxReadMode {
 
 impl ExtractionSandboxReadMode {
     fn from_env() -> Self {
-        match env::var("GFM_EXTRACTION_SANDBOX_READ_MODE") {
-            Ok(value) if value == "strict" => Self::Strict,
-            _ => Self::Ambient,
+        let value = env::var("GFM_EXTRACTION_SANDBOX_READ_MODE").ok();
+        Self::from_env_value(value.as_deref())
+    }
+
+    fn from_env_value(value: Option<&str>) -> Self {
+        match value {
+            Some(value) if value.eq_ignore_ascii_case("ambient") => Self::Ambient,
+            _ => Self::Strict,
         }
     }
 }
@@ -1279,11 +1284,12 @@ mod tests {
     }
 
     #[test]
-    fn extraction_sandbox_profile_default_confines_writes_without_read_deny() {
-        let fixture = SandboxProfileFixture::new("default");
+    fn extraction_sandbox_profile_ambient_mode_still_confines_writes_and_network() {
+        let fixture = SandboxProfileFixture::new("ambient");
 
         let profile = fixture.profile(ExtractionSandboxReadMode::Ambient);
 
+        assert!(profile.contains("(deny network*)"), "{profile}");
         assert!(!profile.contains("(deny file-read*)"), "{profile}");
         assert!(profile.contains("(deny file-write*)"), "{profile}");
         assert!(profile.contains(&format!(
@@ -1298,6 +1304,30 @@ mod tests {
             "(allow file-write* (subpath \"{}\"))",
             sandbox_escape(&fixture.permission_dir.canonicalize().unwrap())
         )));
+    }
+
+    #[test]
+    fn extraction_sandbox_read_mode_defaults_to_strict_unless_ambient_is_explicit() {
+        assert_eq!(
+            ExtractionSandboxReadMode::from_env_value(None),
+            ExtractionSandboxReadMode::Strict
+        );
+        assert_eq!(
+            ExtractionSandboxReadMode::from_env_value(Some("strict")),
+            ExtractionSandboxReadMode::Strict
+        );
+        assert_eq!(
+            ExtractionSandboxReadMode::from_env_value(Some("")),
+            ExtractionSandboxReadMode::Strict
+        );
+        assert_eq!(
+            ExtractionSandboxReadMode::from_env_value(Some("ambient")),
+            ExtractionSandboxReadMode::Ambient
+        );
+        assert_eq!(
+            ExtractionSandboxReadMode::from_env_value(Some("AMBIENT")),
+            ExtractionSandboxReadMode::Ambient
+        );
     }
 
     #[test]
@@ -1588,6 +1618,7 @@ mod tests {
 
         let profile = fixture.profile(ExtractionSandboxReadMode::Strict);
 
+        assert!(profile.contains("(deny network*)"), "{profile}");
         assert!(profile.contains("(deny file-read*)"), "{profile}");
         assert!(profile.contains("(deny file-write*)"), "{profile}");
         assert!(profile.contains(&format!(
