@@ -174,6 +174,13 @@ fn reports_permission_onboarding_dialog_contract_from_binary() {
         stdout.contains("\npermission-onboarding\taction="),
         "{stdout}"
     );
+    assert!(
+        stdout.contains("\npermission-onboarding-visible\tstatus="),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\tscope-summary="), "{stdout}");
+    assert!(stdout.contains("\tscope-preview="), "{stdout}");
+    assert!(stdout.contains("\tmore-scopes="), "{stdout}");
     assert!(stdout.contains("\tprompt-kind="), "{stdout}");
     assert!(
         stdout.contains("\tprompt-mode=defer-until-needed\t"),
@@ -221,6 +228,18 @@ fn permission_onboarding_contract_uses_full_disk_access_prompt_from_binary() {
     );
     assert!(
         stdout.contains("\tprompt-kind=full-disk-access\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\npermission-onboarding-visible\tstatus=Machine-wide search ready\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\tscope-summary=6 protected scopes need attention\t"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\tmore-scopes=2\taction=continue-degraded"),
         "{stdout}"
     );
     assert!(

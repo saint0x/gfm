@@ -238,6 +238,7 @@ impl PermissionOnboardingContract {
             self.finder_parity_default,
             self.machine_search_ready
         )];
+        lines.push(self.visible_tsv());
         lines.extend(
             self.scopes
                 .iter()
@@ -260,6 +261,39 @@ impl PermissionOnboardingContract {
             1 => "1 protected scope needs attention".to_string(),
             count => format!("{count} protected scopes need attention"),
         }
+    }
+
+    pub fn visible_scope_lines(&self) -> Vec<String> {
+        self.scopes
+            .iter()
+            .take(4)
+            .map(PermissionOnboardingScopeContract::visible_line)
+            .collect()
+    }
+
+    pub fn visible_more_scopes(&self) -> usize {
+        self.scopes.len().saturating_sub(4)
+    }
+
+    pub fn visible_tsv(&self) -> String {
+        let scope_preview = self.visible_scope_lines();
+        let scope_preview = if scope_preview.is_empty() {
+            "-".to_string()
+        } else {
+            scope_preview
+                .iter()
+                .map(|scope| escape_contract_field(scope))
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        format!(
+            "permission-onboarding-visible\tstatus={}\tscope-summary={}\tscope-preview={}\tmore-scopes={}\taction={}",
+            escape_contract_field(&self.visible_status()),
+            escape_contract_field(&self.visible_scope_summary()),
+            scope_preview,
+            self.visible_more_scopes(),
+            escape_contract_field(&self.action)
+        )
     }
 }
 
@@ -1820,6 +1854,9 @@ mod tests {
             "\npermission-onboarding\taction=open-full-disk-access\tprompt-kind=full-disk-access\tprompt-mode=first-run\tfinder-parity-default=true\tmachine-search-ready=false"
         ));
         assert!(contract.as_tsv().contains(
+            "\npermission-onboarding-visible\tstatus=Machine-wide search limited: first-run\tscope-summary=1 protected scope needs attention\tscope-preview=desktop: denied - /Users/me/Desktop\tmore-scopes=0\taction=open-full-disk-access"
+        ));
+        assert!(contract.as_tsv().contains(
             "\npermission-scope\tdesktop\tstate=denied\tpath=/Users/me/Desktop\treason=full disk access required"
         ));
         let onboarding = contract.permission_onboarding.as_ref().unwrap();
@@ -1835,6 +1872,8 @@ mod tests {
             onboarding.scopes[0].visible_line(),
             "desktop: denied - /Users/me/Desktop"
         );
+        assert_eq!(onboarding.visible_scope_lines().len(), 1);
+        assert_eq!(onboarding.visible_more_scopes(), 0);
     }
 
     #[test]
@@ -2061,6 +2100,10 @@ mod tests {
             .lines()
             .find(|line| line.starts_with("permission-scope\t"))
             .unwrap();
+        let onboarding_visible = tsv
+            .lines()
+            .find(|line| line.starts_with("permission-onboarding-visible\t"))
+            .unwrap();
         let access = tsv
             .lines()
             .find(|line| line.starts_with("permission-access\t"))
@@ -2089,6 +2132,21 @@ mod tests {
             "{tsv}"
         );
         assert!(
+            onboarding_visible.contains("status=Machine-wide search limited: first\\nrun\t"),
+            "{tsv}"
+        );
+        assert!(
+            onboarding_visible.contains(
+                "scope-preview=desktop\\tfolder: denied\\nnow - /Users/me/Desktop\\tProjects\\nDraft\\r\t"
+            ),
+            "{tsv}"
+        );
+        assert!(onboarding_visible.contains("\tmore-scopes=0\t"), "{tsv}");
+        assert!(
+            onboarding_visible.contains("action=open\\tsettings"),
+            "{tsv}"
+        );
+        assert!(
             access.contains("path=/Users/me/Documents\\tDraft\\nPlan\\r.md\t"),
             "{tsv}"
         );
@@ -2111,6 +2169,7 @@ mod tests {
         assert!(change.contains("scope=desktop\\tfolder\t"), "{tsv}");
         assert!(change.contains("current=granted\\\\now\t"), "{tsv}");
         assert_eq!(onboarding.split('\t').count(), 6, "{tsv}");
+        assert_eq!(onboarding_visible.split('\t').count(), 6, "{tsv}");
         assert_eq!(scope.split('\t').count(), 5, "{tsv}");
         assert_eq!(access.split('\t').count(), 17, "{tsv}");
         assert_eq!(refresh.split('\t').count(), 13, "{tsv}");
@@ -2185,6 +2244,39 @@ mod tests {
             onboarding.scopes[0].visible_line(),
             "documents: denied - /Users/me/Documents"
         );
+        assert!(onboarding.visible_tsv().contains(
+            "permission-onboarding-visible\tstatus=Machine-wide search limited: first-run\tscope-summary=1 protected scope needs attention\tscope-preview=documents: denied - /Users/me/Documents\tmore-scopes=0\taction=open-full-disk-access"
+        ));
+    }
+
+    #[test]
+    fn permission_onboarding_visible_contract_matches_rendered_scope_limit() {
+        let scopes = (0..6)
+            .map(|index| {
+                PermissionOnboardingScopeContract::new(
+                    format!("scope-{index}"),
+                    "denied",
+                    format!("/Users/me/Protected-{index}"),
+                    "full disk access required",
+                )
+            })
+            .collect();
+        let onboarding = PermissionOnboardingContract::new(
+            "open-full-disk-access",
+            PermissionPromptKind::FullDiskAccess,
+            "first-run",
+            true,
+            false,
+        )
+        .with_scopes(scopes);
+        let visible = onboarding.visible_tsv();
+
+        assert_eq!(onboarding.visible_scope_lines().len(), 4);
+        assert_eq!(onboarding.visible_more_scopes(), 2);
+        assert!(visible.contains("\tmore-scopes=2\taction=open-full-disk-access"));
+        assert!(visible.contains("scope-0: denied - /Users/me/Protected-0"));
+        assert!(visible.contains("scope-3: denied - /Users/me/Protected-3"));
+        assert!(!visible.contains("scope-4: denied - /Users/me/Protected-4"));
     }
 
     #[test]

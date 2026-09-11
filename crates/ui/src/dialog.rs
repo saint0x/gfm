@@ -1506,6 +1506,7 @@ struct PermissionOnboardingContractState {
     status: String,
     scope_summary: String,
     scopes: Vec<String>,
+    more_scopes: usize,
     tsv: String,
 }
 
@@ -1525,11 +1526,8 @@ impl From<&super::PermissionOnboardingContract> for PermissionOnboardingContract
         Self {
             status: onboarding.visible_status(),
             scope_summary: onboarding.visible_scope_summary(),
-            scopes: onboarding
-                .scopes
-                .iter()
-                .map(super::PermissionOnboardingScopeContract::visible_line)
-                .collect(),
+            scopes: onboarding.visible_scope_lines(),
+            more_scopes: onboarding.visible_more_scopes(),
             tsv: onboarding.as_tsv(),
         }
     }
@@ -1649,7 +1647,7 @@ fn render_permission_onboarding_state(
         .flex()
         .flex_col()
         .gap(px(5.0));
-    for scope in onboarding.scopes.iter().take(4) {
+    for scope in &onboarding.scopes {
         rows = rows.child(
             div()
                 .id("permission-onboarding-scope")
@@ -1659,13 +1657,13 @@ fn render_permission_onboarding_state(
                 .child(scope.clone()),
         );
     }
-    if onboarding.scopes.len() > 4 {
+    if onboarding.more_scopes > 0 {
         rows = rows.child(
             div()
                 .id("permission-onboarding-more")
                 .text_size(px(11.0))
                 .text_color(rgb(0x9a9aa0))
-                .child(format!("{} more scopes", onboarding.scopes.len() - 4)),
+                .child(format!("{} more scopes", onboarding.more_scopes)),
         );
     }
 
