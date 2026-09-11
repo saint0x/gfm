@@ -1,6 +1,6 @@
 use super::{
-    normalize, rarest_term_postings, tokenize, QueryProximity, RankAccumulator, RecordColumns,
-    SearchIndex, CONTENT,
+    deletion_keys, is_fuzzy_term, normalize, rarest_term_postings, tokenize, QueryExpr,
+    QueryProximity, RankAccumulator, RecordColumns, SearchIndex, SearchQuery, CONTENT,
 };
 use gfm_jobs::Cancellation;
 use gfm_types::{FileId, MatchReason};
@@ -9,6 +9,62 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 const CANCELLATION_STRIDE: usize = 256;
 
 impl SearchIndex {
+    pub(super) fn query_may_have_deep_delta_cancellable(
+        &self,
+        query: &SearchQuery,
+        cancellation: &Cancellation,
+    ) -> gfm_types::Result<bool> {
+        cancellation.check()?;
+        if !query.proximities.is_empty() {
+            return Ok(true);
+        }
+        for term in &query.terms {
+            cancellation.check()?;
+            if self.content_terms.contains_key(term) || self.may_have_fuzzy_term_delta(term) {
+                return Ok(true);
+            }
+        }
+        for phrase in &query.phrases {
+            cancellation.check()?;
+            let terms = tokenize(&normalize(phrase));
+            if rarest_content_postings(&terms, &self.content_terms).is_some() {
+                return Ok(true);
+            }
+        }
+        if let Some(expression) = &query.expression {
+            return Ok(self.expression_may_have_deep_delta(expression));
+        }
+        Ok(false)
+    }
+
+    fn expression_may_have_deep_delta(&self, expression: &QueryExpr) -> bool {
+        match expression {
+            QueryExpr::Term(term) => {
+                self.content_terms.contains_key(term) || self.may_have_fuzzy_term_delta(term)
+            }
+            QueryExpr::Phrase(phrase) => {
+                let terms = tokenize(&normalize(phrase));
+                rarest_content_postings(&terms, &self.content_terms).is_some()
+            }
+            QueryExpr::Proximity(_) | QueryExpr::Not(_) => true,
+            QueryExpr::Filter(_) => false,
+            QueryExpr::And(expressions) | QueryExpr::Or(expressions) => expressions
+                .iter()
+                .any(|expression| self.expression_may_have_deep_delta(expression)),
+        }
+    }
+
+    fn may_have_fuzzy_term_delta(&self, term: &str) -> bool {
+        if !is_fuzzy_term(term) {
+            return false;
+        }
+        deletion_keys(term, 2).into_iter().any(|key| {
+            self.fuzzy_terms
+                .get(&key)
+                .is_some_and(|terms| terms.iter().any(|candidate| candidate != term))
+        })
+    }
+
     pub(super) fn content_has(&self, id: FileId, term: &str) -> bool {
         self.content_terms
             .get(term)

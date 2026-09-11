@@ -1926,6 +1926,64 @@ fn stream_omits_deep_batch_when_full_results_do_not_change() {
 }
 
 #[test]
+fn stream_deep_delta_probe_skips_full_pass_when_no_deep_source_can_match() {
+    let mut index = SearchIndex::new();
+    index.insert(record(1, "/tmp/report.md", "report.md"));
+    let query = SearchQuery::parse("report");
+
+    assert!(!index
+        .query_may_have_deep_delta_cancellable(&query, &Cancellation::default())
+        .unwrap());
+}
+
+#[test]
+fn stream_deep_delta_probe_preserves_content_and_fuzzy_sources() {
+    let mut index = SearchIndex::new();
+    let content = record(1, "/tmp/body.md", "body.md");
+    let fuzzy = record(2, "/tmp/quartely-plan.md", "quartely-plan.md");
+    index.insert(content.clone());
+    index.insert(fuzzy);
+    index.insert_content(content.id, "report appears only in content");
+
+    assert!(index
+        .query_may_have_deep_delta_cancellable(
+            &SearchQuery::parse("report"),
+            &Cancellation::default()
+        )
+        .unwrap());
+    assert!(index
+        .query_may_have_deep_delta_cancellable(
+            &SearchQuery::parse("quarterly"),
+            &Cancellation::default()
+        )
+        .unwrap());
+}
+
+#[test]
+fn stream_deep_delta_probe_stays_conservative_for_structured_queries() {
+    let mut index = SearchIndex::new();
+    let content = record(1, "/tmp/body.md", "body.md");
+    index.insert(content.clone());
+    index.insert_content(content.id, "invoice appears only in content");
+
+    for query in ["near:2:alpha,beta", "NOT draft", "(report OR invoice)"] {
+        assert!(index
+            .query_may_have_deep_delta_cancellable(
+                &SearchQuery::parse(query),
+                &Cancellation::default()
+            )
+            .unwrap());
+    }
+
+    assert!(!index
+        .query_may_have_deep_delta_cancellable(
+            &SearchQuery::parse("(report OR summary)"),
+            &Cancellation::default()
+        )
+        .unwrap());
+}
+
+#[test]
 fn stream_honors_cancellation() {
     let mut index = SearchIndex::new();
     index.insert(record(1, "/tmp/report.md", "report.md"));

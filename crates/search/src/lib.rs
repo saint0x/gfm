@@ -251,16 +251,6 @@ impl SearchIndex {
             )?
             .hits;
         cancellation.check()?;
-        let full = self
-            .query_pass(
-                query,
-                limit,
-                SearchPass::Full,
-                &EmptySearchLookup,
-                SearchLookupBudget::default(),
-                cancellation,
-            )?
-            .hits;
         let mut seen: HashMap<FileId, i64> = HashMap::new();
         let mut batches = Vec::new();
 
@@ -273,6 +263,22 @@ impl SearchIndex {
                 hits: hot,
             });
         }
+
+        if !self.query_may_have_deep_delta_cancellable(query, cancellation)? {
+            cancellation.check()?;
+            return Ok(batches);
+        }
+
+        let full = self
+            .query_pass(
+                query,
+                limit,
+                SearchPass::Full,
+                &EmptySearchLookup,
+                SearchLookupBudget::default(),
+                cancellation,
+            )?
+            .hits;
 
         let deep: Vec<_> = full
             .into_iter()
