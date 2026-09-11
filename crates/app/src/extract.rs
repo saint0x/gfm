@@ -618,8 +618,7 @@ fn run_supervised_worker(
     let start = Instant::now();
     loop {
         if let Err(err) = cancellation.check() {
-            kill_process_group(child.id());
-            let _ = child.wait();
+            let _ = kill_process_group_and_reap(&mut child, Duration::from_millis(250));
             let _ = std::fs::remove_file(stdout_path);
             let _ = std::fs::remove_file(stderr_path);
             let _ = std::fs::remove_dir_all(permission_state_dir);
@@ -635,27 +634,31 @@ fn run_supervised_worker(
                 return output;
             }
             Ok(None) if start.elapsed() >= timeout => {
-                kill_process_group(child.id());
-                let _ = child.wait();
+                let reaped = kill_process_group_and_reap(&mut child, Duration::from_millis(250));
+                let diagnostics = worker_failure_diagnostics(stdout_path, stderr_path);
                 let _ = std::fs::remove_file(stdout_path);
                 let _ = std::fs::remove_file(stderr_path);
                 let _ = std::fs::remove_dir_all(permission_state_dir);
                 return Err(GfmError::Format(format!(
-                    "adaptive extraction worker timed out after {} ms for {}",
+                    "adaptive extraction worker timed out after {} ms for {}; worker-reaped={}{}",
                     timeout.as_millis(),
-                    input.display()
+                    input.display(),
+                    reaped,
+                    diagnostics
                 )));
             }
             Ok(None) => supervised_worker_poll_pause(Duration::from_millis(5), cancellation)?,
             Err(err) => {
-                kill_process_group(child.id());
-                let _ = child.wait();
+                let reaped = kill_process_group_and_reap(&mut child, Duration::from_millis(250));
+                let diagnostics = worker_failure_diagnostics(stdout_path, stderr_path);
                 let _ = std::fs::remove_file(stdout_path);
                 let _ = std::fs::remove_file(stderr_path);
                 let _ = std::fs::remove_dir_all(permission_state_dir);
                 return Err(GfmError::Format(format!(
-                    "could not supervise adaptive extraction worker for {}: {err}",
-                    input.display()
+                    "could not supervise adaptive extraction worker for {}: {err}; worker-reaped={}{}",
+                    input.display(),
+                    reaped,
+                    diagnostics
                 )));
             }
         }
@@ -706,11 +709,78 @@ fn read_worker_output_file_checked(
     Ok(bytes)
 }
 
+fn worker_failure_diagnostics(stdout_path: &Path, stderr_path: &Path) -> String {
+    let stdout = worker_failure_diagnostic(stdout_path);
+    let stderr = worker_failure_diagnostic(stderr_path);
+    format!(
+        "; worker-stdout-bytes={}; worker-stderr-bytes={}; worker-stdout-tail={}; worker-stderr-tail={}",
+        stdout.bytes, stderr.bytes, stdout.tail, stderr.tail
+    )
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WorkerFailureDiagnostic {
+    bytes: usize,
+    tail: String,
+}
+
+fn worker_failure_diagnostic(path: &Path) -> WorkerFailureDiagnostic {
+    const MAX_TAIL_BYTES: usize = 4096;
+    match std::fs::read(path) {
+        Ok(bytes) => {
+            let tail_start = bytes.len().saturating_sub(MAX_TAIL_BYTES);
+            WorkerFailureDiagnostic {
+                bytes: bytes.len(),
+                tail: escape_diagnostic_tail(
+                    String::from_utf8_lossy(&bytes[tail_start..]).as_ref(),
+                ),
+            }
+        }
+        Err(err) => WorkerFailureDiagnostic {
+            bytes: 0,
+            tail: escape_diagnostic_tail(&format!("unavailable: {err}")),
+        },
+    }
+}
+
+fn escape_diagnostic_tail(value: &str) -> String {
+    if value.is_empty() {
+        return "-".to_string();
+    }
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '\t' => escaped.push_str("\\t"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\\' => escaped.push_str("\\\\"),
+            other if other.is_control() => {
+                escaped.push_str(&format!("\\x{:02x}", other as u32));
+            }
+            other => escaped.push(other),
+        }
+    }
+    escaped
+}
+
 fn kill_process_group(pid: u32) {
     let _ = Command::new("/bin/kill")
         .arg("-KILL")
         .arg(format!("-{pid}"))
         .status();
+}
+
+fn kill_process_group_and_reap(child: &mut std::process::Child, timeout: Duration) -> bool {
+    kill_process_group(child.id());
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return true,
+            Ok(None) if Instant::now() >= deadline => return false,
+            Ok(None) => thread::sleep(Duration::from_millis(5)),
+            Err(_) => return false,
+        }
+    }
 }
 
 fn supervised_worker_poll_pause(delay: Duration, cancellation: &Cancellation) -> Result<()> {
@@ -1249,6 +1319,79 @@ mod tests {
         assert!(matches!(result, Err(GfmError::Cancelled)));
         assert!(checks >= 4);
         assert_eq!(fs::read(&path).unwrap(), bytes);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn worker_failure_diagnostics_bound_and_escape_output_tails() {
+        let root = unique_temp_dir("gfm-extract-worker-diagnostics");
+        let stdout = root.join("stdout");
+        let stderr = root.join("stderr");
+        fs::write(&stdout, format!("{}stdout\tneedle\n", "x".repeat(5000))).unwrap();
+        fs::write(&stderr, "stderr\\needle\r").unwrap();
+
+        let diagnostics = worker_failure_diagnostics(&stdout, &stderr);
+
+        assert!(
+            diagnostics.contains("worker-stdout-bytes=5014"),
+            "{diagnostics}"
+        );
+        assert!(!diagnostics.contains(&"x".repeat(5000)), "{diagnostics}");
+        assert!(
+            diagnostics.contains("worker-stdout-tail=")
+                && diagnostics.contains("stdout\\tneedle\\n"),
+            "{diagnostics}"
+        );
+        assert!(
+            diagnostics.contains("worker-stderr-bytes=14")
+                && diagnostics.contains("stderr\\\\needle\\r"),
+            "{diagnostics}"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn supervised_worker_timeout_retains_output_diagnostics_before_cleanup() {
+        let root = unique_temp_dir("gfm-extract-worker-timeout-diagnostics");
+        let input = root.join("document.txt");
+        let stdout = root.join("stdout");
+        let stderr = root.join("stderr");
+        let permission_state_dir = root.join("permission-state");
+        fs::write(&input, "timeout diagnostics").unwrap();
+        fs::create_dir(&permission_state_dir).unwrap();
+        let mut command = Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg("printf 'worker stdout needle'; printf 'worker stderr needle' >&2; sleep 1");
+        let cancellation = Cancellation::default();
+
+        let err = run_supervised_worker(
+            &mut command,
+            &input,
+            Duration::from_millis(20),
+            &stdout,
+            &stderr,
+            &permission_state_dir,
+            &cancellation,
+        )
+        .unwrap_err();
+        let message = err.to_string();
+
+        assert!(message.contains("timed out after 20 ms"), "{message}");
+        assert!(message.contains("worker-reaped="), "{message}");
+        assert!(message.contains("worker-stdout-bytes=20"), "{message}");
+        assert!(message.contains("worker-stderr-bytes=20"), "{message}");
+        assert!(
+            message.contains("worker-stdout-tail=worker stdout needle"),
+            "{message}"
+        );
+        assert!(
+            message.contains("worker-stderr-tail=worker stderr needle"),
+            "{message}"
+        );
+        assert!(!stdout.exists());
+        assert!(!stderr.exists());
+        assert!(!permission_state_dir.exists());
         fs::remove_dir_all(root).unwrap();
     }
 
