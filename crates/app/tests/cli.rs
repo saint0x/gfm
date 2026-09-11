@@ -22666,7 +22666,10 @@ fn visible_adaptive_quicklook_persists_runtime_payload_and_progress_under_pressu
 
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("quicklook-session\t"), "{stdout}");
-    assert!(stdout.contains("\taction=Run\tdeferred=false"), "{stdout}");
+    assert!(
+        stdout.contains("\taction=Throttle\tdeferred=false"),
+        "{stdout}"
+    );
     let catalog_text = fs::read_to_string(&catalog).unwrap();
     assert!(catalog_text.contains("\tpreview\t"), "{catalog_text}");
     assert!(catalog_text.contains("quicklook preview"), "{catalog_text}");

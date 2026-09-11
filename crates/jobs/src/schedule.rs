@@ -1,4 +1,4 @@
-use crate::{JobClass, JobFairnessPolicy, Priority};
+use crate::{JobClass, JobFairnessPolicy, JobPayloadKind, Priority};
 use gfm_types::VolumeId;
 use std::collections::HashMap;
 
@@ -100,6 +100,32 @@ impl SchedulingPressure {
         }
     }
 
+    pub fn decide_for_payload(
+        self,
+        priority: Priority,
+        payload_kind: JobPayloadKind,
+        base_threads: usize,
+        base_volume_limit: usize,
+    ) -> SchedulingDecision {
+        let base_threads = base_threads.max(1);
+        let base_volume_limit = base_volume_limit.max(1);
+        let action = self.action_for_payload(priority, payload_kind);
+        let (worker_threads, volume_limit) = match action {
+            SchedulingAction::Run => (base_threads, base_volume_limit),
+            SchedulingAction::Throttle => (
+                throttle_limit(base_threads),
+                throttle_limit(base_volume_limit),
+            ),
+            SchedulingAction::Defer => (0, 1),
+        };
+        SchedulingDecision {
+            action,
+            worker_threads,
+            volume_policy: VolumeConcurrencyPolicy::new(volume_limit),
+            fairness_policy: fairness_policy_for(action),
+        }
+    }
+
     fn action_for(self, priority: Priority) -> SchedulingAction {
         if matches!(priority, Priority::Visible | Priority::Interactive) {
             return SchedulingAction::Run;
@@ -120,6 +146,48 @@ impl SchedulingPressure {
             return SchedulingAction::Throttle;
         }
         SchedulingAction::Run
+    }
+
+    fn action_for_payload(
+        self,
+        priority: Priority,
+        payload_kind: JobPayloadKind,
+    ) -> SchedulingAction {
+        if priority == Priority::Interactive {
+            return SchedulingAction::Run;
+        }
+
+        if priority == Priority::Visible {
+            return match payload_kind {
+                JobPayloadKind::Operation | JobPayloadKind::Indexing | JobPayloadKind::Repair => {
+                    SchedulingAction::Run
+                }
+                JobPayloadKind::Extraction
+                | JobPayloadKind::Thumbnail
+                | JobPayloadKind::Preview => {
+                    if self.should_throttle_latency_work() {
+                        SchedulingAction::Throttle
+                    } else {
+                        SchedulingAction::Run
+                    }
+                }
+            };
+        }
+
+        self.action_for(priority)
+    }
+
+    fn should_throttle_latency_work(self) -> bool {
+        matches!(self.io, JobIoPressure::Elevated | JobIoPressure::Saturated)
+            || matches!(
+                self.thermal,
+                JobThermalState::Serious | JobThermalState::Critical
+            )
+            || matches!(
+                self.battery,
+                JobBatteryState::Battery | JobBatteryState::LowPower
+            )
+            || matches!(self.user_activity, JobUserActivity::Active)
     }
 }
 

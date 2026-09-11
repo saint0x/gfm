@@ -2830,7 +2830,7 @@ fn adaptive_quicklook_session_stays_visible_under_pressure_from_binary() {
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     assert!(stdout.starts_with("quicklook-session\tquick-look\t"));
-    assert!(stdout.contains("\tschedule=scheduled:visible\taction=Run\tdeferred=false\n"));
+    assert!(stdout.contains("\tschedule=scheduled:visible\taction=Throttle\tdeferred=false\n"));
     assert_eq!(preview_security_scope_count(&stderr), 1, "{stderr}");
     assert_worker_admitted(&stderr, "adaptive quicklook preview", &path);
 

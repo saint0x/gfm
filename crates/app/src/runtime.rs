@@ -312,7 +312,7 @@ where
     T: Send + 'static,
 {
     let payload_path = payload_path.into();
-    let scheduling = pressure.decide(priority, 1, 1);
+    let scheduling = pressure.decide_for_payload(priority, payload_kind, 1, 1);
     let stores = RuntimeJobBeginStores::from_environment();
     let mut scheduler = Scheduler::new_starting_after(stores.max_job_id_checked(label)?);
     let mut job = scheduler.schedule_payload(priority, payload_kind, label);

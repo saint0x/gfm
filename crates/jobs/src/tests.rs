@@ -1217,6 +1217,68 @@ fn scheduling_pressure_preserves_visible_work_under_host_pressure() {
 }
 
 #[test]
+fn scheduling_pressure_throttles_visible_preview_payloads_under_host_pressure() {
+    let pressure = SchedulingPressure {
+        io: JobIoPressure::Saturated,
+        thermal: JobThermalState::Critical,
+        battery: JobBatteryState::LowPower,
+        user_activity: JobUserActivity::Active,
+    };
+
+    for payload in [
+        JobPayloadKind::Extraction,
+        JobPayloadKind::Thumbnail,
+        JobPayloadKind::Preview,
+    ] {
+        let decision = pressure.decide_for_payload(Priority::Visible, payload, 8, 4);
+
+        assert_eq!(decision.action, SchedulingAction::Throttle, "{payload:?}");
+        assert_eq!(decision.worker_threads, 4, "{payload:?}");
+        assert_eq!(decision.volume_policy.default_limit(), 2, "{payload:?}");
+        assert_eq!(decision.fairness_policy.quota(JobClass::Foreground), 4);
+        assert_eq!(decision.fairness_policy.quota(JobClass::Visible), 4);
+    }
+}
+
+#[test]
+fn scheduling_pressure_keeps_visible_metadata_payloads_unthrottled() {
+    let pressure = SchedulingPressure {
+        io: JobIoPressure::Saturated,
+        thermal: JobThermalState::Critical,
+        battery: JobBatteryState::LowPower,
+        user_activity: JobUserActivity::Active,
+    };
+
+    for payload in [
+        JobPayloadKind::Operation,
+        JobPayloadKind::Indexing,
+        JobPayloadKind::Repair,
+    ] {
+        let decision = pressure.decide_for_payload(Priority::Visible, payload, 8, 4);
+
+        assert_eq!(decision.action, SchedulingAction::Run, "{payload:?}");
+        assert_eq!(decision.worker_threads, 8, "{payload:?}");
+        assert_eq!(decision.volume_policy.default_limit(), 4, "{payload:?}");
+        assert_eq!(decision.fairness_policy, JobFairnessPolicy::default());
+    }
+}
+
+#[test]
+fn scheduling_pressure_preserves_background_payload_deferral() {
+    let pressure = SchedulingPressure {
+        io: JobIoPressure::Saturated,
+        ..SchedulingPressure::default()
+    };
+
+    let decision =
+        pressure.decide_for_payload(Priority::Background, JobPayloadKind::Indexing, 8, 4);
+
+    assert_eq!(decision.action, SchedulingAction::Defer);
+    assert_eq!(decision.worker_threads, 0);
+    assert_eq!(decision.volume_policy.default_limit(), 1);
+}
+
+#[test]
 fn structured_cancellation_propagates_to_nested_children() {
     let root = Cancellation::default();
     let child = root.child();
