@@ -485,7 +485,7 @@ cargo run -p gfm -- fuzzy-terms-mmap /tmp/gfm.gfmfuzzy Pln
 cargo run -p gfm -- fuzzy-verify /tmp/gfm.gfmfuzzy
 ```
 
-Adaptive subprocess extraction workers derive pressure-aware byte budgets before worker-side file reads, run inside a macOS Seatbelt wrapper that denies filesystem mutation when `sandbox-exec` is available, are supervised with timeout-bounded process-group termination, honor the shared jobs-layer cancellation token, and persist worker timeout/crash failures into the extraction quarantine store.
+Adaptive subprocess extraction workers derive pressure-aware byte budgets before worker-side file reads, run inside a macOS Seatbelt wrapper that denies filesystem mutation when `sandbox-exec` is available, are supervised with timeout-bounded process-group termination, honor the shared jobs-layer cancellation token, and persist worker timeout, parser-corrupt, parser-encrypted, sandbox-violation, and crash failures into the extraction quarantine store.
 
 Build and query content indexes:
 

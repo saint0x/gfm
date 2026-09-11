@@ -349,9 +349,9 @@ pub(crate) fn run_quarantined_adaptive_extraction_worker_cancellable(
         }
         Err(err) => {
             let message = err.to_string();
-            let kind = worker_failure_kind(&message);
+            let failure = worker_failure(&message);
             let decision =
-                quarantine.record_failure(path, &fingerprint, kind, worker_failure_reason(kind));
+                quarantine.record_failure(path, &fingerprint, failure.kind, failure.reason);
             cancellation.check()?;
             quarantine.write_checked(store, || cancellation.check())?;
             Ok(format!("{}\n", decision.as_tsv()))
@@ -382,21 +382,61 @@ fn read_extraction_quarantine_checked(
     }
 }
 
-fn worker_failure_kind(message: &str) -> QuarantineFailureKind {
-    if message.contains("timed out") {
-        QuarantineFailureKind::Timeout
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct WorkerFailure {
+    kind: QuarantineFailureKind,
+    reason: &'static str,
+}
+
+fn worker_failure(message: &str) -> WorkerFailure {
+    let normalized = message.to_ascii_lowercase();
+    if normalized.contains("timed out") {
+        WorkerFailure {
+            kind: QuarantineFailureKind::Timeout,
+            reason: "worker-timeout",
+        }
+    } else if worker_message_reports_encrypted(&normalized) {
+        WorkerFailure {
+            kind: QuarantineFailureKind::Encrypted,
+            reason: "worker-encrypted",
+        }
+    } else if worker_message_reports_corrupt(&normalized) {
+        WorkerFailure {
+            kind: QuarantineFailureKind::Corrupt,
+            reason: "worker-corrupt",
+        }
+    } else if worker_message_reports_sandbox_violation(&normalized) {
+        WorkerFailure {
+            kind: QuarantineFailureKind::Crash,
+            reason: "worker-sandbox-violation",
+        }
     } else {
-        QuarantineFailureKind::Crash
+        WorkerFailure {
+            kind: QuarantineFailureKind::Crash,
+            reason: "worker-crash",
+        }
     }
 }
 
-fn worker_failure_reason(kind: QuarantineFailureKind) -> &'static str {
-    match kind {
-        QuarantineFailureKind::Timeout => "worker-timeout",
-        QuarantineFailureKind::Crash => "worker-crash",
-        QuarantineFailureKind::Corrupt => "worker-corrupt",
-        QuarantineFailureKind::Encrypted => "worker-encrypted",
-    }
+fn worker_message_reports_encrypted(message: &str) -> bool {
+    message.contains("encrypted-")
+        || message.contains("reason=encrypted")
+        || message.contains("worker-encrypted")
+}
+
+fn worker_message_reports_corrupt(message: &str) -> bool {
+    message.contains("corrupt-")
+        || message.contains("reason=corrupt")
+        || message.contains("worker-corrupt")
+}
+
+fn worker_message_reports_sandbox_violation(message: &str) -> bool {
+    message.contains("sandbox")
+        && (message.contains("deny")
+            || message.contains("denied")
+            || message.contains("violation")
+            || message.contains("operation not permitted")
+            || message.contains("not permitted"))
 }
 
 fn retain_extraction_quarantine_worker_access_checked(
@@ -1232,6 +1272,73 @@ mod tests {
         assert!(checks >= 4);
         assert!(path.exists());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn worker_failure_classifies_timeout_before_other_diagnostics() {
+        let failure = worker_failure(
+            "adaptive extraction worker timed out after 10 ms after sandbox denied logging",
+        );
+
+        assert_eq!(
+            failure,
+            WorkerFailure {
+                kind: QuarantineFailureKind::Timeout,
+                reason: "worker-timeout"
+            }
+        );
+    }
+
+    #[test]
+    fn worker_failure_classifies_sandbox_denial_separately_from_crash() {
+        let failure = worker_failure(
+            "adaptive extraction worker failed: Sandbox: gfm(123) deny(1) file-read-data /Users/me/Private.doc",
+        );
+
+        assert_eq!(
+            failure,
+            WorkerFailure {
+                kind: QuarantineFailureKind::Crash,
+                reason: "worker-sandbox-violation"
+            }
+        );
+    }
+
+    #[test]
+    fn worker_failure_preserves_parser_corrupt_and_encrypted_classes() {
+        let corrupt =
+            worker_failure("extract\tpath=/tmp/bad.pdf\tstatus=quarantined\treason=corrupt-pdf");
+        let encrypted = worker_failure(
+            "extract\tpath=/tmp/locked.pdf\tstatus=quarantined\treason=encrypted-pdf",
+        );
+
+        assert_eq!(
+            corrupt,
+            WorkerFailure {
+                kind: QuarantineFailureKind::Corrupt,
+                reason: "worker-corrupt"
+            }
+        );
+        assert_eq!(
+            encrypted,
+            WorkerFailure {
+                kind: QuarantineFailureKind::Encrypted,
+                reason: "worker-encrypted"
+            }
+        );
+    }
+
+    #[test]
+    fn worker_failure_classifies_unknown_nonzero_exit_as_crash() {
+        let failure = worker_failure("adaptive extraction worker failed for /tmp/doc: signal 11");
+
+        assert_eq!(
+            failure,
+            WorkerFailure {
+                kind: QuarantineFailureKind::Crash,
+                reason: "worker-crash"
+            }
+        );
     }
 
     #[test]
