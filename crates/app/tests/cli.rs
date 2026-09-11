@@ -21103,6 +21103,22 @@ fn native_app_launch_renders_permission_dialog_contract_from_binary() {
         "{stdout}"
     );
     assert!(
+        stdout.contains(
+            "\npermission-onboarding\taction=continue-normally\tprompt-kind=general\tprompt-mode=defer-until-needed\tfinder-parity-default=true\tmachine-search-ready=true"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\npermission-scope\tdocuments\tstate=granted\t")
+            && stdout.contains("\treason=readable"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("\npermission-scope\tdesktop\tstate=missing\t")
+            && stdout.contains("\treason=path is not present on this host"),
+        "{stdout}"
+    );
+    assert!(
         stdout.contains("\npermission-access\tpath=")
             && stdout.contains("\tscope=documents\t")
             && stdout.contains("\tprompt-action=choose-location\t"),
