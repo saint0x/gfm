@@ -126,10 +126,10 @@ The index is compact and incremental:
 - bounded PDF text-stream extraction with PDF-specific byte, page, and object budgets
 - image-only PDF detection with deterministic `image-only-pdf` skips so OCR scheduling can target scans without blocking primary indexing
 - bounded OOXML extraction for DOCX, XLSX, and PPTX with ZIP entry, XML part, and text-output budgets
-- explicit legacy Office classification for DOC, XLS, and PPT through the Office extraction budget and fingerprint lane, with deterministic `legacy-office` skips until the sandboxed binary worker lands
+- explicit legacy Office compound-file classification for DOC, XLS, and PPT through the Office extraction budget and fingerprint lane, with deterministic `legacy-office` skips for valid binary packages until full binary text import lands, plus corrupt/encrypted compound-package quarantine for malformed or protected files
 - encrypted Office compound-file detection for protected DOCX, XLSX, and PPTX inputs so password-protected packages quarantine as `encrypted-office` instead of corrupt archives
 - bounded HTML, RTF, MIME multipart email, and ZIP/TAR/TAR.GZ/TAR.BZ2/TAR.XZ archive-metadata extraction policies, including PAX and GNU TAR long-name headers
-- explicit archive classification for RAR, 7Z, GZIP, BZIP2, and XZ payloads, with archive-scoped versioning and `unsupported-archive` skips until safe metadata readers exist
+- bounded ZIP/TAR/TAR.GZ/TAR.BZ2/TAR.XZ/RAR/7Z/GZIP/BZIP2/XZ archive metadata import, archive-scoped versioning, corrupt-input quarantine, encrypted ZIP/RAR quarantine, and safe `unsupported-archive` skips for valid encoded archive surfaces that need deeper decoders
 - structured JSON, CSV, XML plist, and binary plist extraction for searchable keys, cells, and values
 - format-scoped extractor versioning so parser upgrades invalidate only the affected content-cache family
 - incremental content indexing that tombstones changed/deleted file IDs, re-extracts only new or content-modified records, checks cancellation before each record-level extraction/insertion step, and keeps archive compaction cancellable through segment planning, merge, materialization, and publish boundaries

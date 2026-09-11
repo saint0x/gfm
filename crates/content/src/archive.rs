@@ -23,22 +23,6 @@ pub(crate) enum ArchiveKind {
     Zip,
 }
 
-impl ArchiveKind {
-    pub(crate) const fn supports_metadata(self) -> bool {
-        matches!(
-            self,
-            Self::Bzip2
-                | Self::Gzip
-                | Self::Tar
-                | Self::TarBz2
-                | Self::TarGz
-                | Self::TarXz
-                | Self::Xz
-                | Self::Zip
-        )
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ArchiveExtractStatus {
     Extracted,
@@ -81,7 +65,10 @@ pub(crate) fn extract_archive_metadata_checked(
             policy,
             check_control,
         ),
-        ArchiveKind::Rar | ArchiveKind::SevenZip => Ok((ArchiveExtractStatus::Unsupported, None)),
+        ArchiveKind::Rar => crate::rar::extract_rar_metadata_checked(bytes, policy, check_control),
+        ArchiveKind::SevenZip => {
+            crate::sevenzip::extract_7z_metadata_checked(bytes, policy, check_control)
+        }
         ArchiveKind::Tar => extract_tar_metadata_checked(bytes, policy, check_control),
         ArchiveKind::TarBz2 => extract_compressed_tar_metadata_checked(
             BzDecoder::new(Cursor::new(bytes)),

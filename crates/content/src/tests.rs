@@ -325,24 +325,67 @@ fn quarantines_encrypted_zip_archive_without_reporting_corruption() {
 }
 
 #[test]
-fn classifies_unsupported_archive_formats_as_archive_without_reading_payloads() {
+fn extracts_bounded_rar_and_7z_metadata_through_public_report_path() {
+    let root = unique_temp_dir("gfm-content-rar-7z-metadata");
+    let rar = root.join("bundle.rar");
+    let sevenzip = root.join("bundle.7z");
+    fs::write(&rar, rar4_package(&[("docs/rar-needle.txt", 12)])).unwrap();
+    fs::write(&sevenzip, sevenzip_package(&["docs/7z-needle.txt"])).unwrap();
+
+    let extractor = Extractor::default();
+    let rar_report = extractor.extract_path_report(&rar).unwrap();
+    let sevenzip_report = extractor.extract_path_report(&sevenzip).unwrap();
+
+    assert_eq!(rar_report.format, ExtractionFormat::Archive);
+    assert_eq!(sevenzip_report.format, ExtractionFormat::Archive);
+    assert_eq!(rar_report.status, ExtractionStatus::Extracted);
+    assert_eq!(sevenzip_report.status, ExtractionStatus::Extracted);
+    assert_eq!(
+        rar_report.fingerprint.extractor_version,
+        ARCHIVE_EXTRACTOR_VERSION
+    );
+    assert_eq!(
+        sevenzip_report.fingerprint.extractor_version,
+        ARCHIVE_EXTRACTOR_VERSION
+    );
+    assert!(rar_report
+        .document
+        .as_ref()
+        .unwrap()
+        .text
+        .contains("docs/rar-needle.txt 12 bytes"));
+    assert!(sevenzip_report
+        .document
+        .as_ref()
+        .unwrap()
+        .text
+        .contains("docs/7z-needle.txt"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn quarantines_corrupt_rar_and_7z_archives() {
     for extension in ["rar", "7z"] {
-        let root = unique_temp_dir(&format!("gfm-content-unsupported-archive-{extension}"));
+        let root = unique_temp_dir(&format!("gfm-content-corrupt-archive-{extension}"));
         let path = root.join(format!("payload.{extension}"));
-        fs::write(&path, b"unsupported archive payload with ignored needle").unwrap();
+        fs::write(&path, b"not an archive").unwrap();
+        let mut quarantine = ExtractionQuarantine::new(1);
 
         let report = Extractor::default().extract_path_report(&path).unwrap();
+        let decision = quarantine.record_report(&report);
 
         assert_eq!(report.format, ExtractionFormat::Archive);
         assert_eq!(
             report.status,
-            ExtractionStatus::Skipped("unsupported-archive")
+            ExtractionStatus::Quarantined("corrupt-archive")
         );
         assert_eq!(
             report.fingerprint.extractor_version,
             ARCHIVE_EXTRACTOR_VERSION
         );
         assert!(report.document.is_none());
+        assert!(matches!(decision, QuarantineDecision::Quarantined(_)));
+        assert!(decision.as_tsv().contains("\treason=corrupt-archive\t"));
         fs::remove_dir_all(root).unwrap();
     }
 }
@@ -351,7 +394,11 @@ fn classifies_unsupported_archive_formats_as_archive_without_reading_payloads() 
 fn applies_archive_byte_budget_to_unsupported_archive_formats() {
     let root = unique_temp_dir("gfm-content-unsupported-archive-budget");
     let path = root.join("large.7z");
-    fs::write(&path, vec![0_u8; 128]).unwrap();
+    fs::write(
+        &path,
+        [sevenzip_package(&["docs/budget.txt"]), vec![0_u8; 128]].concat(),
+    )
+    .unwrap();
     let extractor = Extractor::new(ExtractionPolicy {
         max_archive_bytes: 16,
         ..ExtractionPolicy::default()
@@ -1816,6 +1863,69 @@ fn write_directory_entry(entry: &mut [u8], name: &str, object_type: u8) {
     entry[72..76].copy_from_slice(&TEST_OLE_FREESECT.to_le_bytes());
     entry[76..80].copy_from_slice(&TEST_OLE_FREESECT.to_le_bytes());
     entry[116..120].copy_from_slice(&TEST_OLE_ENDOFCHAIN.to_le_bytes());
+}
+
+fn sevenzip_package(names: &[&str]) -> Vec<u8> {
+    let mut header = vec![0x01, 0x05];
+    push_7z_uint(&mut header, names.len() as u64);
+    header.push(0x11);
+    let names_size_index = header.len();
+    header.push(0);
+    header.push(0);
+    let names_start = header.len();
+    for name in names {
+        for unit in name.encode_utf16() {
+            header.extend_from_slice(&unit.to_le_bytes());
+        }
+        header.extend_from_slice(&0_u16.to_le_bytes());
+    }
+    let names_len = header.len() - names_start;
+    assert!(names_len < 127);
+    header[names_size_index] = (names_len + 1) as u8;
+    header.push(0);
+
+    let mut bytes = vec![0_u8; 32];
+    bytes[..6].copy_from_slice(b"7z\xbc\xaf\x27\x1c");
+    bytes[6] = 0;
+    bytes[7] = 4;
+    bytes[12..20].copy_from_slice(&0_u64.to_le_bytes());
+    bytes[20..28].copy_from_slice(&(header.len() as u64).to_le_bytes());
+    bytes.extend_from_slice(&header);
+    bytes
+}
+
+fn push_7z_uint(output: &mut Vec<u8>, value: u64) {
+    assert!(value < 0x80);
+    output.push(value as u8);
+}
+
+fn rar4_package(entries: &[(&str, u64)]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"Rar!\x1a\x07\x00");
+    push_rar4_block(&mut bytes, 0x73, 0, &[0_u8; 6]);
+    for (name, unpacked_size) in entries {
+        let mut body = Vec::new();
+        body.extend_from_slice(&0_u32.to_le_bytes());
+        body.extend_from_slice(&(*unpacked_size as u32).to_le_bytes());
+        body.push(3);
+        body.extend_from_slice(&0_u32.to_le_bytes());
+        body.extend_from_slice(&0_u32.to_le_bytes());
+        body.push(29);
+        body.push(48);
+        body.extend_from_slice(&(name.len() as u16).to_le_bytes());
+        body.extend_from_slice(&0_u32.to_le_bytes());
+        body.extend_from_slice(name.as_bytes());
+        push_rar4_block(&mut bytes, 0x74, 0x8000, &body);
+    }
+    bytes
+}
+
+fn push_rar4_block(output: &mut Vec<u8>, kind: u8, flags: u16, body: &[u8]) {
+    output.extend_from_slice(&0_u16.to_le_bytes());
+    output.push(kind);
+    output.extend_from_slice(&flags.to_le_bytes());
+    output.extend_from_slice(&((7 + body.len()) as u16).to_le_bytes());
+    output.extend_from_slice(body);
 }
 
 fn tar_gz_package(parts: &[(&str, &str)]) -> Vec<u8> {

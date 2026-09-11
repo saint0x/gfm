@@ -7,8 +7,10 @@ mod ooxml;
 mod pdf;
 mod policy;
 mod quarantine;
+mod rar;
 mod report;
 mod rich;
+mod sevenzip;
 mod status;
 mod structured;
 
@@ -57,7 +59,7 @@ pub const TEXT_EXTRACTOR_VERSION: u32 = 4;
 pub const PDF_EXTRACTOR_VERSION: u32 = 4;
 pub const OFFICE_EXTRACTOR_VERSION: u32 = 6;
 pub const RICH_EXTRACTOR_VERSION: u32 = 6;
-pub const ARCHIVE_EXTRACTOR_VERSION: u32 = 7;
+pub const ARCHIVE_EXTRACTOR_VERSION: u32 = 8;
 pub const STRUCTURED_EXTRACTOR_VERSION: u32 = 3;
 pub const UNSUPPORTED_EXTRACTOR_VERSION: u32 = 1;
 pub const EXTRACTOR_VERSION: u32 = ARCHIVE_EXTRACTOR_VERSION;
@@ -198,16 +200,6 @@ impl Extractor {
                 path: path.to_path_buf(),
                 format,
                 status: ExtractionStatus::Skipped("too-large"),
-                fingerprint,
-                document: None,
-            });
-        }
-
-        if archive.is_some_and(|kind| !kind.supports_metadata()) {
-            return Ok(ExtractionReport {
-                path: path.to_path_buf(),
-                format,
-                status: ExtractionStatus::Skipped("unsupported-archive"),
                 fingerprint,
                 document: None,
             });
