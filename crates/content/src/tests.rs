@@ -421,6 +421,48 @@ fn skips_rar5_multi_volume_archives_until_spanning_import_lands() {
 }
 
 #[test]
+fn quarantines_encrypted_7z_header_without_reporting_corruption() {
+    let root = unique_temp_dir("gfm-content-7z-encrypted-header");
+    let path = root.join("locked.7z");
+    fs::write(
+        &path,
+        sevenzip_encoded_header_package(&[0x06, 0xf1, 0x07, 0x01]),
+    )
+    .unwrap();
+    let mut quarantine = ExtractionQuarantine::new(1);
+
+    let report = Extractor::default().extract_path_report(&path).unwrap();
+    let decision = quarantine.record_report(&report);
+
+    assert_eq!(report.format, ExtractionFormat::Archive);
+    assert_eq!(
+        report.status,
+        ExtractionStatus::Quarantined("encrypted-archive")
+    );
+    assert!(report.document.is_none());
+    assert!(matches!(decision, QuarantineDecision::Quarantined(_)));
+    assert!(decision.as_tsv().contains("\treason=encrypted-archive\t"));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn skips_non_encrypted_7z_encoded_header_without_reporting_corruption() {
+    let root = unique_temp_dir("gfm-content-7z-encoded-header");
+    let path = root.join("encoded.7z");
+    fs::write(&path, sevenzip_encoded_header_package(&[0x03, 0x01, 0x01])).unwrap();
+
+    let report = Extractor::default().extract_path_report(&path).unwrap();
+
+    assert_eq!(report.format, ExtractionFormat::Archive);
+    assert_eq!(
+        report.status,
+        ExtractionStatus::Skipped("unsupported-archive")
+    );
+    assert!(report.document.is_none());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn quarantines_corrupt_rar_and_7z_archives() {
     for extension in ["rar", "7z"] {
         let root = unique_temp_dir(&format!("gfm-content-corrupt-archive-{extension}"));
@@ -2037,6 +2079,32 @@ fn sevenzip_package(names: &[&str]) -> Vec<u8> {
     header[names_size_index] = (names_len + 1) as u8;
     header.push(0);
 
+    sevenzip_with_header(header)
+}
+
+fn sevenzip_encoded_header_package(method_id: &[u8]) -> Vec<u8> {
+    let mut header = vec![0x17, 0x06];
+    push_7z_uint(&mut header, 0);
+    push_7z_uint(&mut header, 1);
+    header.push(0x09);
+    push_7z_uint(&mut header, 32);
+    header.push(0);
+    header.push(0x07);
+    header.push(0x0b);
+    push_7z_uint(&mut header, 1);
+    header.push(0);
+    push_7z_uint(&mut header, 1);
+    header.push(method_id.len() as u8);
+    header.extend_from_slice(method_id);
+    header.push(0x0c);
+    push_7z_uint(&mut header, 64);
+    header.push(0);
+    header.push(0);
+
+    sevenzip_with_header(header)
+}
+
+fn sevenzip_with_header(header: Vec<u8>) -> Vec<u8> {
     let mut bytes = vec![0_u8; 32];
     bytes[..6].copy_from_slice(b"7z\xbc\xaf\x27\x1c");
     bytes[6] = 0;
