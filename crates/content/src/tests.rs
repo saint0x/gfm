@@ -364,6 +364,63 @@ fn extracts_bounded_rar_and_7z_metadata_through_public_report_path() {
 }
 
 #[test]
+fn extracts_rar5_metadata_through_public_report_path() {
+    let root = unique_temp_dir("gfm-content-rar5-metadata");
+    let path = root.join("bundle.rar");
+    fs::write(
+        &path,
+        rar5_package(&[("docs/rar5-needle.txt", 19), ("media/image.png", 4096)]),
+    )
+    .unwrap();
+
+    let report = Extractor::default().extract_path_report(&path).unwrap();
+
+    assert_eq!(report.format, ExtractionFormat::Archive);
+    assert_eq!(report.status, ExtractionStatus::Extracted);
+    let text = &report.document.as_ref().unwrap().text;
+    assert!(text.contains("docs/rar5-needle.txt 19 bytes"), "{text}");
+    assert!(text.contains("media/image.png 4096 bytes"), "{text}");
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn quarantines_rar5_encrypted_headers_without_reporting_corruption() {
+    let root = unique_temp_dir("gfm-content-rar5-encrypted");
+    let path = root.join("locked.rar");
+    fs::write(&path, rar5_encrypted_header_package()).unwrap();
+    let mut quarantine = ExtractionQuarantine::new(1);
+
+    let report = Extractor::default().extract_path_report(&path).unwrap();
+    let decision = quarantine.record_report(&report);
+
+    assert_eq!(report.format, ExtractionFormat::Archive);
+    assert_eq!(
+        report.status,
+        ExtractionStatus::Quarantined("encrypted-archive")
+    );
+    assert!(report.document.is_none());
+    assert!(matches!(decision, QuarantineDecision::Quarantined(_)));
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn skips_rar5_multi_volume_archives_until_spanning_import_lands() {
+    let root = unique_temp_dir("gfm-content-rar5-volume");
+    let path = root.join("part1.rar");
+    fs::write(&path, rar5_multivolume_package()).unwrap();
+
+    let report = Extractor::default().extract_path_report(&path).unwrap();
+
+    assert_eq!(report.format, ExtractionFormat::Archive);
+    assert_eq!(
+        report.status,
+        ExtractionStatus::Skipped("unsupported-archive")
+    );
+    assert!(report.document.is_none());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn quarantines_corrupt_rar_and_7z_archives() {
     for extension in ["rar", "7z"] {
         let root = unique_temp_dir(&format!("gfm-content-corrupt-archive-{extension}"));
@@ -2014,6 +2071,102 @@ fn rar4_package(entries: &[(&str, u64)]) -> Vec<u8> {
         push_rar4_block(&mut bytes, 0x74, 0x8000, &body);
     }
     bytes
+}
+
+fn rar5_package(entries: &[(&str, u64)]) -> Vec<u8> {
+    let mut bytes = b"Rar!\x1a\x07\x01\x00".to_vec();
+    push_rar5_block(&mut bytes, 1, 0, 0, &rar5_main_body(0), &[], 0);
+    for (name, unpacked_size) in entries {
+        push_rar5_block(
+            &mut bytes,
+            2,
+            0x0002,
+            0,
+            &rar5_file_body(name, *unpacked_size),
+            &[],
+            *unpacked_size,
+        );
+    }
+    push_rar5_block(&mut bytes, 5, 0, 0, &[], &[], 0);
+    bytes
+}
+
+fn rar5_encrypted_header_package() -> Vec<u8> {
+    let mut bytes = b"Rar!\x1a\x07\x01\x00".to_vec();
+    push_rar5_block(&mut bytes, 4, 0, 0, &[0, 0, 0], &[], 0);
+    bytes
+}
+
+fn rar5_multivolume_package() -> Vec<u8> {
+    let mut bytes = b"Rar!\x1a\x07\x01\x00".to_vec();
+    push_rar5_block(&mut bytes, 1, 0, 0, &rar5_main_body(0x0001), &[], 0);
+    push_rar5_block(&mut bytes, 5, 0, 0, &[], &[], 0);
+    bytes
+}
+
+fn rar5_main_body(flags: u64) -> Vec<u8> {
+    let mut body = Vec::new();
+    push_rar5_vint(&mut body, flags);
+    body
+}
+
+fn rar5_file_body(name: &str, unpacked_size: u64) -> Vec<u8> {
+    let mut body = Vec::new();
+    push_rar5_vint(&mut body, 0);
+    push_rar5_vint(&mut body, unpacked_size);
+    push_rar5_vint(&mut body, 0);
+    push_rar5_vint(&mut body, 0);
+    push_rar5_vint(&mut body, 1);
+    push_rar5_vint(&mut body, name.len() as u64);
+    body.extend_from_slice(name.as_bytes());
+    body
+}
+
+fn push_rar5_block(
+    output: &mut Vec<u8>,
+    kind: u64,
+    common_flags: u64,
+    extra_flags: u64,
+    body: &[u8],
+    extra: &[u8],
+    data_size: u64,
+) {
+    let mut header = Vec::new();
+    push_rar5_vint(&mut header, kind);
+    let mut flags = common_flags | extra_flags;
+    if !extra.is_empty() {
+        flags |= 0x0001;
+    }
+    if data_size > 0 {
+        flags |= 0x0002;
+    }
+    push_rar5_vint(&mut header, flags);
+    if !extra.is_empty() {
+        push_rar5_vint(&mut header, extra.len() as u64);
+    }
+    if data_size > 0 {
+        push_rar5_vint(&mut header, data_size);
+    }
+    header.extend_from_slice(body);
+    header.extend_from_slice(extra);
+    output.extend_from_slice(&0_u32.to_le_bytes());
+    push_rar5_vint(output, header.len() as u64);
+    output.extend_from_slice(&header);
+    output.resize(output.len() + data_size as usize, 0);
+}
+
+fn push_rar5_vint(output: &mut Vec<u8>, mut value: u64) {
+    loop {
+        let mut byte = (value & 0x7f) as u8;
+        value >>= 7;
+        if value != 0 {
+            byte |= 0x80;
+        }
+        output.push(byte);
+        if value == 0 {
+            break;
+        }
+    }
 }
 
 fn push_rar4_block(output: &mut Vec<u8>, kind: u8, flags: u16, body: &[u8]) {
