@@ -11,6 +11,7 @@ const FREESECT: u32 = 0xFFFF_FFFF;
 const ENDOFCHAIN: u32 = 0xFFFF_FFFE;
 const FATSECT: u32 = 0xFFFF_FFFD;
 const MAX_SECTOR_BYTES: usize = 4096;
+const MINI_SECTOR_BYTES: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LegacyOfficeExtractStatus {
@@ -114,6 +115,8 @@ struct OleDirectoryEntry {
 struct OleDirectory {
     sector_bytes: usize,
     fat: Vec<u32>,
+    mini_fat: Vec<u32>,
+    mini_stream: Vec<u8>,
     mini_stream_cutoff: usize,
     entries: Vec<OleDirectoryEntry>,
 }
@@ -141,6 +144,8 @@ impl OleDirectory {
         let fat_sector_count = read_u32(bytes, 44).unwrap_or_default() as usize;
         let first_directory_sector = read_u32(bytes, 48).unwrap_or(FREESECT);
         let mini_stream_cutoff = read_u32(bytes, 56).unwrap_or(4096) as usize;
+        let first_mini_fat_sector = read_u32(bytes, 60).unwrap_or(FREESECT);
+        let mini_fat_sector_count = read_u32(bytes, 64).unwrap_or_default() as usize;
         if matches!(first_directory_sector, FREESECT | ENDOFCHAIN) {
             return Ok(None);
         }
@@ -208,9 +213,21 @@ impl OleDirectory {
             }
         }
 
+        let (mini_fat, mini_stream) = read_mini_fat_and_stream_checked(
+            bytes,
+            sector_bytes,
+            &fat,
+            &entries,
+            first_mini_fat_sector,
+            mini_fat_sector_count,
+            &mut check_control,
+        )?;
+
         Ok(Some(Self {
             sector_bytes,
             fat,
+            mini_fat,
+            mini_stream,
             mini_stream_cutoff,
             entries,
         }))
@@ -228,6 +245,12 @@ impl OleDirectory {
             || matches!(entry.start_sector, FREESECT | ENDOFCHAIN | FATSECT)
         {
             return Ok(None);
+        }
+
+        if entry.stream_size < self.mini_stream_cutoff {
+            if let Some(stream) = self.read_mini_stream_checked(entry, &mut check_control)? {
+                return Ok(Some(stream));
+            }
         }
 
         let Some(mut stream) = read_sector_chain_checked(
@@ -252,6 +275,108 @@ impl OleDirectory {
         }
         Ok(Some(stream))
     }
+
+    fn read_mini_stream_checked(
+        &self,
+        entry: &OleDirectoryEntry,
+        mut check_control: impl FnMut() -> Result<()>,
+    ) -> Result<Option<Vec<u8>>> {
+        check_control()?;
+        if self.mini_fat.is_empty() || self.mini_stream.is_empty() {
+            return Ok(None);
+        }
+
+        let mut seen = HashSet::new();
+        let mut sector = entry.start_sector;
+        let mut stream = Vec::with_capacity(entry.stream_size.min(self.mini_stream.len()));
+        while !matches!(sector, ENDOFCHAIN | FREESECT) {
+            check_control()?;
+            let sector_index = sector as usize;
+            if sector_index >= self.mini_fat.len() || !seen.insert(sector) {
+                return Ok(None);
+            }
+            let offset = sector_index.checked_mul(MINI_SECTOR_BYTES).ok_or_else(|| {
+                gfm_types::GfmError::Format("OLE mini sector overflow".to_string())
+            })?;
+            let end = offset.checked_add(MINI_SECTOR_BYTES).ok_or_else(|| {
+                gfm_types::GfmError::Format("OLE mini sector overflow".to_string())
+            })?;
+            let Some(bytes) = self.mini_stream.get(offset..end) else {
+                return Ok(None);
+            };
+            stream.extend_from_slice(bytes);
+            if stream.len() >= entry.stream_size {
+                break;
+            }
+            sector = self.mini_fat[sector_index];
+            if matches!(sector, FATSECT) {
+                return Ok(None);
+            }
+        }
+        if stream.len() < entry.stream_size {
+            return Ok(None);
+        }
+        stream.truncate(entry.stream_size);
+        if !stream_has_salvageable_text(&stream) {
+            return Ok(None);
+        }
+        Ok(Some(stream))
+    }
+}
+
+fn read_mini_fat_and_stream_checked(
+    bytes: &[u8],
+    sector_bytes: usize,
+    fat: &[u32],
+    entries: &[OleDirectoryEntry],
+    first_mini_fat_sector: u32,
+    mini_fat_sector_count: usize,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<(Vec<u32>, Vec<u8>)> {
+    check_control()?;
+    if mini_fat_sector_count == 0 || matches!(first_mini_fat_sector, FREESECT | ENDOFCHAIN) {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    let Some(mut mini_fat_bytes) = read_sector_chain_checked(
+        bytes,
+        sector_bytes,
+        fat,
+        first_mini_fat_sector,
+        &mut check_control,
+    )?
+    else {
+        return Ok((Vec::new(), Vec::new()));
+    };
+    let expected_mini_fat_bytes = mini_fat_sector_count.saturating_mul(sector_bytes);
+    if mini_fat_bytes.len() < expected_mini_fat_bytes {
+        return Ok((Vec::new(), Vec::new()));
+    }
+    mini_fat_bytes.truncate(expected_mini_fat_bytes);
+    let mini_fat = mini_fat_bytes
+        .chunks_exact(4)
+        .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect::<Vec<_>>();
+    let Some(root) = entries.iter().find(|entry| entry.object_type == 5) else {
+        return Ok((Vec::new(), Vec::new()));
+    };
+    if root.stream_size == 0 || matches!(root.start_sector, FREESECT | ENDOFCHAIN | FATSECT) {
+        return Ok((mini_fat, Vec::new()));
+    }
+    let Some(mut mini_stream) = read_sector_chain_checked(
+        bytes,
+        sector_bytes,
+        fat,
+        root.start_sector,
+        &mut check_control,
+    )?
+    else {
+        return Ok((mini_fat, Vec::new()));
+    };
+    if mini_stream.len() < root.stream_size {
+        return Ok((mini_fat, Vec::new()));
+    }
+    mini_stream.truncate(root.stream_size);
+    Ok((mini_fat, mini_stream))
 }
 
 fn read_sector_chain_checked(
@@ -528,6 +653,26 @@ mod tests {
         assert!(document.is_none());
     }
 
+    #[test]
+    fn extracts_small_legacy_office_streams_from_ministream() {
+        let bytes = legacy_office_compound_file_with_ministream(
+            "WordDocument",
+            b"ministreamneedle launch plan",
+        );
+
+        let (status, document) = extract_legacy_office_document_checked(
+            &bytes,
+            LegacyOfficeKind::Doc,
+            &ExtractionPolicy::default(),
+            || Ok(()),
+        )
+        .unwrap();
+
+        assert_eq!(status, LegacyOfficeExtractStatus::Extracted);
+        let document = document.expect("ministream WordDocument text should extract");
+        assert!(document.text.contains("ministreamneedle launch plan"));
+    }
+
     pub(crate) fn legacy_office_compound_file(streams: &[&str]) -> Vec<u8> {
         let mut header = vec![0_u8; HEADER_BYTES];
         header[..8].copy_from_slice(OLE_COMPOUND_FILE_MAGIC);
@@ -564,12 +709,73 @@ mod tests {
         [header, fat, directory].concat()
     }
 
+    fn legacy_office_compound_file_with_ministream(stream_name: &str, payload: &[u8]) -> Vec<u8> {
+        assert!(payload.len() <= MINI_SECTOR_BYTES);
+        let mut header = vec![0_u8; HEADER_BYTES];
+        header[..8].copy_from_slice(OLE_COMPOUND_FILE_MAGIC);
+        header[24..26].copy_from_slice(&0x003e_u16.to_le_bytes());
+        header[26..28].copy_from_slice(&0x0003_u16.to_le_bytes());
+        header[28..30].copy_from_slice(&0xfffe_u16.to_le_bytes());
+        header[30..32].copy_from_slice(&9_u16.to_le_bytes());
+        header[32..34].copy_from_slice(&6_u16.to_le_bytes());
+        header[44..48].copy_from_slice(&1_u32.to_le_bytes());
+        header[48..52].copy_from_slice(&1_u32.to_le_bytes());
+        header[56..60].copy_from_slice(&4096_u32.to_le_bytes());
+        header[60..64].copy_from_slice(&2_u32.to_le_bytes());
+        header[64..68].copy_from_slice(&1_u32.to_le_bytes());
+        header[68..72].copy_from_slice(&ENDOFCHAIN.to_le_bytes());
+        header[76..80].copy_from_slice(&0_u32.to_le_bytes());
+        for offset in (80..HEADER_BYTES).step_by(4) {
+            header[offset..offset + 4].copy_from_slice(&FREESECT.to_le_bytes());
+        }
+
+        let mut fat = vec![0xff_u8; HEADER_BYTES];
+        write_fat_entry(&mut fat, 0, FATSECT);
+        write_fat_entry(&mut fat, 1, ENDOFCHAIN);
+        write_fat_entry(&mut fat, 2, ENDOFCHAIN);
+        write_fat_entry(&mut fat, 3, ENDOFCHAIN);
+
+        let mut directory = vec![0_u8; HEADER_BYTES];
+        write_directory_entry_with_stream(
+            &mut directory[0..DIRECTORY_ENTRY_BYTES],
+            "Root Entry",
+            5,
+            3,
+            MINI_SECTOR_BYTES,
+        );
+        write_directory_entry_with_stream(
+            &mut directory[DIRECTORY_ENTRY_BYTES..DIRECTORY_ENTRY_BYTES * 2],
+            stream_name,
+            2,
+            0,
+            payload.len(),
+        );
+
+        let mut mini_fat = vec![0xff_u8; HEADER_BYTES];
+        write_fat_entry(&mut mini_fat, 0, ENDOFCHAIN);
+
+        let mut mini_stream = vec![0_u8; HEADER_BYTES];
+        mini_stream[..payload.len()].copy_from_slice(payload);
+
+        [header, fat, directory, mini_fat, mini_stream].concat()
+    }
+
     fn write_fat_entry(fat: &mut [u8], index: usize, value: u32) {
         let offset = index * 4;
         fat[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
     }
 
     fn write_directory_entry(entry: &mut [u8], name: &str, object_type: u8) {
+        write_directory_entry_with_stream(entry, name, object_type, ENDOFCHAIN, 0);
+    }
+
+    fn write_directory_entry_with_stream(
+        entry: &mut [u8],
+        name: &str,
+        object_type: u8,
+        start_sector: u32,
+        stream_size: usize,
+    ) {
         let mut utf16 = name.encode_utf16().collect::<Vec<_>>();
         utf16.push(0);
         for (index, unit) in utf16.iter().enumerate() {
@@ -582,6 +788,7 @@ mod tests {
         entry[68..72].copy_from_slice(&FREESECT.to_le_bytes());
         entry[72..76].copy_from_slice(&FREESECT.to_le_bytes());
         entry[76..80].copy_from_slice(&FREESECT.to_le_bytes());
-        entry[116..120].copy_from_slice(&ENDOFCHAIN.to_le_bytes());
+        entry[116..120].copy_from_slice(&start_sector.to_le_bytes());
+        entry[120..124].copy_from_slice(&(stream_size as u32).to_le_bytes());
     }
 }
