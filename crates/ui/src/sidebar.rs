@@ -401,7 +401,7 @@ impl SidebarVolumeInvalidation {
     }
 
     pub fn as_tsv(&self) -> String {
-        format!(
+        let invalidation = format!(
             "sidebar-volume-invalidation\trow={}\tpath={}\tkind={}\tprevious-kind={}\tprevious-mount={}\tprevious-writable={}\tprevious-read-only={}\tprevious-network={}\tprevious-reachable={}\tprevious-ejectable={}\tprevious-removable={}\tprevious-case-sensitive={}\tprevious-case-preserving={}\tprevious-native-status={}\tprevious-native-reason={}\tprevious-resource-status={}\tprevious-resource-reason={}\tprevious-mount-status={}\tprevious-mount-reason={}\tcurrent-kind={}\tcurrent-mount={}\twritable={}\tread-only={}\tnetwork={}\treachable={}\tejectable={}\tremovable={}\tcase-sensitive={}\tcase-preserving={}\tcurrent-native-status={}\tcurrent-native-reason={}\tcurrent-resource-status={}\tcurrent-resource-reason={}\tcurrent-mount-status={}\tcurrent-mount-reason={}\tinvalidate-row={}\tinvalidate-section={}\tremove-row={}\tdisable-row={}\treason={}",
             self.row_id
                 .as_deref()
@@ -485,7 +485,54 @@ impl SidebarVolumeInvalidation {
             self.remove_row,
             self.disable_row,
             escape_field(&self.reason)
+        );
+        format!("{invalidation}\n{}", self.visible_tsv())
+    }
+
+    pub fn visible_tsv(&self) -> String {
+        format!(
+            "sidebar-volume-visible\trow={}\tpath={}\tevent={}\tstate={}\taction={}\treason={}",
+            self.row_id
+                .as_deref()
+                .map(escape_field)
+                .unwrap_or_else(|| "-".to_string()),
+            self.path
+                .as_ref()
+                .map(|path| escape_path_field(path))
+                .unwrap_or_else(|| "-".to_string()),
+            self.kind.as_str(),
+            self.visible_row_state(),
+            self.visible_action(),
+            escape_field(&self.reason)
         )
+    }
+
+    pub fn visible_row_state(&self) -> &'static str {
+        if self.remove_row {
+            "removed"
+        } else if self.disable_row {
+            "disabled"
+        } else if self.invalidate_row {
+            "refreshed"
+        } else if self.invalidate_section {
+            "section-refreshed"
+        } else {
+            "unchanged"
+        }
+    }
+
+    pub fn visible_action(&self) -> &'static str {
+        if self.remove_row {
+            "remove-row"
+        } else if self.disable_row {
+            "disable-row"
+        } else if self.invalidate_row {
+            "repaint-row"
+        } else if self.invalidate_section {
+            "refresh-section"
+        } else {
+            "none"
+        }
     }
 }
 
@@ -1992,10 +2039,14 @@ mod tests {
         assert!(!invalidation.remove_row);
         assert!(invalidation.disable_row);
         assert_eq!(invalidation.reason, "sidebar-volume-disabled");
+        let tsv = invalidation.as_tsv();
         assert_eq!(
-            invalidation.as_tsv(),
+            tsv.lines().next().unwrap(),
             "sidebar-volume-invalidation\trow=volume-diskarbitration-uuid-team\tpath=/Volumes/Team\tkind=description-changed\tprevious-kind=-\tprevious-mount=-\tprevious-writable=-\tprevious-read-only=-\tprevious-network=-\tprevious-reachable=-\tprevious-ejectable=-\tprevious-removable=-\tprevious-case-sensitive=-\tprevious-case-preserving=-\tprevious-native-status=-\tprevious-native-reason=-\tprevious-resource-status=-\tprevious-resource-reason=-\tprevious-mount-status=-\tprevious-mount-reason=-\tcurrent-kind=network\tcurrent-mount=stale\twritable=false\tread-only=true\tnetwork=true\treachable=false\tejectable=true\tremovable=false\tcase-sensitive=false\tcase-preserving=true\tcurrent-native-status=-\tcurrent-native-reason=-\tcurrent-resource-status=-\tcurrent-resource-reason=-\tcurrent-mount-status=-\tcurrent-mount-reason=-\tinvalidate-row=true\tinvalidate-section=true\tremove-row=false\tdisable-row=true\treason=sidebar-volume-disabled"
         );
+        assert!(tsv.contains(
+            "\nsidebar-volume-visible\trow=volume-diskarbitration-uuid-team\tpath=/Volumes/Team\tevent=description-changed\tstate=disabled\taction=disable-row\treason=sidebar-volume-disabled"
+        ));
     }
 
     #[test]
@@ -2124,14 +2175,20 @@ mod tests {
         );
         let tsv = invalidation.as_tsv();
 
-        assert_eq!(tsv.lines().count(), 1, "{tsv}");
-        assert_eq!(tsv.split('\t').count(), 41, "{tsv}");
+        assert_eq!(tsv.lines().count(), 2, "{tsv}");
+        let row = tsv.lines().next().unwrap();
+        let visible = tsv.lines().nth(1).unwrap();
+        assert_eq!(row.split('\t').count(), 41, "{tsv}");
         assert!(tsv.contains("row=volume-team\\trow\\nnew\\rid\t"));
         assert!(tsv.contains("path=/Volumes/Team\\tDocs\\nDraft\\rFinal\t"));
         assert!(tsv.contains("\tprevious-native-reason=native\\tbefore\\ncallback\\rfailed\t"));
         assert!(tsv.contains("\tcurrent-resource-reason=resource\\tafter\\ncallback\\rready\t"));
         assert!(tsv.contains("\tcurrent-mount-reason=mount\\tafter\\ncallback\\rready\t"));
-        assert!(tsv.ends_with("reason=volume\\tapi\\nstate\\rchanged"));
+        assert!(row.ends_with("reason=volume\\tapi\\nstate\\rchanged"));
+        assert_eq!(visible.split('\t').count(), 7, "{tsv}");
+        assert!(visible.contains("row=volume-team\\trow\\nnew\\rid\t"));
+        assert!(visible.contains("path=/Volumes/Team\\tDocs\\nDraft\\rFinal\t"));
+        assert!(visible.ends_with("reason=volume\\tapi\\nstate\\rchanged"));
     }
 
     #[test]
@@ -2163,10 +2220,14 @@ mod tests {
         assert!(invalidation.invalidate_row);
         assert!(invalidation.disable_row);
         assert_eq!(invalidation.reason, "sidebar-volume-disabled");
+        let tsv = invalidation.as_tsv();
         assert_eq!(
-            invalidation.as_tsv(),
+            tsv.lines().next().unwrap(),
             "sidebar-volume-invalidation\trow=volume-diskarbitration-uuid-team\tpath=/Volumes/Team\tkind=description-changed\tprevious-kind=-\tprevious-mount=-\tprevious-writable=-\tprevious-read-only=-\tprevious-network=-\tprevious-reachable=-\tprevious-ejectable=-\tprevious-removable=-\tprevious-case-sensitive=-\tprevious-case-preserving=-\tprevious-native-status=-\tprevious-native-reason=-\tprevious-resource-status=-\tprevious-resource-reason=-\tprevious-mount-status=-\tprevious-mount-reason=-\tcurrent-kind=network\tcurrent-mount=mounted\twritable=true\tread-only=false\tnetwork=true\treachable=false\tejectable=true\tremovable=false\tcase-sensitive=false\tcase-preserving=true\tcurrent-native-status=-\tcurrent-native-reason=-\tcurrent-resource-status=-\tcurrent-resource-reason=-\tcurrent-mount-status=-\tcurrent-mount-reason=-\tinvalidate-row=true\tinvalidate-section=true\tremove-row=false\tdisable-row=true\treason=sidebar-volume-disabled"
         );
+        assert!(tsv.contains(
+            "\nsidebar-volume-visible\trow=volume-diskarbitration-uuid-team\tpath=/Volumes/Team\tevent=description-changed\tstate=disabled\taction=disable-row\treason=sidebar-volume-disabled"
+        ));
     }
 
     #[test]
@@ -2213,7 +2274,7 @@ mod tests {
         ));
         assert!(invalidation
             .as_tsv()
-            .ends_with("reason=volume-api-status-changed"));
+            .contains("\nsidebar-volume-visible\trow=volume-diskarbitration-uuid-api\tpath=/Volumes/API\tevent=description-changed\tstate=refreshed\taction=repaint-row\treason=volume-api-status-changed"));
     }
 
     #[test]
@@ -2298,6 +2359,9 @@ mod tests {
         assert!(invalidation.as_tsv().contains(
             "\tinvalidate-row=true\tinvalidate-section=true\tremove-row=false\tdisable-row=true\t"
         ));
+        assert!(invalidation.as_tsv().contains(
+            "\nsidebar-volume-visible\trow=volume-diskarbitration-uuid-api\tpath=/Volumes/API\tevent=unavailable\tstate=disabled\taction=disable-row\treason=sidebar-volume-disabled"
+        ));
     }
 
     #[test]
@@ -2341,10 +2405,14 @@ mod tests {
         assert!(invalidation.remove_row);
         assert!(!invalidation.disable_row);
         assert_eq!(invalidation.reason, "sidebar-volume-disappeared");
+        let tsv = invalidation.as_tsv();
         assert_eq!(
-            invalidation.as_tsv(),
+            tsv.lines().next().unwrap(),
             "sidebar-volume-invalidation\trow=volume-diskarbitration-uuid-team\tpath=/Volumes/Team\tkind=disappeared\tprevious-kind=network\tprevious-mount=mounted\tprevious-writable=true\tprevious-read-only=false\tprevious-network=true\tprevious-reachable=true\tprevious-ejectable=true\tprevious-removable=false\tprevious-case-sensitive=false\tprevious-case-preserving=true\tprevious-native-status=-\tprevious-native-reason=-\tprevious-resource-status=-\tprevious-resource-reason=-\tprevious-mount-status=-\tprevious-mount-reason=-\tcurrent-kind=-\tcurrent-mount=-\twritable=-\tread-only=-\tnetwork=-\treachable=-\tejectable=-\tremovable=-\tcase-sensitive=-\tcase-preserving=-\tcurrent-native-status=-\tcurrent-native-reason=-\tcurrent-resource-status=-\tcurrent-resource-reason=-\tcurrent-mount-status=-\tcurrent-mount-reason=-\tinvalidate-row=true\tinvalidate-section=true\tremove-row=true\tdisable-row=false\treason=sidebar-volume-disappeared"
         );
+        assert!(tsv.contains(
+            "\nsidebar-volume-visible\trow=volume-diskarbitration-uuid-team\tpath=/Volumes/Team\tevent=disappeared\tstate=removed\taction=remove-row\treason=sidebar-volume-disappeared"
+        ));
     }
 
     #[test]

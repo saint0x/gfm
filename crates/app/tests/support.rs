@@ -1987,6 +1987,12 @@ fn reports_volume_invalidation_in_ui_sidebar_contract_from_binary() {
             "\tinvalidate-row=true\tinvalidate-section=true\tremove-row=false\tdisable-row=false\t"
         ));
     }
+    assert!(
+        changed_stdout.contains("\nsidebar-volume-visible\trow=volume-")
+            && changed_stdout.contains(&format!("\tpath={}\t", root.display()))
+            && changed_stdout.contains("\tevent=description-changed\t"),
+        "{changed_stdout}"
+    );
 
     let disappeared = Command::new(env!("CARGO_BIN_EXE_gfm"))
         .arg("ui-sidebar-volume-invalidation")
@@ -2020,7 +2026,12 @@ fn reports_volume_invalidation_in_ui_sidebar_contract_from_binary() {
         "\tcurrent-native-status=-\tcurrent-native-reason=-\tcurrent-resource-status=-\tcurrent-resource-reason=-\tcurrent-mount-status=-\tcurrent-mount-reason=-\t"
     ));
     assert!(disappeared_stdout.contains("\tremove-row=true\tdisable-row=false\t"));
-    assert!(disappeared_stdout.ends_with("reason=sidebar-volume-disappeared\n"));
+    assert!(disappeared_stdout.contains("\treason=sidebar-volume-disappeared\n"));
+    assert!(
+        disappeared_stdout.contains("\nsidebar-volume-visible\trow=volume-")
+            && disappeared_stdout.contains("\tevent=disappeared\tstate=removed\taction=remove-row\treason=sidebar-volume-disappeared"),
+        "{disappeared_stdout}"
+    );
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -2060,7 +2071,12 @@ fn reports_stateful_volume_invalidation_in_ui_sidebar_contract_from_binary() {
         .contains("\tprevious-writable=true\tprevious-read-only=false\tprevious-network=true\t"));
     assert!(stdout.contains("\tcurrent-kind=-\tcurrent-mount=-\t"));
     assert!(stdout.contains("\tremove-row=true\tdisable-row=false\t"));
-    assert!(stdout.ends_with("reason=sidebar-volume-disappeared\n"));
+    assert!(stdout.contains("\treason=sidebar-volume-disappeared\n"));
+    assert!(
+        stdout.contains("\nsidebar-volume-visible\trow=volume-")
+            && stdout.contains("\tevent=disappeared\tstate=removed\taction=remove-row\treason=sidebar-volume-disappeared"),
+        "{stdout}"
+    );
 
     let _ = std::fs::remove_dir_all(root);
 }
@@ -2095,7 +2111,11 @@ fn reports_missing_volume_disappearance_in_ui_sidebar_contract_from_binary() {
         "\tcurrent-mount=-\twritable=-\tread-only=-\tnetwork=-\treachable=-\tejectable=-\tremovable=-\tcase-sensitive=-\tcase-preserving=-\tcurrent-native-status=-\tcurrent-native-reason=-\tcurrent-resource-status=-\tcurrent-resource-reason=-\tcurrent-mount-status=-\tcurrent-mount-reason=-\t"
     ));
     assert!(stdout.contains("\tremove-row=true\tdisable-row=false\t"));
-    assert!(stdout.ends_with("reason=sidebar-volume-disappeared\n"));
+    assert!(stdout.contains("\treason=sidebar-volume-disappeared\n"));
+    assert!(stdout.contains("\nsidebar-volume-visible\trow=-\tpath="));
+    assert!(stdout.contains(
+        "\tevent=disappeared\tstate=removed\taction=remove-row\treason=sidebar-volume-disappeared"
+    ));
 }
 
 #[test]
