@@ -382,10 +382,10 @@ fn read_extraction_quarantine_checked(
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct WorkerFailure {
     kind: QuarantineFailureKind,
-    reason: &'static str,
+    reason: String,
 }
 
 fn worker_failure(message: &str) -> WorkerFailure {
@@ -393,29 +393,43 @@ fn worker_failure(message: &str) -> WorkerFailure {
     if normalized.contains("timed out") {
         WorkerFailure {
             kind: QuarantineFailureKind::Timeout,
-            reason: "worker-timeout",
+            reason: worker_failure_reason("worker-timeout", message),
         }
     } else if worker_message_reports_encrypted(&normalized) {
         WorkerFailure {
             kind: QuarantineFailureKind::Encrypted,
-            reason: "worker-encrypted",
+            reason: "worker-encrypted".to_string(),
         }
     } else if worker_message_reports_corrupt(&normalized) {
         WorkerFailure {
             kind: QuarantineFailureKind::Corrupt,
-            reason: "worker-corrupt",
+            reason: "worker-corrupt".to_string(),
         }
     } else if worker_message_reports_sandbox_violation(&normalized) {
         WorkerFailure {
             kind: QuarantineFailureKind::Crash,
-            reason: "worker-sandbox-violation",
+            reason: worker_failure_reason("worker-sandbox-violation", message),
         }
     } else {
         WorkerFailure {
             kind: QuarantineFailureKind::Crash,
-            reason: "worker-crash",
+            reason: worker_failure_reason("worker-crash", message),
         }
     }
+}
+
+fn worker_failure_reason(prefix: &str, message: &str) -> String {
+    const MAX_REASON_BYTES: usize = 4096;
+    let detail = message.trim();
+    if detail.is_empty() {
+        return prefix.to_string();
+    }
+    let escaped = escape_diagnostic_tail(detail);
+    let mut end = escaped.len().min(MAX_REASON_BYTES);
+    while !escaped.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{prefix}: {}", &escaped[..end])
 }
 
 fn worker_message_reports_encrypted(message: &str) -> bool {
@@ -1427,7 +1441,7 @@ mod tests {
             failure,
             WorkerFailure {
                 kind: QuarantineFailureKind::Timeout,
-                reason: "worker-timeout"
+                reason: "worker-timeout: adaptive extraction worker timed out after 10 ms after sandbox denied logging".to_string()
             }
         );
     }
@@ -1442,7 +1456,7 @@ mod tests {
             failure,
             WorkerFailure {
                 kind: QuarantineFailureKind::Crash,
-                reason: "worker-sandbox-violation"
+                reason: "worker-sandbox-violation: adaptive extraction worker failed: Sandbox: gfm(123) deny(1) file-read-data /Users/me/Private.doc".to_string()
             }
         );
     }
@@ -1459,14 +1473,14 @@ mod tests {
             corrupt,
             WorkerFailure {
                 kind: QuarantineFailureKind::Corrupt,
-                reason: "worker-corrupt"
+                reason: "worker-corrupt".to_string()
             }
         );
         assert_eq!(
             encrypted,
             WorkerFailure {
                 kind: QuarantineFailureKind::Encrypted,
-                reason: "worker-encrypted"
+                reason: "worker-encrypted".to_string()
             }
         );
     }
@@ -1479,9 +1493,25 @@ mod tests {
             failure,
             WorkerFailure {
                 kind: QuarantineFailureKind::Crash,
-                reason: "worker-crash"
+                reason: "worker-crash: adaptive extraction worker failed for /tmp/doc: signal 11"
+                    .to_string()
             }
         );
+    }
+
+    #[test]
+    fn worker_failure_reason_bounds_and_escapes_persisted_detail() {
+        let failure = worker_failure(&format!(
+            "adaptive extraction worker timed out after 1 ms\n{}",
+            "x".repeat(5000)
+        ));
+
+        assert_eq!(failure.kind, QuarantineFailureKind::Timeout);
+        assert!(failure
+            .reason
+            .starts_with("worker-timeout: adaptive extraction worker timed out after 1 ms\\n"));
+        assert!(failure.reason.len() < 4200, "{}", failure.reason.len());
+        assert!(!failure.reason.contains('\n'));
     }
 
     #[test]

@@ -12960,7 +12960,7 @@ fn quarantined_adaptive_extraction_worker_records_timeout_from_binary() {
             "{stderr}"
         );
         assert!(stdout.starts_with(expected), "{stdout}");
-        assert!(stdout.contains("\treason=worker-timeout\t") || expected == "quarantine\tallow");
+        assert!(stdout.contains("\treason=worker-timeout:") || expected == "quarantine\tallow");
     }
     assert!(store.is_file());
 
