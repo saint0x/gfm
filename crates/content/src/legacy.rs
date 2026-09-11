@@ -196,6 +196,7 @@ fn push_workbook_biff_text_records(
 ) -> Result<bool> {
     const BIFF_LABEL_RECORD: u16 = 0x0204;
     const BIFF_SST_RECORD: u16 = 0x00fc;
+    const BIFF_CONTINUE_RECORD: u16 = 0x003c;
 
     let mut cursor = 0usize;
     let mut records = 0usize;
@@ -221,7 +222,21 @@ fn push_workbook_biff_text_records(
         match record_type {
             BIFF_LABEL_RECORD => push_biff_label_record_text(data, max_text_bytes, out),
             BIFF_SST_RECORD => {
-                push_biff_sst_record_text(data, max_text_bytes, out, &mut check_control)?
+                let (payload, payload_next, payload_records) = collect_biff_continued_payload(
+                    stream,
+                    data,
+                    next,
+                    records,
+                    BIFF_CONTINUE_RECORD,
+                    &mut check_control,
+                )?;
+                push_biff_sst_record_text(&payload, max_text_bytes, out, &mut check_control)?;
+                cursor = payload_next;
+                records = payload_records;
+                if out.len() >= max_text_bytes {
+                    return Ok(out.len() > initial_len);
+                }
+                continue;
             }
             _ => {}
         }
@@ -232,6 +247,42 @@ fn push_workbook_biff_text_records(
         records += 1;
     }
     Ok(out.len() > initial_len)
+}
+
+fn collect_biff_continued_payload(
+    stream: &[u8],
+    first: &[u8],
+    mut cursor: usize,
+    mut records: usize,
+    continue_record_type: u16,
+    mut check_control: impl FnMut() -> Result<()>,
+) -> Result<(Vec<u8>, usize, usize)> {
+    let mut payload = first.to_vec();
+    while cursor + 4 <= stream.len() && records + 1 < MAX_BIFF_TEXT_RECORDS_TO_SCAN {
+        check_control()?;
+        let Some(record_type) = read_u16(stream, cursor) else {
+            break;
+        };
+        let Some(size) = read_u16(stream, cursor + 2).map(usize::from) else {
+            break;
+        };
+        if record_type != continue_record_type {
+            break;
+        }
+        let Some(data_start) = cursor.checked_add(4) else {
+            break;
+        };
+        let Some(next) = data_start.checked_add(size) else {
+            break;
+        };
+        if next > stream.len() {
+            break;
+        }
+        payload.extend_from_slice(&stream[data_start..next]);
+        cursor = next;
+        records += 1;
+    }
+    Ok((payload, cursor, records + 1))
 }
 
 fn push_biff_label_record_text(data: &[u8], max_text_bytes: usize, out: &mut String) {
@@ -1027,6 +1078,33 @@ mod tests {
         assert_eq!(status, LegacyOfficeExtractStatus::Extracted);
         let document = document.expect("BIFF shared strings should extract");
         assert_eq!(document.text, "A1 Ω2");
+    }
+
+    #[test]
+    fn extracts_workbook_biff_sst_strings_split_across_continue_records() {
+        let mut sst = Vec::new();
+        sst.extend_from_slice(&2_u32.to_le_bytes());
+        sst.extend_from_slice(&2_u32.to_le_bytes());
+        sst.extend_from_slice(&biff_string("North", false));
+        let split = sst.len();
+        sst.extend_from_slice(&biff_string("South", false));
+
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&biff_record(0x00fc, &sst[..split]));
+        payload.extend_from_slice(&biff_record(0x003c, &sst[split..]));
+        let bytes = legacy_office_compound_file_with_ministream("Workbook", &payload);
+
+        let (status, document) = extract_legacy_office_document_checked(
+            &bytes,
+            LegacyOfficeKind::Xls,
+            &ExtractionPolicy::default(),
+            || Ok(()),
+        )
+        .unwrap();
+
+        assert_eq!(status, LegacyOfficeExtractStatus::Extracted);
+        let document = document.expect("continued BIFF shared strings should extract");
+        assert_eq!(document.text, "North South");
     }
 
     #[test]
