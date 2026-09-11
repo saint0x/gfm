@@ -1205,6 +1205,48 @@ fn quarantines_encrypted_legacy_office_without_reporting_corruption() {
 }
 
 #[test]
+fn quarantines_case_varied_legacy_office_encryption_streams() {
+    let root = unique_temp_dir("gfm-content-case-varied-encrypted-legacy-office");
+    let path = root.join("locked.doc");
+    fs::write(
+        &path,
+        legacy_office_bytes(&["WordDocument", "encryptioninfo"]),
+    )
+    .unwrap();
+
+    let report = Extractor::default().extract_path_report(&path).unwrap();
+
+    assert_eq!(report.format, ExtractionFormat::Office);
+    assert_eq!(
+        report.status,
+        ExtractionStatus::Quarantined("encrypted-office")
+    );
+    assert!(report.document.is_none());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn quarantines_control_prefixed_legacy_office_dataspaces_storage() {
+    let root = unique_temp_dir("gfm-content-dataspaces-encrypted-legacy-office");
+    let path = root.join("locked.doc");
+    fs::write(
+        &path,
+        legacy_office_bytes(&["WordDocument", "\u{0006}DataSpaces"]),
+    )
+    .unwrap();
+
+    let report = Extractor::default().extract_path_report(&path).unwrap();
+
+    assert_eq!(report.format, ExtractionFormat::Office);
+    assert_eq!(
+        report.status,
+        ExtractionStatus::Quarantined("encrypted-office")
+    );
+    assert!(report.document.is_none());
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn quarantines_corrupt_legacy_office_compound_file_without_required_stream() {
     let root = unique_temp_dir("gfm-content-corrupt-legacy-office");
     let path = root.join("bad.doc");

@@ -90,10 +90,10 @@ pub(crate) fn extract_legacy_office_document_checked(
 }
 
 fn encrypted_stream_name(name: &str) -> bool {
-    matches!(
-        name,
-        "EncryptedPackage" | "EncryptionInfo" | "\u{0006}DataSpaces"
-    )
+    let normalized = name.trim_start_matches(|ch: char| ch.is_control());
+    normalized.eq_ignore_ascii_case("EncryptedPackage")
+        || normalized.eq_ignore_ascii_case("EncryptionInfo")
+        || normalized.eq_ignore_ascii_case("DataSpaces")
 }
 
 fn required_legacy_office_stream(kind: LegacyOfficeKind, name: &str) -> bool {
