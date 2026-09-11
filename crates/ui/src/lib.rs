@@ -94,6 +94,7 @@ pub struct AppLaunchSpec {
     pub activate_on_launch: bool,
     pub tabbing_identifier: String,
     pub launch_placement: Option<WindowPlacement>,
+    pub sidebar_visible: bool,
     pub sidebar_paths: SidebarPathSnapshot,
     pub sidebar_volumes: Vec<SidebarVolumeSpec>,
     pub sidebar_contract: Option<SidebarContract>,
@@ -666,6 +667,11 @@ impl AppLaunchSpec {
         self
     }
 
+    pub fn with_sidebar_visible(mut self, visible: bool) -> Self {
+        self.sidebar_visible = visible;
+        self
+    }
+
     pub fn with_launch_placement(mut self, placement: WindowPlacement) -> Self {
         self.width = placement.width;
         self.height = placement.height;
@@ -822,6 +828,7 @@ impl Default for AppLaunchSpec {
             activate_on_launch: true,
             tabbing_identifier: "gfm-main-window".to_string(),
             launch_placement: None,
+            sidebar_visible: true,
             sidebar_paths: SidebarPathSnapshot::default(),
             sidebar_volumes: Vec::new(),
             sidebar_contract: None,
@@ -854,6 +861,7 @@ pub struct WindowLifecycleContract {
     pub transparent_titlebar: bool,
     pub activate_on_launch: bool,
     pub tabbing_identifier: String,
+    pub sidebar_visible: bool,
     pub sidebar_paths: SidebarPathSnapshot,
     pub sidebar_volumes: Vec<SidebarVolumeSpec>,
     pub sidebar_contract: Option<SidebarContract>,
@@ -883,6 +891,7 @@ impl WindowLifecycleContract {
             transparent_titlebar: spec.transparent_titlebar,
             activate_on_launch: spec.activate_on_launch,
             tabbing_identifier: spec.tabbing_identifier.clone(),
+            sidebar_visible: spec.sidebar_visible,
             sidebar_paths: spec.sidebar_paths.clone(),
             sidebar_volumes: spec.sidebar_volumes.clone(),
             sidebar_contract: spec.sidebar_contract.clone(),
@@ -907,7 +916,7 @@ impl WindowLifecycleContract {
 
     pub fn as_tsv(&self) -> String {
         let mut lines = vec![format!(
-            "window\t{}\t{}\t{}x{}\tmin={}x{}\ttransparent-titlebar={}\tactivate={}\ttabs={}\tsidebar-home={}\tsidebar-icloud={}\tinitial-view={}\tpermission-dialog={}",
+            "window\t{}\t{}\t{}x{}\tmin={}x{}\ttransparent-titlebar={}\tactivate={}\ttabs={}\tsidebar-visible={}\tsidebar-home={}\tsidebar-icloud={}\tinitial-view={}\tpermission-dialog={}",
             escape_contract_field(&self.title),
             escape_contract_field(&self.initial_path.display().to_string()),
             self.width,
@@ -917,6 +926,7 @@ impl WindowLifecycleContract {
             self.transparent_titlebar,
             self.activate_on_launch,
             escape_contract_field(&self.tabbing_identifier),
+            self.sidebar_visible,
             self.sidebar_paths.home_state.as_str(),
             self.sidebar_paths.icloud_drive_state.as_str(),
             self.initial_view.mode(),
@@ -1047,6 +1057,7 @@ fn open_main_window(
                     spec.sidebar_volumes.clone(),
                 )
             }),
+            sidebar_visible: spec.sidebar_visible,
             initial_view: spec.initial_view,
             context_menus: spec.context_menus,
             progress_surfaces: spec.progress_surfaces,
@@ -1119,6 +1130,7 @@ struct RootView {
     session_writer: WindowSessionWriter,
     toolbar: ToolbarContract,
     sidebar: SidebarContract,
+    sidebar_visible: bool,
     initial_view: InitialViewContract,
     context_menus: Vec<ContextMenuContract>,
     progress_surfaces: Vec<OperationProgressContract>,
@@ -1138,21 +1150,19 @@ impl Render for RootView {
             }));
         }
 
+        let mut content = div().flex().flex_row().flex_1().w_full();
+        if self.sidebar_visible {
+            content = content.child(sidebar::render(&self.sidebar));
+        }
+        content = content.child(render_initial_view(&self.initial_view));
+
         let mut root = div()
             .size_full()
             .flex()
             .flex_col()
             .bg(rgb(0x1e1e1e))
             .child(toolbar::render(&self.toolbar))
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .flex_1()
-                    .w_full()
-                    .child(sidebar::render(&self.sidebar))
-                    .child(render_initial_view(&self.initial_view)),
-            );
+            .child(content);
         root = root.child(render_context_menu_state(&self.context_menus));
         if let Some(dialog) = &self.permission_dialog {
             root = root.child(dialog::render_permission_onboarding(
@@ -1294,6 +1304,7 @@ mod tests {
         assert_eq!(contract.height, DEFAULT_HEIGHT);
         assert!(contract.transparent_titlebar);
         assert_eq!(contract.tabbing_identifier, "gfm-main-window");
+        assert!(contract.sidebar_visible);
         assert_eq!(
             contract.session.restore_policy,
             RestorePolicy::RestoreLastWindowBounds
@@ -1327,7 +1338,7 @@ mod tests {
         let output = contract.as_tsv();
 
         assert!(output.starts_with(
-            "window\tgfm\t/tmp/gfm\t1040x720\tmin=640x420\ttransparent-titlebar=true\tactivate=true\ttabs=gfm-main-window\tsidebar-home=available\tsidebar-icloud=missing\tinitial-view=icon\tpermission-dialog=none\n"
+            "window\tgfm\t/tmp/gfm\t1040x720\tmin=640x420\ttransparent-titlebar=true\tactivate=true\ttabs=gfm-main-window\tsidebar-visible=true\tsidebar-home=available\tsidebar-icloud=missing\tinitial-view=icon\tpermission-dialog=none\n"
         ));
         assert!(output.contains(
             "\nsession\trestore=restore-last-window-bounds\tplacement-policy=persisted-or-centered\ttab-policy=native-macos-tab-group\tactivation=activate-app-and-focus-new-window\ttabs=gfm-main-window\trestore-key=main-window\t"
@@ -1399,6 +1410,17 @@ mod tests {
         assert_eq!(contract.session.cascade_ordinal, 0);
         assert!(output.contains("window\tgfm\t/tmp/gfm\t800x500\tmin=640x420\t"));
         assert!(output.contains("\tplacement=40,70,800,500\tcascade=0\t"));
+    }
+
+    #[test]
+    fn lifecycle_contract_tracks_hidden_sidebar_state() {
+        let spec = AppLaunchSpec::new("/tmp/gfm").with_sidebar_visible(false);
+        let contract = WindowLifecycleContract::from_spec(&spec).unwrap();
+
+        assert!(!contract.sidebar_visible);
+        assert!(contract
+            .as_tsv()
+            .starts_with("window\tgfm\t/tmp/gfm\t1040x720\tmin=640x420\ttransparent-titlebar=true\tactivate=true\ttabs=gfm-main-window\tsidebar-visible=false\t"));
     }
 
     #[test]
@@ -1494,7 +1516,7 @@ mod tests {
         assert!(window.contains("GFM\\tWindow\\nTitle\\r\t"), "{tsv}");
         assert!(window.contains("\t/tmp/Window\\tPath\\nRoot\\r\t"), "{tsv}");
         assert!(window.contains("\ttabs=gfm\\tmain\\nwindow\\r\t"), "{tsv}");
-        assert_eq!(window.split('\t').count(), 12, "{tsv}");
+        assert_eq!(window.split('\t').count(), 13, "{tsv}");
     }
 
     #[test]
@@ -2190,7 +2212,7 @@ mod tests {
         assert_eq!(contract.sidebar_paths, paths);
         assert!(contract
             .as_tsv()
-            .contains("\tsidebar-home=available\tsidebar-icloud=missing\t"));
+            .contains("\tsidebar-visible=true\tsidebar-home=available\tsidebar-icloud=missing\t"));
     }
 
     #[test]

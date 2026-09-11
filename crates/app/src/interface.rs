@@ -1894,6 +1894,9 @@ fn app_launch_spec_checked(
     let mut spec = path
         .map(AppLaunchSpec::new)
         .unwrap_or_else(|| AppLaunchSpec::default().with_finder_window_title());
+    if let Some(visible) = native_sidebar_visible_from_env()? {
+        spec = spec.with_sidebar_visible(visible);
+    }
     let sidebar_volumes = native_sidebar_volumes_checked(&spec.initial_path, &mut check_control)?;
     spec = spec
         .with_sidebar_path_snapshot(SidebarPathSnapshot::discover())
@@ -1993,6 +1996,12 @@ fn native_initial_view_mode_from_env() -> Result<NativeInitialViewMode> {
             "native app view mode `{other}` is invalid; expected icon, list, column, gallery, search, or trash"
         ))),
     }
+}
+
+fn native_sidebar_visible_from_env() -> Result<Option<bool>> {
+    env::var_os("GFM_NATIVE_SIDEBAR_VISIBLE")
+        .map(|value| parse_bool(&value.to_string_lossy(), "GFM_NATIVE_SIDEBAR_VISIBLE"))
+        .transpose()
 }
 
 fn native_initial_view_contract(

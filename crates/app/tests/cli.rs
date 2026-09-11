@@ -20468,6 +20468,52 @@ fn native_app_launch_dispatches_without_operator_command_from_binary() {
 }
 
 #[test]
+fn native_app_launch_can_hide_sidebar_from_binary() {
+    let root = unique_temp_dir("gfm-cli-native-launch-hidden-sidebar");
+    fs::write(root.join("Visible.txt"), "hello").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .current_dir(&root)
+        .env("GFM_NATIVE_LAUNCH_CONTRACT", "1")
+        .env("GFM_NATIVE_SIDEBAR_VISIBLE", "false")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("\tsidebar-visible=false\t"), "{stdout}");
+    assert!(stdout.contains("\nsidebar\t"), "{stdout}");
+    assert!(stdout.contains("\nicon-view\t"), "{stdout}");
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn native_app_launch_rejects_invalid_sidebar_visibility_from_binary() {
+    let root = unique_temp_dir("gfm-cli-native-launch-bad-sidebar-visible");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_gfm"))
+        .current_dir(&root)
+        .env("GFM_NATIVE_LAUNCH_CONTRACT", "1")
+        .env("GFM_NATIVE_SIDEBAR_VISIBLE", "maybe")
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("GFM_NATIVE_SIDEBAR_VISIBLE must be true or false"),
+        "{stderr}"
+    );
+
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn native_app_launch_renders_effective_sidebar_volume_rows_from_binary() {
     let root = unique_temp_dir("gfm-cli-native-launch-sidebar-volume");
     fs::write(root.join(".gfm-volume-kind"), "external-removable\n").unwrap();
