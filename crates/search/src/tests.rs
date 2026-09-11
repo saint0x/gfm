@@ -988,6 +988,22 @@ fn deep_content_phrase_and_proximity_candidates_honor_cancelled_tokens() {
 }
 
 #[test]
+fn final_record_matcher_honors_cancelled_tokens_before_deep_content_checks() {
+    let mut index = SearchIndex::new();
+    let item = record(1, "/tmp/final-match.txt", "final-match.txt");
+    index.insert(item.clone());
+    index.insert_content(item.id, "alpha beta gamma");
+    let query = SearchQuery::parse(r#""alpha beta" near:2:alpha,gamma"#);
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+
+    let result =
+        index.record_matches_query_cancellable(&item, &query, SearchPass::Full, &cancellation);
+
+    assert!(matches!(result, Err(GfmError::Cancelled)));
+}
+
+#[test]
 fn supersession_cancels_stale_query_tokens() {
     let supersession = SearchSupersession::new();
     let first = supersession.begin();

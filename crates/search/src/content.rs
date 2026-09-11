@@ -45,12 +45,7 @@ impl SearchIndex {
             .unwrap_or(0)
     }
 
-    pub(super) fn content_matches_phrase(&self, id: FileId, phrase: &str) -> bool {
-        self.content_matches_phrase_cancellable(id, phrase, &Cancellation::default())
-            .unwrap_or(false)
-    }
-
-    fn content_matches_phrase_cancellable(
+    pub(super) fn content_matches_phrase_cancellable(
         &self,
         id: FileId,
         phrase: &str,
@@ -235,12 +230,7 @@ impl SearchIndex {
         Ok(ids)
     }
 
-    pub(super) fn content_matches_proximity(&self, id: FileId, proximity: &QueryProximity) -> bool {
-        self.content_matches_proximity_cancellable(id, proximity, &Cancellation::default())
-            .unwrap_or(false)
-    }
-
-    fn content_matches_proximity_cancellable(
+    pub(super) fn content_matches_proximity_cancellable(
         &self,
         id: FileId,
         proximity: &QueryProximity,

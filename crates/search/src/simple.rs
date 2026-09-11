@@ -129,7 +129,7 @@ impl SearchIndex {
             let Some(record) = self.records.get(&id) else {
                 continue;
             };
-            if !self.record_matches_query(record, query, pass) {
+            if !self.record_matches_query_cancellable(record, query, pass, cancellation)? {
                 continue;
             }
             score.boost(self.composite_boosts(record, query, pass));
@@ -202,7 +202,7 @@ impl SearchIndex {
             let Some(record) = self.records.get(id) else {
                 continue;
             };
-            if !self.record_matches_query(record, query, pass) {
+            if !self.record_matches_query_cancellable(record, query, pass, cancellation)? {
                 continue;
             }
             let mut score = self.score_plain_multi_term_record(

@@ -522,7 +522,7 @@ impl SearchIndex {
             let Some(record) = self.records.get(&id) else {
                 continue;
             };
-            if !self.record_matches_query(record, query, pass) {
+            if !self.record_matches_query_cancellable(record, query, pass, cancellation)? {
                 continue;
             }
             let (score, reason) = score.finish();
