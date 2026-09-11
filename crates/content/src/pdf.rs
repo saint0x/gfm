@@ -55,6 +55,9 @@ pub(crate) fn extract_pdf_checked(
     let mut text = String::new();
     for stream in streams(bytes) {
         check_control()?;
+        if stream_is_image_xobject(stream.header) {
+            continue;
+        }
         if stream_has_filter(stream.header, b"LZWDecode")
             || stream_has_filter(stream.header, b"ASCII85Decode")
             || stream_has_filter(stream.header, b"DCTDecode")
@@ -373,23 +376,69 @@ fn count_marker(bytes: &[u8], needle: &[u8]) -> usize {
     count
 }
 
+fn stream_is_image_xobject(bytes: &[u8]) -> bool {
+    header_has_name_value(bytes, b"Subtype", b"Image")
+}
+
 fn stream_has_filter(bytes: &[u8], filter: &[u8]) -> bool {
-    bytes.windows(filter.len()).any(|window| window == filter)
+    header_has_slash_name(bytes, filter)
 }
 
 fn has_encryption_dictionary(bytes: &[u8]) -> bool {
-    bytes
-        .windows(b"/Encrypt".len())
-        .any(|window| window == b"/Encrypt")
+    header_has_slash_name(bytes, b"Encrypt")
 }
 
 fn has_image_xobject(bytes: &[u8]) -> bool {
+    header_has_name_value(bytes, b"Subtype", b"Image")
+}
+
+fn header_has_name_value(bytes: &[u8], key: &[u8], value: &[u8]) -> bool {
+    let mut cursor = 0;
+    while let Some(position) = find_slash_name_from(bytes, key, cursor) {
+        let value_position = skip_pdf_whitespace(bytes, position + key.len() + 1);
+        if bytes.get(value_position) == Some(&b'/')
+            && bytes.get(value_position + 1..value_position + 1 + value.len()) == Some(value)
+            && pdf_name_ends_at(bytes, value_position + 1 + value.len())
+        {
+            return true;
+        }
+        cursor = position + key.len() + 1;
+    }
+    false
+}
+
+fn header_has_slash_name(bytes: &[u8], name: &[u8]) -> bool {
+    find_slash_name_from(bytes, name, 0).is_some()
+}
+
+fn find_slash_name_from(bytes: &[u8], name: &[u8], start: usize) -> Option<usize> {
+    let mut cursor = start;
+    while let Some(position) = find_from(bytes, name, cursor) {
+        if position > 0
+            && bytes[position - 1] == b'/'
+            && pdf_name_ends_at(bytes, position + name.len())
+        {
+            return Some(position - 1);
+        }
+        cursor = position + name.len();
+    }
+    None
+}
+
+fn pdf_name_ends_at(bytes: &[u8], index: usize) -> bool {
     bytes
-        .windows(b"/Subtype /Image".len())
-        .any(|window| window == b"/Subtype /Image")
-        || bytes
-            .windows(b"/Subtype/Image".len())
-            .any(|window| window == b"/Subtype/Image")
+        .get(index)
+        .is_none_or(|byte| !byte.is_ascii_alphanumeric() && !matches!(byte, b'-' | b'_' | b'.'))
+}
+
+fn skip_pdf_whitespace(bytes: &[u8], mut index: usize) -> usize {
+    while matches!(
+        bytes.get(index),
+        Some(b'\0' | b'\t' | b'\n' | b'\x0c' | b'\r' | b' ')
+    ) {
+        index += 1;
+    }
+    index
 }
 
 fn find_from(haystack: &[u8], needle: &[u8], start: usize) -> Option<usize> {
@@ -463,6 +512,70 @@ endobj
 
         assert_eq!(status, PdfExtractStatus::ImageOnly);
         assert!(doc.is_none());
+    }
+
+    #[test]
+    fn skips_flate_image_xobject_streams_before_text_budget_inflate() {
+        let image_body = vec![b'x'; 1024];
+        let mut pdf = b"%PDF-1.4
+1 0 obj
+<< /Type /Page /Resources << /XObject << /Im0 2 0 R >> >> >>
+endobj
+2 0 obj
+<< /Type /XObject /Subtype /Image /Width 32 /Height 32 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode /Length "
+            .to_vec();
+        pdf.extend(image_body.len().to_string().as_bytes());
+        pdf.extend(
+            b" >>
+stream
+",
+        );
+        pdf.extend(image_body);
+        pdf.extend(
+            b"
+endstream
+endobj
+%%EOF",
+        );
+        let policy = ExtractionPolicy {
+            max_pdf_stream_bytes: 8,
+            ..ExtractionPolicy::default()
+        };
+
+        let (status, doc) = extract_pdf(&pdf, &policy);
+
+        assert_eq!(status, PdfExtractStatus::ImageOnly);
+        assert!(doc.is_none());
+    }
+
+    #[test]
+    fn does_not_treat_form_xobject_with_image_resource_as_image_stream() {
+        let mut pdf = b"%PDF-1.4
+1 0 obj
+<< /Type /XObject /Subtype /Form /Resources << /XObject << /Im0 3 0 R >> >> /Length "
+            .to_vec();
+        let text_stream = b"BT (form text survives) Tj ET";
+        pdf.extend(text_stream.len().to_string().as_bytes());
+        pdf.extend(
+            b" >>
+stream
+",
+        );
+        pdf.extend(text_stream);
+        pdf.extend(
+            b"
+endstream
+endobj
+3 0 obj
+<< /Type /XObject /Subtype /Image /Width 1 /Height 1 >>
+endobj
+%%EOF",
+        );
+
+        let (status, doc) = extract_pdf(&pdf, &ExtractionPolicy::default());
+
+        assert_eq!(status, PdfExtractStatus::Extracted);
+        assert_eq!(doc.unwrap().text, "form text survives");
     }
 
     #[test]

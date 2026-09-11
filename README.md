@@ -124,7 +124,7 @@ The index is compact and incremental:
 - bounded snippets with highlighted content matches
 - binary-signature and control-byte classification before content extraction
 - bounded PDF text-stream extraction with PDF-specific byte, page, and object budgets
-- image-only PDF detection with deterministic `image-only-pdf` skips so OCR scheduling can target scans without blocking primary indexing
+- image-only PDF detection with deterministic `image-only-pdf` skips, production OCR scheduling, PDFKit-rendered page rasterization, and Vision-backed recognition cache writes for text-bearing scanned documents without blocking primary indexing
 - bounded OOXML extraction for DOCX, XLSX, and PPTX with ZIP entry, XML part, and text-output budgets
 - bounded legacy Office compound-file text recovery for DOC, XLS, and PPT through the Office extraction budget and fingerprint lane, with deterministic `legacy-office` skips for valid binary packages that contain no recoverable text, plus corrupt/encrypted compound-package quarantine for malformed or protected files
 - encrypted Office compound-file detection for protected DOCX, XLSX, and PPTX inputs so password-protected packages quarantine as `encrypted-office` instead of corrupt archives
@@ -133,7 +133,7 @@ The index is compact and incremental:
 - structured JSON, CSV, XML plist, and binary plist extraction for searchable keys, cells, and values
 - format-scoped extractor versioning so parser upgrades invalidate only the affected content-cache family
 - incremental content indexing that tombstones changed/deleted file IDs, re-extracts only new or content-modified records, checks cancellation before each record-level extraction/insertion step, and keeps archive compaction cancellable through segment planning, merge, materialization, and publish boundaries
-- OCR candidate accounting plus deterministic candidate queue records for image-only PDFs and Mac-style screenshot images during background content indexing, so deferred recognition work can be scheduled without blocking primary content postings
+- OCR candidate accounting plus deterministic candidate queue records for image-only PDFs and Mac-style screenshot images during background content indexing, backed by the native PDFKit plus Vision worker path so deferred recognition work can be scheduled, verified, cached, and quarantined without blocking primary content postings
 - persistent extraction quarantine during background content indexing so repeated corrupt/encrypted extractor failures are skipped before they spend more indexing latency
 - explicit ranking accumulator for exact, prefix, substring, fuzzy, path, metadata, kind, tag, content, recency, term-frequency, and user-pinned signals
 - user-intent boosts for Applications, Recents, Downloads, Desktop, screenshots, and project folders

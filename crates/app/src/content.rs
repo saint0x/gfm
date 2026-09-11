@@ -2341,7 +2341,7 @@ impl RecoverableContentJobs {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gfm_content::{ExtractionVolumeClass, OcrCandidate, OcrCandidateKind};
+    use gfm_content::{ExtractionStatus, ExtractionVolumeClass, OcrCandidate, OcrCandidateKind};
     use gfm_mac::VolumeCapacity;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
@@ -3335,6 +3335,45 @@ mod tests {
         assert!(third.contains("ocr-quarantine\tblocked\t"), "{third}");
         assert!(failures.has_entry(&candidate));
         assert!(OcrRecognitionCache::read(cache).unwrap().is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn ocr_worker_recognizes_real_image_only_pdf_fixture() {
+        let root = unique_temp_dir("gfm-ocr-worker-real-pdf-fixture");
+        let queue = root.join("ocr.gfmocrq");
+        let cache = root.join("ocr.gfmocrcache");
+        let quarantine = root.join("ocr.gfmocrfail");
+        let pdf = root.join("image-only-native-ocr.pdf");
+        fs::write(
+            &pdf,
+            include_bytes!("../fixtures/ocr/image-only-native-ocr.pdf"),
+        )
+        .unwrap();
+        let extraction = Extractor::default().extract_path_report(&pdf).unwrap();
+        assert_eq!(
+            extraction.status,
+            ExtractionStatus::Skipped("image-only-pdf")
+        );
+        let candidate = gfm_content::ocr_candidate_for_extraction(&extraction).unwrap();
+        OcrCandidateQueue::new([candidate.clone()])
+            .write(&queue)
+            .unwrap();
+
+        let output = run_ocr_worker(queue, cache.clone(), Some(quarantine.clone())).unwrap();
+        let reloaded = OcrRecognitionCache::read(cache).unwrap();
+        let failures = OcrFailureQuarantine::read(quarantine).unwrap();
+        let recognized = reloaded.get(&candidate).unwrap();
+
+        assert!(output.contains("\tstatus=recognized\t"), "{output}");
+        assert!(
+            output.contains(
+                "ocr-worker\tcandidates=1\tcached=0\trecognized=1\tquarantined=0\tempty=0\tmissing=0\tunsupported=0\tfailed=0\tunavailable=0"
+            ),
+            "{output}"
+        );
+        assert_eq!(recognized.text, "GFM OCR NATIVE NEEDLE 8472");
+        assert!(failures.is_empty());
         fs::remove_dir_all(root).unwrap();
     }
 

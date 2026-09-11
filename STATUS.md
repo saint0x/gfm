@@ -50,38 +50,37 @@ This is the living unfinished-work ledger for GFM. When a capability is implemen
 
 31. Complete full-fidelity Office legacy binary text extraction/import for WordDocument, Workbook/Book, and PowerPoint Document formats, plus password-protected, rights-managed, and edit-protected document handling.
 32. Complete production fixture coverage for RAR5 metadata import plus remaining non-encrypted encoded-header 7z and multi-volume archive import.
-33. Complete image-only PDF OCR production verification with a real text-bearing scanned-PDF fixture recognized through PDFKit-rendered pages and Vision.
-34. Complete hardened extraction-worker isolation with production read-deny Seatbelt feasibility, XPC/App Sandbox entitlement minimization, crash telemetry retention, and full sandbox violation diagnostic capture.
+33. Complete hardened extraction-worker isolation with production read-deny Seatbelt feasibility, XPC/App Sandbox entitlement minimization, crash telemetry retention, and full sandbox violation diagnostic capture.
 
 ## Storage Engine
 
-35. Run and retain production macOS telemetry for the million-file materialized filesystem fixture across developer, media, documents, iCloud, external-volume, and network-volume trees.
+34. Run and retain production macOS telemetry for the million-file materialized filesystem fixture across developer, media, documents, iCloud, external-volume, and network-volume trees.
 
 ## File Operations
 
-36. Finish Finder-compatible copy preservation edge behavior for remaining clonefile/APFS edge cases, locked files, Finder-specific package exceptions, cross-volume metadata degradation UX presentation, and captured Finder baselines.
-37. Finish native GPUI operation pause/resume progress-surface binding, recovery UX, Finder-compatible Pause/Resume/Stop progress sheets, and captured Finder baselines.
-38. Finish conflict UI/state machine binding, Finder-parity sheet presentation, per-item review table, keyboard/focus behavior, and captured Finder baselines.
-39. Finish direct platform Trash item identity, Put Back parity, collision sheets, native destructive delete sheets, native Empty Trash confirmation/policy binding, and captured Finder baselines.
-40. Finish privileged-operation flow for protected paths with native GPUI permission sheets, security-scoped bookmark acquisition UX, privileged helper or authorization strategy where required, Finder-parity Full Disk Access guidance, and captured protected-path baselines.
-41. Finish native volume-specific network-volume fallback and slow-volume throttling with direct DiskArbitration/FileProvider volume classification and captured slow-volume baselines.
+35. Finish Finder-compatible copy preservation edge behavior for remaining clonefile/APFS edge cases, locked files, Finder-specific package exceptions, cross-volume metadata degradation UX presentation, and captured Finder baselines.
+36. Finish native GPUI operation pause/resume progress-surface binding, recovery UX, Finder-compatible Pause/Resume/Stop progress sheets, and captured Finder baselines.
+37. Finish conflict UI/state machine binding, Finder-parity sheet presentation, per-item review table, keyboard/focus behavior, and captured Finder baselines.
+38. Finish direct platform Trash item identity, Put Back parity, collision sheets, native destructive delete sheets, native Empty Trash confirmation/policy binding, and captured Finder baselines.
+39. Finish privileged-operation flow for protected paths with native GPUI permission sheets, security-scoped bookmark acquisition UX, privileged helper or authorization strategy where required, Finder-parity Full Disk Access guidance, and captured protected-path baselines.
+40. Finish native volume-specific network-volume fallback and slow-volume throttling with direct DiskArbitration/FileProvider volume classification and captured slow-volume baselines.
 
 ## Jobs And Runtime
 
-42. Bind adaptive dependency-aware fair scheduling into remaining producer-specific foreground, preview, thumbnail, repair, and maintenance launch paths that do not yet consume pressure-derived class quotas.
-43. Complete automatic persistent job progress restoration and GPUI progress-surface integration across remaining specialized producers.
-44. Bind thermal, battery, IO pressure, and user-activity adaptive scheduling into remaining foreground producers and the native Quick Look/thumbnail execution surfaces that still sit beyond preview admission contracts.
+41. Bind adaptive dependency-aware fair scheduling into remaining producer-specific foreground, preview, thumbnail, repair, and maintenance launch paths that do not yet consume pressure-derived class quotas.
+42. Complete automatic persistent job progress restoration and GPUI progress-surface integration across remaining specialized producers.
+43. Bind thermal, battery, IO pressure, and user-activity adaptive scheduling into remaining foreground producers and the native Quick Look/thumbnail execution surfaces that still sit beyond preview admission contracts.
 
 ## Preview And Thumbnails
 
-45. Implement Finder-compatible generic icons, custom icons, app icons, folder icons, package icons, aliases, symlinks, tags, iCloud badges, and volume badges.
+44. Implement Finder-compatible generic icons, custom icons, app icons, folder icons, package icons, aliases, symlinks, tags, iCloud badges, and volume badges.
 
 ## Packaging
 
-46. Wire the first-run permission onboarding contract into the GPUI shell with Finder-parity presentation.
+45. Wire the first-run permission onboarding contract into the GPUI shell with Finder-parity presentation.
 
 ## Documentation
 
-47. Expand `PLAN.md` when architectural decisions change materially.
-48. Keep `README.md` written as the completed product contract.
-49. Keep this file limited to unfinished work only.
+46. Expand `PLAN.md` when architectural decisions change materially.
+47. Keep `README.md` written as the completed product contract.
+48. Keep this file limited to unfinished work only.
